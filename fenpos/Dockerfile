@@ -11,6 +11,22 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/pnpm/store pnpm install --frozen-lockfile
 
+# ---- production dependencies ----------------------------------------------
+# A second, production-only resolve. The build needs the dev toolchain; the
+# running container does not, and shipping it meant carrying Biome, Vitest,
+# TypeScript and Tailwind into an image that only ever serves requests.
+#
+# tsx, prisma and dotenv are production dependencies rather than dev ones,
+# because the container genuinely runs them: tsx starts the server, and
+# `prisma migrate deploy` reads prisma.config.ts, which imports dotenv.
+FROM node:22-bookworm-slim AS prod-deps
+WORKDIR /build
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/pnpm/store pnpm install --prod --frozen-lockfile
+
 # ---- build ----------------------------------------------------------------
 FROM node:22-bookworm-slim AS build
 WORKDIR /build
@@ -54,7 +70,7 @@ WORKDIR /app
 # recursive chown rewrites every file it touches into a new layer, so the
 # thousand-odd megabytes of node_modules were being stored twice — once as
 # copied and once as chowned.
-COPY --from=build --chown=fenpos:fenpos /build/node_modules ./node_modules
+COPY --from=prod-deps --chown=fenpos:fenpos /build/node_modules ./node_modules
 COPY --from=build --chown=fenpos:fenpos /build/.next ./.next
 COPY --from=build --chown=fenpos:fenpos /build/generated ./generated
 COPY --from=build --chown=fenpos:fenpos /build/prisma ./prisma
