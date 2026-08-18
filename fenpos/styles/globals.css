@@ -53,9 +53,9 @@
 /*
  * FenPOS panel theme.
  *
- * Values are taken verbatim from the design source (Claude Design project "Admin web
- * management UI", file FenPOS Admin.dc.html) and kept as hex rather than converted to oklch,
- * so each can be checked against the mockup by eye.
+ * Values are taken verbatim from the design source (FenPOS Admin.dc.html, the "Admin web
+ * management UI" mockup) and kept as hex rather than converted to oklch, so each can be
+ * checked against the mockup by eye.
  *
  * The panel is dark-only by intent: it is an operations console that lives on a back-room
  * shelf. :root and .dark therefore carry identical values, so no light flash is possible
