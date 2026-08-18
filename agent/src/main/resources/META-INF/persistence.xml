@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Persistence unit for the agent's local store.
+
+    Entities are listed explicitly and <exclude-unlisted-classes> is set, so Hibernate does not
+    scan the classpath at startup. Scanning costs time the agent has no reason to spend on a
+    Raspberry Pi, and an explicit list means the set of persisted types is visible here rather
+    than implied by annotations spread across the source.
+
+    The connection URL is supplied at runtime by AgentStore, because the database path is a
+    deployment concern rather than a build-time one.
+-->
+<persistence xmlns="https://jakarta.ee/xml/ns/persistence"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:schemaLocation="https://jakarta.ee/xml/ns/persistence
+                                 https://jakarta.ee/xml/ns/persistence/persistence_3_0.xsd"
+             version="3.0">
+
+    <persistence-unit name="fenpos-agent" transaction-type="RESOURCE_LOCAL">
+        <class>fi.natroutter.fenpos.store.AgentIdentity</class>
+        <exclude-unlisted-classes>true</exclude-unlisted-classes>
+    </persistence-unit>
+</persistence>
