@@ -5,49 +5,50 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-brand: var(--brand);
-  --color-subtle-foreground: var(--subtle-foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-brand: var(--brand);
+	--color-subtle-foreground: var(--subtle-foreground);
+	--font-sans: var(--font-sans);
+	--font-mono:
+		ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	--font-heading: var(--font-sans);
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
 }
 
 /*
@@ -63,71 +64,71 @@
  */
 :root,
 .dark {
-  --background: #0a0a0a;
-  --foreground: #fafafa;
+	--background: #0a0a0a;
+	--foreground: #fafafa;
 
-  /* Raised surfaces: cards, the sidebar, dialogs, popovers. */
-  --card: #171717;
-  --card-foreground: #fafafa;
-  --popover: #171717;
-  --popover-foreground: #fafafa;
+	/* Raised surfaces: cards, the sidebar, dialogs, popovers. */
+	--card: #171717;
+	--card-foreground: #fafafa;
+	--popover: #171717;
+	--popover-foreground: #fafafa;
 
-  /* The primary action inverts the page: light surface, dark text. */
-  --primary: #e5e5e5;
-  --primary-foreground: #171717;
+	/* The primary action inverts the page: light surface, dark text. */
+	--primary: #e5e5e5;
+	--primary-foreground: #171717;
 
-  --secondary: #262626;
-  --secondary-foreground: #fafafa;
+	--secondary: #262626;
+	--secondary-foreground: #fafafa;
 
-  --muted: #1f1f1f;
-  --muted-foreground: #a1a1a1;
+	--muted: #1f1f1f;
+	--muted-foreground: #a1a1a1;
 
-  --accent: #262626;
-  --accent-foreground: #fafafa;
+	--accent: #262626;
+	--accent-foreground: #fafafa;
 
-  --destructive: #fb5f5f;
+	--destructive: #fb5f5f;
 
-  /* Hairlines are #262626; input outlines sit a step brighter so fields read as editable. */
-  --border: #262626;
-  --input: #2e2e2e;
-  --ring: #737373;
+	/* Hairlines are #262626; input outlines sit a step brighter so fields read as editable. */
+	--border: #262626;
+	--input: #2e2e2e;
+	--ring: #737373;
 
-  /*
+	/*
    * The FenPOS mark. Used for the logo and nothing else, so it stays a brand cue instead of
    * becoming a status colour competing with the state chips.
    */
-  --brand: #e62d3e;
+	--brand: #e62d3e;
 
-  /* A step dimmer than muted-foreground, for timestamps and monospace annotations. */
-  --subtle-foreground: #737373;
+	/* A step dimmer than muted-foreground, for timestamps and monospace annotations. */
+	--subtle-foreground: #737373;
 
-  --chart-1: #e5e5e5;
-  --chart-2: #a1a1a1;
-  --chart-3: #737373;
-  --chart-4: #5a5a5a;
-  --chart-5: #404040;
+	--chart-1: #e5e5e5;
+	--chart-2: #a1a1a1;
+	--chart-3: #737373;
+	--chart-4: #5a5a5a;
+	--chart-5: #404040;
 
-  /* 10px cards, which yields 8px buttons and inputs and 14px dialogs on the radius scale. */
-  --radius: 0.625rem;
+	/* 10px cards, which yields 8px buttons and inputs and 14px dialogs on the radius scale. */
+	--radius: 0.625rem;
 
-  --sidebar: #171717;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #e5e5e5;
-  --sidebar-primary-foreground: #171717;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: #262626;
-  --sidebar-ring: #737373;
+	--sidebar: #171717;
+	--sidebar-foreground: #fafafa;
+	--sidebar-primary: #e5e5e5;
+	--sidebar-primary-foreground: #171717;
+	--sidebar-accent: #262626;
+	--sidebar-accent-foreground: #fafafa;
+	--sidebar-border: #262626;
+	--sidebar-ring: #737373;
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-  html {
-    @apply font-sans;
-  }
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+	html {
+		@apply font-sans;
+	}
 }
