@@ -1,0 +1,55 @@
+# ThermAPI, containerised.
+#
+# Linux hosts only. Docker Desktop on Windows and macOS runs containers inside a
+# VM with no USB or serial passthrough, so a COM port cannot be reached from a
+# container at all; run the jar directly on the JVM there.
+
+services:
+  thermapi:
+    image: ghcr.io/natroutter/thermapi:latest
+    container_name: thermapi
+    restart: unless-stopped
+
+    # One entry per printer. Find the stable name for yours with:
+    #   ls -l /dev/serial/by-id/
+    # ttyUSB numbering changes across reboots, so a udev rule pointing at a fixed
+    # name such as /dev/thermal-kitchen is worth setting up.
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+
+    # The container runs as a non-root user, so it needs the group that owns the
+    # device. Find it with:  stat -c '%g' /dev/ttyUSB0
+    group_add:
+      - "20"                     # dialout on Debian/Ubuntu
+
+    ports:
+      - "8080:8080"
+
+    # Must match httpServer.port in config.yaml. The image deliberately declares
+    # no HEALTHCHECK of its own: it cannot know which port to probe, because that
+    # comes from the mounted config.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/status"]
+      interval: 30s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+
+    volumes:
+      # Read-only because ThermAPI only ever reads this file. The mount makes
+      # that guarantee structural rather than a promise.
+      - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/app/logs
+
+    environment:
+      # Job timestamps are user-facing, so the container's zone matters.
+      TZ: "Europe/Helsinki"
+
+    mem_limit: 512m
+
+    # Required for the console via `docker attach thermapi`. Without them the
+    # container runs headless and is managed entirely over HTTP, which is a
+    # perfectly good mode; the console detects the missing TTY and stays off.
+    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would signal the JVM and shut it down.
+    stdin_open: true
+    tty: true

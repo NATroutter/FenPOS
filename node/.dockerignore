@@ -1,0 +1,16 @@
+# Keep the build context small, and make sure a local build can never leak into
+# the image: target/ here would otherwise be copied over the one built inside.
+target/
+logs/
+FoxFrame/
+.git/
+.github/
+.idea/
+docs/
+*.md
+*.iml
+
+# The live configuration holds a device credential and belongs to the host, not
+# to the image. It is bind-mounted at runtime.
+config.yaml
+.env
