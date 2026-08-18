@@ -21,7 +21,15 @@ import { publishHttpServer } from "./lib/link/server-handle";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
-const hostname = process.env.HOSTNAME ?? "0.0.0.0";
+/**
+ * The interface to bind.
+ *
+ * Deliberately not `HOSTNAME`: Docker sets that in every container, to the container id. Reading
+ * it resolved that id to the container's own address and bound only there, so the port mapping
+ * still worked from outside while nothing answered on loopback inside — which silently broke any
+ * healthcheck, since those run within the container.
+ */
+const hostname = process.env.FENPOS_HOST ?? "0.0.0.0";
 
 /**
  * How long to let in-flight work finish before forcing the process down.
