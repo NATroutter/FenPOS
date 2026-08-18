@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/panel/app-sidebar";
+import { EventStreamProvider } from "@/components/panel/event-stream";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { destroySession } from "@/lib/auth/session";
@@ -46,8 +47,12 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 		<SidebarProvider>
 			<AppSidebar version={APP_VERSION} signOutAction={signOut} />
 			<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
-				<PanelHeader startedAt={SERVER_STARTED_AT} />
-				<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
+				{/* Wraps the header as well as the pages, because the chip that governs the stream
+				    lives in the header while everything consuming it is below. */}
+				<EventStreamProvider>
+					<PanelHeader startedAt={SERVER_STARTED_AT} />
+					<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
+				</EventStreamProvider>
 			</SidebarInset>
 		</SidebarProvider>
 	);

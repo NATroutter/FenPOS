@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { LiveToggle } from "@/components/panel/live-toggle";
 import { Uptime } from "@/components/panel/uptime";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { findNavItem } from "@/lib/navigation";
@@ -23,6 +24,8 @@ export function PanelHeader({ startedAt }: { startedAt: number }) {
 				<div className="text-[11.5px] font-medium text-subtle-foreground">{item?.kicker ?? "FenPOS"}</div>
 				<h1 className="mt-1 text-xl font-semibold tracking-tight">{item?.title ?? "FenPOS"}</h1>
 			</div>
+
+			<LiveToggle />
 
 			<div className="text-right">
 				<div className="text-[11px] font-medium text-subtle-foreground">Uptime</div>

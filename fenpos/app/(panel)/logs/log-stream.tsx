@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useEventStream } from "@/components/panel/event-stream";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -38,13 +39,10 @@ export function LogStream({ lines, live }: { lines: LogLine[]; live: boolean }) 
 		setArrived([]);
 	}, [lines]);
 
-	useEffect(() => {
-		if (!live) {
-			return;
-		}
-		const source = new EventSource("/api/events");
-		source.addEventListener("log", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data);
+	useEventStream(
+		"log",
+		(event) => {
+			const payload = JSON.parse(event.data);
 			setArrived((current) => [
 				{
 					id: payload.id,
@@ -56,9 +54,9 @@ export function LogStream({ lines, live }: { lines: LogLine[]; live: boolean }) 
 				},
 				...current,
 			]);
-		});
-		return () => source.close();
-	}, [live]);
+		},
+		live,
+	);
 
 	const all = [...arrived, ...lines];
 

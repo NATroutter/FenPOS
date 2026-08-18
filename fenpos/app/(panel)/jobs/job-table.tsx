@@ -2,9 +2,10 @@
 
 import { Ban } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { cancelJob } from "@/app/(panel)/jobs/actions";
+import { useEventStream } from "@/components/panel/event-stream";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,14 +47,7 @@ export function JobTable({ jobs, live }: { jobs: JobSummary[]; live: boolean }) 
 
 	// Subscribed only while the header's live chip is on, so pausing genuinely stops the work
 	// rather than just hiding its results.
-	useEffect(() => {
-		if (!live) {
-			return;
-		}
-		const source = new EventSource("/api/events");
-		source.addEventListener("job", () => router.refresh());
-		return () => source.close();
-	}, [live, router]);
+	useEventStream("job", () => router.refresh(), live);
 
 	if (jobs.length === 0) {
 		return (
