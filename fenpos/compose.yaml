@@ -1,0 +1,45 @@
+# The FenPOS server: the API, the admin panel, and all persistent state.
+#
+# One per install. Agents dial in to it, so this is the only component that
+# needs to be reachable — and behind TLS, because a pairing response carries an
+# agent's credential and an admin session rides a cookie.
+
+services:
+  fenpos:
+    image: ghcr.io/natroutter/fenpos:latest
+    container_name: fenpos
+    restart: unless-stopped
+
+    ports:
+      # The panel, the public print API and the agent link all share this port.
+      # The link is an ordinary HTTP upgrade, so nothing extra needs opening.
+      - "3000:3000"
+
+    volumes:
+      # Everything that matters: the database holds agents, their credentials,
+      # devices, keys, jobs and the admin password. Back this up.
+      - ./data:/app/data
+
+    environment:
+      # The address agents should dial. Optional — the panel otherwise derives it
+      # from the request that rendered it, which is right for a direct connection
+      # and usually right behind a proxy that sets forwarded headers. Set it when
+      # the panel is reached on a different address than agents should use, since
+      # an operator copying the wrong one gets an agent that silently never
+      # connects.
+      PUBLIC_URL: "https://fenpos.example.com"
+
+      # Job and log timestamps are user-facing, so the container's zone matters.
+      TZ: "Europe/Helsinki"
+
+    healthcheck:
+      # The login page: cheap, needs no credential, and touches the database on
+      # the way through, so it fails if the volume is unwritable rather than
+      # reporting healthy while nothing works.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    mem_limit: 1g

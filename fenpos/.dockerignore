@@ -1,0 +1,19 @@
+# Keep the build context small, and make sure a local build can never leak into
+# the image: .next here would otherwise be copied over the one built inside.
+node_modules/
+.next/
+generated/
+.git/
+.github/
+.idea/
+docs/
+*.md
+tsconfig.tsbuildinfo
+
+# The live database and the environment that points at it belong to the host.
+# An image carrying either would ship someone's data, and their admin password
+# hash with it.
+data/
+.env
+.env.*
+!.env.example

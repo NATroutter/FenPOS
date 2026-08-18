@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B dependency:go-offline
 
 COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 mvn -B package \
- && mv target/ThermAPI-*.jar target/thermapi.jar
+ && mv target/fenpos-agent-*.jar target/fenpos-agent.jar
 
 # ---- runtime --------------------------------------------------------------
 # Debian rather than Alpine: jSerialComm ships native libraries per platform and
@@ -19,29 +19,33 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B package \
 # ~40 MB on a service that talks to a printer is a poor trade.
 FROM eclipse-temurin:25-jre-noble
 
-LABEL org.opencontainers.image.title="ThermAPI" \
-      org.opencontainers.image.description="HTTP API for serial ESC/POS receipt printers" \
-      org.opencontainers.image.source="https://github.com/NATroutter/ThermAPI" \
+LABEL org.opencontainers.image.title="FenPOS Agent" \
+      org.opencontainers.image.description="Printer agent for FenPOS: drives serial ESC/POS printers" \
+      org.opencontainers.image.source="https://github.com/NATroutter/FenPOS agent" \
       org.opencontainers.image.licenses="MIT"
 
-# curl is used by the compose healthcheck, which runs inside this container
-# wherever it is declared, and doubles as the obvious tool for poking at the API
-# from a docker exec shell.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --system --create-home --uid 10001 thermapi
+# No curl. It was here for a healthcheck against the agent's own HTTP API, and
+# the agent no longer has one — it dials the server and never listens. Dropping
+# it removes a package, a layer, and a tool an attacker would otherwise find
+# waiting in a container that talks to hardware.
+RUN useradd --system --create-home --uid 10001 fenpos-agent
 
 WORKDIR /app
-COPY --from=build /build/target/thermapi.jar /app/thermapi.jar
-RUN mkdir -p /app/logs && chown -R thermapi:thermapi /app
+COPY --from=build /build/target/fenpos-agent.jar /app/fenpos-agent.jar
+RUN mkdir -p /app/logs /app/data && chown -R fenpos-agent:fenpos-agent /app
 
 # Never root: device access comes from a supplementary group instead (see
 # compose.yaml). A fixed uid keeps bind-mounted log ownership predictable.
-USER thermapi
+USER fenpos-agent
 
-EXPOSE 8080
-VOLUME ["/app/logs"]
+# No EXPOSE and no HEALTHCHECK. The agent dials the server and never listens, so
+# there is no port to publish and nothing to probe from inside the container.
+# Whether it is reachable is a question only the server can answer, and the
+# Agents tab does.
+#
+# /app/data holds the agent's identity — the server address and the credential
+# issued at pairing. Losing it means re-pairing with a fresh code.
+VOLUME ["/app/logs", "/app/data"]
 
 # MaxRAMPercentage rather than -Xmx so the heap tracks the container limit, which
 # makes mem_limit the single place memory is configured.
@@ -52,4 +56,4 @@ VOLUME ["/app/logs"]
 ENTRYPOINT ["java", \
             "-XX:MaxRAMPercentage=75.0", \
             "--enable-native-access=ALL-UNNAMED", \
-            "-jar", "/app/thermapi.jar"]
+            "-jar", "/app/fenpos-agent.jar"]

@@ -10,7 +10,8 @@ docs/
 *.md
 *.iml
 
-# The live configuration holds a device credential and belongs to the host, not
-# to the image. It is bind-mounted at runtime.
-config.yaml
+# The agent's identity — server address and pairing credential — belongs to the
+# host volume, never to an image. An image carrying one would pair every copy of
+# itself as the same agent.
+data/
 .env

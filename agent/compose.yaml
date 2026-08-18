@@ -1,0 +1,58 @@
+# The FenPOS agent, containerised.
+#
+# Linux hosts only. Docker Desktop on Windows and macOS runs containers inside a
+# VM with no USB or serial passthrough, so a COM port cannot be reached from a
+# container at all; run the jar directly on the JVM there.
+#
+# The agent has no inbound network surface. It dials the server and holds the
+# connection open, so nothing here publishes a port — there is nothing to reach
+# it on, which is the point.
+
+services:
+  fenpos-agent:
+    image: ghcr.io/natroutter/fenpos-agent:latest
+    container_name: fenpos-agent
+    restart: unless-stopped
+
+    # One entry per printer. Find the stable name for yours with:
+    #   ls -l /dev/serial/by-id/
+    # ttyUSB numbering changes across reboots, so a udev rule pointing at a fixed
+    # name such as /dev/thermal-kitchen is worth setting up.
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+
+    # The container runs as a non-root user, so it needs the group that owns the
+    # device. Find it with:  stat -c '%g' /dev/ttyUSB0
+    group_add:
+      - "20"                     # dialout on Debian/Ubuntu
+
+    volumes:
+      # The agent's identity lives here: the server address and the credential it
+      # was issued at pairing. Lose this volume and the agent is unpaired — it
+      # will need a new code, and the old one is already spent.
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    environment:
+      # Where the server is. https is required for anything but loopback: the
+      # reply to the pairing request carries this agent's credential.
+      FENPOS_SERVER: "https://fenpos.example.com"
+
+      # A single-use code, generated in the panel under Agents. Read only on the
+      # first boot: once an identity is stored the agent connects with that and
+      # logs that it ignored this value, so leaving a spent code here is harmless
+      # and committing this file leaks nothing that still works.
+      FENPOS_PAIR_CODE: ""
+
+      # Job timestamps are user-facing, so the container's zone matters.
+      TZ: "Europe/Helsinki"
+
+    mem_limit: 512m
+
+    # Required for the console via `docker attach fenpos-agent`, which is where
+    # `pair`, `link`, `devices` and `test` live. Without them the container runs
+    # headless and is managed entirely from the panel, which is a perfectly good
+    # mode; the console detects the missing TTY and stays off.
+    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would signal the JVM and shut it down.
+    stdin_open: true
+    tty: true
