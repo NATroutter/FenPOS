@@ -1,0 +1,90 @@
+import { KeyRound, Plus } from "lucide-react";
+import { KeyDialog } from "@/app/(panel)/keys/key-dialog";
+import { KeyRow, type KeyRowData } from "@/app/(panel)/keys/key-row";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { prisma } from "@/lib/db";
+import { listApiKeys } from "@/lib/keys/key-service";
+
+export const metadata = { title: "Keys · FenPOS" };
+
+/** Never cached: last-used timestamps move without any request to this page causing it. */
+export const dynamic = "force-dynamic";
+
+/**
+ * The Keys tab.
+ *
+ * Keys are how machines print. Each carries a set of permissions and a set of printers, and both
+ * must be granted before it can do anything — a key with an empty list is inert, which is the
+ * only safe default for a credential created before anyone has decided what it is for.
+ */
+export default async function KeysPage() {
+	const [keys, devices] = await Promise.all([
+		listApiKeys(),
+		prisma.device.findMany({
+			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
+			select: { id: true, name: true, agent: { select: { name: true } } },
+		}),
+	]);
+
+	const grantable = devices.map((device) => ({
+		id: device.id,
+		name: device.name,
+		agentName: device.agent.name,
+	}));
+
+	const rows: KeyRowData[] = keys.map((key) => ({
+		id: key.id,
+		name: key.name,
+		maskedHint: key.maskedHint,
+		createdAt: key.createdAt.toISOString(),
+		lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
+		revokedAt: key.revokedAt?.toISOString() ?? null,
+		permissions: key.permissions,
+		devices: key.devices,
+	}));
+
+	return (
+		<div className="flex flex-col gap-5">
+			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
+				<div className="min-w-[220px] flex-1">
+					<h2 className="text-[15px] font-semibold tracking-tight">Keys</h2>
+					<p className="mt-1 text-[12.5px] text-muted-foreground">
+						API keys for machines that print. Each is shown once when created and stored only as a hash, so a lost key
+						is replaced rather than recovered.
+					</p>
+				</div>
+				<KeyDialog
+					devices={grantable}
+					trigger={
+						<Button>
+							<Plus className="size-3.5" />
+							New key
+						</Button>
+					}
+				/>
+			</div>
+
+			{rows.length === 0 ? (
+				<Empty className="border border-dashed border-border">
+					<EmptyHeader>
+						<EmptyMedia variant="icon">
+							<KeyRound />
+						</EmptyMedia>
+						<EmptyTitle>No keys yet</EmptyTitle>
+						<EmptyDescription>
+							Create one to let a till or an ordering system submit jobs to{" "}
+							<span className="font-mono">POST /api/print/&#123;agent&#125;/&#123;device&#125;</span>.
+						</EmptyDescription>
+					</EmptyHeader>
+				</Empty>
+			) : (
+				<div className="flex flex-col gap-4">
+					{rows.map((key) => (
+						<KeyRow key={key.id} apiKey={key} devices={grantable} />
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
