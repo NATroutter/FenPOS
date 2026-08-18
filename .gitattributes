@@ -1,0 +1,11 @@
+# Every text file is LF, in the repository and in the working tree.
+#
+# Without this, core.autocrlf=true on Windows checks files out as CRLF while the
+# repository stores LF, so git reports a pending change on files nobody edited and
+# warns on every add. The working-tree half matters beyond tidiness: these sources
+# are copied into Linux container images, and CRLF reaching a shell script or an
+# entrypoint there is a real failure rather than a cosmetic one.
+#
+# `text=auto` still lets git detect binary content and leave it alone. Nothing
+# tracked here is binary today, so no per-type overrides are needed yet.
+* text=auto eol=lf
