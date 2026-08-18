@@ -21,7 +21,7 @@ FROM eclipse-temurin:25-jre-noble
 
 LABEL org.opencontainers.image.title="FenPOS Agent" \
       org.opencontainers.image.description="Printer agent for FenPOS: drives serial ESC/POS printers" \
-      org.opencontainers.image.source="https://github.com/NATroutter/FenPOS agent" \
+      org.opencontainers.image.source="https://github.com/NATroutter/FenPOS" \
       org.opencontainers.image.licenses="MIT"
 
 # No curl. It was here for a healthcheck against the agent's own HTTP API, and

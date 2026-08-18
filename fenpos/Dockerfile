@@ -37,29 +37,42 @@ LABEL org.opencontainers.image.title="FenPOS" \
       org.opencontainers.image.source="https://github.com/NATroutter/FenPOS" \
       org.opencontainers.image.licenses="MIT"
 
-RUN corepack enable \
- && useradd --system --create-home --uid 10001 fenpos
+# No corepack here. The runtime stage never invokes pnpm: doing so made the
+# container fetch pnpm from the registry on every start, and pnpm then compared
+# node_modules against a lockfile this stage does not carry, decided the tree was
+# stale and tried to reinstall — which aborts without a TTY. The binaries in
+# node_modules/.bin are called directly instead, so starting needs no network.
+RUN useradd --system --create-home --uid 10001 fenpos
 
 WORKDIR /app
 
 # The whole tree rather than a standalone bundle: this process is started by
 # `tsx server.ts`, not by Next's own server, because it owns the WebSocket
 # upgrade for the agent link. A standalone build has no entry point for that.
-COPY --from=build /build/node_modules ./node_modules
-COPY --from=build /build/.next ./.next
-COPY --from=build /build/generated ./generated
-COPY --from=build /build/prisma ./prisma
-COPY --from=build /build/package.json ./package.json
-COPY --from=build /build/prisma.config.ts ./prisma.config.ts
-COPY --from=build /build/server.ts ./server.ts
-COPY --from=build /build/instrumentation.ts ./instrumentation.ts
-COPY --from=build /build/instrumentation-runtime.ts ./instrumentation-runtime.ts
-COPY --from=build /build/next.config.ts ./next.config.ts
-COPY --from=build /build/tsconfig.json ./tsconfig.json
-COPY --from=build /build/lib ./lib
-COPY --from=build /build/app ./app
+#
+# Ownership is set by each COPY rather than by a `chown -R` afterwards. A
+# recursive chown rewrites every file it touches into a new layer, so the
+# thousand-odd megabytes of node_modules were being stored twice — once as
+# copied and once as chowned.
+COPY --from=build --chown=fenpos:fenpos /build/node_modules ./node_modules
+COPY --from=build --chown=fenpos:fenpos /build/.next ./.next
+COPY --from=build --chown=fenpos:fenpos /build/generated ./generated
+COPY --from=build --chown=fenpos:fenpos /build/prisma ./prisma
+COPY --from=build --chown=fenpos:fenpos /build/package.json ./package.json
+COPY --from=build --chown=fenpos:fenpos /build/prisma.config.ts ./prisma.config.ts
+COPY --from=build --chown=fenpos:fenpos /build/server.ts ./server.ts
+COPY --from=build --chown=fenpos:fenpos /build/instrumentation.ts ./instrumentation.ts
+COPY --from=build --chown=fenpos:fenpos /build/instrumentation-runtime.ts ./instrumentation-runtime.ts
+COPY --from=build --chown=fenpos:fenpos /build/next.config.ts ./next.config.ts
+COPY --from=build --chown=fenpos:fenpos /build/tsconfig.json ./tsconfig.json
+COPY --from=build --chown=fenpos:fenpos /build/lib ./lib
+COPY --from=build --chown=fenpos:fenpos /build/app ./app
+# The password is set by running the script in here against the live database, so
+# it has to be in the image — without it the documented way to get a first login
+# is unavailable exactly where it is needed.
+COPY --from=build --chown=fenpos:fenpos /build/scripts ./scripts
 
-RUN mkdir -p /app/data && chown -R fenpos:fenpos /app
+RUN mkdir -p /app/data && chown fenpos:fenpos /app /app/data
 
 USER fenpos
 
@@ -73,4 +86,4 @@ VOLUME ["/app/data"]
 # Migrations run at start rather than in the build, because the database is a
 # volume the image has never seen. Deploy rather than dev: it applies what is
 # committed and refuses to invent a migration against a production database.
-CMD ["sh", "-c", "pnpm db:deploy && pnpm start"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec ./node_modules/.bin/tsx server.ts"]

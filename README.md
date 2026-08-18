@@ -73,6 +73,13 @@ Agents are Linux-only in Docker. Docker Desktop on Windows and macOS runs contai
 with no serial passthrough, so a COM port cannot be reached from one at all — run the jar
 directly on the JVM there.
 
+Set the first administrator password once the server container is up. The image calls its
+binaries directly rather than through pnpm, so that starting needs no network access:
+
+```sh
+docker compose exec fenpos ./node_modules/.bin/tsx scripts/set-admin-password.ts "a password of at least twelve characters"
+```
+
 Back up `fenpos/data`. It holds the agents and their credentials, every device, the API keys
 and the administrator password.
 
