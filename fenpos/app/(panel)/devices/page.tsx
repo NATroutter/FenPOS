@@ -1,0 +1,151 @@
+import { Plus, Printer } from "lucide-react";
+import { DeviceCard, type DeviceCardData } from "@/app/(panel)/devices/device-card";
+import { DeviceDialog, EMPTY_DEVICE } from "@/app/(panel)/devices/device-dialog";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { prisma } from "@/lib/db";
+import type { Codepage, FlowControl, Linefeed, Parity, UnsupportedPolicy } from "@/lib/domain/enums";
+import { getAgentStatus } from "@/lib/link/device-status";
+import { isConnected } from "@/lib/link/registry";
+
+export const metadata = { title: "Devices · FenPOS" };
+
+/**
+ * Never cached: connection state and queue depth change without any request causing it to.
+ */
+export const dynamic = "force-dynamic";
+
+/**
+ * The Devices tab.
+ *
+ * Grouped by agent, because that is the physical reality: a printer belongs to one machine, its
+ * name is unique only within that machine, and every action on it goes through that machine's
+ * link. A flat list would let an operator act on a printer without noticing which site it is at.
+ *
+ * Configured state comes from the database; observed state comes from what each agent last
+ * reported. Keeping the two visibly separate is the point — a printer configured to auto-connect
+ * and currently unplugged is a normal, temporary situation, and the panel should show both facts
+ * rather than resolving them into one misleading answer.
+ */
+export default async function DevicesPage() {
+	const agents = await prisma.agent.findMany({
+		orderBy: { name: "asc" },
+		include: { devices: { orderBy: { name: "asc" } } },
+	});
+
+	const groups = agents.map((agent) => {
+		const online = isConnected(agent.id);
+		const observed = getAgentStatus(agent.id);
+
+		const devices: DeviceCardData[] = agent.devices.map((device) => {
+			const state = observed.get(device.name);
+			return {
+				id: device.id,
+				agentId: agent.id,
+				agentName: agent.name,
+				agentOnline: online,
+				name: device.name,
+				paused: device.paused,
+				connection: state?.connection ?? null,
+				queueDepth: state?.queueDepth ?? null,
+				settings: {
+					name: device.name,
+					port: device.port,
+					baudRate: device.baudRate,
+					dataBits: device.dataBits,
+					stopBits: device.stopBits,
+					// SQLite has no enums, so Prisma types these as plain strings. The values are
+					// written only through the device service, which validates them against the same
+					// closed sets, and a row that somehow held anything else would be refused by the
+					// config push long before it reached a printer.
+					parity: device.parity as Parity,
+					flowControl: device.flowControl as FlowControl,
+					writeTimeoutMs: device.writeTimeoutMs,
+					autoConnect: device.autoConnect,
+					autoReconnect: device.autoReconnect,
+					reconnectDelaySeconds: device.reconnectDelaySeconds,
+					columns: device.columns,
+					codepage: device.codepage as Codepage,
+					onUnsupported: device.onUnsupported as UnsupportedPolicy,
+					defaultWrap: device.defaultWrap,
+					defaultLinefeed: device.defaultLinefeed as Linefeed,
+					maxQueueDepth: device.maxQueueDepth ?? EMPTY_DEVICE.maxQueueDepth,
+				},
+			};
+		});
+
+		return { id: agent.id, name: agent.name, online, devices };
+	});
+
+	const total = groups.reduce((count, group) => count + group.devices.length, 0);
+
+	return (
+		<div className="flex flex-col gap-5">
+			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
+				<div className="min-w-[220px] flex-1">
+					<h2 className="text-[15px] font-semibold tracking-tight">Devices</h2>
+					<p className="mt-1 text-[12.5px] text-muted-foreground">
+						Each printer belongs to one agent. Names need only be unique within their agent, so every site can have its
+						own <span className="font-mono">kitchen</span>.
+					</p>
+				</div>
+			</div>
+
+			{agents.length === 0 ? (
+				<Empty className="border border-dashed border-border">
+					<EmptyHeader>
+						<EmptyMedia variant="icon">
+							<Printer />
+						</EmptyMedia>
+						<EmptyTitle>No agents yet</EmptyTitle>
+						<EmptyDescription>
+							Printers are configured behind an agent. Add one on the Agents tab and pair it first.
+						</EmptyDescription>
+					</EmptyHeader>
+				</Empty>
+			) : (
+				groups.map((group) => (
+					<section key={group.id} className="flex flex-col gap-3">
+						<div className="flex flex-wrap items-center gap-3">
+							<h3 className="font-mono text-[13px] font-medium">{group.name}</h3>
+							<span className="text-[11.5px] text-subtle-foreground">
+								{group.online ? "online" : "offline"} · {group.devices.length}{" "}
+								{group.devices.length === 1 ? "printer" : "printers"}
+							</span>
+							<div className="flex-1" />
+							<DeviceDialog
+								agentId={group.id}
+								agentName={group.name}
+								agentOnline={group.online}
+								trigger={
+									<Button variant="outline" size="sm" className="h-8">
+										<Plus className="size-3.5" />
+										Add printer
+									</Button>
+								}
+							/>
+						</div>
+
+						{group.devices.length === 0 ? (
+							<p className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-subtle-foreground">
+								No printers on {group.name} yet.
+							</p>
+						) : (
+							<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] items-stretch gap-4">
+								{group.devices.map((device) => (
+									<DeviceCard key={device.id} device={device} />
+								))}
+							</div>
+						)}
+					</section>
+				))
+			)}
+
+			{agents.length > 0 && total === 0 ? (
+				<p className="text-[12.5px] text-subtle-foreground">
+					Add a printer to an agent above, then use its test page to check the paper width and codepage.
+				</p>
+			) : null}
+		</div>
+	);
+}
