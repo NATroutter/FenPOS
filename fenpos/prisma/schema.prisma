@@ -1,0 +1,288 @@
+// FenPOS schema.
+//
+// FenPOS is the source of truth for all centrally managed state: agent identities,
+// device configuration, API credentials, and job records. Agents hold only a cached copy of
+// what the server pushed them. See
+// docs/superpowers/specs/2026-08-18-fenpos-agent-design.md.
+//
+// SQLite does not support Prisma enums, so every closed value set is stored as TEXT and
+// validated at the application boundary. The TypeScript unions in lib/domain/ are the
+// single source of truth for those values; nothing else may widen them.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Singleton row holding the one administrator credential for this install.
+/// Kept a singleton by the fixed primary key rather than by convention.
+model AdminAuth {
+  id           Int      @id @default(1)
+  passwordHash String   @map("password_hash")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("admin_auth")
+}
+
+/// An authenticated admin browser session.
+///
+/// Stored server-side rather than encoded in a self-contained cookie so that sign-out and
+/// password changes revoke immediately instead of waiting for expiry. Only the hash of the
+/// session token is persisted: a database read must not yield usable credentials.
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique @map("token_hash")
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  userAgent  String?  @map("user_agent")
+  ipAddress  String?  @map("ip_address")
+
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// A printer agent: one machine with printers attached, at one physical location.
+///
+/// The status column is observed state, not desired state: it reflects whether the agent
+/// currently holds a live WebSocket. It is reset to OFFLINE on startup, because
+/// in-memory connection state does not survive a restart and a stale ONLINE would be a lie.
+/// Values: PENDING | ONLINE | OFFLINE.
+model Agent {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  status       String    @default("PENDING")
+  /// SHA-256 of the long-lived bearer token issued at pairing. Never the token itself.
+  /// Deterministic rather than salted, so the token can be resolved in one indexed lookup.
+  /// The token is 256 bits of CSPRNG output and therefore has no brute-force surface for a
+  /// slow KDF to defend; argon2 is for human-chosen passwords, not generated secrets.
+  tokenHash    String?   @unique @map("token_hash")
+  lastSeenAt   DateTime? @map("last_seen_at")
+  agentVersion String?   @map("agent_version")
+  platform     String?
+  hostname     String?
+  /// Address the agent most recently paired or connected from, surfaced in the panel so an
+  /// unexpected pairing is visible to the administrator.
+  lastAddress  String?   @map("last_address")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  devices      Device[]
+  jobs         Job[]
+  pairingCodes PairingCode[]
+  logEntries   LogEntry[]
+
+  @@index([status])
+  @@map("agents")
+}
+
+/// A single-use, short-lived code that lets one agent claim one identity.
+///
+/// Consumed atomically at redemption rather than at first connect, so a code observed in
+/// flight cannot be replayed. Rows are retained after consumption for the audit trail.
+model PairingCode {
+  id         String    @id @default(cuid())
+  agentId     String    @map("agent_id")
+  /// The formatted code, stored in the clear.
+  ///
+  /// Hashing was considered and rejected: the panel must be able to redisplay the code when
+  /// the administrator navigates back to a pending agent, which a one-way hash forbids.
+  /// Nothing is given up by storing it, because the code is single-use, expires in minutes,
+  /// and is rate-limited at redemption — and anyone able to read this table already controls
+  /// the server it belongs to.
+  code       String    @unique
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([expiresAt])
+  @@map("pairing_codes")
+}
+
+/// A thermal printer reachable through exactly one agent.
+///
+/// FenPOS owns this configuration and pushes it to the agent, which caches it so it can
+/// keep printing through a disconnect. Names are unique per agent rather than globally,
+/// which is what makes agent-scoped API paths work.
+model Device {
+  id     String @id @default(cuid())
+  agentId String @map("agent_id")
+  name   String
+
+  // --- Serial transport ---
+  port                  String
+  baudRate              Int     @default(9600) @map("baud_rate")
+  dataBits              Int     @default(8) @map("data_bits")
+  stopBits              Int     @default(1) @map("stop_bits")
+  /// NONE | ODD | EVEN | MARK | SPACE
+  parity                String  @default("NONE")
+  /// NONE | RTS | CTS | DSR | DTR | XONXOFF_IN | XONXOFF_OUT
+  flowControl           String  @default("NONE") @map("flow_control")
+  writeTimeoutMs        Int     @default(5000) @map("write_timeout_ms")
+  autoConnect           Boolean @default(true) @map("auto_connect")
+  autoReconnect         Boolean @default(true) @map("auto_reconnect")
+  reconnectDelaySeconds Int     @default(5) @map("reconnect_delay_seconds")
+
+  // --- Print behaviour ---
+  /// Printable columns: 42 for 80mm paper, 32 for 58mm.
+  columns         Int     @default(42)
+  codepage        String  @default("CP858")
+  /// REJECT | REPLACE | STRIP, for characters the codepage cannot represent.
+  onUnsupported   String  @default("REJECT") @map("on_unsupported")
+  defaultWrap     Boolean @default(true) @map("default_wrap")
+  /// LF | CRLF | NONE
+  defaultLinefeed String  @default("LF") @map("default_linefeed")
+
+  // --- Per-device limit overrides. Null means inherit the global setting. ---
+  maxBodyBytes   Int? @map("max_body_bytes")
+  maxLines       Int? @map("max_lines")
+  maxLineChars   Int? @map("max_line_chars")
+  maxTotalChars  Int? @map("max_total_chars")
+  maxOutputLines Int? @map("max_output_lines")
+  maxQueueDepth  Int? @map("max_queue_depth")
+
+  /// Desired state. Observed connection state lives in memory, reported by the agent.
+  paused    Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  agent       Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  jobs       Job[]
+  keyGrants  ApiKeyDevice[]
+  logEntries LogEntry[]
+
+  @@unique([agentId, name])
+  @@index([agentId])
+  @@map("devices")
+}
+
+/// A bearer credential held by a machine client, typically a POS terminal.
+///
+/// Only the hash is stored; the plaintext is shown once at creation and never again.
+/// A key grants nothing by default: both its device grants and its permissions are
+/// explicit rows, so a freshly created key is inert rather than permissive.
+model ApiKey {
+  id         String    @id @default(cuid())
+  name       String
+  /// SHA-256 of the full key. Deterministic so an incoming bearer token resolves to its key
+  /// in one indexed lookup rather than a scan-and-verify over every row.
+  keyHash    String    @unique @map("key_hash")
+  /// Short non-secret fragment for display, e.g. the last four characters.
+  maskedHint String    @map("masked_hint")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  permissions ApiKeyPermission[]
+  devices     ApiKeyDevice[]
+  jobs        Job[]
+
+  @@index([revokedAt])
+  @@map("api_keys")
+}
+
+/// One permission granted to one key. Absence of a row denies the action.
+model ApiKeyPermission {
+  apiKeyId   String @map("api_key_id")
+  /// See PERMISSIONS in lib/domain/permissions.ts for the closed set.
+  permission String
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@id([apiKeyId, permission])
+  @@map("api_key_permissions")
+}
+
+/// One device a key may address. Absence of a row denies access to that device.
+model ApiKeyDevice {
+  apiKeyId String @map("api_key_id")
+  deviceId String @map("device_id")
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@id([apiKeyId, deviceId])
+  @@index([deviceId])
+  @@map("api_key_devices")
+}
+
+/// A print job lifecycle record.
+///
+/// Deliberately does not retain the submitted content: receipts carry customer data, and
+/// the operational questions (did it print, how large was it, why did it fail) are all
+/// answerable from metadata alone.
+model Job {
+  id       String  @id @default(cuid())
+  agentId   String  @map("agent_id")
+  deviceId String  @map("device_id")
+  /// Null when the job originated from the admin panel rather than from an API key.
+  apiKeyId String? @map("api_key_id")
+
+  /// QUEUED | PRINTING | COMPLETED | FAILED | CANCELLED
+  status String @default("QUEUED")
+
+  submittedAt DateTime  @default(now()) @map("submitted_at")
+  queuedAt    DateTime? @map("queued_at")
+  startedAt   DateTime? @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+
+  /// Text lines after wrapping, i.e. the figure checked against maxOutputLines.
+  lines Int?
+  /// Size of the rendered ESC/POS payload.
+  bytes Int?
+
+  errorCode    String? @map("error_code")
+  errorMessage String? @map("error_message")
+
+  agent   Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  device Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  apiKey ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([submittedAt])
+  @@index([deviceId, submittedAt])
+  @@index([agentId, submittedAt])
+  @@map("jobs")
+}
+
+/// An operational log line, either raised by the server or forwarded from an agent.
+///
+/// Ingestion from agents is rate-limited and length-capped at the protocol boundary. This
+/// table must never become a channel through which an agent can exhaust the disk.
+model LogEntry {
+  id       String   @id @default(cuid())
+  ts       DateTime @default(now())
+  /// DEBUG | INFO | WARN | ERROR
+  level    String
+  message  String
+  agentId   String?  @map("agent_id")
+  deviceId String?  @map("device_id")
+
+  agent   Agent?   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([ts])
+  @@index([level, ts])
+  @@index([agentId, ts])
+  @@map("log_entries")
+}
+
+/// Global configuration, replacing the removed config.yaml.
+///
+/// Values are stored as JSON text and parsed against the schema in lib/domain/settings.ts,
+/// so a malformed or stale row surfaces as a validation error rather than as undefined
+/// behaviour deep in the print path.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
