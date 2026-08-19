@@ -1,5 +1,5 @@
 import { Align, Font } from "@/lib/domain/enums";
-import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { TAGS, type Tag, tagByName } from "@/lib/markup/tags";
 
@@ -65,8 +65,20 @@ class Parser {
 	/** Whether an alignment tag has been seen; a second one is an error. */
 	private alignSeen = false;
 
-	/** Whether alignment has closed; content after that point is outside its scope. */
-	private alignClosed = false;
+	/** Whether a wrap tag has been seen; <wrap> and <nowrap> share one slot. */
+	private wrapSeen = false;
+
+	/** What this line was asked to do about wrapping; null defers to the device. */
+	private wrap: boolean | null = null;
+
+	/**
+	 * The line-owning tag that has closed, if any.
+	 *
+	 * `<align>`, `<wrap>` and `<nowrap>` each apply to a whole printed line, so content after
+	 * one closes would silently inherit a property the author did not write on it. Remembering
+	 * which tag closed is what lets the refusal name the right one.
+	 */
+	private closedOwner: { name: string; code: MarkupErrorCode } | null = null;
 
 	/** Column of the rule tag, or 0 if none, used to report a scope violation. */
 	private ruleColumn = 0;
@@ -106,7 +118,7 @@ class Parser {
 
 		this.verifyRuleScope();
 
-		return { align: this.align, spans: this.spans, directives: this.directives };
+		return { align: this.align, wrap: this.wrap, spans: this.spans, directives: this.directives };
 	}
 
 	// -----------------------------------------------------------------------
@@ -122,7 +134,7 @@ class Parser {
 				"Control characters cannot be printed; use markup tags for formatting",
 			);
 		}
-		this.requireInsideAlignScope(this.index + 1);
+		this.requireInsideLineScope(this.index + 1);
 		this.beginPendingAt(this.index + 1);
 		this.pending += current;
 		this.index++;
@@ -157,7 +169,7 @@ class Parser {
 	 * @param sourceLength how many source characters the entity occupies
 	 */
 	private emitEntity(decoded: string, sourceLength: number): void {
-		this.requireInsideAlignScope(this.index + 1);
+		this.requireInsideLineScope(this.index + 1);
 		this.flushPending();
 		this.spans.push({ text: decoded, style: this.style, sourceColumn: this.index + 1 });
 		this.index += sourceLength;
@@ -233,7 +245,12 @@ class Parser {
 			return;
 		}
 
-		this.requireInsideAlignScope(column);
+		if (tag.name === "wrap" || tag.name === "nowrap") {
+			this.openWrap(tag, column);
+			return;
+		}
+
+		this.requireInsideLineScope(column);
 		this.open.push({ tag, column, styleBefore: this.style });
 		this.style = this.applyStyle(tag, argument, column);
 	}
@@ -257,6 +274,11 @@ class Parser {
 
 		if (tag.name === "align") {
 			this.closeAlign(column);
+			return;
+		}
+
+		if (tag.name === "wrap" || tag.name === "nowrap") {
+			this.closeWrap(tag, column);
 			return;
 		}
 
@@ -322,14 +344,7 @@ class Parser {
 		if (this.alignSeen) {
 			throw new MarkupError(MARKUP_ERRORS.invalidAlignScope, column, "align", "Only one <align> is allowed per line");
 		}
-		if (this.spans.length > 0 || this.directives.length > 0) {
-			throw new MarkupError(
-				MARKUP_ERRORS.invalidAlignScope,
-				column,
-				"align",
-				"<align> must enclose the whole line, so nothing may precede it",
-			);
-		}
+		this.requireLineOwnerCanOpen("align", MARKUP_ERRORS.invalidAlignScope, column);
 
 		const value = (argument ?? "").toUpperCase();
 		if (!Align.is(value)) {
@@ -353,23 +368,82 @@ class Parser {
 		}
 		this.open.pop();
 		this.style = current.styleBefore;
-		this.alignClosed = true;
+		this.closedOwner = { name: "align", code: MARKUP_ERRORS.invalidAlignScope };
+	}
+
+	// -----------------------------------------------------------------------
+	// Wrapping
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Opens `<wrap>` or `<nowrap>`.
+	 *
+	 * Both occupy one slot: a line either wraps or it does not, so writing both is a
+	 * contradiction rather than a refinement.
+	 */
+	private openWrap(tag: Tag, column: number): void {
+		if (this.wrapSeen) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidWrapScope,
+				column,
+				tag.name,
+				"Only one <wrap> or <nowrap> is allowed per line",
+			);
+		}
+		this.requireLineOwnerCanOpen(tag.name, MARKUP_ERRORS.invalidWrapScope, column);
+
+		this.wrap = tag.name === "wrap";
+		this.wrapSeen = true;
+		this.open.push({ tag, column, styleBefore: this.style });
+	}
+
+	private closeWrap(tag: Tag, column: number): void {
+		const current = this.open[this.open.length - 1];
+		if (!current || current.tag !== tag) {
+			throw new MarkupError(
+				MARKUP_ERRORS.unexpectedCloseTag,
+				column,
+				tag.name,
+				`</${tag.name}> does not match any open <${tag.name}>`,
+			);
+		}
+		this.open.pop();
+		this.style = current.styleBefore;
+		this.closedOwner = { name: tag.name, code: MARKUP_ERRORS.invalidWrapScope };
 	}
 
 	/**
-	 * Rejects content appearing after `</align>`.
+	 * Rejects content appearing after a line-owning tag has closed.
 	 *
-	 * Alignment applies to a whole printed line, so text outside the tag would silently inherit
-	 * an alignment the author did not write. Refusing is better than guessing.
+	 * Alignment and wrapping both apply to a whole printed line, so text outside the tag would
+	 * silently inherit a property the author did not write. Refusing is better than guessing.
 	 */
-	private requireInsideAlignScope(column: number): void {
-		if (this.alignClosed) {
+	private requireInsideLineScope(column: number): void {
+		if (this.closedOwner) {
 			throw new MarkupError(
-				MARKUP_ERRORS.invalidAlignScope,
+				this.closedOwner.code,
 				column,
-				"align",
-				"<align> must enclose the whole line, so nothing may follow </align>",
+				this.closedOwner.name,
+				`<${this.closedOwner.name}> must enclose the whole line, so nothing may follow </${this.closedOwner.name}>`,
 			);
+		}
+	}
+
+	/**
+	 * Rejects a line-owning tag that cannot legally open here.
+	 *
+	 * Another line-owning tag may already be open — that is the nesting the language allows, in
+	 * either order — but text or a directive before it means the tag does not own the line.
+	 */
+	private requireLineOwnerCanOpen(name: string, code: MarkupErrorCode, column: number): void {
+		this.requireInsideLineScope(column);
+		// Text or a directive already emitted disqualifies the tag from owning the line. So does
+		// opening inside a styling tag: styling adds nothing to `spans` or `directives` until it
+		// closes, so without this check `<bold><nowrap>` would slip past undetected.
+		const precededByContent = this.spans.length > 0 || this.directives.length > 0;
+		const nestedInsideStyling = this.open.some((entry) => !isLineOwningTag(entry.tag.name));
+		if (precededByContent || nestedInsideStyling) {
+			throw new MarkupError(code, column, name, `<${name}> must enclose the whole line, so nothing may precede it`);
 		}
 	}
 
@@ -378,7 +452,7 @@ class Parser {
 	// -----------------------------------------------------------------------
 
 	private appendDirective(tag: Tag, argument: string | null, column: number): void {
-		this.requireInsideAlignScope(column);
+		this.requireInsideLineScope(column);
 		switch (tag.name) {
 			case "cut":
 				this.directives.push({ kind: "CUT", mode: this.cutMode(argument, column) });
@@ -474,4 +548,14 @@ class Parser {
 function isControl(value: string): boolean {
 	const code = value.charCodeAt(0);
 	return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+}
+
+/**
+ * Whether a tag applies to a whole printed line, as opposed to styling a run of text.
+ *
+ * `<align>`, `<wrap>` and `<nowrap>` may nest each other in any order; nesting one inside a
+ * styling tag is not "enclosing the whole line" and must be refused.
+ */
+function isLineOwningTag(name: string): boolean {
+	return name === "align" || name === "wrap" || name === "nowrap";
 }

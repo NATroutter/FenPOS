@@ -110,7 +110,7 @@ export function validateCharset(line: Line, codepage: Codepage, policy: Unsuppor
 		}
 	}
 
-	return { align: line.align, spans: converted, directives: line.directives };
+	return { align: line.align, wrap: line.wrap, spans: converted, directives: line.directives };
 }
 
 /**

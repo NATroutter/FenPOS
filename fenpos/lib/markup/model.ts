@@ -59,6 +59,13 @@ export type Directive =
 /** One parsed element. Alignment is a line property because ESC/POS justifies whole lines. */
 export interface Line {
 	align: Align;
+	/**
+	 * Whether this line is broken to the paper width.
+	 *
+	 * `null` means the element carried no wrap tag, and the device's `defaultWrap` decides. A
+	 * line property for the same reason alignment is one: a half-wrapped line is not a thing.
+	 */
+	wrap: boolean | null;
 	spans: Span[];
 	directives: Directive[];
 }

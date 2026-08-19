@@ -18,6 +18,8 @@ export const MARKUP_ERRORS = {
 	invalidTagArgument: "invalid_tag_argument",
 	/** An alignment tag that does not enclose the whole element, or a second one. */
 	invalidAlignScope: "invalid_align_scope",
+	/** A wrap tag that does not enclose the whole element, or a second one. */
+	invalidWrapScope: "invalid_wrap_scope",
 	/** A rule tag sharing an element with other content. */
 	invalidRuleScope: "invalid_rule_scope",
 	/** A character that would be interpreted by the printer as a command. */

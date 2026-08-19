@@ -34,6 +34,10 @@ export const TAGS: Record<string, Tag> = {
 	font: { name: "font", kind: "PAIRED", argument: "REQUIRED" },
 	/** Line justification. Paired, and required to enclose the whole element. */
 	align: { name: "align", kind: "PAIRED", argument: "REQUIRED" },
+	/** Break this line at the paper width. Paired, and required to enclose the whole element. */
+	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE" },
+	/** Print this line as written. Paired, and required to enclose the whole element. */
+	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE" },
 	/** Cut the paper, fully by default. */
 	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL" },
 	/** Advance the paper by a number of lines. */

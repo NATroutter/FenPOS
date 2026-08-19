@@ -145,6 +145,7 @@ function trim(rows: Cell[][]): Cell[][] {
 function toLines(rows: Cell[][], source: Line): Line[] {
 	return rows.map((row, index) => ({
 		align: source.align,
+		wrap: source.wrap,
 		spans: toSpans(row),
 		directives: index === rows.length - 1 ? source.directives : [],
 	}));

@@ -209,7 +209,9 @@ describe("compile pipeline", () => {
 		const job = run({ data: ["one", "<cut>"] });
 
 		expect(job.lines).toHaveLength(2);
-		expect(countTextLines([{ align: "LEFT", spans: [], directives: [{ kind: "CUT", mode: "FULL" }] }])).toBe(0);
+		expect(
+			countTextLines([{ align: "LEFT", wrap: null, spans: [], directives: [{ kind: "CUT", mode: "FULL" }] }]),
+		).toBe(0);
 	});
 
 	it("compiles an empty data array", () => {

@@ -32,6 +32,7 @@ export const API_ERROR_STATUS = {
 	unexpected_close_tag: 400,
 	invalid_tag_argument: 400,
 	invalid_align_scope: 400,
+	invalid_wrap_scope: 400,
 	invalid_rule_scope: 400,
 	unsupported_character: 400,
 	too_many_output_lines: 400,

@@ -254,3 +254,94 @@ describe("parseMarkup", () => {
 		expect(error(`a${String.fromCharCode(0x85)}b`).code).toBe(MARKUP_ERRORS.controlCharacter);
 	});
 });
+
+describe("wrap tags", () => {
+	it("leaves wrap unset when no tag is present", () => {
+		expect(parseMarkup("Yhteensa 14.80").wrap).toBeNull();
+	});
+
+	it("reads <nowrap> as a refusal to wrap", () => {
+		expect(parseMarkup("<nowrap>Yhteensa 14.80</nowrap>").wrap).toBe(false);
+	});
+
+	it("reads <wrap> as a request to wrap", () => {
+		expect(parseMarkup("<wrap>Iso kahvi ja korvapuusti</wrap>").wrap).toBe(true);
+	});
+
+	it("keeps the text and drops the tag", () => {
+		const line = parseMarkup("<nowrap>Yhteensa 14.80</nowrap>");
+
+		expect(line.spans.map((span) => span.text).join("")).toBe("Yhteensa 14.80");
+	});
+
+	it("nests inside alignment", () => {
+		const line = parseMarkup("<align=right><nowrap>Yhteensa 14.80</nowrap></align>");
+
+		expect(line.align).toBe("RIGHT");
+		expect(line.wrap).toBe(false);
+	});
+
+	it("nests outside alignment, which means the same thing", () => {
+		const line = parseMarkup("<nowrap><align=right>Yhteensa 14.80</align></nowrap>");
+
+		expect(line.align).toBe("RIGHT");
+		expect(line.wrap).toBe(false);
+	});
+
+	it("encloses styling tags", () => {
+		const line = parseMarkup("<nowrap><bold>Yhteensa 14.80</bold></nowrap>");
+
+		expect(line.wrap).toBe(false);
+		expect(line.spans[0].style.bold).toBe(true);
+	});
+
+	it("permits a rule, where wrapping is a no-op", () => {
+		const line = parseMarkup("<nowrap><hr></nowrap>");
+
+		expect(line.wrap).toBe(false);
+		expect(line.directives).toEqual([{ kind: "RULE" }]);
+	});
+});
+
+describe("wrap tag scope", () => {
+	/** Runs a parse and returns the error, failing the test if it succeeded. */
+	const scopeError = (source: string): MarkupError => {
+		try {
+			parseMarkup(source);
+		} catch (thrown) {
+			if (thrown instanceof MarkupError) {
+				return thrown;
+			}
+			throw thrown;
+		}
+		throw new Error("expected the parse to be refused");
+	};
+
+	it("refuses text before the tag", () => {
+		expect(scopeError("Total: <nowrap>14.80</nowrap>").code).toBe("invalid_wrap_scope");
+	});
+
+	it("refuses text after the tag", () => {
+		expect(scopeError("<nowrap>14.80</nowrap> paid").code).toBe("invalid_wrap_scope");
+	});
+
+	it("refuses a second wrap tag", () => {
+		expect(scopeError("<nowrap>a</nowrap><nowrap>b</nowrap>").code).toBe("invalid_wrap_scope");
+	});
+
+	it("refuses a line that both wraps and does not", () => {
+		expect(scopeError("<wrap><nowrap>x</nowrap></wrap>").code).toBe("invalid_wrap_scope");
+	});
+
+	it("refuses a wrap tag inside a styling tag", () => {
+		expect(scopeError("<bold><nowrap>x</nowrap></bold>").code).toBe("invalid_wrap_scope");
+	});
+
+	it("refuses </nowrap> closing an open <wrap>", () => {
+		expect(scopeError("<wrap>x</nowrap>").code).toBe("unexpected_close_tag");
+	});
+
+	it("reports the column of the offending tag", () => {
+		expect(scopeError("Total: <nowrap>14.80</nowrap>").column).toBe(8);
+	});
+});
