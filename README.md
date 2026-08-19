@@ -31,9 +31,9 @@ FenPOS splits that into a **server** you run once and an **agent** you run at ea
 | **Server** | Public API, admin panel, authentication, and every piece of persistent state | `ghcr.io/natroutter/fenpos` |
 | **Agent** | A small Java daemon that drives the printers physically attached to one machine | `ghcr.io/natroutter/fenpos-agent` |
 
-The agent **dials out** and holds the connection open. A site needs no inbound port, no static
-address and no firewall change — which is the entire reason printers in three buildings are
-workable. It also means an agent has no network surface to attack: there is nothing listening.
+The agent **dials out** and holds the connection open, so a site needs no inbound port, no
+static address and no firewall change. An agent also has nothing listening, so there is no
+port to scan and no endpoint to attack.
 
 ```mermaid
 flowchart LR
@@ -46,18 +46,16 @@ flowchart LR
     A2 --> P2["🖨 serial"]
 ```
 
-The server validates every request and compiles it to an intermediate form before it reaches
-an agent, so bad input is refused **synchronously** with the exact line, column and character
-at fault — not discovered later by a printer that stops mid-receipt.
+The server validates each request and compiles it before it reaches an agent, so bad input
+comes back as a `400` naming the line, column and character at fault rather than failing at
+the printer.
 
 ---
 
 ## Quick start
 
-> **Docker is the supported way to run FenPOS.** Everything below is all you need. The
-> `pnpm` and `mvn` commands further down are for working on FenPOS itself.
-
-Pick the arrangement that matches your site.
+> **Docker is the supported way to run FenPOS.** The `pnpm` and `mvn` commands further down
+> are only for working on FenPOS itself.
 
 ### 1 · Server only
 
@@ -76,7 +74,7 @@ services:
       - "3000:3000"
 
     volumes:
-      # Everything that matters. Back this up.
+      # Agents, devices, keys, jobs and the admin password all live here. Back it up.
       - ./data:/app/data
 
     environment:
@@ -86,7 +84,7 @@ services:
       TZ: "Europe/Helsinki"
 
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 30s
@@ -100,8 +98,7 @@ docker compose up -d
 docker compose logs fenpos     # your administrator password is in here
 ```
 
-Put it behind TLS. Agents refuse plain HTTP to anything but loopback, and the pairing reply
-carries an agent's credential.
+Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
 
 ### 2 · Agent only
 
@@ -175,7 +172,7 @@ services:
     environment:
       TZ: "Europe/Helsinki"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 30s
@@ -237,22 +234,11 @@ the log:
 docker compose logs fenpos
 ```
 
-Sign in with it and the panel asks you to choose your own password before it will let you any
-further. **There is nothing else a session opened with the generated password can reach** —
-every panel route redirects to the change-password screen until it has been replaced.
+Sign in with it and the panel asks you to choose your own password. Every panel route
+redirects to that screen until you have, so the generated password reaches nothing else.
 
-The message repeats on **every start** until you replace it, so a scrolled-away or rotated log
-is never a lockout.
-
-<details>
-<summary>Why not a fixed default like <code>admin</code>, or a setup page?</summary>
-
-Both are the same hole. A server is usually reachable before its owner gets to it, and either
-approach hands the install to whoever arrives first — an unauthenticated setup page to anyone
-who finds it, a published default to anyone who has read the documentation. A generated secret
-closes that window while still asking nothing of you beyond reading the log you just started.
-
-</details>
+It is reprinted on **every start** until you replace it, so losing the first log to a restart
+or a rotation does not lock you out.
 
 ---
 
@@ -275,10 +261,9 @@ java -jar fenpos-agent.jar
 pair https://fenpos.example.com AG7K-2M9P-X4TR
 ```
 
-Both go through the same code path. Once an identity is stored the agent connects with that
-and logs that it ignored the variable, so a spent code left in a committed `compose.yaml`
-leaks nothing that still works — codes are single-use and consumed at redemption, not at first
-connect.
+Both take the same path through the agent. Once an identity is stored the agent uses it and
+logs that it ignored the variable, so a spent code left in a committed `compose.yaml` is
+harmless — codes are single-use and consumed when redeemed.
 
 > [!NOTE]
 > `https` is required for anything but loopback. The reply to a pairing request carries the
@@ -318,18 +303,18 @@ curl -X POST https://fenpos.example.com/api/print/kitchen/receipt-printer \
 { "jobId": "7cbe4cc3", "status": "QUEUED", "device": "receipt-printer", "lines": 7 }
 ```
 
-`202`, not `201` — the job is accepted and queued; the paper has not moved yet.
+The status is `202`: the job is queued, and the paper has not moved yet.
 
 **Markup:** `align` · `bold` · `underline` · `invert` · `size` · `font` · `hr` · `feed` · `cut`
 
 **Permissions:** `print` · `jobs:read` · `jobs:cancel` · `devices:read` · `devices:control` ·
 `status:read`
 
-A key without a grant for the device gets `404`, not `403` — the endpoint does not confirm
-that a device it cannot reach exists. Raw ESC/POS writes are admin-session only and can never
-be granted to a key.
+A key without a grant for the device gets `404` rather than `403`, so the endpoint does not
+confirm that a device exists to someone who cannot use it. Raw ESC/POS writes are admin-session
+only and cannot be granted to a key.
 
-Full reference, generated from the running install, is on the **Docs** tab.
+The **Docs** tab carries the full reference, generated from the running install.
 
 ---
 
@@ -370,32 +355,32 @@ Upgrades apply their own migrations at container start:
 docker compose pull && docker compose up -d
 ```
 
-Images are tagged `latest`, the exact version, and `major.minor` — pin as loosely or as
-tightly as you like.
+Images are tagged `latest`, the exact version, and `major.minor`, so you can pin as loosely
+or as tightly as you want.
 
 ---
 
 ## Security
 
-- **Agents have no inbound surface.** They dial out and never listen. There is no port to
+- **Agents have no inbound surface.** They dial out and never listen, so there is no port to
   scan and no endpoint to post to.
-- **Strict TLS with no escape hatch.** No "trust all certificates" flag exists, in any form.
+- **Strict TLS.** There is no "trust all certificates" option, in any form.
 - **SPKI pinning from pairing onward**, so a mis-issued certificate or a MITM proxy is
   refused even when the certificate chain validates.
 - **Pairing codes** are single-use, consumed atomically at redemption, expire in 15 minutes,
   and are rate-limited per IP.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
   five attempts per minute.
-- **The agent distrusts the server**: every frame is bounds-checked, unknown frames are
-  refused rather than fatal, and job dispatch is deduplicated by id.
-- **Passwords** are argon2id. Any character is accepted, including spaces — a passphrase is
-  the point. Minimum 12 characters.
+- **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
+  frames are refused without dropping the connection, and job dispatch is deduplicated by id.
+- **Passwords** are argon2id, minimum 12 characters. Any character is accepted, including
+  spaces, so passphrases work.
 
 ---
 
 ## Development
 
-> Not needed to run FenPOS. This is for working on it.
+> You do not need any of this to run FenPOS. It is for working on FenPOS itself.
 
 ```sh
 cd fenpos
@@ -424,24 +409,18 @@ mvn package
 
 | Command | What it does |
 |---|---|
-| `pnpm admin:set-password "…"` | Sets the password directly against the database. The recovery path for a lost password — first boot generates one, so this is not setup. |
+| `pnpm admin:set-password "…"` | Sets the password directly against the database. This is the recovery path for a lost password, not setup — first boot generates one. |
 | `pnpm admin:reset-password` | Drops the credential and every session, so the next start generates a fresh password. Leaves agents, devices, keys and history alone. Useful for re-testing the first-run flow. |
 | `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 
-If a page in `pnpm dev` renders but never becomes interactive — dead buttons, live values
-stuck on their placeholder, nothing in the browser console — that cache is stale. The failure
-is silent, so reach for `dev:clean` early.
+If a page in `pnpm dev` renders but never becomes interactive (dead buttons, live values stuck
+on their placeholder, nothing in the browser console) that cache is stale. Nothing is logged
+when this happens, so try `dev:clean` early.
 
 </details>
 
 ---
-
-## Design
-
-[`docs/superpowers/specs/2026-08-18-fenpos-agent-design.md`](docs/superpowers/specs/2026-08-18-fenpos-agent-design.md)
-carries the architecture: the link protocol, the pairing flow, the security model, and the
-reasoning behind each decision.
 
 ## License
 

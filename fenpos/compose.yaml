@@ -33,10 +33,10 @@ services:
       TZ: "Europe/Helsinki"
 
     healthcheck:
-      # The login page: cheap, needs no credential, and touches the database on
-      # the way through, so it fails if the volume is unwritable rather than
-      # reporting healthy while nothing works.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # Purpose-built: needs no credential and round-trips the database, so a process
+      # that is up but cannot reach its volume reports unhealthy instead of serving
+      # HTTP perfectly while being useless.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 30s

@@ -58,7 +58,13 @@ LABEL org.opencontainers.image.title="FenPOS" \
 # node_modules against a lockfile this stage does not carry, decided the tree was
 # stale and tried to reinstall — which aborts without a TTY. The binaries in
 # node_modules/.bin are called directly instead, so starting needs no network.
-RUN useradd --system --create-home --uid 10001 fenpos
+# curl is here for the healthcheck and nothing else. node:22-bookworm-slim ships without it,
+# so a `curl` probe in compose.yaml would fail every time and hold the container permanently
+# unhealthy — the failure looks like a broken app rather than a missing binary.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --create-home --uid 10001 fenpos
 
 WORKDIR /app
 
