@@ -66,11 +66,12 @@
 	},
 	"overrides": [
 		{
-			"includes": ["components/ui/**"],
+			"includes": ["components/ui/**", "components/reui/**"],
 			"linter": {
 				"rules": {
 					"a11y": {
 						"noLabelWithoutControl": "off",
+						"noSvgWithoutTitle": "off",
 						"useKeyWithClickEvents": "off",
 						"useSemanticElements": "off"
 					},
