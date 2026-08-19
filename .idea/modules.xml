@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/FenPOS.iml" filepath="$PROJECT_DIR$/.idea/FenPOS.iml" />
+      <module fileurl="file://$PROJECT_DIR$/agent/fenpos-agent.iml" filepath="$PROJECT_DIR$/agent/fenpos-agent.iml" />
     </modules>
   </component>
 </project>
