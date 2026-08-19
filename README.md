@@ -97,6 +97,12 @@ pnpm build
 If the administrator password is lost, `pnpm admin:set-password "…"` sets a new one directly
 against the database. It is the recovery path, not the setup path — first boot generates one.
 
+To exercise the first-run flow more than once, `pnpm admin:reset-password` drops the
+credential and every session, so the next start generates and prints a fresh password. It
+leaves agents, devices, keys and history alone; only the sign-in is reset. `pnpm db:reset`
+is the larger hammer — it recreates the database from the migrations and takes everything
+with it.
+
 If a page in `pnpm dev` renders but never becomes interactive — buttons dead, live values stuck
 on their placeholder, and nothing in the browser console — the `.next` dev cache is stale.
 `pnpm dev:clean` removes it and starts again. It is worth reaching for early, because the
