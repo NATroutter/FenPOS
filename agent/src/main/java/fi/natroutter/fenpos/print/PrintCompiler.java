@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Turns a job body into a printable payload, or explains precisely why it cannot.
@@ -41,8 +42,10 @@ import java.util.List;
 public final class PrintCompiler {
 
     private static final String FIELD_DATA = "data";
-    private static final String FIELD_WRAP = "wrap";
     private static final String FIELD_LINEFEED = "linefeed";
+
+    /** The only keys a request body may carry. */
+    private static final Set<String> ALLOWED_FIELDS = Set.of("data", "linefeed");
 
     private PrintCompiler() {
     }
@@ -60,10 +63,11 @@ public final class PrintCompiler {
         JsonObject root = parseObject(body);
         List<String> elements = readData(root, device.limits());
 
-        boolean wrap = readWrap(root, device.print());
+        requireKnownFields(root);
+
         Linefeed linefeed = readLinefeed(root, device.print());
 
-        List<Line> lines = layOut(elements, device, wrap);
+        List<Line> lines = layOut(elements, device);
         requireOutputWithinLimit(lines, device.limits());
 
         return new CompiledJob(render(lines, device.print(), linefeed), countTextLines(lines));
@@ -134,16 +138,22 @@ public final class PrintCompiler {
         return elements;
     }
 
-    private static boolean readWrap(JsonObject root, PrintSettings print)
-            throws PrintRequestException {
-        JsonElement wrap = root.get(FIELD_WRAP);
-        if (wrap == null || wrap.isJsonNull()) {
-            return print.defaultWrap();
+    /**
+     * Rejects a body carrying anything but {@code data} and {@code linefeed}.
+     * <p>
+     * Checked rather than ignored because {@code wrap} changed behaviour when it was removed: a
+     * caller still sending it would otherwise get silently wrapped output and no way to find out
+     * why.
+     */
+    private static void requireKnownFields(JsonObject root) throws PrintRequestException {
+        for (String key : root.keySet()) {
+            if (!ALLOWED_FIELDS.contains(key)) {
+                throw PrintRequestException.of("unknown_field", "wrap".equals(key)
+                        ? "'wrap' is no longer a request field. Use the <wrap> and <nowrap> tags, "
+                                + "which apply to one line."
+                        : "Unknown field '" + key + "'; this request accepts 'data' and 'linefeed'");
+            }
         }
-        if (!wrap.isJsonPrimitive() || !wrap.getAsJsonPrimitive().isBoolean()) {
-            throw PrintRequestException.of("invalid_type", "'wrap' must be true or false");
-        }
-        return wrap.getAsBoolean();
     }
 
     private static Linefeed readLinefeed(JsonObject root, PrintSettings print)
@@ -170,7 +180,7 @@ public final class PrintCompiler {
      * Parses, validates and wraps each element, translating the positional failures raised
      * by the parser and the encoder into request-level errors carrying the element index.
      */
-    private static List<Line> layOut(List<String> elements, Device device, boolean wrap)
+    private static List<Line> layOut(List<String> elements, Device device)
             throws PrintRequestException {
         PrintSettings print = device.print();
         List<Line> lines = new ArrayList<>(elements.size());
@@ -181,6 +191,7 @@ public final class PrintCompiler {
                 Line parsed = MarkupParser.parse(elements.get(index));
                 Line checked = CharsetValidator.validate(
                         parsed, print.codepage(), print.onUnsupported());
+                boolean wrap = checked.wrap() == null ? print.defaultWrap() : checked.wrap();
                 lines.addAll(wrap
                         ? LineWrapper.wrap(checked, print.columns())
                         : List.of(checked));

@@ -156,13 +156,6 @@ class PrintCompilerTest {
         assertEquals(2, job.lines(), "11 columns of text should wrap at width 10");
     }
 
-    @Test
-    void wrapFalseLeavesTheLineIntact() throws Exception {
-        CompiledJob job = compile("{\"data\": [\"" + "ab ".repeat(4) + "\"], \"wrap\": false}");
-
-        assertEquals(1, job.lines());
-    }
-
     /**
      * Limits are checked before content: a request that is both oversized and malformed
      * should be refused for the cheaper reason, without parsing megabytes of markup first.
@@ -194,5 +187,66 @@ class PrintCompilerTest {
                 new PrintSettings(10, Codepage.CP858, UnsupportedPolicy.REJECT, true, Linefeed.LF),
                 new LimitSettings(5, 20, 50, 3, 100),
                 false);
+    }
+
+    /**
+     * The ten-column fixture with room for a tagged element.
+     *
+     * {@link #device()} caps a line at twenty characters, which a tag plus its text exceeds —
+     * the request would be refused before wrapping was reached, testing the wrong thing.
+     */
+    private static Device wrappingDevice(boolean defaultWrap) {
+        return new Device(
+                "kitchen",
+                new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
+                        true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
+                new PrintSettings(10, Codepage.CP858, UnsupportedPolicy.REJECT, defaultWrap, Linefeed.LF),
+                new LimitSettings(5, 60, 200, 6, 100),
+                false);
+    }
+
+    // -------------------------------------------------------------------------
+    // wrap / nowrap tags
+    // -------------------------------------------------------------------------
+
+    @Test
+    void leavesANowrapLineIntactWhileNeighboursWrap() throws Exception {
+        // At width 10, "ab ab ab ab" wraps to two lines; the tagged twin stays one.
+        CompiledJob job = PrintCompiler.compile(
+                "{\"data\":[\"ab ab ab ab\",\"<nowrap>ab ab ab ab</nowrap>\"]}", wrappingDevice(true));
+
+        assertEquals(3, job.lines());
+    }
+
+    @Test
+    void wrapsAWrapLineWhenTheDeviceDefaultIsOff() throws Exception {
+        CompiledJob job = PrintCompiler.compile(
+                "{\"data\":[\"<wrap>ab ab ab ab</wrap>\"]}", wrappingDevice(false));
+
+        assertEquals(2, job.lines());
+    }
+
+    @Test
+    void followsTheDeviceDefaultWhenNoTagIsPresent() throws Exception {
+        assertEquals(1, PrintCompiler.compile(
+                "{\"data\":[\"ab ab ab ab\"]}", wrappingDevice(false)).lines());
+        assertEquals(2, PrintCompiler.compile(
+                "{\"data\":[\"ab ab ab ab\"]}", wrappingDevice(true)).lines());
+    }
+
+    @Test
+    void rejectsTheRemovedWrapField() {
+        PrintRequestException failure = assertThrows(PrintRequestException.class,
+                () -> PrintCompiler.compile("{\"data\":[\"x\"],\"wrap\":false}", device()));
+
+        assertEquals("unknown_field", failure.apiCode());
+        assertTrue(failure.getMessage().contains("<nowrap>"));
+    }
+
+    @Test
+    void rejectsAMisspelledField() {
+        assertEquals("unknown_field", assertThrows(PrintRequestException.class,
+                () -> PrintCompiler.compile("{\"data\":[\"x\"],\"linefeeed\":\"LF\"}", device()))
+                .apiCode());
     }
 }
