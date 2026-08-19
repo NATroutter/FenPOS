@@ -85,10 +85,8 @@ jobs:
         arch: [amd64, arm64]
         include:
           - name: server
-            context: fenpos
             image: fenpos
           - name: agent
-            context: agent
             image: fenpos-agent
           - arch: amd64
             platform: linux/amd64
@@ -118,22 +116,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build
-        id: build
-        uses: docker/build-push-action@v6
+      # Writes a bake file carrying the labels and annotations it worked out, which every
+      # target in docker-bake.hcl inherits.
+      - name: Work out metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          context: ${{ matrix.context }}
-          platforms: ${{ matrix.platform }}
+          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/${{ matrix.image }}
+
+      - name: Build
+        id: bake
+        uses: docker/bake-action@v6
+        with:
+          files: |
+            ./docker-bake.hcl
+            cwd://${{ steps.meta.outputs.bake-file }}
+          targets: ${{ matrix.name }}
+          # Everything overridden here is a property of where this build is running rather
+          # than of what is being built, which is why it is not in docker-bake.hcl.
+          #
+          # Tags are cleared deliberately: this pushes by digest, and a tag applied here would
+          # end up owned by whichever architecture finished last instead of covering both.
+          #
+          # Cache is scoped per architecture as well as per component; one cache shared
+          # between them would thrash, each build evicting the other's layers.
+          #
           # On a pull request nothing is pushed, so there is no digest to collect and the
           # build is only proving that it still compiles.
-          outputs: >-
-            ${{ github.event_name == 'pull_request'
-                && 'type=cacheonly'
-                || format('type=image,name={0}/{1}/{2},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, steps.owner.outputs.name, matrix.image) }}
-          # Scoped per architecture as well as per component: one cache shared between them
-          # would thrash, each build evicting the other's layers.
-          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+          set: |
+            *.tags=
+            *.platform=${{ matrix.platform }}
+            *.cache-from=type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+            *.cache-to=type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+            *.output=${{ github.event_name == 'pull_request' && 'type=cacheonly' || format('type=image,name={0}/{1}/{2},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, steps.owner.outputs.name, matrix.image) }}
 
       # The digest is all the merge job needs. Passing it as a file named after itself avoids
       # having to care which architecture wrote it.
@@ -143,7 +158,7 @@ jobs:
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ fromJSON(steps.bake.outputs.metadata)[matrix.name]['containerimage.digest'] }}
 
       - name: Upload the digest
         if: github.event_name != 'pull_request'
