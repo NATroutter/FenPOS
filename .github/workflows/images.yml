@@ -1,4 +1,4 @@
-# Builds and publishes the two container images.
+# Checks the server, then builds and publishes the two container images.
 #
 # The components are versioned and released together, so one workflow covers both rather than
 # two that would have to be kept in step. Each is a separate job so that a failure names the
@@ -16,8 +16,48 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # The agent's tests run inside its own image build — `mvn package` will not produce a jar
+  # without them — so the Java side needs nothing here. The server's do not: `next build`
+  # compiles and says nothing about whether anything works, so an untested server image would
+  # otherwise be publishable.
+  check:
+    name: server checks
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: fenpos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: fenpos/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # The client is generated code, so nothing that reads the database type-checks until it
+      # exists — including the tests.
+      - run: pnpm db:generate
+
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
+      # Runs against a real migrated SQLite database, so this covers the migrations too.
+      - run: pnpm test
+
   build:
     name: ${{ matrix.name }}
+    needs: check
     runs-on: ubuntu-latest
 
     permissions:
