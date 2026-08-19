@@ -152,12 +152,18 @@ jobs:
           # Everything overridden here is a property of where this build is running rather
           # than of what is being built, which is why it is not in docker-bake.hcl.
           #
+          # Tags are cleared because pushing by digest refuses any tagged ref, and the targets
+          # carry a :local tag so that `docker buildx bake` produces something usable on a
+          # laptop. The merge job is the only place that can name an image covering both
+          # architectures, so it is the only place tags are set.
+          #
           # Cache is scoped per architecture as well as per component; one cache shared
           # between them would thrash, each build evicting the other's layers.
           #
           # On a pull request nothing is pushed, so there is no digest to collect and the
           # build is only proving that it still compiles.
           set: |
+            *.tags=
             *.platform=${{ matrix.platform }}
             *.cache-from=type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
             *.cache-to=type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
