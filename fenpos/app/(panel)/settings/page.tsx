@@ -38,7 +38,7 @@ export default async function SettingsPage() {
 				</p>
 			</div>
 
-			<div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+			<div>
 				<SettingsForm settings={fields} />
 			</div>
 		</div>

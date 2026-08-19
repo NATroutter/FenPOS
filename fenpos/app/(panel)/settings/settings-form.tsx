@@ -4,10 +4,15 @@ import { RotateCcw } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
+import {
+	NumberField,
+	NumberFieldDecrement,
+	NumberFieldGroup,
+	NumberFieldIncrement,
+	NumberFieldInput,
+} from "@/components/reui/number-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 /** One setting as the form holds it. */
@@ -24,47 +29,86 @@ export interface SettingFieldData {
 }
 
 /**
+ * What each group of settings is for.
+ *
+ * Keyed by the prefix the setting keys already carry, so a new setting joins the right group
+ * by being named consistently rather than by being registered in a second place.
+ */
+const GROUPS: Record<string, { title: string; summary: string }> = {
+	limits: {
+		title: "Limits",
+		summary: "counted on the request as received, before markup is interpreted",
+	},
+	jobs: {
+		title: "Jobs",
+		summary: "how much history is kept, and how long a shutdown waits",
+	},
+};
+
+/**
  * The global settings form.
  *
- * Each field saves on its own rather than through one submit button. These are unrelated knobs,
- * and a single save would make changing one of them look like a commitment to whatever state the
- * other six happened to be in on screen.
+ * Laid out as one card per group with the fields in a row, rather than a single column of
+ * unrelated inputs. The keys are already namespaced — `limits.*`, `jobs.*` — and showing that
+ * structure is what lets an operator find a setting by the part of the system it affects
+ * instead of reading every label in order.
+ *
+ * Each field saves on its own. These are unrelated knobs, and one save button would make
+ * changing any of them look like a commitment to whatever state the others happened to be in
+ * on screen.
  */
 export function SettingsForm({ settings }: { settings: SettingFieldData[] }) {
+	const groups = new Map<string, SettingFieldData[]>();
+	for (const setting of settings) {
+		const prefix = setting.key.split(".")[0];
+		const existing = groups.get(prefix);
+		if (existing) {
+			existing.push(setting);
+		} else {
+			groups.set(prefix, [setting]);
+		}
+	}
+
 	return (
-		<Card>
-			<CardHeader className="border-b border-border pb-3">
-				<h3 className="text-[13px] font-medium">Limits and retention</h3>
-				<p className="mt-1 text-[12px] text-muted-foreground">
-					Applied to every device that does not override them. A field showing "default" has nothing stored, so it
-					follows the built-in value through upgrades.
-				</p>
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4 pt-4">
-				{settings.map((setting) => (
-					<SettingField key={setting.key} setting={setting} />
-				))}
-			</CardContent>
-		</Card>
+		<div className="flex flex-col gap-4">
+			{[...groups].map(([prefix, fields]) => (
+				<Card key={prefix}>
+					<CardHeader className="border-b border-border pb-3">
+						<h3 className="text-[13px] font-medium">{GROUPS[prefix]?.title ?? prefix}</h3>
+						<p className="mt-1 text-[12px] text-muted-foreground">
+							<span className="font-mono text-subtle-foreground">{prefix}</span>
+							{GROUPS[prefix] ? ` · ${GROUPS[prefix].summary}` : null}
+						</p>
+					</CardHeader>
+
+					<CardContent className="grid gap-x-6 gap-y-6 pt-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+						{fields.map((setting) => (
+							<SettingField key={setting.key} setting={setting} />
+						))}
+					</CardContent>
+				</Card>
+			))}
+		</div>
 	);
 }
 
-/** One setting, saved on blur or on Enter. */
+/** One setting, saved when the value settles. */
 function SettingField({ setting }: { setting: SettingFieldData }) {
-	const [value, setValue] = useState(String(setting.value));
+	const [value, setValue] = useState<number | null>(setting.value);
 	const [pending, startTransition] = useTransition();
 
-	const commit = (): void => {
-		const parsed = Number.parseInt(value, 10);
-		if (!Number.isInteger(parsed) || parsed === setting.value) {
-			setValue(String(setting.value));
+	const commit = (next: number | null): void => {
+		// A cleared or unchanged field is not a change. Snapping back to the stored value beats
+		// leaving an empty box that looks like it saved something.
+		if (next === null || !Number.isInteger(next) || next === setting.value) {
+			setValue(setting.value);
 			return;
 		}
 		startTransition(async () => {
-			const result = await saveSetting(setting.key, parsed);
+			const result = await saveSetting(setting.key, next);
 			if (result.error) {
 				toast.error(result.error);
-				setValue(String(setting.value));
+				setValue(setting.value);
 			} else {
 				toast.success(`${setting.label} saved.`);
 			}
@@ -72,63 +116,59 @@ function SettingField({ setting }: { setting: SettingFieldData }) {
 	};
 
 	return (
-		<Field>
-			<div className="flex items-center gap-2">
-				<FieldLabel htmlFor={setting.key} className="flex-1">
-					{setting.label}
-				</FieldLabel>
-				<span className="font-mono text-[11px] text-subtle-foreground">{setting.key}</span>
+		<div className="flex min-w-0 flex-col gap-1.5">
+			<div className="min-w-0">
+				<div className="truncate text-[12.5px] font-medium">{setting.label}</div>
+				<div className="mt-0.5 truncate font-mono text-[11px] text-subtle-foreground">{setting.key}</div>
 			</div>
 
-			<div className="flex items-center gap-2">
-				<Input
-					id={setting.key}
-					type="number"
-					className="w-[160px] font-mono"
-					value={value}
-					disabled={pending}
-					min={setting.min}
-					max={setting.max}
-					onChange={(event) => setValue(event.target.value)}
-					onBlur={commit}
-					onKeyDown={(event) => {
-						if (event.key === "Enter") {
-							event.currentTarget.blur();
-						}
-					}}
-				/>
-				<span className="text-[11.5px] text-subtle-foreground">{setting.unit}</span>
+			<NumberField
+				value={value}
+				min={setting.min}
+				max={setting.max}
+				disabled={pending}
+				onValueChange={setValue}
+				onBlur={() => commit(value)}
+			>
+				<NumberFieldGroup>
+					<NumberFieldDecrement />
+					<NumberFieldInput className="font-mono" />
+					<NumberFieldIncrement />
+				</NumberFieldGroup>
+			</NumberField>
 
+			<p className="text-[11.5px] leading-relaxed text-muted-foreground">
+				{setting.description}{" "}
+				<span className="text-subtle-foreground">
+					{setting.unit}, {setting.min}–{setting.max}
+				</span>
 				{setting.overridden ? (
-					<Button
-						variant="ghost"
-						size="icon"
-						className="size-8"
-						title={`Reset to ${setting.fallback}`}
-						aria-label="Reset to the default"
-						disabled={pending}
-						onClick={() =>
-							startTransition(async () => {
-								const result = await resetSetting(setting.key);
-								if (result.error) {
-									toast.error(result.error);
-								} else {
-									setValue(String(setting.fallback));
-									toast.success(`${setting.label} reset to its default.`);
-								}
-							})
-						}
-					>
-						{pending ? <Spinner className="size-3.5" /> : <RotateCcw className="size-3.5" />}
-					</Button>
+					<>
+						{" · "}
+						<Button
+							variant="link"
+							className="h-auto p-0 text-[11.5px] font-normal"
+							disabled={pending}
+							onClick={() =>
+								startTransition(async () => {
+									const result = await resetSetting(setting.key);
+									if (result.error) {
+										toast.error(result.error);
+									} else {
+										setValue(setting.fallback);
+										toast.success(`${setting.label} reset to its default.`);
+									}
+								})
+							}
+						>
+							{pending ? <Spinner className="size-3" /> : <RotateCcw className="size-3" />}
+							Reset to {setting.fallback}
+						</Button>
+					</>
 				) : (
-					<span className="text-[11.5px] text-subtle-foreground">default</span>
+					<span className="text-subtle-foreground"> · default</span>
 				)}
-			</div>
-
-			<FieldDescription>
-				{setting.description} Between {setting.min} and {setting.max}.
-			</FieldDescription>
-		</Field>
+			</p>
+		</div>
 	);
 }
