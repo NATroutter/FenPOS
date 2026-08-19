@@ -9,7 +9,7 @@
 		"start": "tsx server.ts",
 		"lint": "biome check",
 		"format": "biome format --write",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "next typegen && tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"db:generate": "prisma generate",
