@@ -37,6 +37,7 @@ export const API_ERROR_STATUS = {
 	unsupported_character: 400,
 	too_many_output_lines: 400,
 	invalid_linefeed: 400,
+	unknown_field: 400,
 
 	// --- 401: the caller is not identified ---
 	missing_key: 401,

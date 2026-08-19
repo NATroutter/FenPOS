@@ -27,6 +27,15 @@ import { wrapLine } from "@/lib/markup/wrapper";
 /** The rendering character for a horizontal rule. */
 const RULE_CHARACTER = "-";
 
+/**
+ * The only keys a request body may carry.
+ *
+ * Checked rather than ignored because the field this replaced, `wrap`, changed behaviour when
+ * it was removed: a caller still sending it would have got silently wrapped output and no way
+ * to find out why. The same strictness catches every other typo that used to be swallowed.
+ */
+const ALLOWED_FIELDS = new Set(["data", "linefeed"]);
+
 /** Limits applied to one request. */
 export interface CompileLimits {
 	maxLines: number;
@@ -47,7 +56,6 @@ export interface CompileSettings {
 /** What a caller asked to print, after the request body has been read. */
 export interface PrintRequest {
 	data: string[];
-	wrap: boolean;
 	linefeed: Linefeed;
 }
 
@@ -69,6 +77,17 @@ export function readRequest(body: unknown, limits: CompileLimits, settings: Comp
 	}
 
 	const record = body as Record<string, unknown>;
+
+	for (const key of Object.keys(record)) {
+		if (!ALLOWED_FIELDS.has(key)) {
+			throw new ApiError(
+				"unknown_field",
+				key === "wrap"
+					? "'wrap' is no longer a request field. Use the <wrap> and <nowrap> tags, which apply to one line."
+					: `Unknown field '${key}'; this request accepts 'data' and 'linefeed'`,
+			);
+		}
+	}
 
 	const data = record.data;
 	if (data === undefined || data === null) {
@@ -107,19 +126,8 @@ export function readRequest(body: unknown, limits: CompileLimits, settings: Comp
 
 	return {
 		data: elements,
-		wrap: readWrap(record.wrap, settings),
 		linefeed: readLinefeed(record.linefeed, settings),
 	};
-}
-
-function readWrap(value: unknown, settings: CompileSettings): boolean {
-	if (value === undefined || value === null) {
-		return settings.defaultWrap;
-	}
-	if (typeof value !== "boolean") {
-		throw new ApiError("invalid_type", "'wrap' must be true or false");
-	}
-	return value;
 }
 
 function readLinefeed(value: unknown, settings: CompileSettings): Linefeed {
@@ -180,7 +188,8 @@ function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
 		try {
 			const parsed = parseMarkup(request.data[index]);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
-			if (request.wrap) {
+			const wrap = checked.wrap ?? settings.defaultWrap;
+			if (wrap) {
 				lines.push(...wrapLine(checked, settings.columns));
 			} else {
 				lines.push(checked);

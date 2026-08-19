@@ -86,10 +86,6 @@ describe("compile pipeline", () => {
 		expect(error({ data: ["x"], linefeed: "CR" }).code).toBe("invalid_linefeed");
 	});
 
-	it("rejects a wrap flag that is not a boolean", () => {
-		expect(error({ data: ["x"], wrap: "yes" }).code).toBe("invalid_type");
-	});
-
 	// -----------------------------------------------------------------------
 	// Limits
 	// -----------------------------------------------------------------------
@@ -162,10 +158,6 @@ describe("compile pipeline", () => {
 		expect(job.lines, "11 columns of text should wrap at width 10").toHaveLength(2);
 	});
 
-	it("leaves the line intact when wrap is false", () => {
-		expect(run({ data: ["ab ".repeat(4)], wrap: false }).lines).toHaveLength(1);
-	});
-
 	it("takes the linefeed from the device when the request omits it", () => {
 		expect(run({ data: ["x"] }).linefeed).toBe("LF");
 	});
@@ -219,5 +211,61 @@ describe("compile pipeline", () => {
 
 		expect(job.lines).toHaveLength(0);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
+	});
+
+	describe("per-line wrapping", () => {
+		// The shared limits allow twenty characters per element, which a tagged line exceeds
+		// before it ever reaches the wrapper. Roomier here so the tag is what is being tested.
+		const roomy: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 6 };
+
+		/** Compiles against the ten-column fixture, with the device default under test. */
+		const wrapping = (body: unknown, defaultWrap = true) => {
+			const merged = { ...settings, defaultWrap };
+			return compile("job", "kitchen", readRequest(body, roomy, merged), roomy, merged);
+		};
+
+		it("leaves a <nowrap> line intact while its neighbours wrap", () => {
+			// At width 10, "ab ab ab ab" wraps to two lines; the tagged twin stays one.
+			const job = wrapping({ data: ["ab ab ab ab", "<nowrap>ab ab ab ab</nowrap>"] });
+
+			expect(job.lines).toHaveLength(3);
+		});
+
+		it("wraps a <wrap> line when the device default is off", () => {
+			const job = wrapping({ data: ["<wrap>ab ab ab ab</wrap>"] }, false);
+
+			expect(job.lines).toHaveLength(2);
+		});
+
+		it("follows the device default when no tag is present", () => {
+			expect(wrapping({ data: ["ab ab ab ab"] }, false).lines).toHaveLength(1);
+			expect(wrapping({ data: ["ab ab ab ab"] }, true).lines).toHaveLength(2);
+		});
+
+		it("counts lines produced by a tag against the output limit", () => {
+			const tight: CompileLimits = { ...roomy, maxOutputLines: 1 };
+			const merged = { ...settings, defaultWrap: false };
+
+			expect(() =>
+				compile("job", "kitchen", readRequest({ data: ["<wrap>ab ab ab ab</wrap>"] }, tight, merged), tight, merged),
+			).toThrow(ApiError);
+		});
+	});
+
+	describe("request fields", () => {
+		it("rejects the removed wrap field and names its replacement", () => {
+			const failure = error({ data: ["x"], wrap: false });
+
+			expect(failure.code).toBe("unknown_field");
+			expect(failure.message).toContain("<nowrap>");
+		});
+
+		it("rejects a misspelled field", () => {
+			expect(error({ data: ["x"], linefeeed: "LF" }).code).toBe("unknown_field");
+		});
+
+		it("still accepts data and linefeed", () => {
+			expect(() => run({ data: ["x"], linefeed: "CRLF" })).not.toThrow();
+		});
 	});
 });
