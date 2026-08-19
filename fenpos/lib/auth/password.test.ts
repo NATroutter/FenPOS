@@ -24,6 +24,26 @@ describe("passwordSchema", () => {
 	it("does not impose composition rules", () => {
 		expect(passwordSchema.safeParse("correct horse battery staple").success).toBe(true);
 	});
+
+	it("accepts any character, including scripts, emoji, symbols and whitespace", () => {
+		for (const password of [
+			"日本語のパスワードですよ",
+			"🔑🔑🔑🔑🔑🔑",
+			"\t  leading and trailing  \n",
+			"'; DROP TABLE admin_auth;--",
+			"«»½¬{}[]|~`\\!@#$%^&*()",
+		]) {
+			expect(passwordSchema.safeParse(password).success, JSON.stringify(password)).toBe(true);
+		}
+	});
+
+	it("measures length in UTF-16 units, so astral characters count double", () => {
+		// Worth pinning because it is surprising: six emoji satisfy a twelve-character minimum
+		// while five do not, and a twelve-letter Japanese phrase carries far more entropy than
+		// a twelve-letter English one. The limit is a floor on effort, not on entropy.
+		expect(passwordSchema.safeParse("🔑".repeat(6)).success).toBe(true);
+		expect(passwordSchema.safeParse("🔑".repeat(5)).success).toBe(false);
+	});
 });
 
 describe("hashPassword and verifyPassword", () => {
@@ -98,5 +118,38 @@ describe("bootstrap script parity", () => {
 	it("uses an identical minimum password length in both places", () => {
 		expect(minimumLength(scriptSource)).toBe(minimumLength(libSource));
 		expect(minimumLength(libSource)).toBe(String(MINIMUM_PASSWORD_LENGTH));
+	});
+
+	it("uses an identical maximum password length in both places", () => {
+		// The upper bound is what stops argon2 being handed a megabyte of input on every
+		// attempt, so a CLI that did not share it would leave that door open.
+		const libMaximum = libSource.match(/\.max\((\d+),/)?.[1];
+		const scriptMaximum = scriptSource.match(/MAXIMUM_PASSWORD_LENGTH = (\d+)/)?.[1];
+
+		expect(libMaximum).toBeDefined();
+		expect(scriptMaximum).toBe(libMaximum);
+	});
+});
+
+describe("what counts as the same password", () => {
+	it("treats surrounding whitespace as part of the password", async () => {
+		// No trimming anywhere on the path, so a password pasted with a stray space is a
+		// different password. Stated in a test because the alternative — quietly trimming —
+		// is the kind of helpfulness that turns into a lockout nobody can explain.
+		const stored = await hashPassword("  padded password  ");
+
+		expect(await verifyPassword(stored, "padded password")).toBe(false);
+		expect(await verifyPassword(stored, "  padded password  ")).toBe(true);
+	});
+
+	it("does not normalise unicode, so composed and decomposed forms differ", async () => {
+		// Two keyboards can produce visually identical text with different code points. Argon2
+		// hashes bytes, so they will not match. Normalising would be friendlier but changes the
+		// bytes hashed, which would invalidate every existing password on the release that did it.
+		const composed = "café latte!!";
+		const stored = await hashPassword(composed);
+
+		expect(await verifyPassword(stored, composed.normalize("NFD"))).toBe(false);
+		expect(await verifyPassword(stored, composed)).toBe(true);
 	});
 });

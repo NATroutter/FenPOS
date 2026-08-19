@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { setAdminPassword, verifyAdminPassword } from "@/lib/auth/admin";
+import { passwordSchema } from "@/lib/auth/password";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
@@ -76,7 +77,17 @@ export async function changePassword(current: string, next: string): Promise<Act
 		if (!(await verifyAdminPassword(current))) {
 			throw new ApiError("invalid_key", "That is not the current password.");
 		}
-		const revoked = await setAdminPassword(next);
+
+		// Checked here rather than trusted from the form. The form disables its button on an
+		// empty field, which stops a slip but not a direct call to this action — and a server
+		// action is a public endpoint, so anything reachable only through the browser's
+		// cooperation is not enforced at all.
+		const parsed = passwordSchema.safeParse(next);
+		if (!parsed.success) {
+			throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
+		}
+
+		const revoked = await setAdminPassword(parsed.data);
 		logger.info("Administrator password changed", { sessionsRevoked: revoked });
 	});
 }

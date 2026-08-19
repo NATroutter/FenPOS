@@ -38,6 +38,9 @@ const ARGON2_OPTIONS = {
 /** Must match MINIMUM_PASSWORD_LENGTH in lib/auth/password.ts. */
 const MINIMUM_PASSWORD_LENGTH = 12;
 
+/** Must match the upper bound in passwordSchema in lib/auth/password.ts. */
+const MAXIMUM_PASSWORD_LENGTH = 1024;
+
 /** Fixed primary key of the singleton admin row. */
 const ADMIN_ROW_ID = 1;
 
@@ -49,6 +52,9 @@ async function main(): Promise<void> {
 	}
 	if (password.length < MINIMUM_PASSWORD_LENGTH) {
 		throw new Error(`Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`);
+	}
+	if (password.length > MAXIMUM_PASSWORD_LENGTH) {
+		throw new Error(`Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`);
 	}
 
 	const databaseUrl = process.env.DATABASE_URL;
