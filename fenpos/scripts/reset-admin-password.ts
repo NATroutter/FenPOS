@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
+import { ADMIN_ROW_ID } from "../lib/auth/admin-credential";
 
 /**
  * Returns the install to its unconfigured state, so the next start generates a fresh
@@ -22,12 +23,9 @@ import { PrismaClient } from "../generated/prisma/client";
  * password. It is still disruptive, since every session ends and nobody can sign in until
  * someone reads the log.
  *
- * Like set-admin-password.ts this does not import lib/auth/*, those modules being marked
- * `server-only` — a constraint a plain Agent process cannot satisfy.
+ * The row id is shared with the application rather than repeated here, for the same reason
+ * set-admin-password.ts shares its hashing and validation.
  */
-
-/** Fixed primary key of the singleton admin row. */
-const ADMIN_ROW_ID = 1;
 
 async function main(): Promise<void> {
 	const databaseUrl = process.env.DATABASE_URL;

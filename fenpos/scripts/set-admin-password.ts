@@ -1,69 +1,35 @@
 import "dotenv/config";
-import { hash } from "@node-rs/argon2";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
+import { writeOperatorPassword } from "../lib/auth/admin-credential";
+import { hashPassword, passwordSchema } from "../lib/auth/password";
 
 /**
  * Sets the administrator password from the command line.
  *
- * This is how an install is bootstrapped and how a forgotten password is recovered. Both
- * deliberately require shell access to the server: an unauthenticated web route that can set
- * the first password is a takeover waiting to happen on a server reachable before anyone
- * configures it.
+ * This is the recovery path for a forgotten password, not the setup path — the server
+ * generates one on first boot and prints it. It stays a shell command because an
+ * unauthenticated web route that can set the password is a takeover waiting to happen on a
+ * server reachable before anyone configures it.
  *
  * Usage:
  *   pnpm admin:set-password "correct horse battery staple"
  *
- * The password is read from argv rather than prompted for, so the command works unattended
- * in a container. That does place it in shell history — acceptable for a bootstrap step run
- * once, and the reason the panel offers a password change of its own for routine rotation.
+ * The password is read from argv rather than prompted for, so the command works unattended in
+ * a container. That does place it in shell history — acceptable for a recovery step, and the
+ * reason the panel offers a password change of its own for routine rotation.
  *
- * This script deliberately does not import lib/auth/*: those modules are marked
- * `server-only`, which is a Next.js bundler constraint that a plain Agent process cannot
- * satisfy. The argon2 parameters below must therefore stay in step with
- * lib/auth/password.ts, which the accompanying test enforces.
+ * Hashing, validation and the shape of the credential row are imported rather than repeated.
+ * They were duplicated here on the belief that lib/auth was entirely `server-only`; only the
+ * modules that reach for the request context and the session store are, and the ones this
+ * needs never were. The copies had already drifted once, leaving this command writing a
+ * password while the server went on advertising the generated one it had just replaced.
  */
 
-/** Must match ARGON2ID in lib/auth/password.ts. */
-const ARGON2ID = 2;
-
-/** Must match ARGON2_OPTIONS in lib/auth/password.ts. */
-const ARGON2_OPTIONS = {
-	algorithm: ARGON2ID,
-	memoryCost: 19_456,
-	timeCost: 2,
-	parallelism: 1,
-} as const;
-
-/** Must match MINIMUM_PASSWORD_LENGTH in lib/auth/password.ts. */
-const MINIMUM_PASSWORD_LENGTH = 12;
-
-/** Must match MAXIMUM_PASSWORD_LENGTH in lib/auth/password.ts. */
-const MAXIMUM_PASSWORD_LENGTH = 1024;
-
-/** Must match CONTROL_CHARACTERS in lib/auth/password.ts. */
-const CONTROL_CHARACTERS = /\p{Cc}/u;
-
-/** Fixed primary key of the singleton admin row. */
-const ADMIN_ROW_ID = 1;
-
 async function main(): Promise<void> {
-	// Trimmed to match normalizePassword in lib/auth/password.ts. Without this the CLI would
-	// store a hash of the untrimmed value while sign-in compares the trimmed one, so a
-	// password given here with a stray space would be impossible to enter.
-	const password = process.argv[2]?.trim();
-
-	if (!password) {
-		throw new Error('Usage: pnpm admin:set-password "<password>"');
-	}
-	if (CONTROL_CHARACTERS.test(password)) {
-		throw new Error("Password must not contain tabs, newlines or control characters.");
-	}
-	if (password.length < MINIMUM_PASSWORD_LENGTH) {
-		throw new Error(`Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`);
-	}
-	if (password.length > MAXIMUM_PASSWORD_LENGTH) {
-		throw new Error(`Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`);
+	const parsed = passwordSchema.safeParse(process.argv[2] ?? "");
+	if (!parsed.success) {
+		throw new Error(parsed.error.issues[0]?.message ?? 'Usage: pnpm admin:set-password "<password>"');
 	}
 
 	const databaseUrl = process.env.DATABASE_URL;
@@ -74,18 +40,7 @@ async function main(): Promise<void> {
 	const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: databaseUrl }) });
 
 	try {
-		const passwordHash = await hash(password, ARGON2_OPTIONS);
-
-		// Clearing the generated marks matters as much as writing the hash. Left set, the
-		// server would go on printing a generated password this command has just invalidated,
-		// and the panel would still divert to the page that asks for it to be replaced —
-		// having just been replaced. Kept in step with setAdminPassword in lib/auth/admin.ts,
-		// which this script cannot import because that module is server-only.
-		await prisma.adminAuth.upsert({
-			where: { id: ADMIN_ROW_ID },
-			create: { id: ADMIN_ROW_ID, passwordHash, isGenerated: false, generatedPassword: null },
-			update: { passwordHash, isGenerated: false, generatedPassword: null },
-		});
+		await writeOperatorPassword(prisma, await hashPassword(parsed.data));
 
 		// Any session created under the old password must not survive the change, or the
 		// change has revoked nothing.

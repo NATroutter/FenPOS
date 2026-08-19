@@ -1,4 +1,5 @@
 import "server-only";
+import { ADMIN_ROW_ID, writeOperatorPassword } from "@/lib/auth/admin-credential";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { generatePassword, generateToken } from "@/lib/auth/secrets";
 import { destroyAllSessions } from "@/lib/auth/session";
@@ -22,9 +23,6 @@ import { prisma } from "@/lib/db";
  * The generated password is marked as such, so the panel can insist on its replacement and
  * confirm when that has happened.
  */
-
-/** Fixed primary key of the singleton row. */
-const ADMIN_ROW_ID = 1;
 
 /**
  * Cached argon2 hash of a value no one holds, used to equalise timing.
@@ -75,14 +73,10 @@ export async function isAdminConfigured(): Promise<boolean> {
 export async function setAdminPassword(plaintext: string): Promise<number> {
 	const passwordHash = await hashPassword(plaintext);
 
-	await prisma.adminAuth.upsert({
-		where: { id: ADMIN_ROW_ID },
-		create: { id: ADMIN_ROW_ID, passwordHash, isGenerated: false, generatedPassword: null },
-		// Clearing the plaintext is the point at which the bootstrap credential stops existing
-		// anywhere recoverable. It happens in the same statement as the new hash so there is no
-		// window where the row claims to be operator-set while still carrying the old secret.
-		update: { passwordHash, isGenerated: false, generatedPassword: null },
-	});
+	// Shared with the CLI scripts, which cannot import this module. Clearing the generated
+	// plaintext is the point at which the bootstrap credential stops existing anywhere
+	// recoverable, and it happens in the same statement as the new hash.
+	await writeOperatorPassword(prisma, passwordHash);
 
 	return destroyAllSessions();
 }

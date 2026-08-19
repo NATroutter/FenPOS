@@ -87,57 +87,28 @@ describe("hashPassword and verifyPassword", () => {
 });
 
 describe("bootstrap script parity", () => {
-	// scripts/set-admin-password.ts cannot import lib/auth/password.ts, because that module
-	// is marked `server-only` and the script runs as plain Agent. It therefore duplicates the
-	// argon2 parameters, and a silent divergence would mean the CLI writes hashes under
-	// different settings than the application expects.
-	const libSource = readFileSync(join(SERVER_ROOT, "lib/auth/password.ts"), "utf8");
-	const scriptSource = readFileSync(join(SERVER_ROOT, "scripts/set-admin-password.ts"), "utf8");
+	const scriptSources = ["scripts/set-admin-password.ts", "scripts/reset-admin-password.ts"].map((path) =>
+		readFileSync(join(SERVER_ROOT, path), "utf8"),
+	);
 
-	/**
-	 * Extracts the argon2 options object literal from a source file.
-	 *
-	 * @param source file contents to search
-	 * @returns the literal with whitespace collapsed, for comparison
-	 */
-	function argon2Options(source: string): string {
-		const match = source.match(/const ARGON2_OPTIONS = \{([\s\S]*?)\} as const;/);
-		if (!match) {
-			throw new Error("ARGON2_OPTIONS literal not found");
+	it("leaves hashing, validation and the row shape to the shared modules", () => {
+		// These were once copied into the scripts, on the belief that all of lib/auth was
+		// server-only. They drifted, and the CLI ended up writing a password while the server
+		// went on advertising the generated one it had replaced. A copy reappearing is the
+		// failure this guards, so the test is that the constants are absent rather than equal.
+		for (const source of scriptSources) {
+			expect(source).not.toMatch(/ARGON2_OPTIONS\s*=\s*\{/);
+			expect(source).not.toMatch(/MINIMUM_PASSWORD_LENGTH\s*=\s*\d/);
+			expect(source).not.toMatch(/MAXIMUM_PASSWORD_LENGTH\s*=\s*\d/);
+			expect(source).not.toMatch(/ADMIN_ROW_ID\s*=\s*\d/);
 		}
-		return match[1].replace(/\s+/g, " ").trim();
-	}
-
-	/**
-	 * Extracts the minimum password length declared in a source file.
-	 *
-	 * @param source file contents to search
-	 * @returns the declared minimum
-	 */
-	function minimumLength(source: string): string {
-		const match = source.match(/MINIMUM_PASSWORD_LENGTH = (\d+)/);
-		if (!match) {
-			throw new Error("MINIMUM_PASSWORD_LENGTH not found");
-		}
-		return match[1];
-	}
-
-	it("uses identical argon2 parameters in both places", () => {
-		expect(argon2Options(scriptSource)).toBe(argon2Options(libSource));
 	});
 
-	it("uses an identical minimum password length in both places", () => {
-		expect(minimumLength(scriptSource)).toBe(minimumLength(libSource));
-		expect(minimumLength(libSource)).toBe(String(MINIMUM_PASSWORD_LENGTH));
-	});
-
-	it("uses an identical maximum password length in both places", () => {
-		// The upper bound is what stops argon2 being handed a megabyte of input on every
-		// attempt, so a CLI that did not share it would leave that door open.
-		const maximum = (source: string): string | undefined => source.match(/MAXIMUM_PASSWORD_LENGTH = (\d+)/)?.[1];
-
-		expect(maximum(libSource)).toBeDefined();
-		expect(maximum(scriptSource)).toBe(maximum(libSource));
+	it("imports them from lib/auth instead", () => {
+		expect(scriptSources[0]).toMatch(/from "\.\.\/lib\/auth\/password"/);
+		for (const source of scriptSources) {
+			expect(source).toMatch(/from "\.\.\/lib\/auth\/admin-credential"/);
+		}
 	});
 });
 
