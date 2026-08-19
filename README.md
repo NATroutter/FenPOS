@@ -93,6 +93,11 @@ pnpm lint        # Biome
 pnpm build
 ```
 
+If a page in `pnpm dev` renders but never becomes interactive — buttons dead, live values stuck
+on their placeholder, and nothing in the browser console — the `.next` dev cache is stale.
+`pnpm dev:clean` removes it and starts again. It is worth reaching for early, because the
+failure is silent: the HTML is correct and the only symptom is that hydration never completes.
+
 The agent needs JDK 25:
 
 ```sh

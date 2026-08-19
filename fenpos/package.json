@@ -4,6 +4,7 @@
 	"private": true,
 	"scripts": {
 		"dev": "tsx server.ts",
+		"dev:clean": "node -e \"require('node:fs').rmSync('.next',{recursive:true,force:true})\" && tsx server.ts",
 		"build": "next build",
 		"start": "tsx server.ts",
 		"lint": "biome check",
