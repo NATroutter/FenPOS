@@ -118,6 +118,43 @@ export function generatePairingCode(): string {
 	return groups.join("-");
 }
 
+/** Characters in the password generated at first boot. 20 over a 32-symbol alphabet is 100 bits. */
+const GENERATED_PASSWORD_LENGTH = 20;
+
+/**
+ * Generates the administrator password used before an operator sets their own.
+ *
+ * Uses the pairing alphabet, and for the same reason: this value is read off a terminal and
+ * typed into a browser, so the characters mistaken for one another are excluded. It is
+ * grouped for the same legibility, and the dashes count toward its length only as literal
+ * characters — the entropy is in the 20 sampled symbols.
+ *
+ * Not a passphrase: it exists to be replaced, and the panel says so until it is.
+ *
+ * @returns a password such as `H7K2-M9PX-4TRB-N6QW-3JZY`
+ */
+export function generatePassword(): string {
+	const limit = Math.floor(256 / PAIRING_ALPHABET.length) * PAIRING_ALPHABET.length;
+	const characters: string[] = [];
+
+	while (characters.length < GENERATED_PASSWORD_LENGTH) {
+		for (const byte of randomBytes(GENERATED_PASSWORD_LENGTH)) {
+			if (byte < limit) {
+				characters.push(PAIRING_ALPHABET[byte % PAIRING_ALPHABET.length]);
+				if (characters.length === GENERATED_PASSWORD_LENGTH) {
+					break;
+				}
+			}
+		}
+	}
+
+	const groups: string[] = [];
+	for (let index = 0; index < characters.length; index += PAIRING_GROUP_SIZE) {
+		groups.push(characters.slice(index, index + PAIRING_GROUP_SIZE).join(""));
+	}
+	return groups.join("-");
+}
+
 /**
  * Normalises a pairing code as typed by an operator into its canonical form.
  *

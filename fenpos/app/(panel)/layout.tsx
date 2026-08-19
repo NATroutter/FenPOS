@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/panel/app-sidebar";
 import { EventStreamProvider } from "@/components/panel/event-stream";
 import { PanelHeader } from "@/components/panel/panel-header";
+import { PasswordBanner } from "@/components/panel/password-banner";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
@@ -51,6 +52,9 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 				    lives in the header while everything consuming it is below. */}
 				<EventStreamProvider>
 					<PanelHeader startedAt={SERVER_STARTED_AT} />
+					{/* Above the scroll container rather than inside it, so it cannot be scrolled
+					    out of sight on a long page. */}
+					<PasswordBanner />
 					<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
 				</EventStreamProvider>
 			</SidebarInset>

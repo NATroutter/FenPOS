@@ -23,6 +23,10 @@ datasource db {
 model AdminAuth {
   id           Int      @id @default(1)
   passwordHash String   @map("password_hash")
+  /// True while the password is the one generated at first boot and printed to the log.
+  /// Drives the panel's warning banner, and is cleared the first time an operator sets
+  /// their own password.
+  isGenerated  Boolean  @default(false) @map("is_generated")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("admin_auth")

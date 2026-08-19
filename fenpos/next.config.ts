@@ -12,6 +12,13 @@ const nextConfig: NextConfig = {
 	 * to arrive at cold.
 	 */
 	allowedDevOrigins: ["127.0.0.1", "localhost"],
+
+	/**
+	 * Next writes AGENTS.md and CLAUDE.md into the project on build unless this is off. They
+	 * are not this project's documentation and nothing here is written for an AI agent to
+	 * read, so they are turned off rather than committed or repeatedly deleted.
+	 */
+	agentRules: false,
 };
 
 export default nextConfig;

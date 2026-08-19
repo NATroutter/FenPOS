@@ -24,13 +24,17 @@ through a network outage.
 cd fenpos
 pnpm install
 pnpm db:migrate
-pnpm admin:set-password "a password of at least twelve characters"
 pnpm dev
 ```
 
-The first administrator password is set from a shell, never through the browser. An
-unauthenticated setup page would be a takeover waiting to happen on a server that is reachable
-before anyone configures it.
+On its first start FenPOS generates an administrator password and prints it, framed, to the
+log. Sign in with it, then change it under **Settings** — the panel carries a warning banner on
+every page until you do.
+
+Nothing is set through an unauthenticated first-run page, and there is no fixed default such as
+`admin`: either would be a takeover waiting to happen on a server that is reachable before
+anyone configures it. A generated secret closes that window while still asking nothing of you
+beyond reading the log you just started.
 
 Then open the panel and add an agent under **Agents**. It shows a single-use pairing code and
 the address to give it.
@@ -73,12 +77,8 @@ Agents are Linux-only in Docker. Docker Desktop on Windows and macOS runs contai
 with no serial passthrough, so a COM port cannot be reached from one at all — run the jar
 directly on the JVM there.
 
-Set the first administrator password once the server container is up. The image calls its
-binaries directly rather than through pnpm, so that starting needs no network access:
-
-```sh
-docker compose exec fenpos ./node_modules/.bin/tsx scripts/set-admin-password.ts "a password of at least twelve characters"
-```
+The generated administrator password is printed when the container first starts, so read it
+with `docker compose logs fenpos` and change it under **Settings** once you are in.
 
 Back up `fenpos/data`. It holds the agents and their credentials, every device, the API keys
 and the administrator password.
@@ -92,6 +92,9 @@ pnpm typecheck
 pnpm lint        # Biome
 pnpm build
 ```
+
+If the administrator password is lost, `pnpm admin:set-password "…"` sets a new one directly
+against the database. It is the recovery path, not the setup path — first boot generates one.
 
 If a page in `pnpm dev` renders but never becomes interactive — buttons dead, live values stuck
 on their placeholder, and nothing in the browser console — the `.next` dev cache is stale.

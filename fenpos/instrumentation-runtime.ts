@@ -1,4 +1,5 @@
 import { purgeExpiredPairingCodes } from "@/lib/agents/pairing";
+import { ensureAdminPassword } from "@/lib/auth/admin";
 import { purgeExpiredSessions } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
@@ -13,8 +14,40 @@ import { logger } from "@/lib/logger";
  * bundle pulling in Prisma and failing to compile.
  */
 export async function registerRuntime(): Promise<void> {
+	await announceAdminPassword();
 	await runMaintenance();
 	attachLink();
+}
+
+/**
+ * Creates the administrator password on first boot and prints it once.
+ *
+ * Written straight to stdout rather than through the logger, and framed, because this is the
+ * one line an operator must not scroll past — it is the only time the password is ever
+ * visible, and everything else about the install is unreachable without it.
+ *
+ * A failure here is fatal to sign-in but not to serving, so it is reported rather than
+ * thrown: an operator needs the panel up to read the logs that explain what went wrong.
+ */
+async function announceAdminPassword(): Promise<void> {
+	try {
+		const password = await ensureAdminPassword();
+		if (!password) {
+			return;
+		}
+
+		const rule = "─".repeat(66);
+		process.stdout.write(
+			`\n${rule}\n` +
+				`  FenPOS generated an administrator password for this install:\n\n` +
+				`      ${password}\n\n` +
+				`  Sign in with it, then change it under Settings. It is shown here\n` +
+				`  once and is not recoverable — the database keeps only its hash.\n` +
+				`${rule}\n\n`,
+		);
+	} catch (error) {
+		logger.error("Could not create the administrator password", error);
+	}
 }
 
 /**

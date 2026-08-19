@@ -1,10 +1,11 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changePassword, resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -141,7 +142,7 @@ function SettingField({ setting }: { setting: SettingFieldData }) {
  * an unattended machine in a back office is exactly the case this defends against, and it costs
  * one field to close.
  */
-export function PasswordForm() {
+export function PasswordForm({ isGenerated }: { isGenerated: boolean }) {
 	const [current, setCurrent] = useState("");
 	const [next, setNext] = useState("");
 	const [confirm, setConfirm] = useState("");
@@ -170,9 +171,27 @@ export function PasswordForm() {
 	return (
 		<Card>
 			<CardHeader className="border-b border-border pb-3">
-				<h3 className="text-[13px] font-medium">Administrator password</h3>
+				<div className="flex flex-wrap items-center gap-2">
+					<h3 className="text-[13px] font-medium">Administrator password</h3>
+					{/* States the credential's provenance, not merely that a password exists. "Set by
+					    you" is the fact an operator is checking for; a green tick alone would read as
+					    approval of a password this page cannot judge. */}
+					{isGenerated ? (
+						<Badge variant="outline" className="border-destructive/40 bg-destructive/10 text-destructive">
+							<TriangleAlert className="size-3" />
+							Generated at first boot
+						</Badge>
+					) : (
+						<Badge variant="outline" className="border-emerald-900 bg-emerald-950 text-emerald-400">
+							<ShieldCheck className="size-3" />
+							Set by you
+						</Badge>
+					)}
+				</div>
 				<p className="mt-1 text-[12px] text-muted-foreground">
-					Changing it signs out every other session immediately, which is the point of changing it.
+					{isGenerated
+						? "This install still uses the password printed to the server log when it started. Replace it here."
+						: "Changing it signs out every other session immediately, which is the point of changing it."}
 				</p>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4 pt-4">
