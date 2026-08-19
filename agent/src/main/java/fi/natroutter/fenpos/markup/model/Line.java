@@ -12,10 +12,11 @@ import java.util.List;
  * span because ESC/POS justifies whole lines.
  *
  * @param align       justification for the whole line
+ * @param wrap        whether this line is broken to the paper width; null defers to the device setting
  * @param spans       styled text, in printing order; empty for a directive-only line
  * @param directives  actions emitted after the text, in the order they appeared
  */
-public record Line(Align align, List<Span> spans, List<Directive> directives) {
+public record Line(Align align, Boolean wrap, List<Span> spans, List<Directive> directives) {
 
     public Line {
         if (align == null) {
@@ -27,7 +28,7 @@ public record Line(Align align, List<Span> spans, List<Directive> directives) {
 
     /** Returns an empty left-aligned line, which prints as a blank line feed. */
     public static Line empty() {
-        return new Line(Align.LEFT, List.of(), List.of());
+        return new Line(Align.LEFT, null, List.of(), List.of());
     }
 
     /**

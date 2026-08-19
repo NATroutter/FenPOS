@@ -24,6 +24,9 @@ public enum MarkupError {
     /** An alignment tag that does not enclose the whole element, or a second one. */
     INVALID_ALIGN_SCOPE("invalid_align_scope"),
 
+    /** A wrap tag that does not enclose the whole element, or a second one. */
+    INVALID_WRAP_SCOPE("invalid_wrap_scope"),
+
     /** A rule tag sharing an element with other content. */
     INVALID_RULE_SCOPE("invalid_rule_scope"),
 

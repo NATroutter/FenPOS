@@ -29,6 +29,12 @@ public enum Tag {
     /** Line justification. Paired, and required to enclose the whole element. */
     ALIGN("align", Kind.PAIRED, Argument.REQUIRED),
 
+    /** Break this line at the paper width. Paired, and required to enclose the whole element. */
+    WRAP("wrap", Kind.PAIRED, Argument.NONE),
+
+    /** Print this line as written. Paired, and required to enclose the whole element. */
+    NOWRAP("nowrap", Kind.PAIRED, Argument.NONE),
+
     /** Cut the paper, fully by default. */
     CUT("cut", Kind.VOID, Argument.OPTIONAL),
 

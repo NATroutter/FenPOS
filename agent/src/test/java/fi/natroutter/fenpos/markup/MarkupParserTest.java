@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -323,5 +324,55 @@ class MarkupParserTest {
                 assertThrows(MarkupException.class, () -> MarkupParser.parse("a" + (char) 0x7F + "b")).error());
         assertEquals(MarkupError.CONTROL_CHARACTER,
                 assertThrows(MarkupException.class, () -> MarkupParser.parse("a" + (char) 0x85 + "b")).error());
+    }
+
+    @Test
+    void leavesWrapUnsetWhenNoTagIsPresent() throws Exception {
+        assertNull(MarkupParser.parse("Yhteensa 14.80").wrap());
+    }
+
+    @Test
+    void readsNowrapAsARefusalToWrap() throws Exception {
+        assertEquals(Boolean.FALSE, MarkupParser.parse("<nowrap>Yhteensa</nowrap>").wrap());
+    }
+
+    @Test
+    void readsWrapAsARequestToWrap() throws Exception {
+        assertEquals(Boolean.TRUE, MarkupParser.parse("<wrap>Iso kahvi</wrap>").wrap());
+    }
+
+    @Test
+    void nestsWithAlignmentInEitherOrder() throws Exception {
+        Line inner = MarkupParser.parse("<align=right><nowrap>x</nowrap></align>");
+        Line outer = MarkupParser.parse("<nowrap><align=right>x</align></nowrap>");
+
+        assertEquals(Align.RIGHT, inner.align());
+        assertEquals(Boolean.FALSE, inner.wrap());
+        assertEquals(Align.RIGHT, outer.align());
+        assertEquals(Boolean.FALSE, outer.wrap());
+    }
+
+    @Test
+    void refusesTextAroundAWrapTag() {
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE,
+                assertThrows(MarkupException.class,
+                        () -> MarkupParser.parse("Total: <nowrap>14.80</nowrap>")).error());
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE,
+                assertThrows(MarkupException.class,
+                        () -> MarkupParser.parse("<nowrap>14.80</nowrap> paid")).error());
+    }
+
+    @Test
+    void refusesALineThatBothWrapsAndDoesNot() {
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE,
+                assertThrows(MarkupException.class,
+                        () -> MarkupParser.parse("<wrap><nowrap>x</nowrap></wrap>")).error());
+    }
+
+    @Test
+    void refusesAWrapTagInsideAStylingTag() {
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE,
+                assertThrows(MarkupException.class,
+                        () -> MarkupParser.parse("<bold><nowrap>x</nowrap></bold>")).error());
     }
 }

@@ -88,7 +88,7 @@ public final class IrRenderer {
             directives.add(toDirective(directive));
         }
 
-        return new Line(wire.align(), spans, directives);
+        return new Line(wire.align(), null, spans, directives);
     }
 
     /**

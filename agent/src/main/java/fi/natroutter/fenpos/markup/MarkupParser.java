@@ -50,8 +50,15 @@ public final class MarkupParser {
     /** Whether an alignment tag has been seen; a second one is an error. */
     private boolean alignSeen;
 
-    /** Whether alignment has closed; content after that point is outside its scope. */
-    private boolean alignClosed;
+    /** Whether a wrap tag has been seen; {@code <wrap>} and {@code <nowrap>} share one slot. */
+    private boolean wrapSeen;
+
+    /** What this line was asked to do about wrapping; null defers to the device. */
+    private Boolean wrap;
+
+    /** The line-owning tag that has closed, if any: content after it is out of scope. */
+    private String closedOwnerName;
+    private MarkupError closedOwnerError;
 
     /** Column of the rule tag, or 0 if none, used to report a scope violation. */
     private int ruleColumn;
@@ -97,7 +104,7 @@ public final class MarkupParser {
 
         verifyRuleScope();
 
-        return new Line(align, spans, directives);
+        return new Line(align, wrap, spans, directives);
     }
 
     // -------------------------------------------------------------------------
@@ -110,7 +117,7 @@ public final class MarkupParser {
                     String.format("U+%04X", (int) current),
                     "Control characters cannot be printed; use markup tags for formatting");
         }
-        requireInsideAlignScope(index + 1);
+        requireInsideLineScope(index + 1);
         beginPendingAt(index + 1);
         pending.append(current);
         index++;
@@ -144,7 +151,7 @@ public final class MarkupParser {
      * @param sourceLength  how many source characters the entity occupies
      */
     private void emitEntity(char decoded, int sourceLength) throws MarkupException {
-        requireInsideAlignScope(index + 1);
+        requireInsideLineScope(index + 1);
         flushPending();
         spans.add(new Span(String.valueOf(decoded), style, index + 1));
         index += sourceLength;
@@ -211,7 +218,12 @@ public final class MarkupParser {
             return;
         }
 
-        requireInsideAlignScope(column);
+        if (tag == Tag.WRAP || tag == Tag.NOWRAP) {
+            openWrap(tag, column);
+            return;
+        }
+
+        requireInsideLineScope(column);
         open.push(new OpenTag(tag, column, style));
         style = applyStyle(tag, argument, column);
     }
@@ -229,6 +241,11 @@ public final class MarkupParser {
 
         if (tag == Tag.ALIGN) {
             closeAlign(column);
+            return;
+        }
+
+        if (tag == Tag.WRAP || tag == Tag.NOWRAP) {
+            closeWrap(tag, column);
             return;
         }
 
@@ -259,7 +276,7 @@ public final class MarkupParser {
             case SIZE -> applySize(argument, column);
             case FONT -> style.withFont(Enums.parse(Font.class, argument).orElseThrow(
                     () -> argumentError(tag, column, "must be 'a' or 'b'")));
-            case ALIGN, CUT, FEED, HR -> throw new IllegalStateException(
+            case ALIGN, WRAP, NOWRAP, CUT, FEED, HR -> throw new IllegalStateException(
                     "Tag " + tag + " does not carry a span style");
         };
     }
@@ -285,10 +302,7 @@ public final class MarkupParser {
             throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, column, "align",
                     "Only one <align> is allowed per line");
         }
-        if (!spans.isEmpty() || !directives.isEmpty()) {
-            throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, column, "align",
-                    "<align> must enclose the whole line, so nothing may precede it");
-        }
+        requireLineOwnerCanOpen("align", MarkupError.INVALID_ALIGN_SCOPE, column);
 
         align = Enums.parse(Align.class, argument).orElseThrow(
                 () -> argumentError(Tag.ALIGN, column, "must be 'left', 'center' or 'right'"));
@@ -304,20 +318,86 @@ public final class MarkupParser {
         }
         open.pop();
         style = current.styleBefore();
-        alignClosed = true;
+        closedOwnerName = "align";
+        closedOwnerError = MarkupError.INVALID_ALIGN_SCOPE;
+    }
+
+    // -------------------------------------------------------------------------
+    // Wrapping
+    // -------------------------------------------------------------------------
+
+    /**
+     * Opens {@code <wrap>} or {@code <nowrap>}.
+     * <p>
+     * Both occupy one slot: a line either wraps or it does not, so writing both is a
+     * contradiction rather than a refinement.
+     */
+    private void openWrap(Tag tag, int column) throws MarkupException {
+        if (wrapSeen) {
+            throw new MarkupException(MarkupError.INVALID_WRAP_SCOPE, column, tag.tagName(),
+                    "Only one <wrap> or <nowrap> is allowed per line");
+        }
+        requireLineOwnerCanOpen(tag.tagName(), MarkupError.INVALID_WRAP_SCOPE, column);
+
+        wrap = tag == Tag.WRAP;
+        wrapSeen = true;
+        open.push(new OpenTag(tag, column, style));
+    }
+
+    private void closeWrap(Tag tag, int column) throws MarkupException {
+        OpenTag current = open.peek();
+        if (current == null || current.tag() != tag) {
+            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, tag.tagName(),
+                    "</" + tag.tagName() + "> does not match any open <" + tag.tagName() + ">");
+        }
+        open.pop();
+        style = current.styleBefore();
+        closedOwnerName = tag.tagName();
+        closedOwnerError = MarkupError.INVALID_WRAP_SCOPE;
     }
 
     /**
-     * Rejects content appearing after {@code </align>}.
+     * Rejects content appearing after a line-owning tag has closed.
      * <p>
-     * Alignment applies to a whole printed line, so text outside the tag would silently
-     * inherit an alignment the author did not write. Refusing is better than guessing.
+     * Alignment and wrapping both apply to a whole printed line, so text outside the tag would
+     * silently inherit a property the author did not write.
      */
-    private void requireInsideAlignScope(int column) throws MarkupException {
-        if (alignClosed) {
-            throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, column, "align",
-                    "<align> must enclose the whole line, so nothing may follow </align>");
+    private void requireInsideLineScope(int column) throws MarkupException {
+        if (closedOwnerName != null) {
+            throw new MarkupException(closedOwnerError, column, closedOwnerName,
+                    "<" + closedOwnerName + "> must enclose the whole line, so nothing may follow </"
+                            + closedOwnerName + ">");
         }
+    }
+
+    /**
+     * Rejects a line-owning tag that cannot legally open here.
+     * <p>
+     * Another line-owning tag may already be open — that is the nesting the language allows,
+     * in either order — but text or a directive before it means the tag does not own the
+     * line. So does opening inside a styling tag: styling adds nothing to {@code spans} or
+     * {@code directives} until it closes, so without this check {@code <bold><nowrap>} would
+     * slip past undetected.
+     */
+    private void requireLineOwnerCanOpen(String name, MarkupError error, int column)
+            throws MarkupException {
+        requireInsideLineScope(column);
+        boolean precededByContent = !spans.isEmpty() || !directives.isEmpty();
+        boolean nestedInsideStyling = open.stream().anyMatch(entry -> !isLineOwningTag(entry.tag()));
+        if (precededByContent || nestedInsideStyling) {
+            throw new MarkupException(error, column, name,
+                    "<" + name + "> must enclose the whole line, so nothing may precede it");
+        }
+    }
+
+    /**
+     * Returns whether a tag applies to a whole printed line, as opposed to styling a run of
+     * text. {@code <align>}, {@code <wrap>} and {@code <nowrap>} may nest each other in any
+     * order; nesting one inside a styling tag is not "enclosing the whole line" and must be
+     * refused.
+     */
+    private static boolean isLineOwningTag(Tag tag) {
+        return tag == Tag.ALIGN || tag == Tag.WRAP || tag == Tag.NOWRAP;
     }
 
     // -------------------------------------------------------------------------
@@ -325,7 +405,7 @@ public final class MarkupParser {
     // -------------------------------------------------------------------------
 
     private void appendDirective(Tag tag, String argument, int column) throws MarkupException {
-        requireInsideAlignScope(column);
+        requireInsideLineScope(column);
         switch (tag) {
             case CUT -> directives.add(new Directive.Cut(cutMode(argument, column)));
             case FEED -> directives.add(new Directive.Feed(

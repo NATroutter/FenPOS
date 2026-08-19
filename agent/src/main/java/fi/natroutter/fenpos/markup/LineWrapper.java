@@ -148,6 +148,7 @@ public final class LineWrapper {
             boolean last = index == rows.size() - 1;
             lines.add(new Line(
                     source.align(),
+                    source.wrap(),
                     toSpans(rows.get(index)),
                     last ? source.directives() : List.of()));
         }

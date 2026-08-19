@@ -51,7 +51,7 @@ public final class CharsetValidator {
             }
         }
 
-        return new Line(line.align(), converted, line.directives());
+        return new Line(line.align(), line.wrap(), converted, line.directives());
     }
 
     /**
