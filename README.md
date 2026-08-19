@@ -63,6 +63,14 @@ The common case: one server somewhere central, agents added later at each site.
 
 **[`compose.server.yaml`](compose.server.yaml)**
 
+The container runs as uid 10001 and the data directory is a bind mount, so it keeps whatever
+owner the host gives it. Create it and hand it over first, or the server cannot open its
+database:
+
+```sh
+mkdir -p data && sudo chown -R 10001:10001 data
+```
+
 ```sh
 docker compose -f compose.server.yaml up -d
 docker compose -f compose.server.yaml logs fenpos   # your administrator password is in here
