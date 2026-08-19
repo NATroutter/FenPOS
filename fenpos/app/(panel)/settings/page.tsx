@@ -1,5 +1,4 @@
 import { PasswordForm, type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
-import { isPasswordGenerated } from "@/lib/auth/admin";
 import { listSettings } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings · FenPOS" };
@@ -40,7 +39,7 @@ export default async function SettingsPage() {
 
 			<div className="grid gap-4 lg:grid-cols-2 lg:items-start">
 				<SettingsForm settings={fields} />
-				<PasswordForm isGenerated={await isPasswordGenerated()} />
+				<PasswordForm />
 			</div>
 		</div>
 	);

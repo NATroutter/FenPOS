@@ -85,13 +85,34 @@ describe("administrator credential", () => {
 			await expect(isPasswordGenerated()).resolves.toBe(true);
 		});
 
-		it("leaves an existing password alone and reports nothing", async () => {
+		it("leaves an operator's password alone and reports nothing", async () => {
 			await setAdminPassword("an operator chosen password");
 
 			// A restart must not rotate the credential: it would lock out an operator who had
 			// already set one, and print a password nobody asked for.
 			await expect(ensureAdminPassword()).resolves.toBeNull();
 			await expect(verifyAdminPassword("an operator chosen password")).resolves.toBe(true);
+		});
+
+		it("reports the same generated password on every start", async () => {
+			const first = await ensureAdminPassword();
+			const second = await ensureAdminPassword();
+
+			// Reprinted on each boot for as long as it is in use, so an operator who missed the
+			// first one can still get in — which only works if it is the same password.
+			expect(second).toBe(first);
+			await expect(verifyAdminPassword(first as string)).resolves.toBe(true);
+		});
+
+		it("forgets the generated password once an operator sets their own", async () => {
+			await ensureAdminPassword();
+			await setAdminPassword("an operator chosen password");
+
+			// The plaintext is stored only so it can be reprinted. Once it is no longer the
+			// credential, keeping it would be a readable password in the database for nothing.
+			const row = await prisma.adminAuth.findUnique({ where: { id: 1 }, select: { generatedPassword: true } });
+			expect(row?.generatedPassword).toBeNull();
+			await expect(ensureAdminPassword()).resolves.toBeNull();
 		});
 
 		it("clears the generated mark once an operator sets their own", async () => {

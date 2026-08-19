@@ -77,8 +77,11 @@ export async function setAdminPassword(plaintext: string): Promise<number> {
 
 	await prisma.adminAuth.upsert({
 		where: { id: ADMIN_ROW_ID },
-		create: { id: ADMIN_ROW_ID, passwordHash, isGenerated: false },
-		update: { passwordHash, isGenerated: false },
+		create: { id: ADMIN_ROW_ID, passwordHash, isGenerated: false, generatedPassword: null },
+		// Clearing the plaintext is the point at which the bootstrap credential stops existing
+		// anywhere recoverable. It happens in the same statement as the new hash so there is no
+		// window where the row claims to be operator-set while still carrying the old secret.
+		update: { passwordHash, isGenerated: false, generatedPassword: null },
 	});
 
 	return destroyAllSessions();
@@ -107,8 +110,17 @@ export async function isPasswordGenerated(): Promise<boolean> {
  * @returns the generated password on the boot that created it, or null when one was already set
  */
 export async function ensureAdminPassword(): Promise<string | null> {
-	if (await isAdminConfigured()) {
-		return null;
+	const existing = await prisma.adminAuth.findUnique({
+		where: { id: ADMIN_ROW_ID },
+		select: { isGenerated: true, generatedPassword: true },
+	});
+
+	if (existing) {
+		// Still on the generated password: hand back the same one rather than a new one. An
+		// operator who missed the first boot's output, or who restarted before signing in,
+		// needs the credential that actually works — rotating it on every start would make
+		// anything they wrote down wrong.
+		return existing.isGenerated ? existing.generatedPassword : null;
 	}
 
 	const plaintext = generatePassword();
@@ -116,7 +128,7 @@ export async function ensureAdminPassword(): Promise<string | null> {
 
 	try {
 		await prisma.adminAuth.create({
-			data: { id: ADMIN_ROW_ID, passwordHash, isGenerated: true },
+			data: { id: ADMIN_ROW_ID, passwordHash, isGenerated: true, generatedPassword: plaintext },
 		});
 	} catch {
 		// Another process won the race between the check and the insert. Theirs is as good as

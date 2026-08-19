@@ -28,8 +28,9 @@ pnpm dev
 ```
 
 On its first start FenPOS generates an administrator password and prints it, framed, to the
-log. Sign in with it, then change it under **Settings** — the panel carries a warning banner on
-every page until you do.
+log. Sign in with it and the panel asks you to choose your own before it will let you any
+further — there is nothing else a session opened with the generated password can reach. The
+message repeats on every start until you have, so missing it costs nothing.
 
 Nothing is set through an unauthenticated first-run page, and there is no fixed default such as
 `admin`: either would be a takeover waiting to happen on a server that is reachable before
@@ -77,8 +78,8 @@ Agents are Linux-only in Docker. Docker Desktop on Windows and macOS runs contai
 with no serial passthrough, so a COM port cannot be reached from one at all — run the jar
 directly on the JVM there.
 
-The generated administrator password is printed when the container first starts, so read it
-with `docker compose logs fenpos` and change it under **Settings** once you are in.
+Read the generated administrator password with `docker compose logs fenpos`. It is reprinted
+on every start until you replace it, so a rotated or scrolled-away log is not a lockout.
 
 Back up `fenpos/data`. It holds the agents and their credentials, every device, the API keys
 and the administrator password.

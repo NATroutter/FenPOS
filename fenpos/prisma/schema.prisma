@@ -23,10 +23,18 @@ datasource db {
 model AdminAuth {
   id           Int      @id @default(1)
   passwordHash String   @map("password_hash")
-  /// True while the password is the one generated at first boot and printed to the log.
-  /// Drives the panel's warning banner, and is cleared the first time an operator sets
-  /// their own password.
+  /// True while the password is the one generated at first boot. While set, the panel is
+  /// unreachable: signing in leads only to the page that replaces this password.
   isGenerated  Boolean  @default(false) @map("is_generated")
+  /// The generated password in the clear, so it can be reprinted on every start for as long
+  /// as it is still in use — an operator who missed the first boot's output should not have
+  /// to reset the install to get back in.
+  ///
+  /// Deleted the moment an operator sets their own password, and never written for one they
+  /// chose. It is readable in the database until then, which is the price of reprinting it;
+  /// the same value is already in the startup log, and it cannot be used to reach anything
+  /// except the page that replaces it.
+  generatedPassword String? @map("generated_password")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("admin_auth")

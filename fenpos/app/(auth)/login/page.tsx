@@ -52,13 +52,13 @@ export default async function LoginPage() {
 							<LoginForm />
 						) : (
 							<div className="flex flex-col gap-3 text-sm text-muted-foreground">
-								<p>Set the first password from a shell on the server:</p>
-								<code className="rounded-md border border-border bg-background px-3 py-2 font-mono text-xs text-foreground">
-									pnpm admin:set-password &quot;your password&quot;
-								</code>
+								<p>
+									A password is generated the first time FenPOS starts and printed to its log. Seeing this instead means
+									that step did not complete — the log will say why.
+								</p>
 								<p className="text-xs">
-									The same command recovers access if the password is lost. It is deliberately not available over the
-									web.
+									If the password is lost, <span className="font-mono text-foreground">pnpm admin:set-password</span>{" "}
+									sets a new one from a shell on the server. It is deliberately not available over the web.
 								</p>
 							</div>
 						)}

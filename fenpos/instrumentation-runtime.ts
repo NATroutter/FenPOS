@@ -20,14 +20,19 @@ export async function registerRuntime(): Promise<void> {
 }
 
 /**
- * Creates the administrator password on first boot and prints it once.
+ * Prints the generated administrator password, creating it on the first boot that needs one.
  *
- * Written straight to stdout rather than through the logger, and framed, because this is the
- * one line an operator must not scroll past — it is the only time the password is ever
- * visible, and everything else about the install is unreachable without it.
+ * Repeated on every start for as long as that password is still in use, rather than shown
+ * once. An operator who scrolled past it, restarted before signing in, or came to a container
+ * whose first logs have rotated away would otherwise have no route in but to reset the
+ * install. It stops appearing the moment a real password is set, so it cannot become
+ * background noise nobody reads.
  *
- * A failure here is fatal to sign-in but not to serving, so it is reported rather than
- * thrown: an operator needs the panel up to read the logs that explain what went wrong.
+ * Written straight to stdout rather than through the logger, and framed, because it is the
+ * one thing in the output an operator must not miss.
+ *
+ * A failure here blocks sign-in but not serving, so it is reported rather than thrown: the
+ * logs explaining what went wrong are easier to reach with the server up.
  */
 async function announceAdminPassword(): Promise<void> {
 	try {
@@ -39,14 +44,14 @@ async function announceAdminPassword(): Promise<void> {
 		const rule = "─".repeat(66);
 		process.stdout.write(
 			`\n${rule}\n` +
-				`  FenPOS generated an administrator password for this install:\n\n` +
+				`  This install is still using its generated administrator password:\n\n` +
 				`      ${password}\n\n` +
-				`  Sign in with it, then change it under Settings. It is shown here\n` +
-				`  once and is not recoverable — the database keeps only its hash.\n` +
+				`  Sign in with it. FenPOS will ask you to replace it before letting you\n` +
+				`  into the panel, and this message stops once you have.\n` +
 				`${rule}\n\n`,
 		);
 	} catch (error) {
-		logger.error("Could not create the administrator password", error);
+		logger.error("Could not read or create the administrator password", error);
 	}
 }
 
