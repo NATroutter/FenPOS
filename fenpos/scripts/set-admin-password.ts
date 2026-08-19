@@ -61,10 +61,15 @@ async function main(): Promise<void> {
 	try {
 		const passwordHash = await hash(password, ARGON2_OPTIONS);
 
+		// Clearing the generated marks matters as much as writing the hash. Left set, the
+		// server would go on printing a generated password this command has just invalidated,
+		// and the panel would still divert to the page that asks for it to be replaced —
+		// having just been replaced. Kept in step with setAdminPassword in lib/auth/admin.ts,
+		// which this script cannot import because that module is server-only.
 		await prisma.adminAuth.upsert({
 			where: { id: ADMIN_ROW_ID },
-			create: { id: ADMIN_ROW_ID, passwordHash },
-			update: { passwordHash },
+			create: { id: ADMIN_ROW_ID, passwordHash, isGenerated: false, generatedPassword: null },
+			update: { passwordHash, isGenerated: false, generatedPassword: null },
 		});
 
 		// Any session created under the old password must not survive the change, or the
