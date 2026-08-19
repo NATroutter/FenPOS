@@ -1,0 +1,61 @@
+# FenPOS server and agent on one machine.
+#
+# For a single shop with the printers attached to the same box that runs the server. The agent
+# shares the server network namespace so it can dial 127.0.0.1: plain HTTP is accepted only to
+# loopback, so pointing it at http://fenpos:3000 over a Docker network would be refused. With a
+# domain and a certificate, drop network_mode and use your https:// address instead.
+#
+# Start the server, read the password from its log, create a pairing code in the panel, put it
+# in FENPOS_PAIR_CODE, then bring the agent up.
+#
+#   docker compose -f compose.all-in-one.yaml up -d fenpos
+#   docker compose -f compose.all-in-one.yaml logs fenpos
+#   docker compose -f compose.all-in-one.yaml up -d
+
+services:
+  fenpos:
+    image: ghcr.io/natroutter/fenpos:latest
+    container_name: fenpos
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./server-data:/app/data
+    environment:
+      TZ: "Europe/Helsinki"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 1g
+
+  fenpos-agent:
+    image: ghcr.io/natroutter/fenpos-agent:latest
+    container_name: fenpos-agent
+    restart: unless-stopped
+
+    # Shares the server's network namespace, so 127.0.0.1 reaches it and plain HTTP is
+    # allowed. Requires the server to be healthy first.
+    network_mode: "service:fenpos"
+    depends_on:
+      fenpos:
+        condition: service_healthy
+
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+    group_add:
+      - "20"
+    volumes:
+      - ./agent-data:/app/data
+      - ./agent-logs:/app/logs
+
+    environment:
+      FENPOS_SERVER: "http://127.0.0.1:3000"
+      FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"
+      TZ: "Europe/Helsinki"
+
+    mem_limit: 512m
+    stdin_open: true
+    tty: true

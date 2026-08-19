@@ -1,0 +1,35 @@
+# FenPOS server on its own.
+#
+# One server somewhere central; agents are added later from the panel. Put it behind TLS —
+# agents refuse plain HTTP to anything but loopback.
+#
+#   docker compose -f compose.server.yaml up -d
+
+services:
+  fenpos:
+    image: ghcr.io/natroutter/fenpos:latest
+    container_name: fenpos
+    restart: unless-stopped
+
+    ports:
+      # Panel, print API and the agent link all share this one port.
+      - "3000:3000"
+
+    volumes:
+      # Agents, devices, keys, jobs and the admin password all live here. Back it up.
+      - ./data:/app/data
+
+    environment:
+      # The address agents should dial. Optional — the panel otherwise derives it from the
+      # request. Set it when the panel is reached on a different address than agents use.
+      PUBLIC_URL: "https://fenpos.example.com"
+      TZ: "Europe/Helsinki"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    mem_limit: 1g

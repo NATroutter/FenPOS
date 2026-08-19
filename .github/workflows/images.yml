@@ -34,7 +34,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Needs the path spelled out: it reads the pnpm version from `packageManager`, and
+      # `defaults.run.working-directory` above applies to run steps, not to action inputs, so
+      # it would otherwise look for a package.json at the repository root that does not exist.
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: fenpos/package.json
 
       - uses: actions/setup-node@v4
         with:

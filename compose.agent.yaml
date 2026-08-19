@@ -1,0 +1,45 @@
+# FenPOS agent on its own.
+#
+# Runs at a site, on the machine the printers are plugged into. Create a pairing code in the
+# panel under Agents first and put it in FENPOS_PAIR_CODE.
+#
+# Linux only. Docker Desktop on Windows and macOS runs containers in a VM with no serial
+# passthrough, so a COM port cannot be reached from a container there.
+#
+#   docker compose -f compose.agent.yaml up -d
+
+services:
+  fenpos-agent:
+    image: ghcr.io/natroutter/fenpos-agent:latest
+    container_name: fenpos-agent
+    restart: unless-stopped
+
+    # No ports. The agent dials out and never listens — there is nothing to publish.
+
+    devices:
+      # One per printer. Find the stable name with:  ls -l /dev/serial/by-id/
+      # ttyUSB numbering changes across reboots; a udev rule is worth setting up.
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+
+    group_add:
+      # The container runs as a non-root user, so it needs the group owning the device.
+      # Find it with:  stat -c '%g' /dev/ttyUSB0
+      - "20"                      # dialout on Debian/Ubuntu
+
+    volumes:
+      # The agent's identity: server address and the credential issued at pairing.
+      # Lose this and the agent is unpaired and needs a fresh code.
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    environment:
+      FENPOS_SERVER: "https://fenpos.example.com"
+      FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"     # single-use, read only on first boot
+      TZ: "Europe/Helsinki"
+
+    mem_limit: 512m
+
+    # Optional: enables the console via `docker attach fenpos-agent`.
+    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would stop the JVM.
+    stdin_open: true
+    tty: true

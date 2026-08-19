@@ -61,41 +61,11 @@ the printer.
 
 The common case: one server somewhere central, agents added later at each site.
 
-```yaml
-# compose.yaml
-services:
-  fenpos:
-    image: ghcr.io/natroutter/fenpos:latest
-    container_name: fenpos
-    restart: unless-stopped
-
-    ports:
-      # Panel, print API and the agent link all share this one port.
-      - "3000:3000"
-
-    volumes:
-      # Agents, devices, keys, jobs and the admin password all live here. Back it up.
-      - ./data:/app/data
-
-    environment:
-      # The address agents should dial. Optional — the panel otherwise derives it from the
-      # request. Set it when the panel is reached on a different address than agents use.
-      PUBLIC_URL: "https://fenpos.example.com"
-      TZ: "Europe/Helsinki"
-
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-
-    mem_limit: 1g
-```
+**[`compose.server.yaml`](compose.server.yaml)**
 
 ```sh
-docker compose up -d
-docker compose logs fenpos     # your administrator password is in here
+docker compose -f compose.server.yaml up -d
+docker compose -f compose.server.yaml logs fenpos   # your administrator password is in here
 ```
 
 Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
@@ -105,43 +75,11 @@ Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
 At each site, on the machine the printers are plugged into. Generate a pairing code first in
 the panel under **Agents**.
 
-```yaml
-# compose.yaml
-services:
-  fenpos-agent:
-    image: ghcr.io/natroutter/fenpos-agent:latest
-    container_name: fenpos-agent
-    restart: unless-stopped
+**[`compose.agent.yaml`](compose.agent.yaml)** — set `FENPOS_SERVER` and `FENPOS_PAIR_CODE`, map
+your printer under `devices:`, then:
 
-    # No ports. The agent dials out and never listens — there is nothing to publish.
-
-    devices:
-      # One per printer. Find the stable name with:  ls -l /dev/serial/by-id/
-      # ttyUSB numbering changes across reboots; a udev rule is worth setting up.
-      - "/dev/ttyUSB0:/dev/ttyUSB0"
-
-    group_add:
-      # The container runs as a non-root user, so it needs the group owning the device.
-      # Find it with:  stat -c '%g' /dev/ttyUSB0
-      - "20"                      # dialout on Debian/Ubuntu
-
-    volumes:
-      # The agent's identity: server address and the credential issued at pairing.
-      # Lose this and the agent is unpaired and needs a fresh code.
-      - ./data:/app/data
-      - ./logs:/app/logs
-
-    environment:
-      FENPOS_SERVER: "https://fenpos.example.com"
-      FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"     # single-use, read only on first boot
-      TZ: "Europe/Helsinki"
-
-    mem_limit: 512m
-
-    # Optional: enables the console via `docker attach fenpos-agent`.
-    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would stop the JVM.
-    stdin_open: true
-    tty: true
+```sh
+docker compose -f compose.agent.yaml up -d
 ```
 
 > [!IMPORTANT]
@@ -153,64 +91,18 @@ services:
 
 A single-box install — one shop, printers attached to the same machine that runs the server.
 
-The agent shares the server's network namespace so it can dial `127.0.0.1`. That is
-deliberate: plain HTTP is accepted **only** to loopback, so `http://fenpos:3000` across a
-Docker network would be refused. If you have a domain and a certificate, drop `network_mode`
-and point `FENPOS_SERVER` at your `https://` address instead.
+The agent shares the server's network namespace so it can dial `127.0.0.1`. Plain HTTP is
+accepted only to loopback, so `http://fenpos:3000` over a Docker network would be refused. If
+you have a domain and a certificate, drop `network_mode` and point `FENPOS_SERVER` at your
+`https://` address instead.
 
-```yaml
-# compose.yaml
-services:
-  fenpos:
-    image: ghcr.io/natroutter/fenpos:latest
-    container_name: fenpos
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./server-data:/app/data
-    environment:
-      TZ: "Europe/Helsinki"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-    mem_limit: 1g
+**[`compose.all-in-one.yaml`](compose.all-in-one.yaml)**
 
-  fenpos-agent:
-    image: ghcr.io/natroutter/fenpos-agent:latest
-    container_name: fenpos-agent
-    restart: unless-stopped
-
-    # Shares the server's network namespace, so 127.0.0.1 reaches it and plain HTTP is
-    # allowed. Requires the server to be healthy first.
-    network_mode: "service:fenpos"
-    depends_on:
-      fenpos:
-        condition: service_healthy
-
-    devices:
-      - "/dev/ttyUSB0:/dev/ttyUSB0"
-    group_add:
-      - "20"
-    volumes:
-      - ./agent-data:/app/data
-      - ./agent-logs:/app/logs
-
-    environment:
-      FENPOS_SERVER: "http://127.0.0.1:3000"
-      FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"
-      TZ: "Europe/Helsinki"
-
-    mem_limit: 512m
-    stdin_open: true
-    tty: true
+```sh
+docker compose -f compose.all-in-one.yaml up -d fenpos      # server first
+docker compose -f compose.all-in-one.yaml logs fenpos      # read the password, make a code
+docker compose -f compose.all-in-one.yaml up -d            # then the agent
 ```
-
-Start the server first, read the password from its log, create a pairing code in the panel,
-put it in `FENPOS_PAIR_CODE`, then bring the agent up.
 
 ---
 
