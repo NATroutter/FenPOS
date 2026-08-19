@@ -4,6 +4,7 @@ import { EventStreamProvider } from "@/components/panel/event-stream";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { isPasswordGenerated } from "@/lib/auth/admin";
+import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
@@ -53,7 +54,7 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 
 	return (
 		<SidebarProvider>
-			<AppSidebar version={APP_VERSION} signOutAction={signOut} />
+			<AppSidebar version={APP_VERSION} signOutAction={signOut} minimumPasswordLength={MINIMUM_PASSWORD_LENGTH} />
 			<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
 				{/* Wraps the header as well as the pages, because the chip that governs the stream
 				    lives in the header while everything consuming it is below. */}

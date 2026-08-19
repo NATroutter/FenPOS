@@ -38,17 +38,26 @@ const ARGON2_OPTIONS = {
 /** Must match MINIMUM_PASSWORD_LENGTH in lib/auth/password.ts. */
 const MINIMUM_PASSWORD_LENGTH = 12;
 
-/** Must match the upper bound in passwordSchema in lib/auth/password.ts. */
+/** Must match MAXIMUM_PASSWORD_LENGTH in lib/auth/password.ts. */
 const MAXIMUM_PASSWORD_LENGTH = 1024;
+
+/** Must match CONTROL_CHARACTERS in lib/auth/password.ts. */
+const CONTROL_CHARACTERS = /\p{Cc}/u;
 
 /** Fixed primary key of the singleton admin row. */
 const ADMIN_ROW_ID = 1;
 
 async function main(): Promise<void> {
-	const password = process.argv[2];
+	// Trimmed to match normalizePassword in lib/auth/password.ts. Without this the CLI would
+	// store a hash of the untrimmed value while sign-in compares the trimmed one, so a
+	// password given here with a stray space would be impossible to enter.
+	const password = process.argv[2]?.trim();
 
 	if (!password) {
 		throw new Error('Usage: pnpm admin:set-password "<password>"');
+	}
+	if (CONTROL_CHARACTERS.test(password)) {
+		throw new Error("Password must not contain tabs, newlines or control characters.");
 	}
 	if (password.length < MINIMUM_PASSWORD_LENGTH) {
 		throw new Error(`Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`);

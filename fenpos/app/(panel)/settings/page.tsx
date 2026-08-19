@@ -1,4 +1,4 @@
-import { PasswordForm, type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
+import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
 import { listSettings } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings · FenPOS" };
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 /**
  * The Settings tab.
  *
- * What used to be the YAML file's global section, and the administrator credential. Everything
+ * What used to be the YAML file's global section. Everything
  * per-device lives on the Devices tab instead — a setting that applies to one printer belongs
  * next to that printer, not in a list of install-wide knobs where it would have to be qualified.
  */
@@ -33,13 +33,13 @@ export default async function SettingsPage() {
 			<div className="border-b border-border pb-3">
 				<h2 className="text-[15px] font-semibold tracking-tight">Settings</h2>
 				<p className="mt-1 text-[12.5px] text-muted-foreground">
-					Install-wide defaults and the administrator credential. Per-printer settings are on the Devices tab.
+					Install-wide defaults. Per-printer settings are on the Devices tab, and the administrator password is under
+					your profile in the sidebar.
 				</p>
 			</div>
 
 			<div className="grid gap-4 lg:grid-cols-2 lg:items-start">
 				<SettingsForm settings={fields} />
-				<PasswordForm />
 			</div>
 		</div>
 	);

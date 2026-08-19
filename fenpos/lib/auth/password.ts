@@ -39,17 +39,62 @@ const ARGON2_OPTIONS = {
 /** Shortest password accepted. Matches the minimum stated in the admin panel. */
 export const MINIMUM_PASSWORD_LENGTH = 12;
 
+/** Longest password accepted. Argon2's cost scales with input, so this is a work bound. */
+export const MAXIMUM_PASSWORD_LENGTH = 1024;
+
+/**
+ * Characters that cannot survive being typed, pasted or stored intact.
+ *
+ * Tabs and newlines arrive by accident from a copied line; NUL and the rest of the C0/C1
+ * ranges arrive from a mangled encoding. None can be reproduced reliably by a human at a
+ * login form, so accepting one produces a password its owner cannot re-enter.
+ */
+const CONTROL_CHARACTERS = /\p{Cc}/u;
+
+/**
+ * Normalises a password before it is hashed or compared.
+ *
+ * Only surrounding whitespace is removed, and it is removed on both the set and the verify
+ * path so the two cannot disagree. A trailing space picked up by a double-click or a copied
+ * line is invisible, and a credential that fails for a reason the operator cannot see is the
+ * worst kind of lockout.
+ *
+ * Interior spaces are left alone deliberately — see `passwordSchema`.
+ *
+ * @param plaintext the password as entered
+ * @returns the password as it should be hashed and compared
+ */
+export function normalizePassword(plaintext: string): string {
+	return plaintext.trim();
+}
+
 /**
  * Validates a candidate administrator password.
  *
- * Only length is enforced. Composition rules (a digit, a symbol, mixed case) are omitted
- * deliberately: they measurably push people toward predictable patterns without adding real
- * entropy, and length is the property that matters.
+ * Length, surrounding whitespace and control characters. No composition rules — requiring a
+ * digit, a symbol or mixed case measurably pushes people toward predictable patterns without
+ * adding real entropy, and length is the property that matters.
+ *
+ * **Interior spaces are allowed on purpose.** They are what makes a passphrase possible, and
+ * `correct horse battery staple` is both far stronger and far more memorable than anything a
+ * space ban leaves behind. Rejecting them is a habit inherited from systems that put
+ * passwords into shell commands unquoted; nothing here does that, and the guidance that once
+ * recommended it now says the opposite. What is worth removing is whitespace nobody can see,
+ * which normalizePassword handles.
  */
 export const passwordSchema = z
 	.string()
-	.min(MINIMUM_PASSWORD_LENGTH, `Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`)
-	.max(1024, "Password must be at most 1024 characters.");
+	.transform(normalizePassword)
+	.pipe(
+		z
+			.string()
+			.min(MINIMUM_PASSWORD_LENGTH, `Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`)
+			.max(MAXIMUM_PASSWORD_LENGTH, `Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`)
+			.refine(
+				(value) => !CONTROL_CHARACTERS.test(value),
+				"Password must not contain tabs, newlines or control characters.",
+			),
+	);
 
 /**
  * Hashes an administrator password for storage.
@@ -58,7 +103,7 @@ export const passwordSchema = z
  * @returns a PHC-format argon2id string carrying its own salt and parameters
  */
 export async function hashPassword(plaintext: string): Promise<string> {
-	return hash(plaintext, ARGON2_OPTIONS);
+	return hash(normalizePassword(plaintext), ARGON2_OPTIONS);
 }
 
 /**
@@ -74,7 +119,9 @@ export async function hashPassword(plaintext: string): Promise<string> {
  */
 export async function verifyPassword(storedHash: string, plaintext: string): Promise<boolean> {
 	try {
-		return await verify(storedHash, plaintext, ARGON2_OPTIONS);
+		// Normalised here as well as in hashPassword, so a password set through one path and
+		// entered through another cannot disagree about its own surrounding whitespace.
+		return await verify(storedHash, normalizePassword(plaintext), ARGON2_OPTIONS);
 	} catch {
 		return false;
 	}

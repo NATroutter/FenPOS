@@ -4,6 +4,7 @@ import { LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
+import { ProfileDialog } from "@/components/panel/profile-dialog";
 import { Button } from "@/components/ui/button";
 import {
 	Sidebar,
@@ -29,11 +30,15 @@ import { NAV_GROUPS } from "@/lib/navigation";
 export function AppSidebar({
 	version,
 	signOutAction,
+	minimumPasswordLength,
 }: {
 	/** Application version, shown under the wordmark. */
 	version: string;
 	/** Server action that revokes the session and redirects. */
 	signOutAction: () => Promise<void>;
+	/** Shortest acceptable password, shown as a hint in the profile dialog. Passed from the
+	    server so this client component does not import the argon2-backed password module. */
+	minimumPasswordLength: number;
 }) {
 	const pathname = usePathname();
 
@@ -79,6 +84,8 @@ export function AppSidebar({
 					<div className="min-w-0 flex-1">
 						<div className="text-[12.5px] font-semibold">Administrator</div>
 					</div>
+					<ProfileDialog minimumLength={minimumPasswordLength} />
+
 					<form action={signOutAction}>
 						<Button
 							type="submit"

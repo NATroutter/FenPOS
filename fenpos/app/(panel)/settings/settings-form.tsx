@@ -1,11 +1,9 @@
 "use client";
 
-import { RotateCcw, ShieldCheck } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { changePassword, resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -132,108 +130,5 @@ function SettingField({ setting }: { setting: SettingFieldData }) {
 				{setting.description} Between {setting.min} and {setting.max}.
 			</FieldDescription>
 		</Field>
-	);
-}
-
-/**
- * Changing the administrator password.
- *
- * The current password is asked for even though the caller is signed in. A session left open on
- * an unattended machine in a back office is exactly the case this defends against, and it costs
- * one field to close.
- */
-export function PasswordForm() {
-	const [current, setCurrent] = useState("");
-	const [next, setNext] = useState("");
-	const [confirm, setConfirm] = useState("");
-	const [error, setError] = useState<string | null>(null);
-	const [pending, startTransition] = useTransition();
-
-	const submit = (): void => {
-		setError(null);
-		if (next !== confirm) {
-			setError("The new passwords do not match.");
-			return;
-		}
-		startTransition(async () => {
-			const result = await changePassword(current, next);
-			if (result.error) {
-				setError(result.error);
-				return;
-			}
-			setCurrent("");
-			setNext("");
-			setConfirm("");
-			toast.success("Password changed. Other sessions have been signed out.");
-		});
-	};
-
-	return (
-		<Card>
-			<CardHeader className="border-b border-border pb-3">
-				<div className="flex flex-wrap items-center gap-2">
-					<h3 className="text-[13px] font-medium">Administrator password</h3>
-					{/* Unconditional: this page is unreachable while the generated password is still in
-					    use, so the only state it can report is that an operator chose this one. */}
-					<Badge variant="outline" className="border-emerald-900 bg-emerald-950 text-emerald-400">
-						<ShieldCheck className="size-3" />
-						Set by you
-					</Badge>
-				</div>
-				<p className="mt-1 text-[12px] text-muted-foreground">
-					Changing it signs out every other session immediately, which is the point of changing it.
-				</p>
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4 pt-4">
-				<Field>
-					<FieldLabel htmlFor="current-password">Current password</FieldLabel>
-					<Input
-						id="current-password"
-						type="password"
-						autoComplete="current-password"
-						value={current}
-						disabled={pending}
-						onChange={(event) => setCurrent(event.target.value)}
-					/>
-				</Field>
-
-				<Field>
-					<FieldLabel htmlFor="new-password">New password</FieldLabel>
-					<Input
-						id="new-password"
-						type="password"
-						autoComplete="new-password"
-						value={next}
-						disabled={pending}
-						onChange={(event) => setNext(event.target.value)}
-					/>
-				</Field>
-
-				<Field>
-					<FieldLabel htmlFor="confirm-password">Confirm new password</FieldLabel>
-					<Input
-						id="confirm-password"
-						type="password"
-						autoComplete="new-password"
-						value={confirm}
-						disabled={pending}
-						onChange={(event) => setConfirm(event.target.value)}
-					/>
-				</Field>
-
-				{error ? (
-					<Alert variant="destructive">
-						<AlertDescription>{error}</AlertDescription>
-					</Alert>
-				) : null}
-
-				<div>
-					<Button type="button" disabled={pending || current === "" || next === "" || confirm === ""} onClick={submit}>
-						{pending ? <Spinner className="size-3.5" /> : null}
-						Change password
-					</Button>
-				</div>
-			</CardContent>
-		</Card>
 	);
 }

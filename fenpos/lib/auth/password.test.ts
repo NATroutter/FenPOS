@@ -25,15 +25,26 @@ describe("passwordSchema", () => {
 		expect(passwordSchema.safeParse("correct horse battery staple").success).toBe(true);
 	});
 
-	it("accepts any character, including scripts, emoji, symbols and whitespace", () => {
+	it("accepts any printable character, including other scripts, emoji and symbols", () => {
 		for (const password of [
 			"日本語のパスワードですよ",
 			"🔑🔑🔑🔑🔑🔑",
-			"\t  leading and trailing  \n",
 			"'; DROP TABLE admin_auth;--",
 			"«»½¬{}[]|~`\\!@#$%^&*()",
 		]) {
 			expect(passwordSchema.safeParse(password).success, JSON.stringify(password)).toBe(true);
+		}
+	});
+
+	it("allows interior spaces, because passphrases are the point", () => {
+		expect(passwordSchema.safeParse("correct horse battery staple").success).toBe(true);
+	});
+
+	it("rejects control characters", () => {
+		// A tab or newline arrives from a copied line and cannot be retyped at a login form,
+		// so accepting one sets a password its owner cannot enter again.
+		for (const password of ["twelve chars\there", "twelve chars\nhere", "twelve chars\0here"]) {
+			expect(passwordSchema.safeParse(password).success, JSON.stringify(password)).toBe(false);
 		}
 	});
 
@@ -123,23 +134,26 @@ describe("bootstrap script parity", () => {
 	it("uses an identical maximum password length in both places", () => {
 		// The upper bound is what stops argon2 being handed a megabyte of input on every
 		// attempt, so a CLI that did not share it would leave that door open.
-		const libMaximum = libSource.match(/\.max\((\d+),/)?.[1];
-		const scriptMaximum = scriptSource.match(/MAXIMUM_PASSWORD_LENGTH = (\d+)/)?.[1];
+		const maximum = (source: string): string | undefined => source.match(/MAXIMUM_PASSWORD_LENGTH = (\d+)/)?.[1];
 
-		expect(libMaximum).toBeDefined();
-		expect(scriptMaximum).toBe(libMaximum);
+		expect(maximum(libSource)).toBeDefined();
+		expect(maximum(scriptSource)).toBe(maximum(libSource));
 	});
 });
 
 describe("what counts as the same password", () => {
-	it("treats surrounding whitespace as part of the password", async () => {
-		// No trimming anywhere on the path, so a password pasted with a stray space is a
-		// different password. Stated in a test because the alternative — quietly trimming —
-		// is the kind of helpfulness that turns into a lockout nobody can explain.
+	it("ignores surrounding whitespace on both the set and the entry path", async () => {
+		// Trimmed at both ends of the journey, so a trailing space from a double-click or a
+		// copied line cannot make a correct password fail for a reason nobody can see.
 		const stored = await hashPassword("  padded password  ");
 
-		expect(await verifyPassword(stored, "padded password")).toBe(false);
+		expect(await verifyPassword(stored, "padded password")).toBe(true);
 		expect(await verifyPassword(stored, "  padded password  ")).toBe(true);
+		expect(await verifyPassword(stored, "padded  password")).toBe(false);
+	});
+
+	it("counts length after trimming, so padding cannot pad out the minimum", async () => {
+		expect(passwordSchema.safeParse(`   ${"a".repeat(MINIMUM_PASSWORD_LENGTH - 1)}   `).success).toBe(false);
 	});
 
 	it("does not normalise unicode, so composed and decomposed forms differ", async () => {
