@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
 # ---- build ----------------------------------------------------------------
-FROM maven:3.9-eclipse-temurin-25 AS build
+# Pinned to the builder's own architecture. The jar is portable — jSerialComm carries its
+# native libraries for every platform inside it — so there is nothing to gain from compiling
+# it again under emulation for each target, and a great deal of time to lose.
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /build
 
 # Dependencies resolve in their own layer so a source-only change does not

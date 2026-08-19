@@ -87,6 +87,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # arm64 emulation. Agents are expected on small ARM boxes — a Raspberry Pi behind the
+      # counter is the whole point — so an amd64-only image is not much use.
+      - uses: docker/setup-qemu-action@v3
+
       # Needed for cache-to/cache-from and the Dockerfile syntax directive both images use.
       - uses: docker/setup-buildx-action@v3
 
@@ -119,6 +123,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
