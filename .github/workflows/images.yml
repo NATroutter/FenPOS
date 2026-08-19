@@ -19,6 +19,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing inherits a token by default; each job asks for what it needs.
+permissions: {}
+
+# A second push to the same branch supersedes the first. Without this the two race, and if
+# the older run finishes last it moves `latest` back onto the earlier commit. Tag builds are
+# left alone: a release is not superseded by the next one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
 env:
   REGISTRY: ghcr.io
 
@@ -30,6 +40,7 @@ jobs:
   check:
     name: server checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     permissions:
       contents: read
@@ -40,6 +51,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Needs the path spelled out: it reads the pnpm version from `packageManager`, and
       # `defaults.run.working-directory` above applies to run steps, not to action inputs, so
@@ -71,6 +84,7 @@ jobs:
     name: ${{ matrix.name }} · ${{ matrix.arch }}
     needs: check
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
 
     permissions:
       contents: read
@@ -97,8 +111,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # ghcr rejects an uppercase path, and this owner is not lowercase.
       - name: Lowercase the owner
@@ -110,33 +126,31 @@ jobs:
       # they just stop before the push.
       - name: Sign in to the registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Writes a bake file carrying the labels and annotations it worked out, which every
-      # target in docker-bake.hcl inherits.
+      # Only the labels and annotations are wanted here. Tags belong to the merge job, which
+      # is the only place that can name an image covering both architectures.
       - name: Work out metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/${{ matrix.image }}
 
       - name: Build
         id: bake
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
           files: |
             ./docker-bake.hcl
-            cwd://${{ steps.meta.outputs.bake-file }}
+            cwd://${{ steps.meta.outputs.bake-file-labels }}
+            cwd://${{ steps.meta.outputs.bake-file-annotations }}
           targets: ${{ matrix.name }}
           # Everything overridden here is a property of where this build is running rather
           # than of what is being built, which is why it is not in docker-bake.hcl.
-          #
-          # Tags are cleared deliberately: this pushes by digest, and a tag applied here would
-          # end up owned by whichever architecture finished last instead of covering both.
           #
           # Cache is scoped per architecture as well as per component; one cache shared
           # between them would thrash, each build evicting the other's layers.
@@ -144,7 +158,6 @@ jobs:
           # On a pull request nothing is pushed, so there is no digest to collect and the
           # build is only proving that it still compiles.
           set: |
-            *.tags=
             *.platform=${{ matrix.platform }}
             *.cache-from=type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
             *.cache-to=type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
@@ -174,6 +187,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     permissions:
       contents: read
@@ -189,7 +203,7 @@ jobs:
             image: fenpos-agent
 
     steps:
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Lowercase the owner
         id: owner
@@ -202,7 +216,7 @@ jobs:
           pattern: digest-${{ matrix.name }}-*
           merge-multiple: true
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -210,9 +224,14 @@ jobs:
 
       - name: Work out tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/${{ matrix.image }}
+          # Without this, metadata-action's default of `latest=auto` adds `latest` to any
+          # stable semver tag, so publishing v1.4.2 would quietly move `latest` onto it even
+          # while the rule below says `latest` tracks the default branch.
+          flavor: |
+            latest=false
           # `latest` follows the default branch; a release tag also publishes its exact
           # version and the major.minor it belongs to, so a deployment can pin as loosely or
           # as tightly as it wants.
