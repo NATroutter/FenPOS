@@ -56,6 +56,10 @@ services:
       FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"
       TZ: "Europe/Helsinki"
 
+    # Raspberry Pi OS disables the cgroup memory controller, so Docker discards this with
+    # "Your kernel does not support memory limit capabilities" and the container runs
+    # uncapped. To enforce it, append cgroup_enable=memory cgroup_memory=1 to the single
+    # line in /boot/firmware/cmdline.txt and reboot.
     mem_limit: 512m
     stdin_open: true
     tty: true

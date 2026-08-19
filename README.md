@@ -82,6 +82,12 @@ your printer under `devices:`, then:
 docker compose -f compose.agent.yaml up -d
 ```
 
+> [!NOTE]
+> On a Raspberry Pi, Docker warns that it discarded `mem_limit` — Raspberry Pi OS ships with
+> the cgroup memory controller off. The agent still runs, just uncapped. To enforce the
+> limit, append `cgroup_enable=memory cgroup_memory=1` to the single line in
+> `/boot/firmware/cmdline.txt` and reboot.
+
 > [!IMPORTANT]
 > **Agents are Linux-only in Docker.** Docker Desktop on Windows and macOS runs containers
 > inside a VM with no serial passthrough, so a COM port cannot be reached from a container at
