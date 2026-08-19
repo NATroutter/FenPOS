@@ -178,6 +178,19 @@ class MarkupParserTest {
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
 
+    /**
+     * Deliberate, not incidental: the line-owning rule that governs {@code <wrap>}/{@code <nowrap>}
+     * also governs {@code <align>}, so a line-owning tag opened inside a styling tag is refused
+     * regardless of which one it is. See "Changes by component" in the wrap-tags design spec.
+     */
+    @Test
+    void rejectsAlignmentOpenedInsideAStylingTagSameAsWrap() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<bold><align=right>x</align></bold>"));
+
+        assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
+    }
+
     // -------------------------------------------------------------------------
     // Directives
     // -------------------------------------------------------------------------
@@ -374,5 +387,38 @@ class MarkupParserTest {
         assertEquals(MarkupError.INVALID_WRAP_SCOPE,
                 assertThrows(MarkupException.class,
                         () -> MarkupParser.parse("<bold><nowrap>x</nowrap></bold>")).error());
+    }
+
+    @Test
+    void enclosesStylingTags() throws Exception {
+        Line line = MarkupParser.parse("<nowrap><bold>Yhteensa 14.80</bold></nowrap>");
+
+        assertEquals(Boolean.FALSE, line.wrap());
+        assertTrue(line.spans().getFirst().style().bold());
+    }
+
+    @Test
+    void permitsARuleWhereWrappingIsANoOp() throws Exception {
+        Line line = MarkupParser.parse("<nowrap><hr></nowrap>");
+
+        assertEquals(Boolean.FALSE, line.wrap());
+        assertEquals(List.of(new Directive.Rule()), line.directives());
+    }
+
+    @Test
+    void refusesNowrapClosingAnOpenWrap() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<wrap>x</nowrap>"));
+
+        assertEquals(MarkupError.UNEXPECTED_CLOSE_TAG, thrown.error());
+    }
+
+    @Test
+    void reportsTheColumnOfTheOffendingWrapTag() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("Total: <nowrap>14.80</nowrap>"));
+
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE, thrown.error());
+        assertEquals(8, thrown.column());
     }
 }

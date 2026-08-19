@@ -154,6 +154,15 @@ describe("parseMarkup", () => {
 		expect(error("<align=left><align=right>x</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
+	/**
+	 * Deliberate, not incidental: the line-owning rule that governs <wrap>/<nowrap> also governs
+	 * <align>, so a line-owning tag opened inside a styling tag is refused regardless of which
+	 * one it is. See "Changes by component" in the wrap-tags design spec.
+	 */
+	it("rejects alignment opened inside a styling tag, same as wrap", () => {
+		expect(error("<bold><align=right>x</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
 	// -----------------------------------------------------------------------
 	// Directives
 	// -----------------------------------------------------------------------

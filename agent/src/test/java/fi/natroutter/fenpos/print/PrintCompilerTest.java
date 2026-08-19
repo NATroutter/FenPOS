@@ -249,4 +249,16 @@ class PrintCompilerTest {
                 () -> PrintCompiler.compile("{\"data\":[\"x\"],\"linefeeed\":\"LF\"}", device()))
                 .apiCode());
     }
+
+    /**
+     * The unknown-field check must run before {@code data} is read: a body that is both
+     * shape-invalid and carrying an unknown key should be refused for the unknown key, not for
+     * the missing {@code data}, so this answers identically to the TypeScript compiler.
+     */
+    @Test
+    void rejectsTheRemovedWrapFieldEvenWithoutData() {
+        assertEquals("unknown_field", assertThrows(PrintRequestException.class,
+                () -> PrintCompiler.compile("{\"wrap\":false}", device()))
+                .apiCode());
+    }
 }

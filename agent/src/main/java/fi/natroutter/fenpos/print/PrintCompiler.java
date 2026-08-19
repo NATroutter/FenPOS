@@ -61,10 +61,9 @@ public final class PrintCompiler {
     public static CompiledJob compile(String body, Device device)
             throws PrintRequestException {
         JsonObject root = parseObject(body);
-        List<String> elements = readData(root, device.limits());
-
         requireKnownFields(root);
 
+        List<String> elements = readData(root, device.limits());
         Linefeed linefeed = readLinefeed(root, device.print());
 
         List<Line> lines = layOut(elements, device);

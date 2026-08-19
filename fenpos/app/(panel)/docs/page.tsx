@@ -44,7 +44,11 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{ syntax: "<size=2>…</size>", meaning: "Character multiplier, 1–8. <size=2,3> sets width and height apart." },
 	{ syntax: "<font=b>…</font>", meaning: "The printer's second built-in font, usually narrower." },
 	{ syntax: "<align=center>…</align>", meaning: "left, center or right. Must enclose the whole element." },
-	{ syntax: "<wrap>…</wrap>", meaning: "Break this line at the paper width, whatever the printer's default is." },
+	{
+		syntax: "<wrap>…</wrap>",
+		meaning:
+			"Break this line at the paper width, whatever the printer's default is. Must enclose the whole element, like <align>.",
+	},
 	{
 		syntax: "<nowrap>…</nowrap>",
 		meaning: "Print this line as written. Must enclose the whole element, like <align>.",
@@ -148,8 +152,8 @@ export default async function DocsPage() {
 							<Col>
 								<P>
 									Each element of <Mono>data</Mono> is one line before wrapping. Tags are case-insensitive and nest,
-									except <Mono>&lt;align&gt;</Mono> and <Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must
-									therefore own it.
+									except <Mono>&lt;align&gt;</Mono>, <Mono>&lt;wrap&gt;</Mono>, <Mono>&lt;nowrap&gt;</Mono> and{" "}
+									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it.
 								</P>
 
 								<P>

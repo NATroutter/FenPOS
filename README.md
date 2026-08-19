@@ -200,7 +200,6 @@ curl -X POST https://fenpos.example.com/api/print/kitchen/receipt-printer \
           "[bold]Total          5.70[/bold]",
           "[feed=3][cut]"
         ],
-        "wrap": true,
         "linefeed": "LF"
       }'
 ```
@@ -211,7 +210,8 @@ curl -X POST https://fenpos.example.com/api/print/kitchen/receipt-printer \
 
 The status is `202`: the job is queued, and the paper has not moved yet.
 
-**Markup:** `align` · `bold` · `underline` · `invert` · `size` · `font` · `hr` · `feed` · `cut`
+**Markup:** `align` · `bold` · `underline` · `invert` · `size` · `font` · `wrap` · `nowrap` · `hr` ·
+`feed` · `cut`
 
 **Permissions:** `print` · `jobs:read` · `jobs:cancel` · `devices:read` · `devices:control` ·
 `status:read`
