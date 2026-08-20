@@ -1,8 +1,10 @@
 package fi.natroutter.fenpos.encoding;
 
+import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.markup.MarkupParser;
+import fi.natroutter.fenpos.markup.model.Directive;
 import fi.natroutter.fenpos.markup.model.Line;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +31,9 @@ class EscPosRendererTest {
     private static final byte[] BOLD_OFF = {0x1B, 0x45, 0x00};
     private static final byte[] CUT_FULL = {0x1D, 0x56, 0x30};
     private static final byte[] CUT_PARTIAL = {0x1D, 0x56, 0x31};
+    private static final byte[] CENTRE_JUSTIFY = {0x1B, 0x61, 0x31};
+    private static final byte[] DRAWER_PIN_2 = {0x1B, 0x70, 0x00, 0x19, (byte) 0xFA};
+    private static final byte[] DRAWER_PIN_5 = {0x1B, 0x70, 0x01, 0x19, (byte) 0xFA};
 
     /**
      * Jobs share a device, so a job that left the printer bold would corrupt the next
@@ -137,6 +142,72 @@ class EscPosRendererTest {
     }
 
     // -------------------------------------------------------------------------
+    // Blocks
+    //
+    // These reach the renderer only from the link, never from markup this agent parses, so the
+    // fixtures build lines directly rather than going through the parser.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Each symbol command carries its own justification, so the line's alignment has to reach
+     * the block rather than being left to whatever the last span set.
+     */
+    @Test
+    void takesASymbolsJustificationFromItsLine() throws Exception {
+        byte[] output = EscPosRenderer.render(
+                List.of(directiveLine(Align.CENTER, new Directive.Qr("x", 3))),
+                Codepage.CP858, Linefeed.LF, 42);
+
+        assertTrue(contains(output, CENTRE_JUSTIFY));
+    }
+
+    /**
+     * A symbol's own preamble leaves the printer in a state the renderer's cached style no
+     * longer describes, exactly as a feed does. Text after one must have its style restated.
+     */
+    @Test
+    void restatesStyleAfterASymbolBecauseTheSymbolWritesItsOwnPreamble() throws Exception {
+        List<Line> lines = List.of(
+                MarkupParser.parse("<bold>a</bold>"),
+                directiveLine(Align.LEFT, new Directive.Qr("x", 3)),
+                MarkupParser.parse("<bold>b</bold>"));
+
+        byte[] output = EscPosRenderer.render(lines, Codepage.CP858, Linefeed.LF, 42);
+
+        assertEquals(2, count(output, BOLD_ON),
+                "bold must be re-sent after the symbol wrote its own preamble");
+    }
+
+    @Test
+    void emitsTheDrawerPulseForEitherPin() throws Exception {
+        assertTrue(contains(
+                EscPosRenderer.render(List.of(directiveLine(Align.LEFT, new Directive.Drawer(2))),
+                        Codepage.CP858, Linefeed.LF, 42),
+                DRAWER_PIN_2));
+        assertTrue(contains(
+                EscPosRenderer.render(List.of(directiveLine(Align.LEFT, new Directive.Drawer(5))),
+                        Codepage.CP858, Linefeed.LF, 42),
+                DRAWER_PIN_5));
+    }
+
+    /**
+     * The pulse is electrical: it writes no style of its own, so unlike a symbol it leaves the
+     * cached style still describing the printer and must not cost a needless preamble.
+     */
+    @Test
+    void keepsTheCachedStyleAcrossADrawerPulse() throws Exception {
+        List<Line> lines = List.of(
+                MarkupParser.parse("<bold>a</bold>"),
+                directiveLine(Align.LEFT, new Directive.Drawer(2)),
+                MarkupParser.parse("<bold>b</bold>"));
+
+        byte[] output = EscPosRenderer.render(lines, Codepage.CP858, Linefeed.LF, 42);
+
+        assertEquals(1, count(output, BOLD_ON),
+                "a pulse changes no style, so the preamble should not be re-sent");
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -144,6 +215,10 @@ class EscPosRendererTest {
             throws Exception {
         return EscPosRenderer.render(
                 List.of(MarkupParser.parse(markup)), codepage, linefeed, 42);
+    }
+
+    private static Line directiveLine(Align align, Directive directive) {
+        return new Line(align, null, List.of(), List.of(directive));
     }
 
     private static int indexOf(byte[] haystack, byte[] needle) {

@@ -1,6 +1,10 @@
 package fi.natroutter.fenpos.link;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
+import fi.natroutter.fenpos.enums.CutMode;
 import fi.natroutter.fenpos.enums.JobState;
 import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.link.Frames.ConfigSync;
@@ -8,6 +12,7 @@ import fi.natroutter.fenpos.link.Frames.Hello;
 import fi.natroutter.fenpos.link.Frames.JobDispatch;
 import fi.natroutter.fenpos.link.Frames.JobUpdate;
 import fi.natroutter.fenpos.link.Frames.Welcome;
+import fi.natroutter.fenpos.link.Frames.WireDirective;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -123,7 +128,117 @@ class FrameCodecTest {
 
         var line = assertInstanceOf(JobDispatch.class, frame).job().lines().getFirst();
         assertTrue(line.spans().isEmpty());
-        assertEquals(3, line.directives().getFirst().lines());
+        assertEquals(3, assertInstanceOf(WireDirective.Feed.class, line.directives().getFirst()).lines());
+    }
+
+    // -----------------------------------------------------------------
+    // Reading: the block directives
+    //
+    // Each variant carries only its own fields, so a directive that parses is one the
+    // renderer can emit without asking whether an optional field happens to be present.
+    // -----------------------------------------------------------------
+
+    @Test
+    void decodesACutDirective() throws Exception {
+        JsonObject json = JsonParser.parseString("{\"type\":\"CUT\",\"mode\":\"PARTIAL\"}").getAsJsonObject();
+
+        WireDirective directive = FrameCodec.readDirective(json);
+
+        assertEquals(CutMode.PARTIAL, assertInstanceOf(WireDirective.Cut.class, directive).mode());
+    }
+
+    @Test
+    void decodesAQrDirective() throws Exception {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"QR\",\"content\":\"https://x.test\",\"size\":6}").getAsJsonObject();
+
+        WireDirective directive = FrameCodec.readDirective(json);
+
+        assertInstanceOf(WireDirective.Qr.class, directive);
+        assertEquals(6, ((WireDirective.Qr) directive).size());
+    }
+
+    @Test
+    void decodesABarcodeDirective() throws Exception {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"BARCODE\",\"system\":\"EAN13\",\"content\":\"4006381333931\"}").getAsJsonObject();
+
+        WireDirective.Barcode barcode =
+                assertInstanceOf(WireDirective.Barcode.class, FrameCodec.readDirective(json));
+
+        assertEquals(BarcodeSystem.EAN13, barcode.system());
+        assertEquals("4006381333931", barcode.content());
+    }
+
+    @Test
+    void decodesAPdf417Directive() throws Exception {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"PDF417\",\"content\":\"ORDER-42\",\"errorLevel\":0}").getAsJsonObject();
+
+        assertEquals(0, assertInstanceOf(
+                WireDirective.Pdf417.class, FrameCodec.readDirective(json)).errorLevel());
+    }
+
+    @Test
+    void decodesBothDrawerPins() throws Exception {
+        for (int pin : new int[] {2, 5}) {
+            JsonObject json = JsonParser.parseString(
+                    "{\"type\":\"DRAWER\",\"pin\":" + pin + "}").getAsJsonObject();
+
+            assertEquals(pin, assertInstanceOf(
+                    WireDirective.Drawer.class, FrameCodec.readDirective(json)).pin());
+        }
+    }
+
+    @Test
+    void rejectsAnUnknownDirectiveType() {
+        JsonObject json = JsonParser.parseString("{\"type\":\"NOPE\"}").getAsJsonObject();
+
+        assertThrows(ProtocolException.class, () -> FrameCodec.readDirective(json));
+    }
+
+    @Test
+    void refusesAQrModuleSizeThePrinterCannotSet() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"QR\",\"content\":\"x\",\"size\":17}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"QR\",\"content\":\"x\",\"size\":0}")));
+    }
+
+    @Test
+    void refusesASymbolWithNoContentToEncode() {
+        // An empty symbol is not a smaller symbol; there is nothing for the encoder to lay out,
+        // so it is refused here rather than handed to the library to fail on.
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"QR\",\"content\":\"\",\"size\":6}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"\",\"errorLevel\":1}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"\"}")));
+    }
+
+    @Test
+    void refusesASymbologyThisAgentDoesNotHave() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"BARCODE\",\"system\":\"QR\",\"content\":\"x\"}")));
+    }
+
+    @Test
+    void refusesAPdf417ErrorLevelOutsideTheEscPosRange() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":9}")));
+    }
+
+    @Test
+    void refusesADrawerPinTheHardwareDoesNotHave() {
+        // The connector has two pins, not a range: 3 is not a smaller 5.
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"DRAWER\",\"pin\":3}")));
+    }
+
+    @Test
+    void refusesADrawerPulseWithNoPin() {
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("", "{\"type\":\"DRAWER\"}")));
     }
 
     // -----------------------------------------------------------------
@@ -219,7 +334,9 @@ class FrameCodecTest {
 
     @Test
     void refusesAnUnknownDirective() {
-        assertThrows(ProtocolException.class, () -> codec.read(dispatch("", "{\"type\":\"DRAWER\"}")));
+        // RULE in particular: the server expands a horizontal rule to characters because only it
+        // knows the paper width, so one arriving here means the two sides disagree about that.
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("", "{\"type\":\"RULE\"}")));
     }
 
     @Test

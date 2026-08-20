@@ -3,7 +3,11 @@ package fi.natroutter.fenpos.encoding;
 import com.github.anastaciocintra.escpos.EscPos;
 import com.github.anastaciocintra.escpos.EscPosConst;
 import com.github.anastaciocintra.escpos.Style;
+import com.github.anastaciocintra.escpos.barcode.BarCode;
+import com.github.anastaciocintra.escpos.barcode.PDF417;
+import com.github.anastaciocintra.escpos.barcode.QRCode;
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.enums.Linefeed;
@@ -59,6 +63,15 @@ public final class EscPosRenderer {
 
     /** Character repeated to draw {@code <hr>}; prints on every device, unlike a graphic. */
     private static final char RULE_CHARACTER = '-';
+
+    /** ESC, as a byte, for the one command this class assembles itself. */
+    private static final byte ESC = 0x1B;
+
+    /** {@code p}, the generate-pulse command that fires a cash drawer. */
+    private static final byte PULSE = 0x70;
+
+    /** Code 128 code set B: the full printable ASCII range. */
+    private static final String CODE128_SET_B = "{B";
 
     private EscPosRenderer() {
     }
@@ -156,7 +169,100 @@ public final class EscPosRenderer {
                         out, state, codepage);
                 out.write(new byte[]{EscPosConst.LF});
             }
+            // Each symbol emits its own justification and, having done so, leaves the printer in
+            // a state the cached style no longer describes. Forgetting it costs one preamble on
+            // the next span; keeping it would cost a span printed in the wrong style.
+            case Directive.Qr qr -> {
+                escpos.write(new QRCode()
+                        .setJustification(justification(align))
+                        .setSize(qr.size()), qr.content());
+                state.activeStyle = null;
+            }
+            case Directive.Barcode barcode -> {
+                escpos.write(new BarCode()
+                        .setJustification(justification(align))
+                        .setSystem(system(barcode.system())), barcodeData(barcode));
+                state.activeStyle = null;
+            }
+            case Directive.Pdf417 pdf417 -> {
+                escpos.write(new PDF417()
+                        .setJustification(justification(align))
+                        .setErrorLevel(errorLevel(pdf417.errorLevel())), pdf417.content());
+                state.activeStyle = null;
+            }
+            // Alone among these, the pulse writes no style of its own and none of the printer's
+            // state it touches is style, so the cached style still describes the printer.
+            case Directive.Drawer drawer -> out.write(drawerPulse(drawer.pin()));
         }
+    }
+
+    /**
+     * The bytes that fire a cash drawer: {@code ESC p m t1 t2}.
+     * <p>
+     * Assembled here rather than taken from the library's {@code pulsePin}, which encodes
+     * {@code m} as 48 or 49. Both are valid — ESC/POS accepts 0, 1, 48 and 49 — but the panel's
+     * raw-byte tool catalogues {@code 1B 70 00 19 FA} and {@code 1B 70 01 19 FA}, and an
+     * operator who fires the drawer from that tool and then from a receipt should be able to
+     * compare the two and see the same bytes.
+     * <p>
+     * The pulse is 25 units on and 250 off, in units of 2 ms: 50 ms is long enough to throw a
+     * drawer solenoid, and the off time keeps a second kick from arriving before the first has
+     * released.
+     */
+    private static byte[] drawerPulse(int pin) {
+        return new byte[]{ESC, PULSE, pin == 5 ? (byte) 0x01 : (byte) 0x00, (byte) 0x19, (byte) 0xFA};
+    }
+
+    /**
+     * Maps a 0..8 error correction level onto the library's constants, which are declared in
+     * ascending order so the ordinal is the level itself.
+     */
+    private static PDF417.PDF417ErrorLevel errorLevel(int level) {
+        return PDF417.PDF417ErrorLevel.values()[level];
+    }
+
+    /**
+     * The data a barcode command carries, which is not always the content verbatim.
+     * <p>
+     * Code 128 encodes its data in one of three code sets, and the ESC/POS command has no field
+     * for which: the selector is the first two characters of the data. Content that already
+     * names a set is passed through, because the caller chose it deliberately; anything else is
+     * prefixed with code set B, the full printable ASCII range and so the one that can carry
+     * whatever a caller wrote as plain text.
+     */
+    private static String barcodeData(Directive.Barcode barcode) {
+        if (barcode.system() != BarcodeSystem.CODE128 || namesACode128Set(barcode.content())) {
+            return barcode.content();
+        }
+        return CODE128_SET_B + barcode.content();
+    }
+
+    private static boolean namesACode128Set(String content) {
+        return content.length() >= 2
+                && content.charAt(0) == '{'
+                && content.charAt(1) >= 'A'
+                && content.charAt(1) <= 'C';
+    }
+
+    /**
+     * Maps a symbology onto the library's constant.
+     * <p>
+     * Function A ({@code GS k 0..6}) is chosen wherever it exists, because it is the older form
+     * and the one cheap thermal printers implement most reliably. Code 93 and Code 128 have no
+     * function A, so they use function B, which any printer offering those symbologies has.
+     */
+    private static BarCode.BarCodeSystem system(BarcodeSystem system) {
+        return switch (system) {
+            case UPCA -> BarCode.BarCodeSystem.UPCA;
+            case UPCE -> BarCode.BarCodeSystem.UPCE_A;
+            case EAN13 -> BarCode.BarCodeSystem.JAN13_A;
+            case EAN8 -> BarCode.BarCodeSystem.JAN8_A;
+            case CODE39 -> BarCode.BarCodeSystem.CODE39_A;
+            case ITF -> BarCode.BarCodeSystem.ITF_A;
+            case CODABAR -> BarCode.BarCodeSystem.CODABAR_A;
+            case CODE93 -> BarCode.BarCodeSystem.CODE93_Default;
+            case CODE128 -> BarCode.BarCodeSystem.CODE128;
+        };
     }
 
     private static Style toLibraryStyle(SpanStyle style, Align align) {

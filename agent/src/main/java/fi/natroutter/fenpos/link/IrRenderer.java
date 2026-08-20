@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.link;
 
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.encoding.EscPosRenderer;
+import fi.natroutter.fenpos.enums.CutMode;
 import fi.natroutter.fenpos.markup.model.Directive;
 import fi.natroutter.fenpos.markup.model.Line;
 import fi.natroutter.fenpos.markup.model.Span;
@@ -12,7 +13,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Turns a job the server compiled into the bytes a printer takes.
@@ -65,6 +65,12 @@ public final class IrRenderer {
             // The renderer writes to an in-memory buffer, so this cannot arise from I/O.
             // Surfacing it unchanged would mislabel a genuine bug as a transport failure.
             throw new UncheckedIOException("Rendering to an in-memory buffer failed", e);
+        } catch (IllegalArgumentException e) {
+            // A symbol encoder refusing its content, which the server's format rules do not
+            // catch in every case — a check digit it cannot verify, a symbology whose alphabet
+            // is narrower there than here. The job is reported failed with the encoder's own
+            // words rather than taking the print thread down with it.
+            throw new ProtocolException(e.getMessage());
         }
     }
 
@@ -94,43 +100,38 @@ public final class IrRenderer {
     /**
      * Maps a wire directive onto the render model.
      * <p>
-     * The horizontal rule the markup grammar offers is absent here by design: only the server
-     * knows a device's column count at compile time, so it expands the rule to characters and
-     * what arrives is text. A rule appearing on the wire would mean the two sides disagree
-     * about that, which is worth refusing rather than rendering as nothing.
+     * There is no unknown case to reject: {@link FrameCodec#readDirective} is where a type this
+     * agent cannot render is refused, and the wire type is sealed, so what reaches here is one
+     * of six kinds. The horizontal rule the markup grammar offers is not among them by design —
+     * only the server knows a device's column count at compile time, so it expands the rule to
+     * characters and what arrives is text.
+     * <p>
+     * What can still be wrong is a value: the codec bounds each field against the server's own
+     * limits, and the render model bounds them again against what a printer accepts. A server
+     * that sends past the second is refused rather than clamped.
      */
     private static Directive toDirective(Frames.WireDirective directive) throws ProtocolException {
-        String type = directive.type() == null
-                ? ""
-                : directive.type().toUpperCase(Locale.ROOT);
-
-        return switch (type) {
-            case "CUT" -> new Directive.Cut(cutMode(directive.mode()));
-            case "FEED" -> feed(directive.lines());
-            default -> throw new ProtocolException("unknown directive type '" + directive.type() + "'");
-        };
-    }
-
-    private static Directive.Cut.Mode cutMode(String mode) throws ProtocolException {
-        String value = mode == null ? "" : mode.toUpperCase(Locale.ROOT);
-        return switch (value) {
-            case "FULL" -> Directive.Cut.Mode.FULL;
-            case "PARTIAL" -> Directive.Cut.Mode.PARTIAL;
-            default -> throw new ProtocolException("unknown cut mode '" + mode + "'");
-        };
-    }
-
-    private static Directive feed(Integer lines) throws ProtocolException {
-        if (lines == null) {
-            throw new ProtocolException("a FEED directive carried no line count");
-        }
         try {
-            return new Directive.Feed(lines);
+            return switch (directive) {
+                case Frames.WireDirective.Cut cut -> new Directive.Cut(cutMode(cut.mode()));
+                case Frames.WireDirective.Feed feed -> new Directive.Feed(feed.lines());
+                case Frames.WireDirective.Qr qr -> new Directive.Qr(qr.content(), qr.size());
+                case Frames.WireDirective.Barcode barcode ->
+                        new Directive.Barcode(barcode.system(), barcode.content());
+                case Frames.WireDirective.Pdf417 pdf417 ->
+                        new Directive.Pdf417(pdf417.content(), pdf417.errorLevel());
+                case Frames.WireDirective.Drawer drawer -> new Directive.Drawer(drawer.pin());
+            };
         } catch (IllegalArgumentException e) {
-            // The bound is the render model's, and it is the authority on what the printer can
-            // be asked to do. A server that sends past it is refused rather than clamped.
             throw new ProtocolException(e.getMessage());
         }
+    }
+
+    private static Directive.Cut.Mode cutMode(CutMode mode) {
+        return switch (mode) {
+            case FULL -> Directive.Cut.Mode.FULL;
+            case PARTIAL -> Directive.Cut.Mode.PARTIAL;
+        };
     }
 
     /** Counts lines that advance the paper; directive-only lines do not. */

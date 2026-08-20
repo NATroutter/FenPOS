@@ -7,7 +7,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
+import fi.natroutter.fenpos.enums.CutMode;
 import fi.natroutter.fenpos.enums.FlowControl;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.enums.Linefeed;
@@ -228,22 +230,68 @@ public final class FrameCodec {
         return new WireLine(requireEnum(line, "align", Align.class), spans, directives);
     }
 
-    private WireDirective readDirective(JsonObject directive) throws ProtocolException {
+    /**
+     * Reads one directive, refusing any type this agent cannot render.
+     *
+     * <p>The refusal is what {@link Frames#PROTOCOL_VERSION} exists to prevent reaching: a server
+     * speaking a newer protocol would otherwise send a directive this agent fails the job on,
+     * receipt by receipt, instead of being turned away once at the handshake.
+     *
+     * @param directive the directive object as received
+     * @return the parsed directive
+     * @throws ProtocolException when the type is unknown or a field is missing or out of range
+     */
+    static WireDirective readDirective(JsonObject directive) throws ProtocolException {
         String type = requireString(directive, "type");
 
         return switch (type) {
-            case "CUT" -> {
-                String mode = requireString(directive, "mode");
-                if (!mode.equals("FULL") && !mode.equals("PARTIAL")) {
-                    throw new ProtocolException("cut mode must be FULL or PARTIAL, got '" + mode + "'");
-                }
-                yield new WireDirective("CUT", mode, null);
-            }
+            case "CUT" -> new WireDirective.Cut(requireEnum(directive, "mode", CutMode.class));
             // Bounded to one byte because that is what the ESC/POS feed command encodes;
             // a larger value would be silently truncated by the printer.
-            case "FEED" -> new WireDirective("FEED", null, requireBoundedInt(directive, "lines", 1, 255));
+            case "FEED" -> new WireDirective.Feed(requireBoundedInt(directive, "lines", 1, 255));
+            // Sizes and error levels are bounded to what the ESC/POS commands encode. The
+            // server applies the same bounds; repeating them is what makes this a boundary
+            // rather than a place that trusts the server got it right.
+            case "QR" -> new WireDirective.Qr(
+                    requireContent(directive),
+                    requireBoundedInt(directive, "size", 1, 16));
+            case "BARCODE" -> new WireDirective.Barcode(
+                    requireEnum(directive, "system", BarcodeSystem.class),
+                    requireContent(directive));
+            case "PDF417" -> new WireDirective.Pdf417(
+                    requireContent(directive),
+                    requireBoundedInt(directive, "errorLevel", 0, 8));
+            case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
             default -> throw new ProtocolException("unknown directive type '" + type + "'");
         };
+    }
+
+    /**
+     * Reads a symbol's payload, refusing an empty one.
+     *
+     * <p>An empty symbol is not a smaller symbol: there is nothing for the encoder to lay out,
+     * and the library would fail on it further down where the message names a regex rather than
+     * the job.
+     */
+    private static String requireContent(JsonObject directive) throws ProtocolException {
+        String content = requireString(directive, "content");
+        if (content.isEmpty()) {
+            throw new ProtocolException("field 'content' must not be empty");
+        }
+        return content;
+    }
+
+    /**
+     * Reads a cash drawer pin.
+     *
+     * <p>A pair rather than a range: the connector has two pins, and 3 is not a smaller 5.
+     */
+    private static int requireDrawerPin(JsonObject directive) throws ProtocolException {
+        int pin = requireInt(directive, "pin");
+        if (pin != 2 && pin != 5) {
+            throw new ProtocolException("field 'pin' must be 2 or 5, got " + pin);
+        }
+        return pin;
     }
 
     // ---------------------------------------------------------------------

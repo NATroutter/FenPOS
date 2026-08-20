@@ -1,8 +1,10 @@
 package fi.natroutter.fenpos.link;
 
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.ConnectionStatus;
+import fi.natroutter.fenpos.enums.CutMode;
 import fi.natroutter.fenpos.enums.FlowControl;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.enums.JobState;
@@ -30,8 +32,16 @@ import java.util.List;
  */
 public final class Frames {
 
-    /** Protocol version this agent implements. Must match PROTOCOL_VERSION on the server. */
-    public static final int PROTOCOL_VERSION = 1;
+    /**
+     * Protocol version this agent implements. Must match PROTOCOL_VERSION on the server.
+     *
+     * <p>Bumped 1 -&gt; 2 for the {@code QR}, {@code BARCODE}, {@code PDF417} and {@code DRAWER}
+     * directives. {@link FrameCodec#readDirective} refuses a directive type it does not know, so
+     * an older agent handed one of these would fail the job rather than print it incomplete. The
+     * version is what turns that into a refusal to connect at all, which an operator sees once
+     * instead of discovering per receipt.
+     */
+    public static final int PROTOCOL_VERSION = 2;
 
     private Frames() {
     }
@@ -445,14 +455,77 @@ public final class Frames {
     /**
      * A printer action that is not text.
      *
+     * <p>Sealed with one record per kind rather than one record carrying every kind's fields.
+     * A flat shape would need a nullable field for each variant's arguments, and every reader
+     * would then have to know which combinations are real — a QR code with a cut mode is
+     * expressible but meaningless. Here the type system carries that knowledge, and the
+     * renderer's switch is exhaustive, so a kind added later cannot be silently dropped.
+     *
      * <p>The horizontal rule the markup grammar offers is expanded to characters by the
      * server, because only the server knows the device's column count at compile time. It is
      * therefore absent here.
      *
-     * @param type  {@code CUT} or {@code FEED}
-     * @param mode  cut mode, present only for {@code CUT}
-     * @param lines feed distance, present only for {@code FEED}
+     * <p>None of the symbols carry a printed height. Height is the server's concern: it
+     * measures the symbol to charge the job's line budget and to draw the preview. The agent's
+     * library computes its own geometry when it draws, so a height on the wire would be a
+     * second opinion nothing reads.
      */
-    public record WireDirective(String type, String mode, Integer lines) {
+    public sealed interface WireDirective
+            permits WireDirective.Cut, WireDirective.Feed, WireDirective.Qr,
+                    WireDirective.Barcode, WireDirective.Pdf417, WireDirective.Drawer {
+
+        /**
+         * Cuts the paper.
+         *
+         * @param mode how completely the paper is severed
+         */
+        record Cut(CutMode mode) implements WireDirective {
+        }
+
+        /**
+         * Advances the paper.
+         *
+         * @param lines how many lines to advance
+         */
+        record Feed(int lines) implements WireDirective {
+        }
+
+        /**
+         * A QR code.
+         *
+         * @param content the data to encode
+         * @param size    module size in printer dots, 1..16
+         */
+        record Qr(String content, int size) implements WireDirective {
+        }
+
+        /**
+         * A linear barcode.
+         *
+         * @param system  the symbology to encode with
+         * @param content the data to encode
+         */
+        record Barcode(BarcodeSystem system, String content) implements WireDirective {
+        }
+
+        /**
+         * A PDF417 stacked barcode.
+         *
+         * @param content    the data to encode
+         * @param errorLevel error correction level, 0..8
+         */
+        record Pdf417(String content, int errorLevel) implements WireDirective {
+        }
+
+        /**
+         * A cash drawer kick.
+         *
+         * <p>Electrical rather than printed: it fires the solenoid in the drawer and never
+         * touches the paper.
+         *
+         * @param pin the drawer connector pin to pulse, 2 or 5
+         */
+        record Drawer(int pin) implements WireDirective {
+        }
     }
 }

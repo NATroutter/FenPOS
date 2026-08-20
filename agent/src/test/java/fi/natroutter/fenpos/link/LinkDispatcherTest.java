@@ -161,8 +161,11 @@ class LinkDispatcherTest {
     void refusesAJobItCannotRender() {
         configure("kitchen");
 
+        // Past what the render model lets a printer be asked to feed. The codec would have
+        // refused it, but a job reaching the dispatcher some other way must still fail cleanly
+        // rather than take the print path down.
         Frames.WireLine bad = new Frames.WireLine(
-                Align.LEFT, List.of(), List.of(new Frames.WireDirective("DRAWER", null, null)));
+                Align.LEFT, List.of(), List.of(new Frames.WireDirective.Feed(999)));
         dispatcher.accept(new Frames.JobDispatch(
                 new Frames.CompiledJob("job-1", "kitchen", Linefeed.LF, List.of(bad))));
 
