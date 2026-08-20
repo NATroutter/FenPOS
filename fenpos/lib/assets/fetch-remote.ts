@@ -1,0 +1,662 @@
+import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
+import { ApiError } from "@/lib/errors";
+
+/**
+ * Fetching an image that a receipt names by URL, without letting the receipt point the server
+ * at things it was never meant to reach.
+ *
+ * An `<image>` tag may reference a stored asset or a live `http(s)` URL. The stored asset was
+ * uploaded by someone who was already signed in; the URL is different in kind. It is the one
+ * place in this system where compiling a print job makes the server open a connection chosen by
+ * whoever submitted the job.
+ *
+ * **Why that is dangerous here specifically.** The panel is not a machine sitting alone on the
+ * public internet. It runs inside a shop, on the same LAN as the router's admin page, the other
+ * printers, the POS terminals and whatever else is plugged in — and, on a hosted deployment,
+ * next to a cloud metadata endpoint that hands out credentials to anything that asks. Anyone who
+ * can submit a print job can therefore make this server issue an HTTP request on their behalf.
+ * Worse than usual: the answer comes out of a thermal printer, so the response body is not merely
+ * fetched, it is *rendered onto paper the attacker can read*. That is a complete exfiltration
+ * channel out of a network that was supposed to be private.
+ *
+ * `<image>http://192.168.1.1/</image>` must not work. Neither must the dozen ways of writing that
+ * which do not look like it.
+ *
+ * So every fetch through {@link fetchRemoteImage} is bounded four ways, and each bound exists
+ * because removing it reopens something specific:
+ *
+ * - **Scheme.** `http` and `https` only. Without this, `file:///etc/passwd` and `gopher://` are
+ *   reachable through the same code path.
+ * - **Address.** The *resolved* address must be publicly routable — see {@link IPV4_RULES} and
+ *   {@link IPV6_RULES}. Checking the hostname text instead would be defeated by one DNS A record
+ *   pointing inward, and checking the address and then connecting by hostname would be defeated
+ *   by a second DNS answer — see {@link pinnedLookup}.
+ * - **Redirects.** Followed at most {@link MAX_REDIRECTS} times, and every hop is put through the
+ *   whole guard again. See {@link followTo} for why this is the easiest check to forget.
+ * - **Time and size.** {@link REMOTE_FETCH_TIMEOUT_MS} for the entire operation and
+ *   {@link MAX_REMOTE_IMAGE_BYTES} for the body, the latter enforced by counting bytes as they
+ *   arrive rather than by measuring what was downloaded.
+ *
+ * Every refusal is an `ApiError`, so the caller reports it the same way as any other bad tag
+ * argument rather than as a server fault. Fetching an internal address is not a recoverable
+ * mistake; refusing a legitimate public image is. Where the two conflict, this module refuses.
+ */
+
+/**
+ * How long the whole fetch may take, in milliseconds.
+ *
+ * One budget for everything — DNS, connect, redirects, body — not one per hop. Per-hop budgets
+ * multiply: five redirects would buy five times the wait, and a print job that hangs for fifteen
+ * seconds behind a slow attacker-controlled host is its own small denial of service.
+ */
+export const REMOTE_FETCH_TIMEOUT_MS = 3_000;
+
+/**
+ * The largest remote image this system will accept, in bytes.
+ *
+ * Two megabytes is generous for a receipt logo and small enough that a hostile server cannot use
+ * it as a memory pump. It matters more than it looks: an image that gets past here is handed to
+ * `ditherToRaster`, whose cost is quadratic-ish in pixel count — a few hundred kilobytes of PNG
+ * can decode into hundreds of megabytes of bitmap and gigabytes of transient allocation. This cap
+ * is the first size bound anywhere in the pipeline, so it is the one standing between a URL and
+ * that. Enforced while the bytes stream in; see {@link readCapped}.
+ */
+export const MAX_REMOTE_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How many redirects to follow before giving up.
+ *
+ * Enough for the CDN chains real image hosts use, few enough that a redirect loop ends quickly.
+ */
+export const MAX_REDIRECTS = 5;
+
+/** The redirect statuses that carry a `Location` worth following. */
+const REDIRECT_STATUSES: readonly number[] = [301, 302, 303, 307, 308];
+
+/** An IP address that has been checked and may be connected to. */
+export interface PinnedAddress {
+	/** The literal address, in the form `node:net` produces. */
+	address: string;
+	/** 4 or 6. */
+	family: 4 | 6;
+}
+
+/** Turns a hostname into the addresses it currently points at. Injected so tests need no DNS. */
+export type HostResolver = (hostname: string) => Promise<PinnedAddress[]>;
+
+/**
+ * One HTTP response, reduced to what the guard needs to decide about it.
+ *
+ * Deliberately smaller than a `Response`: this module must not be able to accidentally read a
+ * whole body, and it must never follow a redirect without being asked. The body is an
+ * `AsyncIterable` so that {@link readCapped} can stop pulling part-way through.
+ */
+export interface RemoteResponse {
+	status: number;
+	/** The `Location` header, or null if there was none. */
+	location: string | null;
+	/** `Content-Length` if the server sent a usable one. A hint from an untrusted party, nothing more. */
+	contentLength: number | null;
+	/** The response body, read at most once. */
+	body: AsyncIterable<Uint8Array>;
+	/** Abandons the response and its socket. Safe to call more than once, and after the body ends. */
+	cancel: () => void;
+}
+
+/**
+ * Opens one hop.
+ *
+ * Takes the address to connect to as a separate argument from the URL, which is the whole point:
+ * the caller has already decided which address is acceptable, and the transport must not get a
+ * second opinion from DNS. Injected so tests can script responses without a socket.
+ */
+export type RemoteTransport = (url: URL, pinned: PinnedAddress, signal: AbortSignal) => Promise<RemoteResponse>;
+
+/** Seams for tests. Every one of these has a working default; production passes none of them. */
+export interface RemoteFetchOptions {
+	resolve?: HostResolver;
+	transport?: RemoteTransport;
+	/** Overrides {@link REMOTE_FETCH_TIMEOUT_MS}. Tests use a few milliseconds so the suite stays fast. */
+	timeoutMs?: number;
+}
+
+/**
+ * Fetches an image named by a receipt, or refuses to.
+ *
+ * @param url the URL from the `<image>` tag, exactly as the caller wrote it
+ * @param options test seams; omit them
+ * @returns the response body, at most {@link MAX_REMOTE_IMAGE_BYTES} of it
+ * @throws ApiError if the URL, the address behind it, any redirect hop, the size or the time
+ *         taken is outside what this system will fetch
+ */
+export async function fetchRemoteImage(url: string, options: RemoteFetchOptions = {}): Promise<Buffer> {
+	const resolve = options.resolve ?? systemResolver;
+	const transport = options.transport ?? pinnedTransport;
+	const budget = options.timeoutMs ?? REMOTE_FETCH_TIMEOUT_MS;
+	const signal = AbortSignal.timeout(budget);
+
+	let target = parseTarget(url);
+
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		const pinned = await guardAddress(target, resolve, signal, budget);
+
+		let response: RemoteResponse;
+		try {
+			response = await untilAborted(transport(target, pinned, signal), signal);
+		} catch (thrown) {
+			throw transportRefusal(target, signal, budget, thrown);
+		}
+
+		try {
+			if (REDIRECT_STATUSES.includes(response.status)) {
+				target = followTo(target, response);
+				continue;
+			}
+			if (response.status < 200 || response.status >= 300) {
+				throw new ApiError("invalid_tag_argument", `${target.host} answered ${response.status} for this image.`, {
+					url: target.href,
+					status: response.status,
+				});
+			}
+			try {
+				return await untilAborted(readCapped(response, target), signal);
+			} catch (thrown) {
+				if (thrown instanceof ApiError) {
+					throw thrown;
+				}
+				throw transportRefusal(target, signal, budget, thrown);
+			}
+		} finally {
+			// Always, including on the way out with the bytes: an `IncomingMessage` that has been
+			// fully read is already closed and this is a no-op, but one abandoned mid-body would
+			// otherwise hold a socket open until the server gave up on it.
+			response.cancel();
+		}
+	}
+
+	throw new ApiError(
+		"invalid_tag_argument",
+		`This image redirected more than ${MAX_REDIRECTS} times, so it was not fetched.`,
+		{ url },
+	);
+}
+
+// --- Which addresses may be connected to ---
+
+/** One block of address space that is not on the public internet, and what to call it. */
+interface AddressRule {
+	/** Reads into "…is <why>." Named so the refusal says which rule fired, not merely that one did. */
+	readonly why: string;
+	readonly block: BlockList;
+}
+
+function rule(family: "ipv4" | "ipv6", address: string, prefix: number, why: string): AddressRule {
+	const block = new BlockList();
+	block.addSubnet(address, prefix, family);
+	return { why, block };
+}
+
+/**
+ * The IPv4 space that is not the public internet.
+ *
+ * Every entry is here because something answers on it inside a shop or a datacentre, and a
+ * receipt must not be able to make the server talk to it. Deleting a line re-opens that range:
+ *
+ * - `169.254.0.0/16` is the one an attacker actually wants. `169.254.169.254` is the cloud
+ *   metadata endpoint on AWS, GCP, Azure and DigitalOcean alike, and it hands out instance
+ *   credentials over plain HTTP to anything that can reach it.
+ * - `127.0.0.0/8` is the *whole* loopback block, not just `127.0.0.1`. On Linux every address in
+ *   it answers, so a guard that special-cases `127.0.0.1` is bypassed by `127.0.0.2`.
+ * - `10/8`, `172.16/12` and `192.168/16` are the shop's own LAN: the router's admin page, the
+ *   other printers, the POS terminals.
+ * - `100.64.0.0/10` is carrier-grade NAT, which is what the LAN looks like behind some ISP
+ *   routers and on Tailscale.
+ * - `0.0.0.0/8` reaches the local host on Linux — `0.0.0.0` is a working synonym for loopback.
+ * - `192.0.0.0/24`, `198.18.0.0/15`, `224.0.0.0/4` and `240.0.0.0/4` are not routable on the
+ *   public internet at all, so nothing legitimate can be behind them and anything that answers
+ *   is local by definition. `240.0.0.0/4` also covers the `255.255.255.255` broadcast address.
+ *
+ * These are checked against IPv6 addresses too. `BlockList` matches an IPv4-mapped address such
+ * as `::ffff:169.254.169.254` against IPv4 rules, which is how the mapped form is caught with the
+ * right reason rather than a vague one.
+ */
+const IPV4_RULES: readonly AddressRule[] = [
+	rule("ipv4", "0.0.0.0", 8, "an unspecified address, which reaches the local host"),
+	rule("ipv4", "10.0.0.0", 8, "a private address on the local network"),
+	rule("ipv4", "100.64.0.0", 10, "a carrier-grade NAT address"),
+	rule("ipv4", "127.0.0.0", 8, "a loopback address"),
+	rule("ipv4", "169.254.0.0", 16, "a link-local address, where cloud metadata services live"),
+	rule("ipv4", "172.16.0.0", 12, "a private address on the local network"),
+	rule("ipv4", "192.0.0.0", 24, "an IETF protocol assignment address"),
+	rule("ipv4", "192.168.0.0", 16, "a private address on the local network"),
+	rule("ipv4", "198.18.0.0", 15, "a benchmarking address"),
+	rule("ipv4", "224.0.0.0", 4, "a multicast address"),
+	rule("ipv4", "240.0.0.0", 4, "a reserved address"),
+];
+
+/**
+ * The IPv6 space that is not the public internet.
+ *
+ * The last three entries are the important ones and they invert the approach: instead of listing
+ * what to block, they block everything outside `2000::/3`, the only range IANA has allocated for
+ * global unicast. IPv6 has far too many special-purpose prefixes to enumerate confidently, and a
+ * denylist that misses one fails open. This fails closed — a new prefix that nobody here has
+ * heard of is refused until someone deliberately allows it.
+ *
+ * The named rules above the catch-all exist so the refusal explains itself; without them
+ * `fe80::1` would be reported as merely "not global unicast", which tells nobody anything.
+ *
+ * Note the ordering with {@link IPV4_RULES}: IPv4 rules run first, so `::ffff:127.0.0.1` is
+ * reported as loopback and only a mapped address with no other objection falls through to
+ * `::ffff:0:0/96`. That last rule refuses IPv4-mapped addresses even when the address inside them
+ * is a perfectly good public one — `dns.lookup` does not produce the mapped form for a real
+ * hostname, so seeing one means somebody wrote it deliberately, and the mapped form has a long
+ * history of being handled inconsistently by parsers. Fail closed.
+ *
+ * `2002::/16` (6to4) and `64:ff9b::/96` (NAT64) embed an IPv4 address inside an IPv6 one and are
+ * refused wholesale for the same reason: they are routes to the IPv4 world that do not look like
+ * IPv4 addresses to a check that is not expecting them.
+ */
+const IPV6_RULES: readonly AddressRule[] = [
+	rule("ipv6", "::ffff:0:0", 96, "an IPv4-mapped address"),
+	rule("ipv6", "::1", 128, "a loopback address"),
+	rule("ipv6", "::", 128, "an unspecified address"),
+	rule("ipv6", "fe80::", 10, "a link-local address"),
+	rule("ipv6", "fc00::", 7, "a unique-local address on the local network"),
+	rule("ipv6", "ff00::", 8, "a multicast address"),
+	rule("ipv6", "64:ff9b::", 96, "a NAT64 address, which tunnels to IPv4"),
+	rule("ipv6", "2001::", 32, "a Teredo address, which tunnels to IPv4"),
+	rule("ipv6", "2002::", 16, "a 6to4 address, which tunnels to IPv4"),
+	rule("ipv6", "2001:db8::", 32, "a documentation address"),
+	// Everything outside 2000::/3, expressed as the three blocks that make up its complement.
+	rule("ipv6", "::", 3, "not a global unicast address"),
+	rule("ipv6", "4000::", 2, "not a global unicast address"),
+	rule("ipv6", "8000::", 1, "not a global unicast address"),
+];
+
+/**
+ * Decides whether an address is one this system will connect to.
+ *
+ * @param address a literal IP address
+ * @returns why the address is refused, or null if it is on the public internet
+ */
+function blockedReason(address: string): string | null {
+	const family = isIP(address);
+	if (family === 0) {
+		// A resolver that answered with something that is not an address is a resolver this code
+		// does not understand, and an address it cannot classify is one it must not connect to.
+		return "not an IP address";
+	}
+
+	const type = family === 4 ? "ipv4" : "ipv6";
+	for (const candidate of IPV4_RULES) {
+		if (candidate.block.check(address, type)) {
+			return candidate.why;
+		}
+	}
+	if (family === 6) {
+		for (const candidate of IPV6_RULES) {
+			if (candidate.block.check(address, "ipv6")) {
+				return candidate.why;
+			}
+		}
+	}
+	return null;
+}
+
+// --- The steps of a single hop ---
+
+/**
+ * Parses a URL and requires a scheme this system fetches over.
+ *
+ * @param url the caller's URL
+ * @returns the parsed URL
+ * @throws ApiError if it is not a URL, or not an http(s) one
+ */
+function parseTarget(url: string): URL {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new ApiError("invalid_tag_argument", "This image is not a URL that can be fetched over http or https.", {
+			url,
+		});
+	}
+	requireWebScheme(parsed);
+	return parsed;
+}
+
+/**
+ * @param target a parsed URL
+ * @throws ApiError unless the scheme is http or https
+ */
+function requireWebScheme(target: URL): void {
+	if (target.protocol !== "http:" && target.protocol !== "https:") {
+		throw new ApiError(
+			"invalid_tag_argument",
+			`Images may only be fetched over http or https, not ${target.protocol.replace(":", "")}.`,
+			{ url: target.href },
+		);
+	}
+}
+
+/**
+ * Works out which address this hop may connect to, and refuses if it is not one.
+ *
+ * A literal address in the URL is used as-is rather than being handed to a resolver, because
+ * there is nothing to resolve — and because it keeps the numeric cases off the resolver seam
+ * entirely, so they are checked by the same code in tests as in production. Note that the WHATWG
+ * `URL` parser has already normalised the ways of disguising a literal: `http://0177.0.0.1/`,
+ * `http://2130706433/` and `http://127.1/` all arrive here as `127.0.0.1`.
+ *
+ * **Every** answer is checked, not just the one that will be used. A hostname that resolves to a
+ * public address and a private one is a hostname that gets to choose, and the choice is not this
+ * code's to make.
+ *
+ * @param target the URL for this hop
+ * @param resolve the resolver
+ * @param signal the shared deadline
+ * @param budget the deadline in milliseconds, for the message if it expires
+ * @returns the address to connect to
+ * @throws ApiError if the hostname does not resolve, or resolves to anything not public
+ */
+async function guardAddress(
+	target: URL,
+	resolve: HostResolver,
+	signal: AbortSignal,
+	budget: number,
+): Promise<PinnedAddress> {
+	// `URL.hostname` keeps the brackets around an IPv6 literal; nothing downstream wants them.
+	const hostname = target.hostname.replace(/^\[|\]$/g, "");
+
+	// The WHATWG parser will not produce an empty host for http(s), so this should be unreachable.
+	// It is checked anyway because `dns.lookup("")` is a documented compatibility quirk rather than
+	// an error, and a resolver that answers a question this code never meant to ask is exactly the
+	// kind of thing a guard should not be relying on being impossible.
+	if (hostname === "") {
+		throw new ApiError("invalid_tag_argument", "This image URL names no host to fetch it from.", {
+			url: target.href,
+		});
+	}
+
+	const literal = isIP(hostname);
+	let candidates: PinnedAddress[];
+	if (literal !== 0) {
+		candidates = [{ address: hostname, family: literal === 4 ? 4 : 6 }];
+	} else {
+		try {
+			candidates = await untilAborted(resolve(hostname), signal);
+		} catch (thrown) {
+			throw transportRefusal(target, signal, budget, thrown, `The hostname ${hostname} has no address.`);
+		}
+	}
+
+	if (candidates.length === 0) {
+		throw new ApiError("invalid_tag_argument", `The hostname ${hostname} did not resolve to any address.`, {
+			url: target.href,
+		});
+	}
+
+	for (const candidate of candidates) {
+		const why = blockedReason(candidate.address);
+		if (why !== null) {
+			// Naming both the hostname and what it resolved to is the point of the message: the
+			// person who wrote `<image>https://logo.example.com/…</image>` cannot otherwise tell
+			// why a URL that looks entirely ordinary was refused.
+			const found = candidate.address === hostname ? hostname : `${hostname}, which resolves to ${candidate.address},`;
+			throw new ApiError("invalid_tag_argument", `This image cannot be fetched: ${found} is ${why}.`, {
+				url: target.href,
+				address: candidate.address,
+			});
+		}
+	}
+
+	// Any of them would do — they all passed. The first is the one DNS preferred.
+	return candidates[0];
+}
+
+/**
+ * Works out where a redirect points, so the next pass through the loop can guard it.
+ *
+ * This is the check that is easiest to leave out and most expensive to leave out. `fetch` follows
+ * redirects by default and does it inside the runtime, where no guard can see it: a URL on a
+ * public CDN that passes every check here can answer `302 Location: http://169.254.169.254/`, and
+ * a guard that validated only the URL it was handed has already lost. That is why this module
+ * drives the redirects itself, one hop at a time, and why the loop in {@link fetchRemoteImage}
+ * re-runs {@link guardAddress} on the result rather than treating a validated first hop as
+ * permission for the rest of the chain.
+ *
+ * @param from the URL this response came from, which a relative `Location` is relative to
+ * @param response the redirect response
+ * @returns the next URL, still unguarded
+ * @throws ApiError if there is no usable `Location`, or it leaves http(s)
+ */
+function followTo(from: URL, response: RemoteResponse): URL {
+	if (response.location === null || response.location === "") {
+		throw new ApiError("invalid_tag_argument", `${from.host} sent a ${response.status} redirect with no location.`, {
+			url: from.href,
+			status: response.status,
+		});
+	}
+
+	let next: URL;
+	try {
+		next = new URL(response.location, from);
+	} catch {
+		throw new ApiError("invalid_tag_argument", `${from.host} redirected this image somewhere unreadable.`, {
+			url: from.href,
+		});
+	}
+	requireWebScheme(next);
+	return next;
+}
+
+/**
+ * Reads a body, stopping the moment it goes over the cap.
+ *
+ * The counting happens as the chunks arrive, which is the entire point. Reading the body and then
+ * checking its length would be a cap that has already been exceeded by the time it is enforced —
+ * the memory has been allocated, and a server that streams forever is never refused at all
+ * because the check never runs.
+ *
+ * `Content-Length` is used only to refuse early. It is a claim by the server this module exists to
+ * be careful about, so it can shorten a refusal but can never be what permits a read: a server
+ * that declares one kilobyte and sends a hundred megabytes is cut off by the running total, the
+ * same as one that declares nothing.
+ *
+ * @param response the successful response
+ * @param target the URL, for the refusal message
+ * @returns the body
+ * @throws ApiError if the body is larger than {@link MAX_REMOTE_IMAGE_BYTES}
+ */
+async function readCapped(response: RemoteResponse, target: URL): Promise<Buffer> {
+	if (response.contentLength !== null && response.contentLength > MAX_REMOTE_IMAGE_BYTES) {
+		throw tooLarge(target, response.contentLength);
+	}
+
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for await (const chunk of response.body) {
+		total += chunk.byteLength;
+		if (total > MAX_REMOTE_IMAGE_BYTES) {
+			// Leaving the loop by throwing closes the iterator, which destroys the underlying
+			// socket, so nothing keeps arriving after this point.
+			throw tooLarge(target, total);
+		}
+		chunks.push(chunk);
+	}
+	return Buffer.concat(chunks, total);
+}
+
+function tooLarge(target: URL, seen: number): ApiError {
+	const limit = MAX_REMOTE_IMAGE_BYTES / (1024 * 1024);
+	return new ApiError("invalid_tag_argument", `This image is larger than the ${limit} MB limit.`, {
+		url: target.href,
+		limit: MAX_REMOTE_IMAGE_BYTES,
+		seen,
+	});
+}
+
+/**
+ * Turns a failed connection into a refusal the caller can read.
+ *
+ * The underlying error is kept as `cause` for the log and deliberately kept out of the message:
+ * `connect ECONNREFUSED 93.184.216.34:80` reports what the server found at an address, and this
+ * module's whole job is to not be a probe that answers questions about the network it sits in.
+ *
+ * @param target the URL being fetched
+ * @param signal the shared deadline, consulted to tell "too slow" from "would not connect"
+ * @param budget the deadline in milliseconds, for the message
+ * @param cause the underlying failure
+ * @param fallback message to use when the deadline was not the problem
+ * @returns the refusal to throw
+ */
+function transportRefusal(
+	target: URL,
+	signal: AbortSignal,
+	budget: number,
+	cause: unknown,
+	fallback = `${target.host} could not be reached for this image.`,
+): ApiError {
+	if (signal.aborted) {
+		return new ApiError(
+			"invalid_tag_argument",
+			`This image timed out after ${budget} ms.`,
+			{ url: target.href },
+			{
+				cause,
+			},
+		);
+	}
+	return new ApiError("invalid_tag_argument", fallback, { url: target.href }, { cause });
+}
+
+/**
+ * Fails a promise when the deadline expires, whether or not the promise itself is listening.
+ *
+ * The real transport honours the signal, but the deadline must hold for any transport — including
+ * a body that simply stops arriving mid-stream, which no `AbortSignal` wired into a request will
+ * notice on its own. A print job may not hang because a remote server decided to be slow.
+ *
+ * The abandoned work is left to settle on its own; the caller cancels the response in a `finally`,
+ * which is what actually closes the socket.
+ *
+ * @param work the operation to bound
+ * @param signal the shared deadline
+ * @returns the operation's result
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) {
+		return Promise.reject(signal.reason);
+	}
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
+}
+
+// --- The real transport ---
+
+/** Resolves a hostname the way the operating system would. */
+const systemResolver: HostResolver = async (hostname) => {
+	const answers = await lookup(hostname, { all: true, verbatim: true });
+	return answers.map((answer) => ({ address: answer.address, family: answer.family === 4 ? 4 : 6 }));
+};
+
+/**
+ * A `lookup` that ignores the hostname and always answers with an address already checked.
+ *
+ * This is what closes the gap between checking an address and connecting to it. Resolving a
+ * hostname, approving what came back and then handing the *hostname* to an HTTP client asks DNS a
+ * second question, and nothing obliges the second answer to match the first: a record with a
+ * one-second TTL can return a public address to the check and a private one to the connection,
+ * which is DNS rebinding and is a real attack, not a theoretical one. Giving the client a resolver
+ * that cannot say anything except the approved address removes the second question entirely.
+ *
+ * The hostname is still what goes in the `Host` header and in TLS SNI and certificate validation,
+ * because only DNS is overridden and not the request's idea of who it is talking to.
+ *
+ * @param pinned the approved address
+ * @returns a lookup function for `node:http`
+ */
+function pinnedLookup(pinned: PinnedAddress): LookupFunction {
+	return (_hostname, options, callback) => {
+		// Node asks with `all: true` when it is prepared to try several addresses (Happy Eyeballs)
+		// and without it otherwise. There is only ever one address to offer either way.
+		if (options.all === true) {
+			callback(null, [{ address: pinned.address, family: pinned.family }]);
+			return;
+		}
+		callback(null, pinned.address, pinned.family);
+	};
+}
+
+/**
+ * Opens one hop against an address that has already been approved.
+ *
+ * Redirects are not followed here — they are handed back for {@link fetchRemoteImage} to guard.
+ * `agent: false` turns off connection reuse: pooled sockets are keyed by host and port and know
+ * nothing about the pinning, and rather than reason about whether a reused socket could ever
+ * outlive the check that approved it, this simply never reuses one. An occasional logo fetch does
+ * not need the handshake back.
+ *
+ * @param url the URL for this hop
+ * @param pinned the address approved for it
+ * @param signal the shared deadline
+ * @returns the response, with its body unread
+ */
+export const pinnedTransport: RemoteTransport = (url, pinned, signal) =>
+	new Promise<RemoteResponse>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason);
+			return;
+		}
+
+		const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+		const request = send(
+			url,
+			{
+				lookup: pinnedLookup(pinned),
+				agent: false,
+				signal,
+				headers: {
+					// A preference, not a requirement. `image/*` alone would let a strict server
+					// answer 406 to a URL that serves a perfectly good PNG, and what the bytes
+					// actually are is decided by decoding them, not by what the server claims.
+					accept: "image/*,*/*;q=0.8",
+					// Some CDNs answer 403 to a request with no user agent at all.
+					"user-agent": "FenPOS",
+				},
+			},
+			(response) => {
+				resolve({
+					status: response.statusCode ?? 0,
+					location: typeof response.headers.location === "string" ? response.headers.location : null,
+					contentLength: parseContentLength(response.headers["content-length"]),
+					body: response,
+					cancel: () => {
+						response.destroy();
+						request.destroy();
+					},
+				});
+			},
+		);
+		request.on("error", reject);
+		request.end();
+	});
+
+/**
+ * @param header the raw `Content-Length`
+ * @returns the declared length, or null if the server did not send a usable one
+ */
+function parseContentLength(header: string | string[] | undefined): number | null {
+	if (typeof header !== "string") {
+		return null;
+	}
+	const declared = Number(header);
+	return Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
+}
