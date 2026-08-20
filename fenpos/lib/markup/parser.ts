@@ -1,5 +1,11 @@
 import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
-import { type SymbolGeometry, type SymbolSpec, symbolGeometry, validateSymbolContent } from "@/lib/markup/blocks";
+import {
+	SymbolEncodeError,
+	type SymbolGeometry,
+	type SymbolSpec,
+	symbolGeometry,
+	validateSymbolContent,
+} from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
@@ -604,17 +610,23 @@ class Parser {
 	 * `validateSymbolContent` checks format only — length and alphabet — because check-digit
 	 * arithmetic belongs to the encoder that computes it. When the encoder is the one to refuse,
 	 * the caller still deserves a 400 naming the tag rather than an unhandled fault.
+	 *
+	 * Only a {@link SymbolEncodeError} is converted. Anything else thrown while measuring is a
+	 * fault on this side, and reporting it as a 400 would both tell the caller to fix content
+	 * that is fine and hide a server defect from the error rate that is supposed to show it.
 	 */
 	private measure(block: OpenBlock): SymbolGeometry {
 		try {
 			return symbolGeometry(block.spec);
 		} catch (thrown) {
-			const reason = thrown instanceof Error ? thrown.message : String(thrown);
+			if (!(thrown instanceof SymbolEncodeError)) {
+				throw thrown;
+			}
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidTagArgument,
 				block.column,
 				block.tag.name,
-				`<${block.tag.name}> cannot encode this content: ${reason}`,
+				`<${block.tag.name}> cannot encode this content: ${thrown.message}`,
 			);
 		}
 	}

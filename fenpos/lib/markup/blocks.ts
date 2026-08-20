@@ -23,6 +23,31 @@ import type { BarcodeSystem } from "@/lib/domain/enums";
  *    rather than anything read from `bwip-js`.
  */
 
+/**
+ * The encoder's refusal of a symbol's content.
+ *
+ * Distinct from any other failure inside this module on purpose. {@link validateSymbolContent}
+ * checks format only, so content that passes it can still be rejected by the encoder itself —
+ * a wrong check digit is the usual case. That is a caller's mistake and belongs in a `400`,
+ * whereas a bug in this module or a broken `bwip-js` install is a server fault and must stay a
+ * `5xx`. Callers cannot tell those apart from a bare `Error`, so this type does it for them.
+ */
+export class SymbolEncodeError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "SymbolEncodeError";
+	}
+}
+
+/**
+ * The identifier bwip-js stamps on a refusal, e.g. `bwipp.ean13badCheckDigit#6915: `.
+ *
+ * Matching it is how a refusal of the content is told apart from any other throw out of the
+ * library. Stripping it is how a library-internal token — which moves with every bwip-js
+ * release — stays out of a message an API caller reads.
+ */
+const BWIPP_REFUSAL = /^bwipp\.\w+#\d+:\s*/;
+
 /** Height of one printed line at the default font (Font A). */
 export const LINE_HEIGHT_DOTS = 24;
 
@@ -100,6 +125,7 @@ const BARCODE_HEIGHT_DOTS = 100;
  *
  * @param spec what to print
  * @returns its width and height in dots, and its height in whole printed lines
+ * @throws SymbolEncodeError if the encoder refuses this content, e.g. a wrong check digit
  */
 export function symbolGeometry(spec: SymbolSpec): SymbolGeometry {
 	switch (spec.kind) {
@@ -127,6 +153,29 @@ function toGeometry(widthDots: number, heightDots: number): SymbolGeometry {
 }
 
 /**
+ * Describes a symbol with bwip-js, naming a refusal of the content as such.
+ *
+ * The whole of this module's contact with bwip-js goes through here, so that the one place that
+ * knows the library's error format is the one place that has to change when that format does.
+ * Only a refusal is converted: anything else out of `raw()` is a fault in this module or in the
+ * install, and rethrowing it untouched is what keeps it visible as one.
+ *
+ * @param options the bwip-js call, as `raw()` takes it
+ * @returns bwip-js's description of the symbol
+ * @throws SymbolEncodeError if bwip-js refuses the content, with its identifier prefix removed
+ */
+function rawSymbol(options: Parameters<typeof bwip.raw>[0]) {
+	try {
+		return bwip.raw(options)[0];
+	} catch (thrown) {
+		if (!(thrown instanceof Error) || !BWIPP_REFUSAL.test(thrown.message)) {
+			throw thrown;
+		}
+		throw new SymbolEncodeError(thrown.message.replace(BWIPP_REFUSAL, ""), { cause: thrown });
+	}
+}
+
+/**
  * Reads a 2D symbol's module grid from bwip-js.
  *
  * @param bcid bwip-js's symbology identifier
@@ -137,7 +186,7 @@ function toGeometry(widthDots: number, heightDots: number): SymbolGeometry {
  *         instead, which would mean this function was called for the wrong kind of symbol
  */
 function moduleGrid(bcid: string, text: string, extra?: Record<string, unknown>): { pixx: number; pixy: number } {
-	const symbol = bwip.raw({ bcid, text, ...extra })[0];
+	const symbol = rawSymbol({ bcid, text, ...extra });
 	if (!("pixx" in symbol) || !("pixy" in symbol)) {
 		throw new Error(`bwip-js did not return a module matrix for '${bcid}'`);
 	}
@@ -157,7 +206,7 @@ function moduleGrid(bcid: string, text: string, extra?: Record<string, unknown>)
  * @throws Error if bwip-js reports this symbology's shape as a module matrix instead
  */
 function barModuleWidth(bcid: string, text: string): number {
-	const symbol = bwip.raw({ bcid, text })[0];
+	const symbol = rawSymbol({ bcid, text });
 	if (!("sbs" in symbol)) {
 		throw new Error(`bwip-js did not return bar widths for '${bcid}'`);
 	}

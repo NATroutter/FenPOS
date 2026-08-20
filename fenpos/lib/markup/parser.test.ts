@@ -1,8 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
+
+/**
+ * Leaves `symbolGeometry` real for every test but one.
+ *
+ * The exception pins that the parser rethrows a fault raised while measuring instead of
+ * reporting it to the caller as bad content. Nothing a caller can write triggers such a fault —
+ * that is what makes it a fault — so it has to be injected, and this is the narrowest way to do
+ * it: the spy delegates to the real implementation unless a single test says otherwise.
+ */
+vi.mock("@/lib/markup/blocks", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/markup/blocks")>();
+	return { ...actual, symbolGeometry: vi.fn(actual.symbolGeometry) };
+});
 
 /**
  * Behavioural tests for the markup parser.
@@ -458,6 +471,40 @@ describe("block tags", () => {
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
 		expect(thrown.column).toBe(1);
+		expect(thrown.message).toContain("check digit");
+	});
+
+	/**
+	 * bwip-js stamps its refusals with an internal identifier — `bwipp.ean13badCheckDigit#6915:` —
+	 * that moves with every release of the library. It has no meaning to a caller and no business
+	 * in a response they read, so `blocks.ts` strips it before the parser ever sees it.
+	 */
+	it("keeps the encoder's internal identifier out of the message", () => {
+		const thrown = blockError("<barcode=EAN13>1234567890123</barcode>");
+
+		expect(thrown.message).not.toContain("bwipp.");
+		expect(thrown.message).not.toMatch(/#\d+/);
+	});
+
+	/**
+	 * The counterpart to the test above: only the encoder refusing *this content* is a client
+	 * mistake. A fault raised while measuring is a defect on this side, and dressing it up as a
+	 * 400 would blame the caller for it and hide it from the error rate meant to surface it.
+	 */
+	it("lets a fault raised while measuring propagate, rather than blaming the content", () => {
+		const fault = new TypeError("bwip is not a function");
+		vi.mocked(symbolGeometry).mockImplementationOnce(() => {
+			throw fault;
+		});
+
+		let thrown: unknown;
+		try {
+			parseMarkup("<qr>https://example.com/o/1</qr>");
+		} catch (caught) {
+			thrown = caught;
+		}
+
+		expect(thrown).toBe(fault);
 	});
 
 	it("parses a PDF417 symbol with its default error level", () => {

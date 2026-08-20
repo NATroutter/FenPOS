@@ -1,6 +1,12 @@
 import bwip from "bwip-js/node";
 import { describe, expect, it } from "vitest";
-import { dotWidth, LINE_HEIGHT_DOTS, symbolGeometry, validateSymbolContent } from "@/lib/markup/blocks";
+import {
+	dotWidth,
+	LINE_HEIGHT_DOTS,
+	SymbolEncodeError,
+	symbolGeometry,
+	validateSymbolContent,
+} from "@/lib/markup/blocks";
 
 describe("dotWidth", () => {
 	it("is twelve dots per column", () => {
@@ -40,6 +46,27 @@ describe("symbolGeometry", () => {
 	it("measures an EAN13 barcode at the spec's fixed 100-dot height", () => {
 		const geometry = symbolGeometry({ kind: "BARCODE", content: "5901234123457", system: "EAN13" });
 		expect(geometry.heightLines).toBe(5);
+	});
+
+	/**
+	 * The seam that lets a caller's mistake be told apart from this module's own.
+	 *
+	 * `validateSymbolContent` passes a 13-digit EAN13 because its format is right; the encoder
+	 * then rejects it because the last digit is not the check digit the first twelve imply. That
+	 * is a client mistake, so it gets a type of its own, and the identifier bwip-js stamps on its
+	 * message is stripped here rather than travelling out into an API response.
+	 */
+	it("names an encoder refusal as one, without bwip-js's internal identifier", () => {
+		let thrown: unknown;
+		try {
+			symbolGeometry({ kind: "BARCODE", content: "1234567890123", system: "EAN13" });
+		} catch (caught) {
+			thrown = caught;
+		}
+
+		expect(thrown).toBeInstanceOf(SymbolEncodeError);
+		expect((thrown as SymbolEncodeError).message).toBe("Incorrect EAN-13 check digit provided");
+		expect((thrown as SymbolEncodeError).cause).toBeInstanceOf(Error);
 	});
 
 	it("grows a PDF417 with its content", () => {
