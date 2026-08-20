@@ -85,7 +85,10 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 	 */
 	const choose = (chosen: File | null): void => {
 		if (chosen && chosen.size > maxBytes) {
-			setFile(null);
+			// `clearFile`, not `setFile(null)`: the input keeps showing whatever the picker put in it
+			// until its key changes, so dropping only the form's copy leaves the operator looking at a
+			// filename the form no longer has — with Clear disabled, because that is keyed off `file`.
+			clearFile();
 			setError(`That image is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${megabytes(maxBytes)} MB.`);
 			return;
 		}

@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Copy, Image as ImageIcon, Trash2 } from "lucide-react";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { removeAsset } from "@/app/(panel)/assets/actions";
 import {
@@ -43,6 +43,9 @@ export interface AssetCardData {
 	previewDots: number;
 }
 
+/** How long the copied tick stays up. Long enough to be seen, short enough to stop meaning "just now". */
+const COPIED_TICK_MS = 2000;
+
 /**
  * One stored image: what it will look like printed, and what to do with it.
  *
@@ -53,6 +56,23 @@ export interface AssetCardData {
 export function AssetCard({ asset }: { asset: AssetCardData }) {
 	const [pending, startTransition] = useTransition();
 	const [copied, setCopied] = useState(false);
+
+	/**
+	 * The tick, which has to go away again.
+	 *
+	 * It confirms one press, so it is timed rather than sticky: the panel is a tab left open all day,
+	 * and a tick that never resets stops meaning "copied just now" within a minute of meaning it. The
+	 * timer is cleared on unmount and on a second press, so a card deleted mid-tick sets no state on a
+	 * component that is gone.
+	 */
+	const resetAt = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(() => () => clearTimeout(resetAt.current ?? undefined), []);
+
+	const confirmCopied = (): void => {
+		setCopied(true);
+		clearTimeout(resetAt.current ?? undefined);
+		resetAt.current = setTimeout(() => setCopied(false), COPIED_TICK_MS);
+	};
 
 	/** What a receipt writes to print this image. The tag is paired; see the Docs tab. */
 	const reference = `<image>${asset.name}</image>`;
@@ -116,7 +136,7 @@ export function AssetCard({ asset }: { asset: AssetCardData }) {
 						disabled={pending}
 						onClick={() => {
 							void navigator.clipboard.writeText(reference);
-							setCopied(true);
+							confirmCopied();
 							toast.success("Markup reference copied.");
 						}}
 					>
