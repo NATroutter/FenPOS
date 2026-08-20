@@ -240,15 +240,23 @@ const RASTER_CACHE_BYTES = 8 * 1024 * 1024;
  * and an in-place edit moves the timestamp. That is the whole invalidation story — there is no
  * eviction on write to forget, because a stale entry is unreachable rather than merely wrong.
  *
+ * `inFlight` is the same memoisation one moment earlier. A cache consulted only before the first
+ * `await` does nothing for calls that arrive together, and together is exactly how they arrive:
+ * `pushConfigToEveryAgent` fans out over every connected agent at once, so several agents sharing a
+ * paper width would each derive the same picture simultaneously and each miss the cold cache. Sharing
+ * the promise turns that back into one derivation.
+ *
  * Held on `globalThis` for the same reason the link registry is: a development hot reload would
  * otherwise strand the previous module's entries and accumulate a second copy.
  */
 const globalForRasters = globalThis as unknown as {
-	fenposRasterCache: { entries: Map<string, ImageRaster>; bytes: number } | undefined;
+	fenposRasterCache:
+		| { entries: Map<string, ImageRaster>; bytes: number; inFlight: Map<string, Promise<ImageRaster>> }
+		| undefined;
 };
 
 if (!globalForRasters.fenposRasterCache) {
-	globalForRasters.fenposRasterCache = { entries: new Map(), bytes: 0 };
+	globalForRasters.fenposRasterCache = { entries: new Map(), bytes: 0, inFlight: new Map() };
 }
 
 const rasterCache = globalForRasters.fenposRasterCache;
@@ -267,6 +275,12 @@ const rasterCache = globalForRasters.fenposRasterCache;
  * {@link RASTER_CACHE_BYTES}, it is correct across restarts by being empty, and it keeps `Asset.data`
  * holding nothing but the source. A cheap read of the row's id and timestamp happens on every call,
  * so a hit still cannot serve dots from bytes that have been replaced.
+ *
+ * **Callers that arrive together share one derivation.** The cache above is consulted before the
+ * first `await`, which does nothing for calls already in flight — and in flight together is how they
+ * come: `pushConfigToEveryAgent` pushes every connected agent at once, so a dozen agents on the same
+ * paper width would each decode and dither the same image simultaneously against a cold cache. The
+ * second and later callers wait on the first one's promise instead.
  *
  * **The returned raster is shared.** Callers read it — encode it, measure it — and must not write
  * through `packed`, which several of them would then be holding.
@@ -299,7 +313,47 @@ export async function rasterFor(name: string, targetDots: number): Promise<Image
 		return remembered;
 	}
 
-	const stored = await prisma.asset.findUnique({ where: { id: revision.id }, select: { data: true } });
+	const already = rasterCache.inFlight.get(key);
+	if (already) {
+		return already;
+	}
+
+	const deriving = derive(revision.id, name, targetDots, key);
+	rasterCache.inFlight.set(key, deriving);
+
+	// Cleared on either outcome, so one failure — a row deleted mid-derive, an image that will not
+	// decode — cannot leave the key permanently answering with that failure. The identity check is
+	// the same guard `unregisterLink` uses: if something has since replaced this entry, removing it
+	// would strand whoever is waiting on the replacement.
+	//
+	// `then(clear, clear)` rather than `finally`, which re-raises into a derived promise nobody
+	// awaits and would surface as an unhandled rejection. The promise handed back is the one the
+	// caller handles.
+	const clear = () => {
+		if (rasterCache.inFlight.get(key) === deriving) {
+			rasterCache.inFlight.delete(key);
+		}
+	};
+	deriving.then(clear, clear);
+
+	return deriving;
+}
+
+/**
+ * Reads the bytes and dithers them, which is the expensive half.
+ *
+ * Split out so that the promise doing this work is a value {@link rasterFor} can hand to every other
+ * caller waiting on the same picture.
+ *
+ * @param assetId the row to read, already resolved from the name
+ * @param name the asset's name, for the refusal
+ * @param targetDots the paper width in printer dots
+ * @param key the cache key this derivation belongs to
+ * @returns the raster
+ * @throws ApiError if the row is gone by the time its bytes are read
+ */
+async function derive(assetId: string, name: string, targetDots: number, key: string): Promise<ImageRaster> {
+	const stored = await prisma.asset.findUnique({ where: { id: assetId }, select: { data: true } });
 	if (!stored) {
 		// Deleted between the two reads. Ordinary with two operators on the Assets tab, and the
 		// caller gets the same answer as if it had been gone all along.
@@ -319,12 +373,24 @@ export async function rasterFor(name: string, targetDots: number): Promise<Image
  * A raster larger than the whole cap is returned to its caller and never stored, rather than
  * emptying the cache to hold one thing nothing else can share.
  *
+ * **What is replaced is subtracted before what replaces it is added.** The map holds one entry per
+ * key however many times it is written, so a counter that only ever added would drift above the
+ * bytes actually held — and since the drift is what the eviction loop reads, it would evict entries
+ * that were still wanted while believing it was under the cap. In-flight sharing means two
+ * derivations of one key should no longer meet here, but the accounting must not depend on that
+ * being true of every path that ever calls this.
+ *
  * @param key the asset revision and width this was derived from
  * @param raster the dots
  */
 function remember(key: string, raster: ImageRaster): void {
 	if (raster.packed.length > RASTER_CACHE_BYTES) {
 		return;
+	}
+
+	const replaced = rasterCache.entries.get(key);
+	if (replaced) {
+		rasterCache.bytes -= replaced.packed.length;
 	}
 
 	rasterCache.entries.set(key, raster);
@@ -340,15 +406,32 @@ function remember(key: string, raster: ImageRaster): void {
 }
 
 /**
- * Empties the raster cache.
+ * Empties the raster cache, including anything being derived right now.
  *
  * For tests, which need to tell a hit from a miss and share one process across cases. Nothing in the
  * product calls it: an entry is keyed by the revision it came from, so there is never anything stale
  * to clear.
+ *
+ * A derivation already running is not cancelled — it finishes and stores its result, which is
+ * harmless because the key it stores under is still the key that describes it.
  */
 export function forgetRasters(): void {
 	rasterCache.entries.clear();
+	rasterCache.inFlight.clear();
 	rasterCache.bytes = 0;
+}
+
+/**
+ * What the raster cache is currently holding.
+ *
+ * For tests. The bound and the eviction it drives are invisible from the outside — a caller cannot
+ * tell a cache that is accounting correctly from one whose counter has drifted, until it starts
+ * evicting things it should have kept — so the accounting is asserted directly rather than inferred.
+ *
+ * @returns how many rasters are held and how many bytes of dots they come to
+ */
+export function rasterCacheStats(): { entries: number; bytes: number } {
+	return { entries: rasterCache.entries.size, bytes: rasterCache.bytes };
 }
 
 /**

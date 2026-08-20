@@ -58,6 +58,7 @@ const {
 	forgetRasters,
 	importAssetFromUrl,
 	listAssets,
+	rasterCacheStats,
 	rasterFor,
 } = await import("@/lib/assets/asset-service");
 
@@ -72,6 +73,16 @@ const {
  */
 async function solidPng(width: number, height: number): Promise<Buffer> {
 	return Buffer.from(await new Jimp({ width, height, color: 0x808080ff }).getBuffer("image/png"));
+}
+
+/**
+ * Lets the microtask queue drain, so a call that has started can reach its first `await`.
+ *
+ * Used where the point of the test is what two overlapping calls do to each other, which needs one
+ * of them to be genuinely in flight rather than merely constructed.
+ */
+function tick(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
 }
 
 /** A real 128x40 PNG, the same fixture the dither tests use. */
@@ -534,7 +545,13 @@ describe("rasterFor", () => {
 		expect(after.heightDots).not.toBe(before.heightDots);
 	});
 
-	/** A cache that outlived its bytes would be worse than none: a deleted image must be gone. */
+	/**
+	 * A cache that outlived its bytes would be worse than none: a deleted image must be gone.
+	 *
+	 * This is what forbids the obvious "optimisation" of answering from the cache before reading the
+	 * row. The read looks like pure overhead on a hit — it is two integer-ish columns fetched only to
+	 * build a key — but skipping it would let a deleted or replaced image keep printing.
+	 */
 	it("refuses an image deleted after its raster was remembered", async () => {
 		await createAsset("logo", PNG);
 		await rasterFor("logo", 384);
@@ -543,5 +560,132 @@ describe("rasterFor", () => {
 		await deleteAsset(stored.id);
 
 		await refusal(() => rasterFor("logo", 384));
+	});
+
+	/**
+	 * Callers that arrive together, which is how they actually arrive.
+	 *
+	 * `pushConfigToEveryAgent` fans out over every connected agent at once, so agents sharing a paper
+	 * width ask for the same picture simultaneously. A cache read before the first `await` cannot help
+	 * them: each one misses the cold cache and each pays a full decode, resize and error-diffusion
+	 * pass. That is the "ten agents, hundreds of dithers in one event" case, and it is the one the
+	 * memoisation was added for.
+	 */
+	it("derives once for callers that ask at the same time", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+		ditherToRaster.mockClear();
+
+		const [first, second, third] = await Promise.all([
+			rasterFor("logo", 384),
+			rasterFor("logo", 384),
+			rasterFor("logo", 384),
+		]);
+
+		expect(ditherToRaster).toHaveBeenCalledTimes(1);
+		expect(second).toBe(first);
+		expect(third).toBe(first);
+	});
+
+	/**
+	 * A failure must not stick to the key.
+	 *
+	 * The shared promise is removed whichever way it settles, so an image that could not be read once
+	 * — a row deleted mid-derive, bytes that will not decode — does not leave every later caller
+	 * receiving that same failure for as long as the process lives.
+	 */
+	it("does not let one failed derivation poison the key", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+
+		const real = await vi.importActual<typeof import("@/lib/assets/dither")>("@/lib/assets/dither");
+		ditherToRaster.mockRejectedValueOnce(new Error("the decoder fell over"));
+
+		await expect(rasterFor("logo", 384)).rejects.toThrow("the decoder fell over");
+
+		ditherToRaster.mockImplementation(real.ditherToRaster);
+		expect((await rasterFor("logo", 384)).widthDots).toBe(384);
+	});
+
+	/**
+	 * The accounting behind the eviction, asserted directly because it is invisible from outside: a
+	 * counter that has drifted above what is really held looks exactly like a correct one until it
+	 * starts evicting entries that were still wanted.
+	 *
+	 * Two derivations landing on one key is the case that drifts it. In-flight sharing normally
+	 * prevents that meeting, so the sequence is staged — the first derivation is held open, the
+	 * in-flight record cleared, a second one started — but the guard is in `remember` rather than in
+	 * the sharing, because the accounting must not depend on every future path being careful.
+	 */
+	it("counts a raster once even when two derivations land on the same key", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+
+		const real = await vi.importActual<typeof import("@/lib/assets/dither")>("@/lib/assets/dither");
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		ditherToRaster.mockImplementation(async (bytes, dots) => {
+			await held;
+			return real.ditherToRaster(bytes, dots);
+		});
+
+		const first = rasterFor("logo", 384);
+		await tick();
+		// Drops the in-flight record, so the next caller starts a derivation of its own rather than
+		// joining the one already running.
+		forgetRasters();
+		const second = rasterFor("logo", 384);
+		await tick();
+
+		release();
+		const [derived] = await Promise.all([first, second]);
+		ditherToRaster.mockImplementation(real.ditherToRaster);
+
+		expect(rasterCacheStats().entries).toBe(1);
+		expect(rasterCacheStats().bytes).toBe(derived.packed.length);
+	});
+
+	/**
+	 * The bound, and the eviction that keeps it.
+	 *
+	 * The dither is replaced with one that fabricates three-megabyte rasters, because reaching an
+	 * eight-megabyte cache honestly means dithering some sixty-four million pixels — which would
+	 * dominate this suite to assert a loop that only cares about byte counts. Nothing about the
+	 * eviction depends on the dots being real.
+	 */
+	it("evicts to stay within its cap, keeping what was used most recently", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+
+		const real = await vi.importActual<typeof import("@/lib/assets/dither")>("@/lib/assets/dither");
+		const huge = 3 * 1024 * 1024;
+		ditherToRaster.mockImplementation(async (_bytes, dots) => ({
+			widthDots: dots,
+			heightDots: 1,
+			packed: Buffer.alloc(huge),
+		}));
+		try {
+			await rasterFor("logo", 100);
+			await rasterFor("logo", 200);
+			// 100 is touched again, so 200 becomes the least recently used and is the one that goes.
+			await rasterFor("logo", 100);
+			ditherToRaster.mockClear();
+
+			await rasterFor("logo", 300);
+
+			expect(rasterCacheStats().entries).toBe(2);
+			expect(rasterCacheStats().bytes).toBe(2 * huge);
+
+			// A hit costs no dither; the evicted width costs one.
+			await rasterFor("logo", 100);
+			expect(ditherToRaster).toHaveBeenCalledTimes(1);
+			await rasterFor("logo", 200);
+			expect(ditherToRaster).toHaveBeenCalledTimes(2);
+		} finally {
+			ditherToRaster.mockImplementation(real.ditherToRaster);
+			forgetRasters();
+		}
 	});
 });
