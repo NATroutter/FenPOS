@@ -43,8 +43,14 @@ const PREVIEW_DOTS = dotWidth(32);
 export default async function AssetsPage() {
 	const assets = await listAssets();
 
-	const cards: AssetCardData[] = await Promise.all(
-		assets.map(async (asset) => ({
+	// One at a time, not `Promise.all`. Rendering a preview decodes the image, and `MAX_IMAGE_DIMENSION`
+	// in the asset service is a bound on *one* decode — a 4096-pixel JPEG costs about half a gigabyte
+	// while it is being read. Started together, every image on this tab would be holding a bitmap at
+	// once and that bound would mean nothing; in sequence the peak stays where the service put it. The
+	// cost is latency on a page whose images are, in practice, a few kilobytes each.
+	const cards: AssetCardData[] = [];
+	for (const asset of assets) {
+		cards.push({
 			id: asset.id,
 			name: asset.name,
 			width: asset.width,
@@ -54,8 +60,8 @@ export default async function AssetsPage() {
 			createdAt: asset.createdAt,
 			preview: await previewOf(asset.name),
 			previewDots: PREVIEW_DOTS,
-		})),
-	);
+		});
+	}
 
 	return (
 		<div className="flex flex-col gap-5">
