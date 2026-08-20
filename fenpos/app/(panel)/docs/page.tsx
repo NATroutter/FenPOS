@@ -456,9 +456,11 @@ export default async function DocsPage() {
 								</P>
 
 								<P>
-									Everything is decided before the response. Past a <Status>202</Status>, a job can only fail for
-									hardware reasons, or for an image the agent turns out not to hold — see Blocks — which is what makes
-									these codes worth branching on.
+									Most failures are settled before the response. A job can still fail after its <Status>202</Status> —
+									the agent re-checks every dispatch against its own device set and renders it itself — and when one
+									does, the reason reaches you the same way as anything else here: a code in <Mono>error</Mono>, with{" "}
+									<Mono>errorMessage</Mono> beside it, on the job's own <Mono>GET</Mono>. That is what makes these codes
+									worth branching on. An image the agent was never sent is one such reason; see Blocks.
 								</P>
 							</Col>
 
