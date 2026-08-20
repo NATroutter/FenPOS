@@ -304,3 +304,27 @@ model Setting {
 
   @@map("settings")
 }
+
+model Asset {
+  id        String   @id @default(cuid())
+  /// IMAGE. See AssetKind in lib/domain/enums.ts for the closed set.
+  kind      String   @default("IMAGE")
+  /// Referenced from markup. Slug-shaped.
+  name      String
+  /// The uploaded file, untouched. Dithered output is derived from this, never stored as the
+  /// source of truth, because the right dither depends on the paper it is going to.
+  data      Bytes
+  mimeType  String   @map("mime_type")
+  /// Pixel dimensions, for kinds that are rasters. Null otherwise.
+  width     Int?
+  height    Int?
+  /// Set when imported from a URL, for provenance only. Not re-fetched.
+  sourceUrl String?  @map("source_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  /// Unique per kind rather than globally, so a later kind may reuse a name that reads naturally
+  /// for it without colliding with an image.
+  @@unique([kind, name])
+  @@map("assets")
+}
