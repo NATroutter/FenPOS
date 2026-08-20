@@ -78,8 +78,10 @@ export function AssetCard({ asset }: { asset: AssetCardData }) {
 				{asset.preview ? (
 					// White because this is paper, not panel: the dots that are not inked are the ones
 					// the printer leaves blank, and showing them as the card's own dark surface would
-					// invert the image an operator is being asked to judge.
-					<div className="flex items-center justify-center overflow-hidden rounded-md border border-border bg-white p-2">
+					// invert the image an operator is being asked to judge. Same surface the Tools
+					// tab's sheet is drawn on — a hairline ring rather than a border, because a
+					// dark border around white paper reads as a frame around the picture instead.
+					<div className="flex items-center justify-center overflow-hidden rounded-sm bg-white p-2 shadow-sm ring-1 ring-black/10">
 						{/** biome-ignore lint/performance/noImgElement: a data URI is already inlined; there is nothing for the image pipeline to optimise. */}
 						<img
 							src={asset.preview}
