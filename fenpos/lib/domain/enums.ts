@@ -130,3 +130,17 @@ export type Align = (typeof Align.values)[number];
 /** Printer font. B is narrower than A and fits more columns on the same paper. */
 export const Font = closedSet(["A", "B"] as const);
 export type Font = (typeof Font.values)[number];
+
+/** Linear barcode symbologies. Mirrors BarcodeSystem in the agent. */
+export const BarcodeSystem = closedSet([
+	"UPCA",
+	"UPCE",
+	"EAN13",
+	"EAN8",
+	"CODE39",
+	"ITF",
+	"CODABAR",
+	"CODE93",
+	"CODE128",
+] as const);
+export type BarcodeSystem = (typeof BarcodeSystem.values)[number];
