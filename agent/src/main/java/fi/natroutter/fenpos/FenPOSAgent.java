@@ -316,11 +316,11 @@ public class FenPOSAgent extends FoxLib {
     }
 
     private static void printBanner() {
-        println("[35m _____ _                       _   ____ ___ ");
-        println("[35m|_   _| |__   ___ _ __ _ __ ___ / \\ |  _ \\_ _|");
-        println("[35m  | | | '_ \\ / _ \\ '__| '_ ` _ \\/ _ \\| |_) | | ");
-        println("[35m  | | | | | |  __/ |  | | | | | / ___ \\  __/| | ");
-        println("[35m  |_| |_| |_|\\___|_|  |_| |_| |_/_/   \\_\\_|  |___|");
+        println("[35m _____               ____    ___   ____  ");
+        println("[35m|  ___|  ___  _ __  |  _ \\  / _ \\ / ___| ");
+        println("[35m| |_    / _ \\| '_ \\ | |_) || | | |\\___ \\ ");
+        println("[35m|  _|  |  __/| | | ||  __/ | |_| | ___) |");
+        println("[35m|_|     \\___||_| |_||_|     \\___/ |____/ ");
         println("[35m• Version: " + VERSION);
         println("[35m• Author: NATroutter");
         println("[35m• Website: https://NATroutter.fi");

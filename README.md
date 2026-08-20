@@ -83,8 +83,16 @@ Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
 At each site, on the machine the printers are plugged into. Generate a pairing code first in
 the panel under **Agents**.
 
-**[`compose.agent.yaml`](compose.agent.yaml)** — set `FENPOS_SERVER` and `FENPOS_PAIR_CODE`, map
-your printer under `devices:`, then:
+**[`compose.agent.yaml`](compose.agent.yaml)** — set `FENPOS_SERVER` and `FENPOS_PAIR_CODE`, and
+map your printer under `devices:`.
+
+The container runs as uid 10001 and its directories are bind mounts, so they keep whatever
+owner the host gives them. Create them and hand them over first, or the agent cannot open its
+store and refuses to start:
+
+```sh
+mkdir -p data logs && sudo chown -R 10001:10001 data logs
+```
 
 ```sh
 docker compose -f compose.agent.yaml up -d

@@ -9,6 +9,8 @@ import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,8 +30,23 @@ import java.util.Optional;
  * started without one, a systemd unit, a piped stdin — the read loop does not start. A loop
  * reading a closed stdin returns end-of-file immediately and forever, which would spin a
  * core at 100% for the life of the process.
+ * <p>
+ * <strong>A detach is not the end.</strong> Stdin reporting end-of-file — which is what
+ * leaving a {@code docker attach} looks like from in here — rebuilds the reader rather
+ * than abandoning the console, so the next attach gets a working prompt instead of one
+ * that silently ignores everything typed at it. Repeated end-of-files in quick
+ * succession still stop it, because those mean stdin is gone rather than detached.
  */
 public class ConsoleManager {
+
+    /** How many end-of-files in quick succession before the console gives up for good. */
+    private static final int END_OF_FILE_BUDGET = 3;
+
+    /** Within this, another end-of-file means stdin is closed rather than detached. */
+    private static final Duration END_OF_FILE_WINDOW = Duration.ofSeconds(2);
+
+    /** Pause before rebuilding the reader, so a closed stdin cannot spin a core. */
+    private static final Duration END_OF_FILE_BACKOFF = Duration.ofMillis(500);
 
     private final ConsoleOutput output;
     private final FoxLogger logger;
@@ -38,6 +55,9 @@ public class ConsoleManager {
     private volatile boolean running;
     private Terminal terminal;
     private LineReader reader;
+    private Instant lastEndOfFile;
+    private int consecutiveEndOfFiles;
+    private String openFailure;
 
     /**
      * @param output the sink for command output, redirected to the terminal once started
@@ -93,16 +113,36 @@ public class ConsoleManager {
      * @return whether the console started
      */
     public boolean start() {
+        if (!openReader()) {
+            logger.info("Console disabled: " + openFailure
+                    + ". Run the container with a TTY to enable it.");
+            return false;
+        }
+
+        running = true;
+        Thread.ofVirtual().name("fenpos-agent-console").start(this::readLoop);
+        return true;
+    }
+
+    /**
+     * Builds the terminal and the line reader over the current stdin.
+     * <p>
+     * Separate from {@link #start()} because it runs again every time stdin is replaced,
+     * which is what re-attaching to a container does.
+     *
+     * @return whether an interactive terminal was available; {@link #openFailure} says why
+     *         not when it was not
+     */
+    private boolean openReader() {
         try {
             terminal = TerminalBuilder.builder().name("FenPOS").system(true).build();
         } catch (IOException e) {
-            logger.warn("Console unavailable (no terminal): " + e.getMessage());
+            openFailure = "no terminal (" + e.getMessage() + ")";
             return false;
         }
 
         if (Terminal.TYPE_DUMB.equals(terminal.getType())) {
-            logger.info("Console disabled: no interactive terminal. "
-                    + "Run the container with a TTY to enable it.");
+            openFailure = "no interactive terminal";
             closeTerminal();
             return false;
         }
@@ -115,9 +155,7 @@ public class ConsoleManager {
         // Log lines must be drawn above the prompt, or they overwrite whatever is being
         // typed. This is the whole reason the console owns the output sink.
         output.redirectTo(reader::printAbove);
-
-        running = true;
-        Thread.ofVirtual().name("fenpos-agent-console").start(this::readLoop);
+        openFailure = null;
         return true;
     }
 
@@ -131,13 +169,72 @@ public class ConsoleManager {
                 // kill a printer daemon by reflex.
                 continue;
             } catch (EndOfFileException e) {
-                // Ctrl-D or the stream closing: stop reading, but leave the daemon serving.
-                logger.info("Console input closed; the agent keeps running");
-                running = false;
-                return;
+                if (!reopenAfterEndOfFile()) {
+                    return;
+                }
+                continue;
             }
             dispatch(line);
         }
+    }
+
+    /**
+     * Rebuilds the reader after stdin reported end-of-file, when that is worth doing.
+     * <p>
+     * Detaching from a container ends this process's view of stdin. Treating that as final —
+     * which it was — left the next {@code docker attach} looking at a prompt that silently
+     * swallowed everything typed at it, with a restart of the whole agent the only way back.
+     * A detach is not a reason to give up the console.
+     * <p>
+     * Bounded, because the hazard in the class documentation is real: stdin that is closed
+     * rather than merely detached returns end-of-file instantly and forever, and rebuilding
+     * around that would spin a core for the life of the process. The pause and the small
+     * budget tell the two apart — an operator detaching does it once, and not again half a
+     * second later.
+     *
+     * @return whether the console may keep reading
+     */
+    private boolean reopenAfterEndOfFile() {
+        if (!worthReopening(Instant.now())) {
+            logger.info("Console input is closed, not merely detached; the agent keeps running");
+            stop();
+            return false;
+        }
+
+        closeTerminal();
+        try {
+            Thread.sleep(END_OF_FILE_BACKOFF);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stop();
+            return false;
+        }
+
+        if (!openReader()) {
+            logger.info("Console input closed (" + openFailure + "); the agent keeps running");
+            stop();
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Whether an end-of-file arriving now is a detach worth reopening for.
+     * <p>
+     * Handed the instant rather than reading the clock, and visible to the package, because
+     * this is the one part of the recovery a test can exercise: a unit test cannot conjure a
+     * pseudo-terminal, but it can prove the budget stops a closed stdin from being reopened
+     * forever.
+     *
+     * @param now when the end-of-file arrived
+     * @return whether to rebuild the reader rather than give up on the console
+     */
+    boolean worthReopening(Instant now) {
+        boolean immediate = lastEndOfFile != null
+                && Duration.between(lastEndOfFile, now).compareTo(END_OF_FILE_WINDOW) < 0;
+        consecutiveEndOfFiles = immediate ? consecutiveEndOfFiles + 1 : 1;
+        lastEndOfFile = now;
+        return consecutiveEndOfFiles < END_OF_FILE_BUDGET;
     }
 
     /**
@@ -210,6 +307,9 @@ public class ConsoleManager {
     }
 
     private void closeTerminal() {
+        // The sink points at a reader backed by the terminal being closed, so anything
+        // logged after this would be written into a closed stream.
+        output.redirectTo(System.out::println);
         if (terminal != null) {
             try {
                 terminal.close();

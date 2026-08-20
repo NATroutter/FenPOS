@@ -30,6 +30,11 @@ services:
       # The agent's identity lives here: the server address and the credential it
       # was issued at pairing. Lose this volume and the agent is unpaired — it
       # will need a new code, and the old one is already spent.
+      #
+      # The container runs as uid 10001 and a bind mount keeps the host directory
+      # owner, so create both and hand them over before the first start or the
+      # agent cannot open its store and refuses to run:
+      #   mkdir -p data logs && sudo chown -R 10001:10001 data logs
       - ./data:/app/data
       - ./logs:/app/logs
 

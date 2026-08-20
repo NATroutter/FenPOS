@@ -4,10 +4,12 @@ import fi.natroutter.foxlib.logger.FoxLogger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -178,6 +180,42 @@ class ConsoleManagerTest {
 
         assertEquals(List.of("alpha", "beta"),
                 console.completionsFor(List.of("greet", ""), 1));
+    }
+
+    @Test
+    void reopensAfterASingleEndOfFile() {
+        Instant detached = Instant.parse("2026-08-19T08:40:00Z");
+
+        assertTrue(console.worthReopening(detached));
+    }
+
+    @Test
+    void reopensForDetachesSpacedOutOverTime() {
+        Instant first = Instant.parse("2026-08-19T08:40:00Z");
+
+        assertTrue(console.worthReopening(first));
+        assertTrue(console.worthReopening(first.plusSeconds(30)));
+        assertTrue(console.worthReopening(first.plusSeconds(60)));
+    }
+
+    @Test
+    void givesUpWhenEndOfFileReturnsImmediatelyAndRepeatedly() {
+        // A stdin that is closed rather than detached answers instantly, every time.
+        Instant closed = Instant.parse("2026-08-19T08:40:00Z");
+
+        assertTrue(console.worthReopening(closed));
+        assertTrue(console.worthReopening(closed.plusMillis(1)));
+        assertFalse(console.worthReopening(closed.plusMillis(2)));
+    }
+
+    @Test
+    void forgivesAnEarlierBurstOnceTheGapIsLongEnough() {
+        Instant burst = Instant.parse("2026-08-19T08:40:00Z");
+        console.worthReopening(burst);
+        console.worthReopening(burst.plusMillis(1));
+
+        // Far enough after the burst to be a person detaching, not a closed stream.
+        assertTrue(console.worthReopening(burst.plusSeconds(10)));
     }
 
     /** Records what it was invoked with, so dispatch can be asserted. */
