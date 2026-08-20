@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { Align, Codepage, ConnectionStatus, Font, JobStatus, Linefeed, LogLevel } from "@/lib/domain/enums";
+import {
+	Align,
+	BarcodeSystem,
+	Codepage,
+	ConnectionStatus,
+	Font,
+	JobStatus,
+	Linefeed,
+	LogLevel,
+} from "@/lib/domain/enums";
 
 /**
  * The wire contract between the server and a agent.
@@ -25,8 +34,15 @@ import { Align, Codepage, ConnectionStatus, Font, JobStatus, Linefeed, LogLevel 
  * Incremented only for a change that an older peer could misread. A agent announcing a
  * version the server does not implement is refused at the handshake with a clear reason,
  * which is far easier to diagnose than frames failing individually later.
+ *
+ * Bumped 1 -> 2 for the QR, BARCODE, PDF417 and DRAWER directives. `FrameCodec.readDirective`
+ * on the agent throws `ProtocolException("unknown directive type")` on anything it does not
+ * recognise, and a stale agent jar — easy to have lying in `agent/target` — would otherwise
+ * connect happily to a new server and then fail partway through the first receipt containing
+ * a block. `Hello`/`Welcome` compare this value exactly, so the bump turns that into a clean
+ * refusal at connect time, which is the failure worth having while both sides are moving.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /**
  * Largest frame accepted, in bytes.
@@ -85,6 +101,10 @@ export const spanSchema = z.object({
 export const directiveSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("CUT"), mode: z.enum(["FULL", "PARTIAL"]) }),
 	z.object({ type: z.literal("FEED"), lines: z.number().int().min(1).max(255) }),
+	z.object({ type: z.literal("QR"), content: z.string().min(1), size: z.number().int().min(1).max(16) }),
+	z.object({ type: z.literal("BARCODE"), system: BarcodeSystem.schema, content: z.string().min(1) }),
+	z.object({ type: z.literal("PDF417"), content: z.string().min(1), errorLevel: z.number().int().min(0).max(8) }),
+	z.object({ type: z.literal("DRAWER"), pin: z.union([z.literal(2), z.literal(5)]) }),
 ]);
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	directiveSchema,
 	JOB_LIMITS,
 	type Line,
 	MAX_FRAME_BYTES,
@@ -230,5 +231,23 @@ describe("serialiseServerFrame", () => {
 			],
 		});
 		expect(JSON.parse(text).devices[0].codepage).toBe("CP858");
+	});
+});
+
+describe("block directives on the wire", () => {
+	it("accepts a QR directive", () => {
+		expect(directiveSchema.parse({ type: "QR", content: "https://x.test", size: 6 })).toMatchObject({ type: "QR" });
+	});
+
+	it("accepts a drawer pulse", () => {
+		expect(directiveSchema.parse({ type: "DRAWER", pin: 5 })).toMatchObject({ pin: 5 });
+	});
+
+	it("refuses a drawer pin the hardware does not have", () => {
+		expect(() => directiveSchema.parse({ type: "DRAWER", pin: 3 })).toThrow();
+	});
+
+	it("refuses an unknown symbology", () => {
+		expect(() => directiveSchema.parse({ type: "BARCODE", system: "NOPE", content: "1" })).toThrow();
 	});
 });
