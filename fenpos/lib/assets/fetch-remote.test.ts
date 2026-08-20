@@ -321,6 +321,53 @@ describe("fetchRemoteImage credentials", () => {
 		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
 	});
 
+	/**
+	 * The two refusals inside `followTo`. They were the last two `details.url` sites in the module
+	 * still passing an unredacted href, and they survived a round that added six credential tests
+	 * precisely because neither had one — the refusal that already covered this path asserted on the
+	 * message and never looked at the body. Both are reachable: a 302 with no `Location` is
+	 * ordinary server behaviour, and `new URL("http://[", base)` genuinely throws.
+	 */
+	it("keeps the password out of a refusal for a redirect with no location", async () => {
+		const stub = stubTransport(() => ({ status: 302 }));
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of a refusal for a location that will not parse", async () => {
+		const stub = stubTransport(() => ({ status: 302, location: "http://[" }));
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	/**
+	 * An `@` is legal inside userinfo, and WHATWG splits the authority on the **last** one. A
+	 * redaction that stops at the first `@` therefore leaves the password sitting in what it just
+	 * claimed to have cleaned — `//al@ice:hunter2@host/x` keeps `hunter2` in full. These assert on
+	 * the exact redacted value rather than merely on the absence of the secret, because a pattern
+	 * that truncates in the wrong place can drop the secret from one input while mangling another.
+	 */
+	it.each([
+		[`//al@ice:${SECRET}@cdn.example.com/logo.png`, "//cdn.example.com/logo.png"],
+		["//alice:p@ss@cdn.example.com/logo.png", "//cdn.example.com/logo.png"],
+		[`//alice:${SECRET}@cdn.example.com/logo.png`, "//cdn.example.com/logo.png"],
+	])("strips userinfo containing an @ from %s", async (url, expected) => {
+		const failure = await refusalFrom(url);
+		expect(failure.details.url).toBe(expected);
+	});
+
+	/** A path may contain an `@` too, and it is not userinfo. Redaction must leave it alone. */
+	it("leaves an @ in the path alone", async () => {
+		const failure = await refusalFrom("//cdn.example.com/logo@2x.png");
+		expect(failure.details.url).toBe("//cdn.example.com/logo@2x.png");
+	});
+
 	it("keeps the password out of a redirect-limit refusal", async () => {
 		const stub = stubTransport((url) => ({ status: 302, location: url.href }));
 		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {

@@ -218,6 +218,11 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
  * The host and path survive, because a refusal that will not say which image it refused is not
  * much use to the person trying to fix their receipt.
  *
+ * **Every** `details.url` in this module must go through here, including the two refusals inside
+ * {@link followTo}. A redaction helper that ten of twelve call sites use is not a redaction helper,
+ * and the two that were missed were both on the redirect path, where the URL is least likely to be
+ * the one a reader is looking at and a leak is least likely to be noticed.
+ *
  * @param url a parsed URL, or the raw string when it was too malformed to parse
  * @returns the same URL with userinfo removed
  */
@@ -228,7 +233,13 @@ function safeUrl(url: URL | string): string {
 		} catch {
 			// It did not parse, so there is no structure to trust. Strip anything in the position
 			// userinfo would occupy and accept that this is a best effort on a malformed string.
-			return url.replace(/\/\/[^/@]*@/, "//");
+			//
+			// `[^/]*@` and not `[^/@]*@`: an `@` is legal inside userinfo and WHATWG splits the
+			// authority on the **last** one, so stopping at the first leaves the password in the
+			// output. `//al@ice:hunter2@host/x` keeps `hunter2` in full under the narrower pattern.
+			// Excluding `/` is what keeps the match inside the authority, so an `@` in a path —
+			// `//host/logo@2x.png` — is left alone.
+			return url.replace(/\/\/[^/]*@/, "//");
 		}
 	}
 	if (url.username === "" && url.password === "") {
@@ -495,7 +506,7 @@ async function guardAddress(
 function followTo(from: URL, response: RemoteResponse): URL {
 	if (response.location === null || response.location === "") {
 		throw new ApiError("invalid_tag_argument", `${from.host} sent a ${response.status} redirect with no location.`, {
-			url: from.href,
+			url: safeUrl(from),
 			status: response.status,
 		});
 	}
@@ -505,7 +516,7 @@ function followTo(from: URL, response: RemoteResponse): URL {
 		next = new URL(response.location, from);
 	} catch {
 		throw new ApiError("invalid_tag_argument", `${from.host} redirected this image somewhere unreadable.`, {
-			url: from.href,
+			url: safeUrl(from),
 		});
 	}
 	requireWebScheme(next);
