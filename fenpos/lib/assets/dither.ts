@@ -1,4 +1,5 @@
 import { Jimp, JimpMime } from "jimp";
+import { IMAGE_LIMITS } from "@/lib/link/protocol";
 
 /**
  * Turning an uploaded image into something an ESC/POS printer can put on paper.
@@ -118,6 +119,29 @@ export interface DecodedImage {
 	mimeType: string;
 }
 
+/**
+ * How tall a source of these proportions comes out once resized to a paper width.
+ *
+ * **The bound every other image limit misses.** The byte cap, the 4096-per-side cap, the Adam7
+ * refusal and the JPEG decode budget all bound the *input*; none of them bounds the *aspect ratio*,
+ * and the raster's height is the input's aspect ratio multiplied by the paper width. A 4x1024 PNG
+ * is 1,106 bytes, passes every one of those checks, and projects to 384x98,304 — 4.7 MB of packed
+ * dots and, measured through `ditherToRaster` on this machine, +439 MB resident. A 1x4096 source
+ * projects to ~7 GB. So the derived size has to be predicted from the two numbers in the header and
+ * refused before anything is allocated, which is what this exists for.
+ *
+ * `Math.round` mirrors what jimp's own `resize({ w })` does to the omitted height, so the prediction
+ * is the size that would really have been produced rather than an estimate of it.
+ *
+ * @param width the source's width in pixels
+ * @param height the source's height in pixels
+ * @param targetDots the paper width in printer dots
+ * @returns the height in dots the derived raster would have
+ */
+export function projectedHeightDots(width: number, height: number, targetDots: number): number {
+	return Math.round((height * targetDots) / width);
+}
+
 /** An image reduced to one bit per dot, ready for an ESC/POS raster command. */
 export interface ImageRaster {
 	widthDots: number;
@@ -170,10 +194,19 @@ export async function decodeImage(bytes: Buffer): Promise<DecodedImage> {
  * Runs on upload and once per distinct paper width. Never on the print path — see the module
  * comment for why.
  *
+ * **A source too tall for its width is refused before the resize, not after.** See
+ * {@link projectedHeightDots}: the resize is the allocation this module cannot afford to make
+ * blind, and `IMAGE_LIMITS.maxHeightDots` was previously only consulted once the dots already
+ * existed. Callers that can refuse earlier should — `measured` in `asset-service.ts` does, against
+ * the widest paper an install can configure, so a source like this never reaches the store — but
+ * this check is the one that cannot be walked around, and it is what protects rows stored before
+ * that gate existed.
+ *
  * @param bytes the uploaded file
  * @param targetDots the paper width in printer dots, from `dotWidth(columns)`
  * @returns the raster's size in dots and its packed bits, MSB first
- * @throws ImageDecodeError if the bytes are not a PNG or a JPEG
+ * @throws ImageDecodeError if the bytes are not a PNG or a JPEG, or are so tall for their width
+ *         that the raster would exceed `IMAGE_LIMITS.maxHeightDots`
  * @throws RangeError if `targetDots` is not a positive whole number of dots
  */
 export async function ditherToRaster(bytes: Buffer, targetDots: number): Promise<ImageRaster> {
@@ -182,6 +215,13 @@ export async function ditherToRaster(bytes: Buffer, targetDots: number): Promise
 	}
 
 	const { image } = await accepted(bytes);
+	const projected = projectedHeightDots(image.bitmap.width, image.bitmap.height, targetDots);
+	if (projected > IMAGE_LIMITS.maxHeightDots) {
+		throw new ImageDecodeError(
+			`This image is ${image.bitmap.width}x${image.bitmap.height}, which at ${targetDots} dots wide would print ${projected} dots tall — more than the ${IMAGE_LIMITS.maxHeightDots} a raster can be. Crop it, or print it at a narrower width.`,
+		);
+	}
+
 	flattenOntoWhite(image.bitmap.data);
 	// jimp 1.x takes an options object; omitting `h` is what keeps the aspect ratio.
 	image.resize({ w: targetDots });
@@ -231,9 +271,12 @@ async function accepted(
  * transparent pixel is very often black. Read as opaque colour it would print as a solid black
  * slab around the logo, so alpha has to mean paper.
  *
- * Done before the resize rather than after, because resampling straight RGBA blends the invisible
- * colour of transparent pixels into their visible neighbours and leaves a dark halo along every
- * edge. Once flattened the bitmap is fully opaque and the resize has nothing to smear.
+ * Done before the resize rather than after, so that every pixel the resampler averages already
+ * means what it will print. Flattening afterwards would decide each output pixel's alpha from its
+ * neighbours' and then composite that blend onto white, which is a different picture along every
+ * soft edge than compositing first and resampling the opaque result — and only the second is the
+ * one the operator saw in their editor. Doing it first also means the resize has no alpha channel
+ * left to interpolate at all.
  *
  * @param data jimp's RGBA bitmap, modified in place
  */

@@ -2,10 +2,22 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Jimp } from "jimp";
 import { describe, expect, it } from "vitest";
-import { decodeImage, ditherToRaster, type ImageRaster } from "@/lib/assets/dither";
+import {
+	decodeImage,
+	ditherToRaster,
+	ImageDecodeError,
+	type ImageRaster,
+	projectedHeightDots,
+} from "@/lib/assets/dither";
+import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 
 const PNG = readFileSync("test/fixtures/logo.png");
+
+/** A plain white PNG of a given shape, for the tests that care about proportions rather than pixels. */
+async function solidPng(width: number, height: number): Promise<Buffer> {
+	return await new Jimp({ width, height, color: 0xffffffff }).getBuffer("image/png");
+}
 
 describe("decodeImage", () => {
 	it("reports the pixel dimensions", async () => {
@@ -96,6 +108,84 @@ describe("ditherToRaster", () => {
 		const raster = await ditherToRaster(PNG, 384);
 		const expected = Math.round((384 / source.width) * source.height);
 		expect(Math.abs(raster.heightDots - expected)).toBeLessThanOrEqual(1);
+	});
+
+	/**
+	 * The projection is only worth anything if it is the size jimp would really have produced.
+	 *
+	 * The shapes below are chosen so that `Math.floor` and `Math.ceil` give different answers from
+	 * `Math.round` — 3/7 of 384 is 164.57, 5/13 of 504 is 193.8 — so a projection that rounded the
+	 * other way would disagree here rather than pass by coincidence on a shape whose arithmetic
+	 * happens to be exact.
+	 */
+	it("projects the height the resize actually produces", async () => {
+		for (const [width, height, target] of [
+			[7, 3, 384],
+			[13, 5, 504],
+			[11, 7, 576],
+			[9, 2, 384],
+		] as const) {
+			const raster = await ditherToRaster(await solidPng(width, height), target);
+			expect(raster.heightDots, `${width}x${height} at ${target}`).toBe(projectedHeightDots(width, height, target));
+		}
+	});
+
+	/**
+	 * The bound no other image limit gives.
+	 *
+	 * A 4x1024 PNG is about 1,100 bytes and is inside every guard on the upload path — the 2 MB byte
+	 * cap, 4096 pixels a side, not interlaced, well under the JPEG decode budget — because none of
+	 * them looks at the *shape*. Resized to 384 dots preserving aspect it becomes 384x98,304, which
+	 * measured through this function cost +439 MB resident before this check existed.
+	 *
+	 * The assertion is on memory as well as on the throw, and that is the load-bearing half: the
+	 * protocol's `maxHeightDots` was already checked, but only once the dots existed. What changed
+	 * is that the refusal now happens before the resize allocates, so a version that moved the check
+	 * back after `image.resize` would still throw and would still fail this test.
+	 */
+	it("refuses an extreme-aspect source before the resize allocates", async () => {
+		const tall = await solidPng(4, 1024);
+
+		const before = process.memoryUsage().rss;
+		await expect(ditherToRaster(tall, 384)).rejects.toThrow(ImageDecodeError);
+		const after = process.memoryUsage().rss;
+
+		expect(after - before).toBeLessThan(64 * 1024 * 1024);
+	});
+
+	/** The message has to name the size and the ceiling, or the operator cannot act on it. */
+	it("names the projected height in the refusal", async () => {
+		await expect(ditherToRaster(await solidPng(4, 1024), 384)).rejects.toThrow(/98304 dots tall/);
+	});
+
+	/**
+	 * The boundary, from both sides.
+	 *
+	 * Exercised at five dots wide rather than at a real paper width because a raster right on
+	 * `maxHeightDots` is genuinely enormous — at 3060 dots the intermediate luminance buffer alone
+	 * is 1.5 GB — and the arithmetic being pinned is the comparison, not the width. Five divides
+	 * 65,535 exactly, which is what makes this a real boundary: 13,107 source rows project to
+	 * precisely the ceiling and 13,108 to five dots past it, so a check written `>=` instead of `>`
+	 * refuses the first of these and fails here. A cheaper width like eight would leave a gap at the
+	 * top and let that mutation through.
+	 */
+	it("accepts the tallest raster that fits and refuses the next one", async () => {
+		const fits = Math.floor(IMAGE_LIMITS.maxHeightDots / 5);
+		expect(projectedHeightDots(1, fits, 5), "the boundary must be exact").toBe(IMAGE_LIMITS.maxHeightDots);
+		expect(projectedHeightDots(1, fits + 1, 5)).toBeGreaterThan(IMAGE_LIMITS.maxHeightDots);
+
+		const raster = await ditherToRaster(await solidPng(1, fits), 5);
+		expect(raster.heightDots).toBe(IMAGE_LIMITS.maxHeightDots);
+		await expect(ditherToRaster(await solidPng(1, fits + 1), 5)).rejects.toThrow(ImageDecodeError);
+	});
+
+	/**
+	 * A phone photograph is the case the cap must not catch. 4032x3024 off a 12 MP sensor is 432
+	 * rows at 80mm paper — see `MAX_IMAGE_DIMENSION`, which stays at 4096 for exactly this reason.
+	 */
+	it("still rasters a full-size phone photograph", async () => {
+		const raster = await ditherToRaster(await solidPng(4032, 3024), 576);
+		expect(raster.heightDots).toBe(432);
 	});
 
 	it("packs eight pixels to the byte", async () => {

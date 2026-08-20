@@ -5,12 +5,14 @@ import {
 	ditherToRaster,
 	ImageDecodeError,
 	type ImageRaster,
+	projectedHeightDots,
 } from "@/lib/assets/dither";
 import { fetchRemoteImage, safeUrl } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { AssetKind } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
+import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import type { ImageSource } from "@/lib/markup/images";
 
@@ -87,6 +89,22 @@ export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
  *   declared here
  */
 export const MAX_IMAGE_DIMENSION = 4096;
+
+/**
+ * The widest paper any install of this system can be configured for, in printer dots.
+ *
+ * `dotWidth(255)`: a device's `columns` is bounded to 255 by `deviceInputSchema`, and one column is
+ * twelve dots. Restated here rather than imported because `lib/markup/blocks.ts` pulls bwip-js and
+ * its 110 encoders in behind `dotWidth`, which is a two-megabyte dependency for one multiplication
+ * on a module that has nothing else to do with symbols. `asset-service.test.ts` asserts this equals
+ * `dotWidth(255)` and that 255 is really the schema's ceiling, so the duplication cannot drift
+ * silently — the same arrangement `MAX_JPEG_MEGAPIXELS` uses in `dither.ts`.
+ *
+ * It is the *widest* width that matters, because {@link projectedHeightDots} grows with it: a
+ * source refused here is refused at every narrower paper too, so one check covers every device an
+ * install could later add without re-measuring anything already stored.
+ */
+export const MAX_PAPER_DOTS = 3060;
 
 /** An asset as the Assets tab lists it. Deliberately without the bytes. */
 export interface AssetSummary {
@@ -584,6 +602,7 @@ async function measured(bytes: Buffer): Promise<DecodedImage> {
 	// there. They agree for every well-formed file, and where they do not the smaller claim was the
 	// one that got past the gate.
 	requireWithinDimensions(decoded.width, decoded.height);
+	requireProjectedHeight(decoded.width, decoded.height);
 
 	return decoded;
 }
@@ -653,6 +672,7 @@ function requireDecodableSize(bytes: Buffer): void {
 		);
 	}
 	requireWithinDimensions(declared.width, declared.height);
+	requireProjectedHeight(declared.width, declared.height);
 }
 
 /**
@@ -667,6 +687,39 @@ function requireWithinDimensions(width: number, height: number): void {
 		throw new ApiError(
 			"invalid_type",
 			`An image must be at most ${MAX_IMAGE_DIMENSION} pixels on each side; this one is ${width}x${height}.`,
+		);
+	}
+}
+
+/**
+ * Refuses a source too tall for its width to derive a raster from.
+ *
+ * **The bound {@link MAX_IMAGE_DIMENSION} does not give.** Every other check on this path bounds
+ * the bytes that arrive or the pixels they decode to; none of them bounds the shape. `ditherToRaster`
+ * resizes to the paper width preserving aspect, so the derived height is the aspect ratio times that
+ * width, and the aspect ratio is inside all of 2 MB, 4096 per side, non-interlaced, and the JPEG
+ * decode budget. A 1,106-byte 4x1024 PNG derives a 384x98,304 raster — measured at +439 MB resident
+ * — and a 1x4096 source projects to about 7 GB.
+ *
+ * Refused here, at the one gate every door into this module passes, so a source like that never
+ * enters the store. That matters more than the message: `rasterFor` re-derives from the stored bytes
+ * on **every agent connect**, so one such row would be a denial of service that survives a restart,
+ * and the `try/catch` around that derivation would not help because an out-of-memory abort is not
+ * catchable. `ditherToRaster` refuses the same shape itself for rows that predate this check.
+ *
+ * Measured against {@link MAX_PAPER_DOTS} rather than any particular device's paper, so the answer
+ * does not change when an install adds a wider printer to images it already accepted.
+ *
+ * @param width pixels across
+ * @param height pixels down
+ * @throws ApiError if the raster this would derive is taller than a raster may be
+ */
+function requireProjectedHeight(width: number, height: number): void {
+	const projected = projectedHeightDots(width, height, MAX_PAPER_DOTS);
+	if (projected > IMAGE_LIMITS.maxHeightDots) {
+		throw new ApiError(
+			"invalid_type",
+			`This image is ${width}x${height}, which on the widest paper this system prints would come out ${projected} dots tall — more than the ${IMAGE_LIMITS.maxHeightDots} a raster can be. Crop it, or scale it down before uploading.`,
 		);
 	}
 }

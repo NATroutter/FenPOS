@@ -3,7 +3,9 @@ import { Jimp } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_JPEG_MEGAPIXELS } from "@/lib/assets/dither";
 import { prisma } from "@/lib/db";
+import { deviceInputSchema } from "@/lib/devices/device-service";
 import { ApiError } from "@/lib/errors";
+import { dotWidth } from "@/lib/markup/blocks";
 
 /**
  * Tests for the asset store.
@@ -53,6 +55,7 @@ vi.mock("@/lib/assets/dither", async (importOriginal) => {
 const {
 	MAX_ASSET_BYTES,
 	MAX_IMAGE_DIMENSION,
+	MAX_PAPER_DOTS,
 	createAsset,
 	deleteAsset,
 	forgetRasters,
@@ -307,6 +310,62 @@ describe("createAsset", () => {
 	 */
 	it("keeps the decoder's megapixel ceiling above the dimension cap", () => {
 		expect(MAX_JPEG_MEGAPIXELS * 1_000_000).toBeGreaterThanOrEqual(MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION);
+	});
+
+	/**
+	 * `MAX_PAPER_DOTS` is `dotWidth(255)` restated, for the same reason and with the same protection
+	 * as the megapixel ceiling above: `asset-service` cannot import `dotWidth` without pulling
+	 * bwip-js's 110 encoders in behind it. Both halves are asserted — the multiplication and the 255
+	 * — because a schema that later allowed 256 columns would leave the constant quietly short of
+	 * the widest paper it claims to cover, and the projection would then under-estimate.
+	 */
+	it("keeps the widest paper width in step with the device schema", () => {
+		expect(MAX_PAPER_DOTS).toBe(dotWidth(255));
+		expect(deviceInputSchema.shape.columns.safeParse(255).success).toBe(true);
+		expect(deviceInputSchema.shape.columns.safeParse(256).success).toBe(false);
+	});
+
+	/**
+	 * The shape no other check on this path looks at.
+	 *
+	 * 4x1024 is 1,106 bytes, inside the byte cap, inside 4096 a side, not interlaced, and nowhere
+	 * near the JPEG decode budget — and it derives a 384x98,304 raster, measured at +439 MB
+	 * resident. It has to be refused *at the store*, not just at the dither, because `rasterFor`
+	 * re-derives from the stored bytes on every agent connect: one such row is a denial of service
+	 * that survives a restart.
+	 *
+	 * The refusal is asserted to arrive as an `ApiError` from `measured`, before `ditherToRaster`
+	 * is called at all — a store that admitted the row and only failed later would leave the row
+	 * behind, which is the whole problem.
+	 */
+	it("refuses a source too tall for its width to derive a raster from", async () => {
+		const tall = await solidPng(4, 1024);
+
+		const refused = await refusal(() => createAsset("tall", tall));
+
+		expect(refused.code).toBe("invalid_type");
+		expect(refused.message).toMatch(/dots tall/);
+		expect(ditherToRaster).not.toHaveBeenCalled();
+	});
+
+	/** The same gate, reached through the other door. */
+	it("refuses an extreme-aspect image on import as well as on upload", async () => {
+		fetchRemoteImage.mockResolvedValue(await solidPng(4, 1024));
+
+		const refused = await refusal(() => importAssetFromUrl("tall", "https://example.test/tall.png"));
+
+		expect(refused.message).toMatch(/dots tall/);
+	});
+
+	/**
+	 * The shape the cap must not catch, and the reason `MAX_IMAGE_DIMENSION` stays at 4096: a
+	 * 12 MP phone photograph is 4032x3024, which is 432 rows on 80mm paper. It is the aspect ratio
+	 * that needs bounding, not the side length.
+	 */
+	it("still accepts a full-size phone photograph", async () => {
+		const photo = await solidPng(4032, 3024);
+
+		expect((await createAsset("photo", photo)).width).toBe(4032);
 	});
 
 	it("refuses a file whose dimensions cannot be read at all", async () => {
