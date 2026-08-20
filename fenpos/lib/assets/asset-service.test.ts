@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Jimp } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_JPEG_MEGAPIXELS } from "@/lib/assets/dither";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 
@@ -248,6 +249,17 @@ describe("createAsset", () => {
 		const refused = await refusal(() => createAsset("plain", headerClaiming(16, 16)));
 
 		expect(refused.message).not.toMatch(/interlac/i);
+	});
+
+	/**
+	 * The dimension cap here and the megapixel ceiling handed to the JPEG decoder are the same
+	 * limit expressed twice, and they cannot import each other — `asset-service` already imports
+	 * `dither`. So the relationship is asserted instead: raising the pixel cap without raising the
+	 * decoder's ceiling would start refusing images this module claims to accept, inside the
+	 * decoder, with a message written for neither.
+	 */
+	it("keeps the decoder's megapixel ceiling above the dimension cap", () => {
+		expect(MAX_JPEG_MEGAPIXELS * 1_000_000).toBeGreaterThanOrEqual(MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION);
 	});
 
 	it("refuses a file whose dimensions cannot be read at all", async () => {

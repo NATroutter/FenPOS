@@ -56,6 +56,60 @@ export class ImageDecodeError extends Error {
  */
 const ACCEPTED_MIME_TYPES: readonly string[] = [JimpMime.png, JimpMime.jpeg];
 
+/**
+ * The pixel ceiling handed to the JPEG decoder, in megapixels.
+ *
+ * Mirrors `MAX_IMAGE_DIMENSION` in `asset-service.ts`: 4096 on a side is 16.78 MP, so 17 is the
+ * smallest whole number that admits everything the asset store admits and nothing beyond it. It is
+ * restated here rather than imported because `asset-service.ts` imports *this* module, and the
+ * asset tests assert the two stay in step so the duplication cannot drift silently.
+ *
+ * This is a genuine pre-allocation gate: `jpeg-js` checks it while reading the frame header, before
+ * `prepareComponents` allocates anything (`decoder.js:736` precedes `decoder.js:603`).
+ */
+export const MAX_JPEG_MEGAPIXELS = 17;
+
+/**
+ * The memory budget handed to the JPEG decoder, in megabytes.
+ *
+ * `jpeg-js` defaults to 512 MB and that default is what a receipt logo does not need. Worse, the
+ * budget is charged optimistically: a coefficient block is billed at `blocksToAllocate * 256`
+ * (`decoder.js:603`) — 256 bytes for an `Int32Array(64)` — which ignores V8's per-object overhead
+ * on every one of those arrays, so real resident memory runs about 2.5x the number being counted.
+ *
+ * That gap is reachable from a file that is otherwise entirely within bounds. A frame header alone
+ * allocates: 21 bytes declaring 4096x4096 with three components cost +497 MB, and 777 bytes
+ * declaring the same size with 255 components cost +1286 MB, both measured through this module's
+ * own `Jimp.fromBuffer` call and both well inside the asset store's 2 MB byte cap and 4096 pixel
+ * cap. No scan data is needed; the allocation happens while parsing the header.
+ *
+ * 384 is the smallest round budget that still decodes a real 4:4:4 JPEG at the full permitted
+ * 4096x4096, which measurement puts at just over 353 MB of charged allocation. It takes the
+ * 255-component case from +1286 MB down to +969 MB.
+ *
+ * What it deliberately does not do is reduce the ~500 MB that a three-component 4096x4096 frame
+ * costs, because that is exactly what a *legitimate* 4:4:4 image at the permitted dimensions
+ * allocates — the two are indistinguishable by memory accounting, and the cost is a property of the
+ * dimension cap rather than a defect here. Lowering it means lowering `MAX_IMAGE_DIMENSION`, which
+ * is a product decision and not this module's to make.
+ */
+export const MAX_JPEG_DECODE_MB = 384;
+
+/**
+ * Decoder limits, keyed by MIME type the way jimp forwards them.
+ *
+ * `@jimp/core` passes `options[format.mime]` straight into the format's decoder, so this is how a
+ * bound reaches `jpeg-js` at all. PNG has no equivalent entry because `pngjs` takes no options;
+ * it is bounded instead by refusing interlacing, which keeps every PNG on the branch that sizes its
+ * inflate from the declared dimensions. See `requireDecodableSize` in `asset-service.ts`.
+ */
+const DECODE_LIMITS = {
+	[JimpMime.jpeg]: {
+		maxMemoryUsageInMB: MAX_JPEG_DECODE_MB,
+		maxResolutionInMP: MAX_JPEG_MEGAPIXELS,
+	},
+};
+
 /** What an uploaded image turned out to be. */
 export interface DecodedImage {
 	width: number;
@@ -155,7 +209,7 @@ async function accepted(
 ): Promise<{ image: Awaited<ReturnType<typeof Jimp.fromBuffer>>; mimeType: string }> {
 	let image: Awaited<ReturnType<typeof Jimp.fromBuffer>>;
 	try {
-		image = await Jimp.fromBuffer(bytes);
+		image = await Jimp.fromBuffer(bytes, DECODE_LIMITS);
 	} catch (thrown) {
 		throw new ImageDecodeError("This file could not be read as an image.", { cause: thrown });
 	}

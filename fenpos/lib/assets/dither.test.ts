@@ -28,7 +28,63 @@ describe("decodeImage", () => {
 		const gif = await new Jimp({ width: 4, height: 4, color: 0xff0000ff }).getBuffer("image/gif");
 		await expect(decodeImage(gif)).rejects.toThrow(/gif/i);
 	});
+
+	/**
+	 * The decoder gets its own bounds, because a caller's dimension check cannot help here.
+	 *
+	 * `jpeg-js` allocates one `Int32Array(64)` per coefficient block *while parsing the frame
+	 * header*, so a file with no scan data at all — the 21-byte fixture below — allocates for the
+	 * whole image. Left at the library's defaults it will do that for anything up to 100 megapixels,
+	 * which is six times what this pipeline accepts, and it bills each block at 256 bytes while V8
+	 * charges roughly 2.5x that in reality.
+	 *
+	 * The assertion is on memory rather than on the throw, deliberately: the decoder rejects this
+	 * file either way, and the only thing that changes when the bound is removed is *how much it
+	 * allocated first*. 25 megapixels across three components costs about 300 MB unbounded, so the
+	 * 64 MB threshold is a wide margin around "did not allocate for the frame at all".
+	 *
+	 * Measured before and after rather than sampled, because the parse is synchronous: a timer
+	 * callback cannot fire in the middle of it.
+	 */
+	it("refuses an oversized JPEG frame without allocating for it first", async () => {
+		const frame = jpegFrameHeader(5000, 5000, 3);
+
+		const before = process.memoryUsage().rss;
+		await expect(decodeImage(frame)).rejects.toThrow();
+		const after = process.memoryUsage().rss;
+
+		expect(after - before).toBeLessThan(64 * 1024 * 1024);
+	});
 });
+
+/**
+ * Builds a JPEG that is nothing but a frame header declaring a size and a component count.
+ *
+ * A real JPEG carries its size behind however many EXIF and comment segments the camera wrote, and
+ * then a scan. None of that is needed to make the decoder allocate, which is the point of building
+ * this by hand: the allocation happens on the header, so the header is the whole exploit.
+ *
+ * @param width the frame width to declare
+ * @param height the frame height to declare
+ * @param components how many components to declare, each of which is allocated for separately
+ * @returns SOI followed by an SOF0 segment and nothing else
+ */
+function jpegFrameHeader(width: number, height: number, components: number): Buffer {
+	const length = 8 + components * 3;
+	const jpeg = Buffer.alloc(4 + length);
+	jpeg.writeUInt16BE(0xffd8, 0); // SOI
+	jpeg.writeUInt16BE(0xffc0, 2); // SOF0
+	jpeg.writeUInt16BE(length, 4);
+	jpeg[6] = 8; // sample precision
+	jpeg.writeUInt16BE(height, 7);
+	jpeg.writeUInt16BE(width, 9);
+	jpeg[11] = components;
+	for (let component = 0; component < components; component++) {
+		jpeg[12 + component * 3] = component + 1;
+		jpeg[13 + component * 3] = 0x11; // sampling factors h=1, v=1
+	}
+	return jpeg;
+}
 
 describe("ditherToRaster", () => {
 	it("scales to the requested dot width", async () => {

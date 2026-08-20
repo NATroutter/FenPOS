@@ -50,16 +50,32 @@ export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
  * 4096 is the trade. A thermal printer's widest common paper is 504 dots, so 4096 is already eight
  * times more source than any receipt can use — but it is also more than a phone photograph, which
  * comes off a 12 MP sensor at 4032x3024, so nobody uploading a picture they just took is told no.
- * At the worst case it permits, 4096x4096, the decoded bitmap is 64 MB and the process reached
- * 147 MB resident; measured, on the same machine as the figures above. That is a cost a shop's
- * server can absorb, and everything past it is either a mistake or an attack.
+ *
+ * **What 4096x4096 actually costs**, measured through `decodeImage` on this machine, as the extra
+ * resident memory each takes:
+ *
+ * - 8-bit RGBA PNG: +196 MB
+ * - 16-bit RGBA PNG: +333 MB — bit depth feeds the inflate bound, so this doubles the 8-bit case
+ * - 4:4:4 three-component JPEG: about +500 MB, and reached from a 21-byte frame header, because
+ *   `jpeg-js` allocates coefficient blocks while parsing the header rather than while decoding a
+ *   scan
+ *
+ * So the honest ceiling this constant buys is a few hundred megabytes, worst observed +500 MB —
+ * not the 147 MB an earlier version of this comment claimed from one greyscale sample. A shop's
+ * server absorbs that; the point is that it is bounded and knowable, and everything past 4096 is
+ * either a mistake or an attack.
  *
  * Checked from the file's header rather than from the decoded image, because a check that runs
  * after `decodeImage` runs after the allocation it exists to prevent. See {@link declaredSize}.
  *
- * That 4096x4096 worst case holds only because {@link requireDecodableSize} also refuses
- * interlaced PNGs. Without that refusal this number bounds nothing at all, for reasons written out
- * there — it is not an independent limit, and the two have to be read together.
+ * **This number bounds nothing on its own.** It holds only alongside two other limits, and all
+ * three have to be read together:
+ *
+ * - {@link requireDecodableSize} refusing interlaced PNGs, without which `pngjs` inflates
+ *   unbounded and the dimensions stop governing anything
+ * - `MAX_JPEG_DECODE_MB` and `MAX_JPEG_MEGAPIXELS` in `dither.ts`, without which `jpeg-js` will
+ *   allocate to its own 512 MB budget — worth about 1.3 GB of real memory — regardless of what is
+ *   declared here
  */
 export const MAX_IMAGE_DIMENSION = 4096;
 
