@@ -1,6 +1,7 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { Gauge, ListOrdered, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
@@ -34,16 +35,21 @@ export interface SettingFieldData {
  * Keyed by the prefix the setting keys already carry, so a new setting joins the right group
  * by being named consistently rather than by being registered in a second place.
  */
-const GROUPS: Record<string, { title: string; summary: string }> = {
+const GROUPS: Record<string, { title: string; summary: string; icon: LucideIcon }> = {
 	limits: {
 		title: "Limits",
-		summary: "counted on the request as received, before markup is interpreted",
+		summary: "Counted on the request as received, before markup is interpreted.",
+		icon: Gauge,
 	},
 	jobs: {
 		title: "Jobs",
-		summary: "how much history is kept, and how long a shutdown waits",
+		summary: "How much history is kept, and how long a shutdown waits.",
+		icon: ListOrdered,
 	},
 };
+
+/** Stands in for a group the table does not name, so an unknown prefix still renders a header. */
+const FALLBACK_ICON: LucideIcon = SlidersHorizontal;
 
 /**
  * The global settings form.
@@ -71,23 +77,33 @@ export function SettingsForm({ settings }: { settings: SettingFieldData[] }) {
 
 	return (
 		<div className="flex flex-col gap-4">
-			{[...groups].map(([prefix, fields]) => (
-				<Card key={prefix}>
-					<CardHeader className="border-b border-border pb-3">
-						<h3 className="text-[13px] font-medium">{GROUPS[prefix]?.title ?? prefix}</h3>
-						<p className="mt-1 text-[12px] text-muted-foreground">
-							<span className="font-mono text-subtle-foreground">{prefix}</span>
-							{GROUPS[prefix] ? ` · ${GROUPS[prefix].summary}` : null}
-						</p>
-					</CardHeader>
+			{[...groups].map(([prefix, fields]) => {
+				const group = GROUPS[prefix];
+				const Icon = group?.icon ?? FALLBACK_ICON;
 
-					<CardContent className="grid gap-x-6 gap-y-6 pt-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-						{fields.map((setting) => (
-							<SettingField key={setting.key} setting={setting} />
-						))}
-					</CardContent>
-				</Card>
-			))}
+				return (
+					<Card key={prefix}>
+						{/* Flex rather than the header's default grid, so the icon centres against the
+					    title and summary together instead of sitting on the title's line. Same shape
+					    every other card's header uses. */}
+						<CardHeader className="flex flex-row items-center gap-3">
+							<Icon className="size-4.5 shrink-0 text-subtle-foreground" />
+							<div className="min-w-0">
+								<h3 className="text-[13px] font-medium">{group?.title ?? prefix}</h3>
+								{/* The prefix used to lead this line. It is on every field below it in
+							    `limits.maxLines` form, so repeating it here said nothing twice. */}
+								<p className="mt-0.5 text-[11.5px] text-muted-foreground">{group?.summary ?? prefix}</p>
+							</div>
+						</CardHeader>
+
+						<CardContent className="grid gap-x-6 gap-y-6 pt-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+							{fields.map((setting) => (
+								<SettingField key={setting.key} setting={setting} />
+							))}
+						</CardContent>
+					</Card>
+				);
+			})}
 		</div>
 	);
 }

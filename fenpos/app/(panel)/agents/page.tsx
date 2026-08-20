@@ -1,12 +1,13 @@
 import { Server } from "lucide-react";
 import { AddAgentDialog } from "@/app/(panel)/agents/add-agent-dialog";
 import { AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
+import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAgents } from "@/lib/agents/agent-service";
 import { isConnected } from "@/lib/link/registry";
 import { getPublicAddress } from "@/lib/public-url";
 
-export const metadata = { title: "Agents · FenPOS" };
+export const metadata = { title: "Agents" };
 
 /**
  * Never cached: connection state changes without any request causing it to.
@@ -40,14 +41,10 @@ export default async function AgentsPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
-				<div className="min-w-[220px] flex-1">
-					<h2 className="text-[15px] font-semibold tracking-tight">Agents</h2>
-					<p className="mt-1 text-[12.5px] text-muted-foreground">
-						Each agent is one machine with printers attached. Agents dial the server, so no inbound port needs opening
-						at the site.
-					</p>
-				</div>
+			<LiveRefresh kinds={["agent"]} />
+			{/* The section's own description is in the top bar; what is left here is the one action
+			    this page offers, kept on its own row so it stays put as the grid below changes. */}
+			<div className="flex justify-end">
 				<AddAgentDialog />
 			</div>
 

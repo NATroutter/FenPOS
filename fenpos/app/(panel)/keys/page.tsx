@@ -6,7 +6,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { prisma } from "@/lib/db";
 import { listApiKeys } from "@/lib/keys/key-service";
 
-export const metadata = { title: "Keys · FenPOS" };
+export const metadata = { title: "API keys" };
 
 /** Never cached: last-used timestamps move without any request to this page causing it. */
 export const dynamic = "force-dynamic";
@@ -46,14 +46,9 @@ export default async function KeysPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
-				<div className="min-w-[220px] flex-1">
-					<h2 className="text-[15px] font-semibold tracking-tight">Keys</h2>
-					<p className="mt-1 text-[12.5px] text-muted-foreground">
-						API keys for machines that print. Each is shown once when created and stored only as a hash, so a lost key
-						is replaced rather than recovered.
-					</p>
-				</div>
+			{/* The section's own description is in the top bar; what is left here is the one action
+			    this page offers, kept on its own row so it stays put as the list below changes. */}
+			<div className="flex justify-end">
 				<KeyDialog
 					devices={grantable}
 					trigger={

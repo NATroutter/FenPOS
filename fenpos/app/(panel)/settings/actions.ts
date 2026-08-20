@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { setAdminPassword, verifyAdminPassword } from "@/lib/auth/admin";
 import { passwordSchema } from "@/lib/auth/password";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { clearSetting, setSetting } from "@/lib/settings/settings-service";
@@ -24,10 +24,11 @@ import { clearSetting, setSetting } from "@/lib/settings/settings-service";
  * @returns the state to render
  */
 async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
+
 	try {
-		if (!(await getCurrentSession())) {
-			throw new ApiError("missing_key", "Not signed in.");
-		}
 		await work();
 		revalidatePath("/settings");
 		return { error: null };

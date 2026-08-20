@@ -1,10 +1,11 @@
 "use client";
 
-import { Ban, Settings2, Trash2 } from "lucide-react";
-import { useTransition } from "react";
+import { Ban, KeyRound, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { deleteKey, revokeKey } from "@/app/(panel)/keys/actions";
+import { deleteKey, rerollKey, revokeKey } from "@/app/(panel)/keys/actions";
 import { type GrantableDevice, KeyDialog } from "@/app/(panel)/keys/key-dialog";
+import { SecretPane } from "@/app/(panel)/keys/secret-pane";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -18,7 +19,17 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { formatDate, formatDateTime } from "@/lib/format/datetime";
 
 /** A key as this component needs it, serialised for the client boundary. */
 export interface KeyRowData {
@@ -41,6 +52,10 @@ export interface KeyRowData {
  */
 export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: GrantableDevice[] }) {
 	const [pending, startTransition] = useTransition();
+	const [rerolled, setRerolled] = useState<string | null>(null);
+	// Tracked apart from the secret rather than derived from it. Derived, dismissing cleared both
+	// at once and the body emptied while the dialog was still fading out.
+	const [showSecret, setShowSecret] = useState(false);
 	const revoked = apiKey.revokedAt !== null;
 
 	const act = (label: string, action: () => Promise<{ error: string | null }>): void => {
@@ -54,9 +69,24 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 		});
 	};
 
+	// No success toast: the dialog carrying the new secret is the confirmation, and a toast over
+	// it would be one more thing to dismiss while copying something that cannot be recovered.
+	const reroll = (): void => {
+		startTransition(async () => {
+			const result = await rerollKey(apiKey.id);
+			if (result.error || !result.secret) {
+				toast.error(result.error ?? "Could not reissue the key.");
+				return;
+			}
+			setRerolled(result.secret);
+			setShowSecret(true);
+		});
+	};
+
 	return (
 		<Card className={revoked ? "opacity-60" : undefined}>
 			<CardHeader className="flex flex-row flex-wrap items-center gap-3 border-b border-border pb-3">
+				<KeyRound className="size-4.5 shrink-0 text-subtle-foreground" />
 				<div className="min-w-0 flex-1">
 					<div className="truncate text-[13.5px] font-medium">{apiKey.name}</div>
 					<div className="mt-0.5 font-mono text-[11.5px] text-subtle-foreground">…{apiKey.maskedHint}</div>
@@ -82,11 +112,10 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 						empty="None — this key cannot address any printer."
 					/>
 				</div>
-
-				<div className="flex flex-wrap items-center gap-3 border-t border-border pt-3">
+				<CardActions>
 					<span className="text-[11.5px] text-subtle-foreground">
-						Created {new Date(apiKey.createdAt).toLocaleDateString()}
-						{apiKey.lastUsedAt ? ` · last used ${new Date(apiKey.lastUsedAt).toLocaleString()}` : " · never used"}
+						Created {formatDate(apiKey.createdAt)}
+						{apiKey.lastUsedAt ? ` · last used ${formatDateTime(apiKey.lastUsedAt)}` : " · never used"}
 					</span>
 
 					<div className="flex-1" />
@@ -102,6 +131,19 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 								trigger={
 									<Button variant="outline" size="icon" className="size-8" title="Edit grants" aria-label="Edit grants">
 										<Settings2 className="size-3.5" />
+									</Button>
+								}
+							/>
+
+							<Confirm
+								title={`Reroll ${apiKey.name}?`}
+								description="A new secret is issued and shown once. The current one stops working immediately, so anything still using it is refused until it is updated. The name, grants and job history are kept."
+								confirmLabel="Reroll"
+								disabled={pending}
+								onConfirm={reroll}
+								trigger={
+									<Button variant="outline" size="icon" className="size-8" title="Reroll" aria-label="Reroll key">
+										<RefreshCw className="size-3.5" />
 									</Button>
 								}
 							/>
@@ -139,8 +181,38 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 							</Button>
 						}
 					/>
-				</div>
+				</CardActions>
 			</CardContent>
+
+			{/* Opened by the reroll succeeding rather than by a trigger, and dismissed only on purpose:
+			    this is the only moment the new secret exists anywhere outside a clipboard. */}
+			<Dialog
+				open={showSecret}
+				onOpenChange={setShowSecret}
+				// The secret is dropped once the closing animation has finished, so the pane fades out
+				// still showing what it was dismissed on rather than emptying first.
+				onOpenChangeComplete={(nowOpen) => {
+					if (!nowOpen) {
+						setRerolled(null);
+					}
+				}}
+			>
+				<DialogContent className="sm:max-w-[560px]">
+					<DialogHeader>
+						<DialogTitle>Copy this key now</DialogTitle>
+						<DialogDescription>
+							{apiKey.name} has a new secret and the old one no longer works. It is stored as a hash and cannot be shown
+							again — if you lose it, reroll again.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogBody>{rerolled ? <SecretPane secret={rerolled} /> : null}</DialogBody>
+					<DialogFooter>
+						<Button type="button" onClick={() => setShowSecret(false)}>
+							Done
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</Card>
 	);
 }

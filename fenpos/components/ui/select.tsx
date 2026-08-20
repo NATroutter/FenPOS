@@ -5,10 +5,18 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * The select root.
+ *
+ * **Pass `items` whenever a value is not the text you want in the trigger.** Base UI renders
+ * the raw value there unless the root is given a value-to-label map, so a select over ids
+ * shows an id and one with a sentinel for "no choice" shows the sentinel. Selects whose
+ * values are already the label — a baud rate, a codepage — need nothing.
+ */
 const Select = SelectPrimitive.Root;
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
-	return <SelectPrimitive.Group data-slot="select-group" className={cn("scroll-my-1 p-1", className)} {...props} />;
+	return <SelectPrimitive.Group data-slot="select-group" className={cn("scroll-my-1", className)} {...props} />;
 }
 
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
@@ -46,9 +54,13 @@ function SelectContent({
 	children,
 	side = "bottom",
 	sideOffset = 4,
-	align = "center",
+	align = "start",
 	alignOffset = 0,
-	alignItemWithTrigger = true,
+	// Base UI defaults to the macOS behaviour of parking the selected item on top of the
+	// trigger, which drops the list over the middle of the form and hides the label and the
+	// fields around it. These are settings read top to bottom, so the list opens below the
+	// trigger like every other popover here and leaves the form it belongs to visible.
+	alignItemWithTrigger = false,
 	...props
 }: SelectPrimitive.Popup.Props &
 	Pick<SelectPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger">) {
@@ -62,11 +74,16 @@ function SelectContent({
 				alignItemWithTrigger={alignItemWithTrigger}
 				className="isolate z-50"
 			>
+				{/* No min-width: a floor wider than the trigger — min-w-36 was 144px against a 140px
+				    trigger — makes the list overhang the right edge of the thing it belongs to, which is
+				    the misalignment people notice. The trigger's own width is the right width. */}
+				{/* No zoom on open: a popup that starts at 95% is briefly narrower than the trigger it
+				    hangs off, which reads as a list that missed its mark. It fades and slides instead. */}
 				<SelectPrimitive.Popup
 					data-slot="select-content"
 					data-align-trigger={alignItemWithTrigger}
 					className={cn(
-						"relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+						"relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-1 data-[side=inline-end]:slide-in-from-left-1 data-[side=inline-start]:slide-in-from-right-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
 						className,
 					)}
 					{...props}

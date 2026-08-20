@@ -1,13 +1,20 @@
 "use server";
 
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
-import { type CompileSettings, compile, readRequest } from "@/lib/markup/compiler";
+import {
+	type CompileSettings,
+	collectElementErrors,
+	compile,
+	countOutputLines,
+	type PrintRequest,
+	readRequest,
+} from "@/lib/markup/compiler";
 import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
@@ -18,17 +25,6 @@ import { globalLimits } from "@/lib/settings/settings-service";
  * value of a preview is that what it shows is what will print.
  */
 
-/**
- * Rejects the call unless the request carries a valid administrator session.
- *
- * @throws ApiError when the caller is not signed in
- */
-async function requireSession(): Promise<void> {
-	if (!(await getCurrentSession())) {
-		throw new ApiError("missing_key", "Not signed in.");
-	}
-}
-
 /** One line as the paper preview renders it. */
 export interface PreviewLine {
 	spans: { text: string; bold: boolean; underline: number; invert: boolean; widthMult: number }[];
@@ -37,11 +33,29 @@ export interface PreviewLine {
 	marker: string | null;
 }
 
-/** What compiling produced: paper, or the reason there is none. */
+/** One thing wrong with the markup, worded and positioned as the API would report it. */
+export interface PreviewError {
+	code: string;
+	message: string;
+	/** The status the API would answer this with. */
+	status: number;
+	/** 1-based element, or null for a failure that belongs to the request rather than a line. */
+	line: number | null;
+	/** 1-based character within the element, or null when the failure has no position. */
+	column: number | null;
+}
+
+/** What compiling produced: paper and its measurements, or everything wrong with it. */
 export interface PreviewResult {
 	lines: PreviewLine[] | null;
 	columns: number;
-	error: { code: string; message: string; line?: number; column?: number } | null;
+	/** Empty when the markup compiles. Every element is checked, not only the first to fail. */
+	errors: PreviewError[];
+	/** Lines that will advance the paper, and the ceiling they are checked against. */
+	outputLines: number;
+	maxOutputLines: number;
+	/** What will terminate each printed line. */
+	linefeed: Linefeed;
 }
 
 /**
@@ -49,12 +63,19 @@ export interface PreviewResult {
  *
  * @param deviceId the device whose width and codepage to compile against
  * @param source the markup, one element per line
- * @returns the paper, or the first error with its position
+ * @param linefeed what will terminate each line, or null to use the device's own setting
+ * @returns the paper and its measurements, or everything wrong with it
  */
-export async function preview(deviceId: string, source: string): Promise<PreviewResult> {
-	try {
-		await requireSession();
+export async function preview(
+	deviceId: string,
+	source: string,
+	linefeed: Linefeed | null = null,
+): Promise<PreviewResult> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
 
+	try {
 		const device = await prisma.device.findUnique({ where: { id: deviceId } });
 		if (!device) {
 			throw new ApiError("unknown_device", "That printer no longer exists.");
@@ -76,13 +97,44 @@ export async function preview(deviceId: string, source: string): Promise<Preview
 			maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
 		};
 
-		const body = { data: source.split("\n") };
-		const request = readRequest(body, limits, settings);
+		// Everything the preview reports about a failure, minus the failures themselves. Repeated
+		// on each early return so the footer's measurements are always present and honest.
+		const measured = {
+			lines: null,
+			columns: device.columns,
+			outputLines: 0,
+			maxOutputLines: limits.maxOutputLines,
+			linefeed: linefeed ?? settings.defaultLinefeed,
+		} as const;
+
+		// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
+		// what a real request would resolve to rather than restating the device's setting. Omitted
+		// when null, because absence is how the body asks for the device's own.
+		const data = source.split("\n");
+		const body = linefeed ? { data, linefeed } : { data };
+
+		// Request-level validation first, and on its own: it fails for the body as a whole — too
+		// many elements, too many characters — which is one problem, not one per line.
+		let request: PrintRequest;
+		try {
+			request = readRequest(body, limits, settings);
+		} catch (error) {
+			return { ...measured, errors: [asPreviewError(error)] };
+		}
+
+		const elementErrors = collectElementErrors(request, settings);
+		if (elementErrors.length > 0) {
+			return { ...measured, errors: elementErrors.map(asPreviewError) };
+		}
+
 		const job = compile("preview", device.name, request, limits, settings);
 
 		return {
 			columns: device.columns,
-			error: null,
+			errors: [],
+			outputLines: countOutputLines(request, settings),
+			maxOutputLines: limits.maxOutputLines,
+			linefeed: request.linefeed,
 			lines: job.lines.map((line) => ({
 				align: line.align,
 				marker: describe(line.directives),
@@ -96,25 +148,50 @@ export async function preview(deviceId: string, source: string): Promise<Preview
 			})),
 		};
 	} catch (error) {
+		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
+
 		if (error instanceof ApiError) {
-			return {
-				lines: null,
-				columns: 0,
-				error: {
-					code: error.code,
-					message: error.message,
-					line: typeof error.details.line === "number" ? error.details.line : undefined,
-					column: typeof error.details.column === "number" ? error.details.column : undefined,
-				},
-			};
+			return { ...blank, errors: [asPreviewError(error)] };
 		}
+
 		logger.error("Preview failed", error);
 		return {
-			lines: null,
-			columns: 0,
-			error: { code: "internal_error", message: "Something went wrong. Check the server log." },
+			...blank,
+			errors: [
+				{
+					code: "internal_error",
+					message: "Something went wrong. Check the server log.",
+					status: 500,
+					line: null,
+					column: null,
+				},
+			],
 		};
 	}
+}
+
+/**
+ * Flattens an API error into the shape the preview renders.
+ *
+ * Position comes from `details`, which is untyped by design — different codes carry different
+ * facts — so each field is read defensively and falls back to "no position" rather than to a
+ * number that would point somewhere wrong.
+ *
+ * @param error the failure, expected to be an {@link ApiError}
+ * @returns the error as the preview reports it
+ */
+function asPreviewError(error: unknown): PreviewError {
+	if (!(error instanceof ApiError)) {
+		throw error;
+	}
+
+	return {
+		code: error.code,
+		message: error.message,
+		status: error.status,
+		line: typeof error.details.line === "number" ? error.details.line : null,
+		column: typeof error.details.column === "number" ? error.details.column : null,
+	};
 }
 
 /** Describes a line's directives for the preview, or null when it has none. */
@@ -143,12 +220,21 @@ export interface SendResult {
  *
  * @param deviceId the device to print on
  * @param source the markup, one element per line
+ * @param linefeed what terminates each line, or null to use the device's own setting
  * @returns the job id, or why it could not be printed
  */
-export async function printMarkup(deviceId: string, source: string): Promise<SendResult> {
+export async function printMarkup(
+	deviceId: string,
+	source: string,
+	linefeed: Linefeed | null = null,
+): Promise<SendResult> {
+	await requireSession();
+
 	try {
-		await requireSession();
-		const job = await submitJob(deviceId, { data: source.split("\n") });
+		const data = source.split("\n");
+		// Omitted rather than sent as null when the device's setting is wanted: the body accepts
+		// exactly `data` and `linefeed`, and "absent" is how it says "whatever the device is set to".
+		const job = await submitJob(deviceId, linefeed ? { data, linefeed } : { data });
 		return { error: null, message: `Queued ${job.id}.` };
 	} catch (error) {
 		if (error instanceof ApiError) {
@@ -171,9 +257,9 @@ export async function printMarkup(deviceId: string, source: string): Promise<Sen
  * @returns what the agent reported, or why it could not be sent
  */
 export async function writeRaw(deviceId: string, bytes: number[]): Promise<SendResult> {
-	try {
-		await requireSession();
+	await requireSession();
 
+	try {
 		const device = await prisma.device.findUnique({
 			where: { id: deviceId },
 			select: { name: true, agentId: true },

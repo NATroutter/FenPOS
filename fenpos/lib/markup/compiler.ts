@@ -202,6 +202,60 @@ function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
 	return lines;
 }
 
+/**
+ * How many lines a request will advance the paper by.
+ *
+ * The same figure {@link compile} checks against `maxOutputLines`, from the same lay-out, so a
+ * preview stating "24 of 300" cannot disagree with the limit that would reject it. It is measured
+ * before the lines reach the wire because a rule is a directive at that point and becomes a line
+ * of dashes only on the way out — counting after that conversion would report a number the limit
+ * never applied.
+ *
+ * Costs a second lay-out. That is the preview's problem alone, and the preview is debounced.
+ *
+ * @param request the validated request
+ * @param settings the device's compile settings
+ * @returns the number of lines that advance the paper
+ */
+export function countOutputLines(request: PrintRequest, settings: CompileSettings): number {
+	return countTextLines(layOut(request, settings));
+}
+
+/**
+ * Collects everything wrong with a request's elements, instead of stopping at the first.
+ *
+ * {@link compile} stops at the first failure, and is right to: a request either prints or it does
+ * not, and doing more work on a body that is already a `400` buys nothing. The preview is read by
+ * someone in the middle of fixing the markup, and handing them one mistake per round trip makes
+ * four mistakes take four times as long to find.
+ *
+ * Only per-element failures are collected — parsing and the codepage check. Limits that apply to
+ * the request as a whole are checked before this and after it, because "the whole thing is too
+ * long" is not a mistake attributable to any one line.
+ *
+ * @param request the validated request
+ * @param settings the device's compile settings
+ * @returns every element error, in element order; empty when the markup is sound
+ */
+export function collectElementErrors(request: PrintRequest, settings: CompileSettings): ApiError[] {
+	const errors: ApiError[] = [];
+
+	for (let index = 0; index < request.data.length; index++) {
+		try {
+			validateCharset(parseMarkup(request.data[index]), settings.codepage, settings.onUnsupported);
+		} catch (error) {
+			const translated = translate(error, index + 1);
+			if (!(translated instanceof ApiError)) {
+				// Not a markup failure at all, so not something to collect and carry on from.
+				throw translated;
+			}
+			errors.push(translated);
+		}
+	}
+
+	return errors;
+}
+
 /** Turns a positional failure into the API error that reports it. */
 function translate(error: unknown, line: number): unknown {
 	if (error instanceof MarkupError) {

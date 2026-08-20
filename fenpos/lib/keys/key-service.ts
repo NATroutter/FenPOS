@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { nameSchema } from "@/lib/domain/naming";
 import { type Permission, parseStoredPermissions, permissionSchema } from "@/lib/domain/permissions";
 import { ApiError } from "@/lib/errors";
+import { HINT_LENGTH, KEY_PREFIX } from "@/lib/keys/key-format";
 import { logger } from "@/lib/logger";
 
 /**
@@ -19,12 +20,6 @@ import { logger } from "@/lib/logger";
  * deterministic hash is what lets an incoming bearer token resolve in one indexed lookup instead
  * of a scan-and-verify over every row.
  */
-
-/** Characters of the key shown in the panel, so an operator can tell two keys apart. */
-const HINT_LENGTH = 6;
-
-/** Prefix every key carries, so one found in a log or a config file is recognisable. */
-const KEY_PREFIX = "fpk_";
 
 /** A key as the Keys page displays it. */
 export interface ApiKeySummary {
@@ -111,6 +106,46 @@ export async function createApiKey(rawName: string, permissions: string[], devic
 
 	logger.info("API key created", { keyId: key.id, name, permissions: granted, devices: deviceIds.length });
 	return { id: key.id, secret };
+}
+
+/**
+ * Issues a new secret for an existing key, keeping everything else about it.
+ *
+ * Rotation is the ordinary reason a credential changes: it leaked into a screenshot, an
+ * integrator left, or a calendar says it is time. Revoke-and-recreate does the job but loses the
+ * name, the grants and the job history, and forces the operator to re-enter every permission —
+ * which is exactly when a grant gets fat-fingered. This changes only the one thing that has to
+ * change.
+ *
+ * **The old secret stops working the instant this returns.** There is no overlap window: two
+ * live secrets for one key would need a second hash column and an expiry to reap it, and the
+ * honest way to stage a rotation is two keys.
+ *
+ * `lastUsedAt` is cleared, because it described the secret that no longer exists. Leaving it
+ * would make the panel say a key was used at a time nothing could have used the credential now
+ * in circulation, and "never used" after a reroll is the useful signal: nobody has picked the
+ * new secret up yet.
+ *
+ * @param keyId the key to reissue
+ * @returns the key's id and its new secret, shown once
+ * @throws ApiError when the key is unknown or revoked
+ */
+export async function rerollApiKey(keyId: string): Promise<MintedKey> {
+	const key = await requireKey(keyId);
+	if (key.revokedAt) {
+		// Revoking is documented as irreversible, so rerolling must not become the way back.
+		throw new ApiError("invalid_type", "That key is revoked. Create a new one instead.");
+	}
+
+	const secret = KEY_PREFIX + generateToken();
+
+	await prisma.apiKey.update({
+		where: { id: keyId },
+		data: { keyHash: hashSecret(secret), maskedHint: secret.slice(-HINT_LENGTH), lastUsedAt: null },
+	});
+
+	logger.info("API key rerolled", { keyId });
+	return { id: keyId, secret };
 }
 
 /**

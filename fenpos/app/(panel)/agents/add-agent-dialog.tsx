@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -70,33 +71,33 @@ export function AddAgentDialog() {
 							machine.
 						</DialogDescription>
 					</DialogHeader>
+					<DialogBody>
+						<div className="py-4">
+							<Field>
+								<FieldLabel htmlFor="agent-name">Name</FieldLabel>
+								<Input
+									id="agent-name"
+									name="name"
+									value={name}
+									onChange={(event) => setName(toNameCandidate(event.target.value, { keepTrailingSeparator: true }))}
+									placeholder="kitchen"
+									className="font-mono"
+									autoComplete="off"
+									required
+								/>
+								<FieldDescription>
+									Becomes part of the print API path, as in{" "}
+									<code className="font-mono">/api/print/{name || "kitchen"}/…</code>
+								</FieldDescription>
+							</Field>
 
-					<div className="py-4">
-						<Field>
-							<FieldLabel htmlFor="agent-name">Name</FieldLabel>
-							<Input
-								id="agent-name"
-								name="name"
-								value={name}
-								onChange={(event) => setName(toNameCandidate(event.target.value, { keepTrailingSeparator: true }))}
-								placeholder="kitchen"
-								className="font-mono"
-								autoComplete="off"
-								required
-							/>
-							<FieldDescription>
-								Becomes part of the print API path, as in{" "}
-								<code className="font-mono">/api/print/{name || "kitchen"}/…</code>
-							</FieldDescription>
-						</Field>
-
-						{state.error ? (
-							<Alert variant="destructive" className="mt-3">
-								<AlertDescription>{state.error}</AlertDescription>
-							</Alert>
-						) : null}
-					</div>
-
+							{state.error ? (
+								<Alert variant="destructive" className="mt-3">
+									<AlertDescription>{state.error}</AlertDescription>
+								</Alert>
+							) : null}
+						</div>
+					</DialogBody>
 					<DialogFooter>
 						<Button type="button" variant="outline" onClick={() => setOpen(false)}>
 							Cancel

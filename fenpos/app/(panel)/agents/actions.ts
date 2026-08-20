@@ -9,7 +9,7 @@ import {
 	renameAgent as renameAgentRecord,
 	unpairAgent as unpairAgentRecord,
 } from "@/lib/agents/agent-service";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
@@ -19,22 +19,8 @@ import { logger } from "@/lib/logger";
 /**
  * Server actions behind the Agents tab.
  *
- * Every action re-checks the session. The panel layout already guards the page, but an
- * action is a POST endpoint in its own right: anything that trusted the layout would be
- * callable directly by anyone who knew the action id. Authorisation belongs at the action,
- * not at the page that happens to render its button.
+ * Every action re-checks the session through {@link requireSession}.
  */
-
-/**
- * Rejects the call unless the request carries a valid administrator session.
- *
- * @throws ApiError when the caller is not signed in
- */
-async function requireSession(): Promise<void> {
-	if (!(await getCurrentSession())) {
-		throw new ApiError("missing_key", "Not signed in.");
-	}
-}
 
 /**
  * Runs an action, converting a failure into a message the form can render.
@@ -48,8 +34,11 @@ async function requireSession(): Promise<void> {
  * @returns the state to render
  */
 async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
+
 	try {
-		await requireSession();
 		await work();
 		revalidatePath("/agents");
 		return { error: null };

@@ -1,6 +1,7 @@
-import { Plus, Printer } from "lucide-react";
+import { Plus, Printer, Server } from "lucide-react";
 import { DeviceCard, type DeviceCardData } from "@/app/(panel)/devices/device-card";
 import { DeviceDialog, EMPTY_DEVICE } from "@/app/(panel)/devices/device-dialog";
+import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { prisma } from "@/lib/db";
@@ -8,7 +9,7 @@ import type { Codepage, FlowControl, Linefeed, Parity, UnsupportedPolicy } from 
 import { getAgentStatus } from "@/lib/link/device-status";
 import { isConnected } from "@/lib/link/registry";
 
-export const metadata = { title: "Devices · FenPOS" };
+export const metadata = { title: "Devices" };
 
 /**
  * Never cached: connection state and queue depth change without any request causing it to.
@@ -81,16 +82,7 @@ export default async function DevicesPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
-				<div className="min-w-[220px] flex-1">
-					<h2 className="text-[15px] font-semibold tracking-tight">Devices</h2>
-					<p className="mt-1 text-[12.5px] text-muted-foreground">
-						Each printer belongs to one agent. Names need only be unique within their agent, so every site can have its
-						own <span className="font-mono">kitchen</span>.
-					</p>
-				</div>
-			</div>
-
+			<LiveRefresh kinds={["agent", "device"]} />
 			{agents.length === 0 ? (
 				<Empty className="border border-dashed border-border">
 					<EmptyHeader>
@@ -105,8 +97,15 @@ export default async function DevicesPage() {
 				</Empty>
 			) : (
 				groups.map((group) => (
-					<section key={group.id} className="flex flex-col gap-3">
-						<div className="flex flex-wrap items-center gap-3">
+					// An agent is a heading with a rule under it, not a card. The grouping is real — a
+					// printer belongs to one machine and every action on it goes through that machine's
+					// link — but drawing it as a box put cards inside a card, and two nested surfaces
+					// compete for the same "this is an object" reading rather than one containing the
+					// other. A rule says "everything below this belongs to that name" without claiming
+					// to be an object at all.
+					<section key={group.id} className="flex flex-col gap-4">
+						<div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+							<Server className="size-4.5 shrink-0 text-subtle-foreground" />
 							<h3 className="font-mono text-[13px] font-medium">{group.name}</h3>
 							<span className="text-[11.5px] text-subtle-foreground">
 								{group.online ? "online" : "offline"} · {group.devices.length}{" "}

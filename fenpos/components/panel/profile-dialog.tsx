@@ -4,10 +4,12 @@ import { UserCog } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changePassword } from "@/app/(panel)/settings/actions";
+import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -16,7 +18,6 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 /**
@@ -90,58 +91,55 @@ export function ProfileDialog({ minimumLength }: { minimumLength: number }) {
 						point of changing it.
 					</DialogDescription>
 				</DialogHeader>
+				<DialogBody>
+					<div className="flex flex-col gap-4">
+						<Field>
+							<FieldLabel htmlFor="profile-current">Current password</FieldLabel>
+							<PasswordInput
+								id="profile-current"
+								autoComplete="current-password"
+								value={current}
+								disabled={pending}
+								onChange={(event) => setCurrent(event.target.value)}
+							/>
+							<FieldDescription>
+								Asked for even though you are signed in — a session left open on an unattended machine is the case this
+								defends against.
+							</FieldDescription>
+						</Field>
 
-				<div className="flex flex-col gap-4">
-					<Field>
-						<FieldLabel htmlFor="profile-current">Current password</FieldLabel>
-						<Input
-							id="profile-current"
-							type="password"
-							autoComplete="current-password"
-							value={current}
-							disabled={pending}
-							onChange={(event) => setCurrent(event.target.value)}
-						/>
-						<FieldDescription>
-							Asked for even though you are signed in — a session left open on an unattended machine is the case this
-							defends against.
-						</FieldDescription>
-					</Field>
+						<Field>
+							<FieldLabel htmlFor="profile-new">New password</FieldLabel>
+							<PasswordInput
+								id="profile-new"
+								autoComplete="new-password"
+								value={next}
+								disabled={pending}
+								onChange={(event) => setNext(event.target.value)}
+							/>
+							<FieldDescription>
+								At least {minimumLength} characters. Spaces are fine; a passphrase is ideal.
+							</FieldDescription>
+						</Field>
 
-					<Field>
-						<FieldLabel htmlFor="profile-new">New password</FieldLabel>
-						<Input
-							id="profile-new"
-							type="password"
-							autoComplete="new-password"
-							value={next}
-							disabled={pending}
-							onChange={(event) => setNext(event.target.value)}
-						/>
-						<FieldDescription>
-							At least {minimumLength} characters. Spaces are fine; a passphrase is ideal.
-						</FieldDescription>
-					</Field>
+						<Field>
+							<FieldLabel htmlFor="profile-confirm">Confirm new password</FieldLabel>
+							<PasswordInput
+								id="profile-confirm"
+								autoComplete="new-password"
+								value={confirm}
+								disabled={pending}
+								onChange={(event) => setConfirm(event.target.value)}
+							/>
+						</Field>
 
-					<Field>
-						<FieldLabel htmlFor="profile-confirm">Confirm new password</FieldLabel>
-						<Input
-							id="profile-confirm"
-							type="password"
-							autoComplete="new-password"
-							value={confirm}
-							disabled={pending}
-							onChange={(event) => setConfirm(event.target.value)}
-						/>
-					</Field>
-
-					{error ? (
-						<Alert variant="destructive">
-							<AlertDescription>{error}</AlertDescription>
-						</Alert>
-					) : null}
-				</div>
-
+						{error ? (
+							<Alert variant="destructive">
+								<AlertDescription>{error}</AlertDescription>
+							</Alert>
+						) : null}
+					</div>
+				</DialogBody>
 				<DialogFooter>
 					<Button type="button" disabled={pending || current === "" || next === "" || confirm === ""} onClick={submit}>
 						{pending ? <Spinner className="size-3.5" /> : null}

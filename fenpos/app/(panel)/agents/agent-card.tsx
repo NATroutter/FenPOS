@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Printer, Trash2, Unplug } from "lucide-react";
+import { FileText, Printer, Server, Trash2, Unplug } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { deleteAgent, renameAgent, sendTestPrint, unpairAgent } from "@/app/(panel)/agents/actions";
@@ -18,10 +18,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import type { AgentStatus } from "@/lib/domain/enums";
+import { formatDateTime } from "@/lib/format/datetime";
 
 /** A agent as this component needs it, serialised for the client boundary. */
 export interface AgentCardData {
@@ -65,6 +66,7 @@ export function AgentCard({
 	return (
 		<Card className="flex flex-col">
 			<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
+				<Server className="size-4.5 shrink-0 text-subtle-foreground" />
 				<AgentName agentId={agent.id} name={agent.name} />
 				<Badge variant="outline" className={`shrink-0 ${status.className}`}>
 					{status.label}
@@ -84,8 +86,7 @@ export function AgentCard({
 				) : (
 					<Details agent={agent} />
 				)}
-
-				<div className="mt-auto flex items-center gap-2 border-t border-border pt-3">
+				<CardActions className="flex-nowrap gap-2">
 					<span className="flex items-center gap-1.5 text-[11.5px] text-subtle-foreground">
 						<Printer className="size-3.5" />
 						{agent.deviceCount} {agent.deviceCount === 1 ? "printer" : "printers"}
@@ -174,7 +175,7 @@ export function AgentCard({
 							</Button>
 						}
 					/>
-				</div>
+				</CardActions>
 			</CardContent>
 		</Card>
 	);
@@ -188,7 +189,7 @@ function Details({ agent }: { agent: AgentCardData }) {
 			<Detail label="Platform" value={agent.platform} />
 			<Detail label="Agent" value={agent.agentVersion} />
 			<Detail label="Address" value={agent.lastAddress} />
-			<Detail label="Last seen" value={agent.lastSeenAt ? new Date(agent.lastSeenAt).toLocaleString() : null} />
+			<Detail label="Last seen" value={agent.lastSeenAt ? formatDateTime(agent.lastSeenAt) : null} />
 		</dl>
 	);
 }

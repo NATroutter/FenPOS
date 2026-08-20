@@ -2,12 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import {
 	createApiKey as createApiKeyRecord,
 	deleteApiKey as deleteApiKeyRecord,
 	renameApiKey as renameApiKeyRecord,
+	rerollApiKey as rerollApiKeyRecord,
 	revokeApiKey as revokeApiKeyRecord,
 	updateApiKeyGrants,
 } from "@/lib/keys/key-service";
@@ -22,17 +23,6 @@ import { logger } from "@/lib/logger";
  */
 
 /**
- * Rejects the call unless the request carries a valid administrator session.
- *
- * @throws ApiError when the caller is not signed in
- */
-async function requireSession(): Promise<void> {
-	if (!(await getCurrentSession())) {
-		throw new ApiError("missing_key", "Not signed in.");
-	}
-}
-
-/**
  * Runs an action, converting a failure into a message the panel can render.
  *
  * @param label short description used in the log line
@@ -40,8 +30,11 @@ async function requireSession(): Promise<void> {
  * @returns the state to render
  */
 async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
+
 	try {
-		await requireSession();
 		await work();
 		revalidatePath("/keys");
 		return { error: null };
@@ -54,8 +47,8 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 	}
 }
 
-/** The outcome of minting a key, carrying the one and only sight of its secret. */
-export interface CreateKeyResult {
+/** The outcome of minting or reissuing a key, carrying the one and only sight of its secret. */
+export interface MintedKeyResult {
 	error: string | null;
 	/** The full key. Shown once and never recoverable; null when creation failed. */
 	secret: string | null;
@@ -73,9 +66,10 @@ export interface CreateKeyResult {
  * @param deviceIds which printers it may address
  * @returns the secret, or why it could not be created
  */
-export async function createKey(name: string, permissions: string[], deviceIds: string[]): Promise<CreateKeyResult> {
+export async function createKey(name: string, permissions: string[], deviceIds: string[]): Promise<MintedKeyResult> {
+	await requireSession();
+
 	try {
-		await requireSession();
 		const key = await createApiKeyRecord(name, permissions, deviceIds);
 		revalidatePath("/keys");
 		return { error: null, secret: key.secret };
@@ -98,6 +92,30 @@ export async function createKey(name: string, permissions: string[], deviceIds: 
  */
 export async function updateKey(keyId: string, permissions: string[], deviceIds: string[]): Promise<ActionState> {
 	return run("update", () => updateApiKeyGrants(keyId, permissions, deviceIds));
+}
+
+/**
+ * Issues a new secret for a key and returns it once.
+ *
+ * Same one-sight-only contract as {@link createKey}, for the same reason: nothing stores it.
+ *
+ * @param keyId the key to reissue
+ * @returns the new secret, or why it could not be issued
+ */
+export async function rerollKey(keyId: string): Promise<MintedKeyResult> {
+	await requireSession();
+
+	try {
+		const key = await rerollApiKeyRecord(keyId);
+		revalidatePath("/keys");
+		return { error: null, secret: key.secret };
+	} catch (error) {
+		if (error instanceof ApiError) {
+			return { error: error.message, secret: null };
+		}
+		logger.error("Key action failed: reroll", error);
+		return { error: "Something went wrong. Check the server log.", secret: null };
+	}
 }
 
 /**

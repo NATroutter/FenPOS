@@ -1,14 +1,15 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
 import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createKey, updateKey } from "@/app/(panel)/keys/actions";
+import { SecretPane } from "@/app/(panel)/keys/secret-pane";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -57,7 +58,6 @@ export function KeyDialog({
 	const [deviceIds, setDeviceIds] = useState<string[]>(initialDeviceIds ?? []);
 	const [error, setError] = useState<string | null>(null);
 	const [secret, setSecret] = useState<string | null>(null);
-	const [copied, setCopied] = useState(false);
 	const [saving, startSave] = useTransition();
 
 	const toggle = (list: string[], value: string): string[] =>
@@ -86,11 +86,18 @@ export function KeyDialog({
 		});
 	};
 
+	// Dismissing only closes. It deliberately does not touch `secret`, which chooses between the
+	// two panes below: clearing it here would swap the secret pane for the creation form and then
+	// play the closing animation on *that*, so dismissing a freshly minted key flashed the form
+	// it was created from on the way out.
 	const close = (): void => {
 		setOpen(false);
+	};
+
+	/** Returns the dialog to its opening state. Safe to call more than once. */
+	const reset = (): void => {
 		setError(null);
 		setSecret(null);
-		setCopied(false);
 		if (!keyId) {
 			setName("");
 			setPermissions([]);
@@ -99,9 +106,26 @@ export function KeyDialog({
 	};
 
 	return (
-		<Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
+		<Dialog
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				// Also on the way in, because reopening within the closing animation's 100ms never
+				// reaches the handler below and would otherwise reveal the last secret again.
+				if (next) {
+					reset();
+				}
+			}}
+			// After the animation rather than at the click, so the pane being faded out is the one
+			// that was on screen when it was dismissed.
+			onOpenChangeComplete={(nowOpen) => {
+				if (!nowOpen) {
+					reset();
+				}
+			}}
+		>
 			<DialogTrigger render={trigger} />
-			<DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[560px]">
+			<DialogContent className="sm:max-w-[560px]">
 				{secret ? (
 					<>
 						<DialogHeader>
@@ -110,25 +134,9 @@ export function KeyDialog({
 								It is stored as a hash and cannot be shown again. If you lose it, revoke this key and create another.
 							</DialogDescription>
 						</DialogHeader>
-
-						<div className="flex gap-2">
-							<Input readOnly value={secret} className="font-mono text-[12px]" />
-							<Button
-								type="button"
-								variant="outline"
-								size="icon"
-								title="Copy"
-								aria-label="Copy key"
-								onClick={() => {
-									void navigator.clipboard.writeText(secret);
-									setCopied(true);
-									toast.success("Key copied.");
-								}}
-							>
-								{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-							</Button>
-						</div>
-
+						<DialogBody>
+							<SecretPane secret={secret} />
+						</DialogBody>
 						<DialogFooter>
 							<Button type="button" onClick={close}>
 								Done
@@ -144,75 +152,75 @@ export function KeyDialog({
 								purpose.
 							</DialogDescription>
 						</DialogHeader>
-
-						<div className="flex flex-col gap-4">
-							{keyId ? null : (
-								<Field>
-									<FieldLabel htmlFor="key-name">Name</FieldLabel>
-									<Input
-										id="key-name"
-										value={name}
-										disabled={saving}
-										placeholder="Till software"
-										onChange={(event) => setName(event.target.value)}
-									/>
-									<FieldDescription>Shown in the panel and in job history. Free text.</FieldDescription>
-								</Field>
-							)}
-
-							<div className="flex flex-col gap-2.5">
-								<span className="text-[12.5px] font-medium">Permissions</span>
-								{PERMISSIONS.map((permission) => (
-									<div key={permission.id} className="flex items-start gap-2.5">
-										<Checkbox
-											id={`permission-${permission.id}`}
-											className="mt-0.5"
-											checked={permissions.includes(permission.id)}
+						<DialogBody>
+							<div className="flex flex-col gap-4">
+								{keyId ? null : (
+									<Field>
+										<FieldLabel htmlFor="key-name">Name</FieldLabel>
+										<Input
+											id="key-name"
+											value={name}
 											disabled={saving}
-											onCheckedChange={() => setPermissions((current) => toggle(current, permission.id))}
+											placeholder="Till software"
+											onChange={(event) => setName(event.target.value)}
 										/>
-										<FieldLabel htmlFor={`permission-${permission.id}`} className="cursor-pointer font-normal">
-											<span className="font-mono text-[12px]">{permission.id}</span>
-											<span className="block text-[11.5px] font-normal text-subtle-foreground">
-												{permission.description}
-											</span>
-										</FieldLabel>
-									</div>
-								))}
-							</div>
+										<FieldDescription>Shown in the panel and in job history. Free text.</FieldDescription>
+									</Field>
+								)}
 
-							<div className="flex flex-col gap-2.5 border-t border-border pt-3">
-								<span className="text-[12.5px] font-medium">Printers</span>
-								{devices.length === 0 ? (
-									<p className="text-[11.5px] text-subtle-foreground">
-										No printers configured yet. Add one on the Devices tab first.
-									</p>
-								) : (
-									devices.map((device) => (
-										<div key={device.id} className="flex items-center gap-2.5">
+								<div className="flex flex-col gap-2.5">
+									<span className="text-[12.5px] font-medium">Permissions</span>
+									{PERMISSIONS.map((permission) => (
+										<div key={permission.id} className="flex items-start gap-2.5">
 											<Checkbox
-												id={`device-${device.id}`}
-												checked={deviceIds.includes(device.id)}
+												id={`permission-${permission.id}`}
+												className="mt-0.5"
+												checked={permissions.includes(permission.id)}
 												disabled={saving}
-												onCheckedChange={() => setDeviceIds((current) => toggle(current, device.id))}
+												onCheckedChange={() => setPermissions((current) => toggle(current, permission.id))}
 											/>
-											<FieldLabel htmlFor={`device-${device.id}`} className="cursor-pointer font-normal">
-												<span className="font-mono text-[12px]">
-													{device.agentName}/{device.name}
+											<FieldLabel htmlFor={`permission-${permission.id}`} className="cursor-pointer font-normal">
+												<span className="font-mono text-[12px]">{permission.id}</span>
+												<span className="block text-[11.5px] font-normal text-subtle-foreground">
+													{permission.description}
 												</span>
 											</FieldLabel>
 										</div>
-									))
-								)}
+									))}
+								</div>
+
+								<div className="flex flex-col gap-2.5 border-t border-border pt-3">
+									<span className="text-[12.5px] font-medium">Printers</span>
+									{devices.length === 0 ? (
+										<p className="text-[11.5px] text-subtle-foreground">
+											No printers configured yet. Add one on the Devices tab first.
+										</p>
+									) : (
+										devices.map((device) => (
+											<div key={device.id} className="flex items-center gap-2.5">
+												<Checkbox
+													id={`device-${device.id}`}
+													checked={deviceIds.includes(device.id)}
+													disabled={saving}
+													onCheckedChange={() => setDeviceIds((current) => toggle(current, device.id))}
+												/>
+												<FieldLabel htmlFor={`device-${device.id}`} className="cursor-pointer font-normal">
+													<span className="font-mono text-[12px]">
+														{device.agentName}/{device.name}
+													</span>
+												</FieldLabel>
+											</div>
+										))
+									)}
+								</div>
+
+								{error ? (
+									<Alert variant="destructive">
+										<AlertDescription>{error}</AlertDescription>
+									</Alert>
+								) : null}
 							</div>
-
-							{error ? (
-								<Alert variant="destructive">
-									<AlertDescription>{error}</AlertDescription>
-								</Alert>
-							) : null}
-						</div>
-
+						</DialogBody>
 						<DialogFooter>
 							<Button type="button" variant="outline" disabled={saving} onClick={close}>
 								Cancel

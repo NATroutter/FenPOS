@@ -26,8 +26,14 @@ export interface NavItem {
 	label: string;
 	/** Heading shown at the top of the page, when it differs from the sidebar label. */
 	title: string;
-	/** Small text above the heading, naming the area the page belongs to. */
-	kicker: string;
+	/**
+	 * One sentence on what the section is for, shown under the heading in the top bar.
+	 *
+	 * Lives here rather than on each page because it belongs to the section, not to whatever the
+	 * page happens to render — a page that grew a second card would otherwise have a description
+	 * describing only its first. Plain text: it is set in a bar the page does not control.
+	 */
+	description: string;
 	icon: LucideIcon;
 }
 
@@ -51,27 +57,79 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				href: "/dashboard",
 				label: "Dashboard",
 				title: "Dashboard",
-				kicker: "Operations",
+				description: "What is reachable now, and what the last day produced.",
 				icon: LayoutDashboard,
 			},
-			{ href: "/jobs", label: "Jobs", title: "Print jobs", kicker: "Operations", icon: ListOrdered },
-			{ href: "/logs", label: "Logs", title: "Logs", kicker: "Operations", icon: ScrollText },
+			{
+				href: "/jobs",
+				label: "Jobs",
+				title: "Print jobs",
+				description: "Every job and what became of it. A job that failed carries the agent's own words about why.",
+				icon: ListOrdered,
+			},
+			{
+				href: "/logs",
+				label: "Logs",
+				title: "Logs",
+				description: "What the agents forwarded. Each also keeps its own complete log on the machine it runs on.",
+				icon: ScrollText,
+			},
 		],
 	},
 	{
 		label: "Hardware",
 		items: [
-			{ href: "/agents", label: "Agents", title: "Agents", kicker: "Hardware", icon: Server },
-			{ href: "/devices", label: "Devices", title: "Configured printers", kicker: "Hardware", icon: Printer },
-			{ href: "/tools", label: "Tools", title: "Tools", kicker: "Hardware", icon: Wrench },
+			{
+				href: "/agents",
+				label: "Agents",
+				title: "Agents",
+				description:
+					"Each agent is one machine with printers attached. Agents dial the server, so no inbound port needs opening at the site.",
+				icon: Server,
+			},
+			{
+				href: "/devices",
+				label: "Devices",
+				title: "Configured printers",
+				description:
+					"Each printer belongs to one agent. Names need only be unique within their agent, so every site can have its own kitchen.",
+				icon: Printer,
+			},
+			{
+				href: "/tools",
+				label: "Tools",
+				title: "Tools",
+				description: "Compose a receipt and see where it lands on the paper, or send bytes straight to a printer.",
+				icon: Wrench,
+			},
 		],
 	},
 	{
 		label: "Administration",
 		items: [
-			{ href: "/keys", label: "API keys", title: "API keys", kicker: "Administration", icon: KeyRound },
-			{ href: "/settings", label: "Settings", title: "Settings", kicker: "Administration", icon: Settings2 },
-			{ href: "/docs", label: "Docs", title: "API documentation", kicker: "Administration", icon: BookOpen },
+			{
+				href: "/keys",
+				label: "API keys",
+				title: "API keys",
+				description:
+					"Keys for machines that print. Each is shown once when created and stored only as a hash, so a lost key is replaced rather than recovered.",
+				icon: KeyRound,
+			},
+			{
+				href: "/settings",
+				label: "Settings",
+				title: "Settings",
+				description:
+					"Install-wide defaults. Per-printer settings are on the Devices tab, and the administrator password is under your profile in the sidebar.",
+				icon: Settings2,
+			},
+			{
+				href: "/docs",
+				label: "Docs",
+				title: "API documentation",
+				description: "The print API, as this install serves it.",
+				icon: BookOpen,
+			},
 		],
 	},
 ];

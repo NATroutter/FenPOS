@@ -1,6 +1,8 @@
-import { AlertTriangle, Printer, Server } from "lucide-react";
+import { Activity, AlertTriangle, Printer, Server } from "lucide-react";
 import Link from "next/link";
+import { FollowProvider } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
+import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { prisma } from "@/lib/db";
@@ -9,7 +11,7 @@ import { getAgentStatus } from "@/lib/link/device-status";
 import { isConnected } from "@/lib/link/registry";
 import { listLogs } from "@/lib/logs/log-service";
 
-export const metadata = { title: "Dashboard · FenPOS" };
+export const metadata = { title: "Dashboard" };
 
 /** Never cached: everything on this page changes without a request causing it. */
 export const dynamic = "force-dynamic";
@@ -67,13 +69,8 @@ export default async function DashboardPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="border-b border-border pb-3">
-				<h2 className="text-[15px] font-semibold tracking-tight">Dashboard</h2>
-				<p className="mt-1 text-[12.5px] text-muted-foreground">
-					What is reachable now, and what the last {WINDOW_HOURS} hours produced.
-				</p>
-			</div>
-
+			{/* Not "log": the activity list below is a LogStream, which takes those itself. */}
+			<LiveRefresh kinds={["agent", "device", "job"]} />
 			<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 				<Stat
 					icon={<Server className="size-3.5" />}
@@ -101,7 +98,8 @@ export default async function DashboardPage() {
 
 			<div className="grid gap-4 lg:grid-cols-2">
 				<Card>
-					<CardHeader className="border-b border-border pb-3">
+					<CardHeader className="flex flex-row items-center gap-2 border-b border-border pb-3">
+						<Activity className="size-4.5 shrink-0 text-subtle-foreground" />
 						<h3 className="text-[13px] font-medium">In flight</h3>
 					</CardHeader>
 					<CardContent className="pt-4">
@@ -114,7 +112,8 @@ export default async function DashboardPage() {
 				</Card>
 
 				<Card>
-					<CardHeader className="border-b border-border pb-3">
+					<CardHeader className="flex flex-row items-center gap-2 border-b border-border pb-3">
+						<AlertTriangle className="size-4.5 shrink-0 text-subtle-foreground" />
 						<h3 className="text-[13px] font-medium">Printers needing attention</h3>
 					</CardHeader>
 					<CardContent className="pt-4">
@@ -147,7 +146,12 @@ export default async function DashboardPage() {
 						All logs
 					</Link>
 				</div>
-				<LogStream lines={tail.lines} live />
+				{/* The dashboard tail carries no Follow control of its own: it is a glance rather than a
+				    reading surface, and the header chip already governs whether anything streams. The
+				    provider is here only because the stream reads its answer from context. */}
+				<FollowProvider streamable>
+					<LogStream lines={tail.lines} sortable={false} />
+				</FollowProvider>
 			</div>
 		</div>
 	);

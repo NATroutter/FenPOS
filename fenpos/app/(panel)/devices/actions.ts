@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import {
 	createDevice as createDeviceRecord,
 	type DeviceInput,
@@ -25,17 +25,6 @@ import { logger } from "@/lib/logger";
  */
 
 /**
- * Rejects the call unless the request carries a valid administrator session.
- *
- * @throws ApiError when the caller is not signed in
- */
-async function requireSession(): Promise<void> {
-	if (!(await getCurrentSession())) {
-		throw new ApiError("missing_key", "Not signed in.");
-	}
-}
-
-/**
  * Runs an action, converting a failure into a message the panel can render.
  *
  * @param label short description used in the log line
@@ -43,8 +32,11 @@ async function requireSession(): Promise<void> {
  * @returns the state to render
  */
 async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
+
 	try {
-		await requireSession();
 		await work();
 		revalidatePath("/devices");
 		revalidatePath("/agents");
@@ -173,8 +165,9 @@ export interface ScanResult {
  * @returns the ports it reported, or why it could not be asked
  */
 export async function scanAgentPorts(agentId: string): Promise<ScanResult> {
+	await requireSession();
+
 	try {
-		await requireSession();
 		return { ports: await scanPorts(agentId), error: null };
 	} catch (error) {
 		if (error instanceof ApiError) {

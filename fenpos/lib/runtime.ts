@@ -1,4 +1,5 @@
 import "server-only";
+import { version } from "@/package.json";
 
 /**
  * Facts about this running process.
@@ -16,9 +17,10 @@ export const SERVER_STARTED_AT: number = Date.now();
 /**
  * Application version, shown in the panel.
  *
- * Sourced from the environment so a container image can stamp its own build without the
- * value drifting from package.json at runtime; falls back to a clear placeholder rather than
- * a plausible-looking number, because a wrong version in a bug report costs more than an
- * obviously absent one.
+ * Read from package.json, which is the one place a release actually bumps. It used to come from
+ * an `APP_VERSION` environment variable with a hardcoded fallback, so that a container image
+ * could stamp its own build — but nothing ever set the variable, and the fallback was what the
+ * panel showed. A second source of truth that no deployment writes to is not a second source of
+ * truth; it is a copy that drifts, and it had.
  */
-export const APP_VERSION: string = process.env.APP_VERSION ?? "0.1.0-dev";
+export const APP_VERSION: string = version;

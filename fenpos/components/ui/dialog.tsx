@@ -49,7 +49,14 @@ function DialogContent({
 			<DialogPrimitive.Popup
 				data-slot="dialog-content"
 				className={cn(
-					"fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+					// A dialog is a card that floats: `bg-card` for the well and the same hairline.
+					//
+					// A flex column with no padding of its own, capped at the viewport. The bands are
+					// `flex-none` and {@link DialogBody} takes the rest and scrolls — so the scrollbar
+					// belongs to the body alone, and nothing shows through above the header or below
+					// the footer. Sticky bands inside a padded scroll container looked right until you
+					// scrolled: the container's own padding stayed put and content ran through it.
+					"fixed top-1/2 left-1/2 z-50 flex max-h-[90vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-foreground/15 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
 					className,
 				)}
 				{...props}
@@ -69,8 +76,35 @@ function DialogContent({
 	);
 }
 
+/**
+ * Everything between the two bands, and the only part that scrolls.
+ *
+ * It exists so the scrollbar belongs to the content rather than to the whole dialog: a scrollbar
+ * running the full height reaches past the header and footer, which do not move, and looks like it
+ * would scroll them.
+ *
+ * `min-h-0` is what lets it shrink below its content — a flex child refuses to by default, which
+ * would push the footer off the bottom of the viewport instead of scrolling.
+ */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+	return (
+		<div
+			data-slot="dialog-body"
+			className={cn("flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4", className)}
+			{...props}
+		/>
+	);
+}
+
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
-	return <div data-slot="dialog-header" className={cn("flex flex-col gap-2", className)} {...props} />;
+	// The same band a card's header carries.
+	return (
+		<div
+			data-slot="dialog-header"
+			className={cn("flex flex-none flex-col gap-1 border-b border-border bg-card-band px-4 py-3", className)}
+			{...props}
+		/>
+	);
 }
 
 function DialogFooter({
@@ -85,7 +119,10 @@ function DialogFooter({
 		<div
 			data-slot="dialog-footer"
 			className={cn(
-				"-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+				// The same band as the header, at the other end. It was `bg-muted/50`, which over the
+				// old popover surface computed to within a shade of it — a footer that was there in
+				// the markup and invisible on screen.
+				"flex flex-none flex-col-reverse gap-2 border-t border-border bg-card-band px-4 py-3 sm:flex-row sm:justify-end",
 				className,
 			)}
 			{...props}
@@ -122,6 +159,7 @@ function DialogDescription({ className, ...props }: DialogPrimitive.Description.
 export {
 	Dialog,
 	DialogClose,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,

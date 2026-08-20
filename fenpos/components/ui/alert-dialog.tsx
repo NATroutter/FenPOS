@@ -121,8 +121,27 @@ function AlertDialogDescription({
 	);
 }
 
-function AlertDialogAction({ className, ...props }: React.ComponentProps<typeof Button>) {
-	return <Button data-slot="alert-dialog-action" className={cn(className)} {...props} />;
+/**
+ * The button that carries out the thing being confirmed.
+ *
+ * Rendered through `Close`, like the cancel button, so answering the question dismisses it. As a
+ * plain button it did not: the dialog stayed open behind whatever the action produced, and
+ * dismissing that revealed the question again — as if it were being asked a second time.
+ */
+function AlertDialogAction({
+	className,
+	variant = "default",
+	size = "default",
+	...props
+}: AlertDialogPrimitive.Close.Props & Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
+	return (
+		<AlertDialogPrimitive.Close
+			data-slot="alert-dialog-action"
+			className={cn(className)}
+			render={<Button variant={variant} size={size} />}
+			{...props}
+		/>
+	);
 }
 
 function AlertDialogCancel({

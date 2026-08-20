@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Pause, Play, Plug, PlugZap, Settings2, Trash, Trash2 } from "lucide-react";
+import { FileText, Pause, Play, Plug, PlugZap, Printer, Settings2, Trash, Trash2 } from "lucide-react";
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { clearQueue, deleteDevice, printTestPage, setConnected, setPaused } from "@/app/(panel)/devices/actions";
@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import type { ConnectionStatus } from "@/lib/domain/enums";
 
@@ -76,6 +76,7 @@ export function DeviceCard({ device }: { device: DeviceCardData }) {
 	return (
 		<Card className="flex flex-col">
 			<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
+				<Printer className="size-4.5 shrink-0 text-subtle-foreground" />
 				<div className="min-w-0 flex-1">
 					<div className="truncate font-mono text-[13.5px] font-medium">{device.name}</div>
 					<div className="mt-0.5 truncate text-[11.5px] text-subtle-foreground">{device.agentName}</div>
@@ -98,7 +99,9 @@ export function DeviceCard({ device }: { device: DeviceCardData }) {
 					<Detail label="Printing" value={device.paused ? "Paused" : "Running"} />
 				</dl>
 
-				<div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
+				{/* `mt-0` because the offline note sits below this row. On `mt-auto` the row was pushed
+					    down the card until it met the note, which left a gap above the buttons. */}
+				<CardActions className="mt-0 gap-2">
 					<Action
 						title={connected ? "Close the port" : "Open the port"}
 						disabled={!online || pending}
@@ -189,7 +192,7 @@ export function DeviceCard({ device }: { device: DeviceCardData }) {
 							</AlertDialogFooter>
 						</AlertDialogContent>
 					</AlertDialog>
-				</div>
+				</CardActions>
 
 				{!online ? (
 					<p className="text-[11.5px] text-subtle-foreground">

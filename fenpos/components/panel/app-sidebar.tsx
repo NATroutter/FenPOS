@@ -4,6 +4,7 @@ import { LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
+import { HEADER_STRIP } from "@/components/panel/panel-header";
 import { ProfileDialog } from "@/components/panel/profile-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import {
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { NAV_GROUPS } from "@/lib/navigation";
+import { cn } from "@/lib/utils";
 
 /**
  * The panel's primary navigation.
@@ -44,9 +46,10 @@ export function AppSidebar({
 
 	return (
 		<Sidebar>
-			<SidebarHeader className="border-b border-sidebar-border p-4">
-				<BrandMark size="compact" />
-				<div className="mt-1.5 font-mono text-[11.5px] text-subtle-foreground">v{version}</div>
+			{/* Same height as the page header beside it, so the two bottom borders read as the one
+			    line they appear to be. See HEADER_STRIP. */}
+			<SidebarHeader className={cn("justify-center border-b border-sidebar-border px-4 py-3", HEADER_STRIP)}>
+				<BrandMark size="compact" caption={`v${version}`} />
 			</SidebarHeader>
 
 			<SidebarContent>
@@ -61,6 +64,15 @@ export function AppSidebar({
 										<SidebarMenuItem key={item.href}>
 											<SidebarMenuButton
 												isActive={active}
+												// The accent bar marking the current section. Styled here rather than in the
+												// sidebar primitive because it belongs to this product's navigation, not to
+												// every menu button the primitive will ever draw. It earns a strong colour by
+												// encoding something true — which page you are on — rather than decorating.
+												className={cn(
+													"relative before:absolute before:top-1/2 before:left-0 before:h-4 before:w-[3px]",
+													"before:-translate-y-1/2 before:rounded-full before:bg-brand before:opacity-0",
+													"before:transition-opacity data-active:before:opacity-100",
+												)}
 												tooltip={item.label}
 												render={
 													<Link href={item.href}>

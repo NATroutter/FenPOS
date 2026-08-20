@@ -8,7 +8,7 @@ import {
 	requireGrantedDevice,
 	requirePermission,
 } from "@/lib/keys/authenticate";
-import { createApiKey, revokeApiKey } from "@/lib/keys/key-service";
+import { createApiKey, rerollApiKey, revokeApiKey } from "@/lib/keys/key-service";
 
 /**
  * Tests for the public API's authorisation boundary.
@@ -121,6 +121,66 @@ describe("API key authorisation", () => {
 		const row = await prisma.apiKey.findUnique({ where: { id: key.id } });
 		expect(row?.keyHash).not.toBe(key.secret);
 		expect(JSON.stringify(row)).not.toContain(key.secret);
+	});
+
+	// -----------------------------------------------------------------------
+	// Rerolling
+	// -----------------------------------------------------------------------
+
+	it("refuses the old secret after a reroll", async () => {
+		const key = await mint(["print"], [kitchenId]);
+		await rerollApiKey(key.id);
+
+		// Indistinguishable from a key that never existed, for the same reason a revoked one is.
+		expect((await refusal(() => authenticate(key.secret))).code).toBe("invalid_key");
+	});
+
+	it("accepts the new secret after a reroll, with the grants intact", async () => {
+		const key = await mint(["print", "jobs:read"], [kitchenId]);
+
+		const reissued = await rerollApiKey(key.id);
+		const authenticated = await authenticate(reissued.secret);
+
+		// The same key, which is the point: rerolling rotates the credential and nothing else.
+		expect(authenticated.id).toBe(key.id);
+		expect([...authenticated.permissions].sort()).toEqual(["jobs:read", "print"]);
+		await expect(requireGrantedDevice(authenticated, "site-a", "kitchen")).resolves.toBeDefined();
+	});
+
+	it("issues a different secret than the one it replaces", async () => {
+		const key = await mint(["print"], []);
+
+		const reissued = await rerollApiKey(key.id);
+
+		expect(reissued.secret).not.toBe(key.secret);
+		expect(reissued.id).toBe(key.id);
+	});
+
+	it("never stores the rerolled secret either", async () => {
+		const key = await mint(["print"], []);
+
+		const reissued = await rerollApiKey(key.id);
+
+		const row = await prisma.apiKey.findUnique({ where: { id: key.id } });
+		expect(row?.keyHash).not.toBe(reissued.secret);
+		expect(JSON.stringify(row)).not.toContain(reissued.secret);
+	});
+
+	it("clears the last-used time, which described the secret that is gone", async () => {
+		const key = await mint(["print"], [kitchenId]);
+		await prisma.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } });
+
+		await rerollApiKey(key.id);
+
+		expect((await prisma.apiKey.findUnique({ where: { id: key.id } }))?.lastUsedAt).toBeNull();
+	});
+
+	it("refuses to reroll a revoked key rather than bringing it back", async () => {
+		const key = await mint(["print"], []);
+		await revokeApiKey(key.id);
+
+		// Revoking is documented as irreversible; rerolling must not be the way around it.
+		expect((await refusal(() => rerollApiKey(key.id))).code).toBe("invalid_type");
 	});
 
 	// -----------------------------------------------------------------------

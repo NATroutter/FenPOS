@@ -1,7 +1,7 @@
 import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
 import { listSettings } from "@/lib/settings/settings-service";
 
-export const metadata = { title: "Settings · FenPOS" };
+export const metadata = { title: "Settings" };
 
 /** Never cached: the values are what the panel just wrote. */
 export const dynamic = "force-dynamic";
@@ -30,14 +30,6 @@ export default async function SettingsPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="border-b border-border pb-3">
-				<h2 className="text-[15px] font-semibold tracking-tight">Settings</h2>
-				<p className="mt-1 text-[12.5px] text-muted-foreground">
-					Install-wide defaults. Per-printer settings are on the Devices tab, and the administrator password is under
-					your profile in the sidebar.
-				</p>
-			</div>
-
 			<div>
 				<SettingsForm settings={fields} />
 			</div>

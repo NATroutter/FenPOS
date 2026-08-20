@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
+import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection, type Verb } from "@/app/(panel)/docs/doc-section";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
@@ -7,7 +8,7 @@ import { PERMISSIONS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
 
-export const metadata = { title: "Docs · FenPOS" };
+export const metadata = { title: "Docs" };
 
 /** Never cached: the examples name real agents and printers from this install. */
 export const dynamic = "force-dynamic";
@@ -87,13 +88,14 @@ export default async function DocsPage() {
 
 	return (
 		<div className="flex w-full flex-col gap-5">
-			<div className="border-b border-border pb-3">
-				<h2 className="text-[15px] font-semibold tracking-tight">Docs</h2>
-				<p className="mt-1 text-[12.5px] text-muted-foreground">
-					The print API, as this install serves it.
-					{device ? null : " No printers are configured yet, so the examples use placeholder names."}
+			{/* Stays on the page rather than joining the description in the top bar, because it is
+			    true of this install right now rather than of the section — and it is a caveat about
+			    the examples directly below it, which is where a caveat should sit. */}
+			{device ? null : (
+				<p className="text-[12.5px] text-muted-foreground">
+					No printers are configured yet, so the examples below use placeholder names.
 				</p>
-			</div>
+			)}
 
 			{/* The two things every request needs, before any explanation of them. */}
 			<div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
@@ -131,12 +133,12 @@ export default async function DocsPage() {
   -H "Content-Type: application/json" \\
   -d '{
     "data": [
-      "<align=center><bold>KAHVILA</bold></align>",
+      "<align=center><bold>THE CORNER CAFE</bold></align>",
       "<hr>",
-      "Kahvi            2.50",
-      "Pulla            3.00",
+      "Coffee           2.50",
+      "Pastry           3.00",
       "<hr>",
-      "<bold>Yhteensa         5.50</bold>",
+      "<bold>Total            5.50</bold>",
       "<feed=3>",
       "<cut>"
     ]
@@ -318,23 +320,7 @@ export default async function DocsPage() {
 					</DocSection>
 				</div>
 
-				<nav aria-label="On this page" className="hidden xl:sticky xl:top-2 xl:block">
-					<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">
-						On this page
-					</div>
-					<ul className="mt-2 flex flex-col gap-px border-l border-border">
-						{SECTIONS.map((section) => (
-							<li key={section.id}>
-								<a
-									href={`#${section.id}`}
-									className="-ml-px block border-l border-transparent py-1 pl-3 text-[12px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
-								>
-									{section.title}
-								</a>
-							</li>
-						))}
-					</ul>
-				</nav>
+				<ContentsRail sections={SECTIONS} />
 			</div>
 		</div>
 	);

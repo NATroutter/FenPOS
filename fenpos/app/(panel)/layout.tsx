@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/panel/app-sidebar";
 import { EventStreamProvider } from "@/components/panel/event-stream";
 import { PanelHeader } from "@/components/panel/panel-header";
+import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { isPasswordGenerated } from "@/lib/auth/admin";
 import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
@@ -41,7 +42,8 @@ async function signOut(): Promise<void> {
  * is therefore unreachable without a valid session.
  */
 export default async function PanelLayout({ children }: LayoutProps<"/">) {
-	if (!(await getCurrentSession())) {
+	const session = await getCurrentSession();
+	if (!session) {
 		redirect("/login");
 	}
 
@@ -59,6 +61,7 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 				{/* Wraps the header as well as the pages, because the chip that governs the stream
 				    lives in the header while everything consuming it is below. */}
 				<EventStreamProvider>
+					<SessionExpiry expiresAt={session.expiresAt.getTime()} />
 					<PanelHeader startedAt={SERVER_STARTED_AT} />
 					<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
 				</EventStreamProvider>
