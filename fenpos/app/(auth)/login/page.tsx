@@ -8,7 +8,7 @@ import { SESSION_TTL_MS } from "@/lib/auth/session";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 
 export const metadata: Metadata = {
-	title: "Sign in · FenPOS",
+	title: "Sign in",
 };
 
 /**

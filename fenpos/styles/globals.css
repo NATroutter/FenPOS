@@ -8,6 +8,7 @@
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-brand: var(--brand);
+	--color-card-band: var(--card-band);
 	--color-subtle-foreground: var(--subtle-foreground);
 	--font-sans: var(--font-sans);
 	--font-mono:
@@ -67,10 +68,29 @@
 	--background: #0a0a0a;
 	--foreground: #fafafa;
 
-	/* Raised surfaces: cards, the sidebar, dialogs, popovers. */
-	--card: #171717;
+	/*
+   * A card is chrome around a well, not a slab.
+   *
+   *   #1c1c1c  the bands — the card's chrome, and the lightest part of it
+   *   #101010  the body — a dark well the content sits in, close to the page
+   *   #0a0a0a  the page itself
+   *
+   * One token for both bands rather than two with the same value: a header naming the card and
+   * a footer carrying its controls are the same surface at opposite ends, and giving them
+   * separate tokens would be an invitation for them to drift apart for no reason.
+   *
+   * What separates a card from the page is its hairline and its header band, not a lighter
+   * fill. That is why the body can stay near-black: an editor, a table or a list of fields all
+   * read better sunk into the card than floated on it, and a card that was uniformly lighter
+   * than the page turned every one of them into a slab.
+   *
+   * Popovers sit above all of it at #242424 — lighter than any card surface, because a menu
+   * that opened darker than what it was opened from would invert the depth this expresses.
+   */
+	--card: #101010;
 	--card-foreground: #fafafa;
-	--popover: #171717;
+	--card-band: #161616;
+	--popover: #242424;
 	--popover-foreground: #fafafa;
 
 	/* The primary action inverts the page: light surface, dark text. */
@@ -94,8 +114,15 @@
 	--ring: #737373;
 
 	/*
-   * The FenPOS mark. Used for the logo and nothing else, so it stays a brand cue instead of
-   * becoming a status colour competing with the state chips.
+   * The FenPOS accent.
+   *
+   * Reserved for things that are neither good nor bad: which page you are on, what you have
+   * selected, the mark itself. Emerald, amber, sky and --destructive all answer "how is the
+   * system doing"; this one answers "where am I". Keeping it off anything that carries a state
+   * is what stops it being read as one — which matters here, because --destructive is only a
+   * step away from it and the two must never be confused.
+   *
+   * Not for buttons that act, badges, or body text.
    */
 	--brand: #e62d3e;
 
@@ -130,5 +157,16 @@
 	}
 	html {
 		@apply font-sans;
+	}
+
+	/*
+   * Selected text carries the accent.
+   *
+   * It appears only while the operator is dragging, so it never becomes ambient colour, and
+   * selected text makes no claim about the system — which is what qualifies it for --brand.
+   * Partial alpha rather than the solid colour so the text on top keeps its contrast.
+   */
+	::selection {
+		background-color: color-mix(in oklab, var(--brand) 40%, transparent);
 	}
 }

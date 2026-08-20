@@ -2,10 +2,10 @@
 
 import { useActionState } from "react";
 import { type SignInState, signIn } from "@/app/(auth)/login/actions";
+import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 const INITIAL_STATE: SignInState = { error: null };
@@ -23,10 +23,9 @@ export function LoginForm() {
 		<form action={formAction} className="flex flex-col gap-5">
 			<Field>
 				<FieldLabel htmlFor="password">Password</FieldLabel>
-				<Input
+				<PasswordInput
 					id="password"
 					name="password"
-					type="password"
 					autoComplete="current-password"
 					placeholder="••••••••••••"
 					className="font-mono"

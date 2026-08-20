@@ -2,10 +2,10 @@
 
 import { useActionState } from "react";
 import { type SetPasswordState, setPassword } from "@/app/(auth)/set-password/actions";
+import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 const INITIAL_STATE: SetPasswordState = { error: null };
@@ -27,10 +27,9 @@ export function SetPasswordForm() {
 		<form action={formAction} className="flex flex-col gap-5">
 			<Field>
 				<FieldLabel htmlFor="password">New password</FieldLabel>
-				<Input
+				<PasswordInput
 					id="password"
 					name="password"
-					type="password"
 					autoComplete="new-password"
 					placeholder="••••••••••••"
 					className="font-mono"
@@ -41,10 +40,9 @@ export function SetPasswordForm() {
 
 			<Field>
 				<FieldLabel htmlFor="confirm">Confirm new password</FieldLabel>
-				<Input
+				<PasswordInput
 					id="confirm"
 					name="confirm"
-					type="password"
 					autoComplete="new-password"
 					placeholder="••••••••••••"
 					className="font-mono"

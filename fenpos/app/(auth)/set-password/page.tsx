@@ -8,7 +8,7 @@ import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 
 export const metadata: Metadata = {
-	title: "Set a password · FenPOS",
+	title: "Set a password",
 };
 
 /** Never prerendered: what this page should do depends on the session and the stored credential. */
