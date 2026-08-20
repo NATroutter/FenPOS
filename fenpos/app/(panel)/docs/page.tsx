@@ -4,6 +4,7 @@ import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection, type Verb } from "@/app/(panel)/docs/doc-section";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
+import { BarcodeSystem } from "@/lib/domain/enums";
 import { PERMISSIONS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
@@ -27,6 +28,7 @@ const SECTIONS = [
 		path: "/api/print/{agent}/{device}",
 	},
 	{ id: "markup", title: "Markup", note: "What a data element may contain" },
+	{ id: "blocks", title: "Blocks", note: "Symbols and the drawer, and the paper they cost" },
 	{ id: "authentication", title: "Authentication", note: "Bearer keys, permissions and device grants" },
 	{
 		id: "following",
@@ -55,10 +57,49 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		meaning: "Print this line as written. Must enclose the whole element, like <align>.",
 	},
 	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its element." },
+	{
+		syntax: "<qr>…</qr>",
+		meaning: "A QR code. <qr=8> sets the module size, 1–16, default 6. ASCII only. Must be alone in its element.",
+	},
+	{
+		syntax: "<barcode=EAN13>…</barcode>",
+		meaning:
+			"A linear barcode. UPCA, UPCE, EAN13, EAN8, CODE39, ITF, CODABAR, CODE93 or CODE128, each with its own content rule. Must be alone in its element.",
+	},
+	{
+		syntax: "<pdf417>…</pdf417>",
+		meaning:
+			"A PDF417 symbol. <pdf417=4> sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its element.",
+	},
+	{
+		syntax: "<drawer>",
+		meaning: "Pulse the cash drawer on pin 2. <drawer=5> uses the other pin. Prints nothing, so it may share a line.",
+	},
 	{ syntax: "<feed=3>", meaning: "Advance the paper, 1–255 lines." },
 	{ syntax: "<cut>", meaning: "Cut the paper. <cut=partial> leaves a tab." },
 	{ syntax: "&lt; and &amp;", meaning: "A literal < or &. Any other ampersand is literal text." },
 ];
+
+/**
+ * What each symbology will accept, as `<barcode>` enforces it.
+ *
+ * Keyed by the symbology set itself, so a symbology added to `BarcodeSystem` fails to compile
+ * until it is described here — the alternative being a table that quietly goes one row short. The
+ * wording restates `BARCODE_CONTENT_RULES` in `lib/markup/blocks.ts` rather than reading it,
+ * because those functions return refusals ("EAN13 requires exactly 13 digits") and a reference
+ * reads better stating what is allowed than what is not.
+ */
+const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
+	UPCA: "Exactly 12 digits.",
+	UPCE: "7 or 8 digits, the first of them the 0 that names the number system.",
+	EAN13: "Exactly 13 digits.",
+	EAN8: "Exactly 8 digits.",
+	CODE39: "Digits, A–Z, spaces and -.$/+%",
+	ITF: "An even number of digits: it encodes them in pairs.",
+	CODABAR: "A, B, C or D at each end, with digits and -$:./+ between.",
+	CODE93: "Digits, A–Z, spaces and -.$/+%",
+	CODE128: "Any non-empty text, taken literally.",
+};
 
 /**
  * The Docs tab.
@@ -155,7 +196,8 @@ export default async function DocsPage() {
 								<P>
 									Each element of <Mono>data</Mono> is one line before wrapping. Tags are case-insensitive and nest,
 									except <Mono>&lt;align&gt;</Mono>, <Mono>&lt;wrap&gt;</Mono>, <Mono>&lt;nowrap&gt;</Mono> and{" "}
-									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it.
+									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it. So do the block tags,
+									which additionally admit no tags inside them — see Blocks below.
 								</P>
 
 								<P>
@@ -196,6 +238,96 @@ export default async function DocsPage() {
 						<Split>
 							<Col>
 								<P>
+									<Mono>&lt;qr&gt;</Mono>, <Mono>&lt;barcode&gt;</Mono> and <Mono>&lt;pdf417&gt;</Mono> enclose the
+									payload of a symbology — a URL, an article number — rather than text. No tag may appear inside one,
+									since styling data changes nothing about the printed symbol, and nothing else may share the element: a
+									symbol is a block of dots several lines tall, so anything beside it would overflow the line by
+									construction. <Mono>&lt;align&gt;</Mono> still applies, because it justifies the whole line and the
+									symbol with it.
+								</P>
+
+								<P>
+									<Mono>&lt;drawer&gt;</Mono> is the exception. It pulses a solenoid rather than laying down dots, so it
+									costs the paper nothing and may sit beside text — the line that prints the total can open the till.
+								</P>
+
+								<P>
+									Content is checked when the block closes, and refused with <Status>400</Status>{" "}
+									<Mono>invalid_tag_argument</Mono> at the opening tag. The rules beside are format only: a check digit
+									that does not add up is refused as well, by the encoder rather than by the rule, so both mistakes come
+									back in the response rather than on the paper.
+								</P>
+
+								<P>
+									QR and PDF417 content must be ASCII, which is a limit of the agent rather than of the symbologies. Its
+									printer library declares the symbol's length in characters while writing the string as UTF-8 bytes, so
+									one character above <Mono>U+007F</Mono> leaves the printer reading a truncated payload as a perfectly
+									valid symbol. A symbol that scans and is wrong is worse than one that fails to print, so it is refused
+									here instead.
+								</P>
+
+								<P>
+									<Mono>CODE128</Mono> takes its content literally. Code 128 has no field for which of its three code
+									sets is in use, so the selector travels inside the data as <Mono>{"{A"}</Mono>, <Mono>{"{B"}</Mono> or{" "}
+									<Mono>{"{C"}</Mono>; the agent names code set B itself and doubles every brace it was given. A brace
+									prints as a brace, and there is no way to switch code set or emit an FNC character.
+								</P>
+
+								<Aside>
+									<Mono>maxOutputLines</Mono> counts paper, not elements. A symbol costs the height it really prints —
+									seven lines for a default-size QR code of a short URL, five for any linear barcode — so a receipt of
+									symbols spends the limit far faster than a receipt of text, and can come back <Status>400</Status>{" "}
+									<Mono>too_many_output_lines</Mono>. A <Mono>&lt;hr&gt;</Mono> costs the one line it prints;{" "}
+									<Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and <Mono>&lt;drawer&gt;</Mono> cost nothing,
+									since none of them lays dots on the paper as text. The Tools tab shows what a job would spend against
+									the limit before it is sent.
+								</Aside>
+							</Col>
+
+							<Col>
+								<div className="min-w-0 overflow-x-auto rounded-lg border border-border">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead className="w-[110px]">Symbology</TableHead>
+												<TableHead>Content</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{BarcodeSystem.values.map((system) => (
+												<TableRow key={system}>
+													<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+														{system}
+													</TableCell>
+													<TableCell className="text-[12px] text-muted-foreground">
+														{SYMBOLOGY_CONTENT[system]}
+													</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+								</div>
+
+								<CodeBlock label="Request">{`curl -X POST ${base}/api/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "data": [
+      "<align=center><qr>https://corner.cafe/r/8f21</qr></align>",
+      "<align=center><barcode=EAN13>5901234123457</barcode></align>",
+      "<bold>Total            5.50</bold><drawer>",
+      "<feed=3>",
+      "<cut>"
+    ]
+  }'`}</CodeBlock>
+							</Col>
+						</Split>
+					</DocSection>
+
+					<DocSection {...SECTIONS[3]}>
+						<Split>
+							<Col>
+								<P>
 									Every request carries <Mono>Authorization: Bearer &lt;key&gt;</Mono>. Keys are created on the Keys
 									tab, shown once, and stored only as a hash — a lost key is replaced, not recovered.
 								</P>
@@ -227,7 +359,7 @@ export default async function DocsPage() {
 						</Split>
 					</DocSection>
 
-					<DocSection {...SECTIONS[3]}>
+					<DocSection {...SECTIONS[4]}>
 						<Split>
 							<Col>
 								<P>
@@ -248,7 +380,7 @@ export default async function DocsPage() {
 						</Split>
 					</DocSection>
 
-					<DocSection {...SECTIONS[4]}>
+					<DocSection {...SECTIONS[5]}>
 						<Split>
 							<Col>
 								<P>
