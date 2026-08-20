@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Jimp } from "jimp";
 import { describe, expect, it } from "vitest";
@@ -107,6 +108,28 @@ describe("ditherToRaster", () => {
 		}
 		expect(run).toContain(true);
 		expect(run).toContain(false);
+	});
+
+	/**
+	 * The whole raster, pinned.
+	 *
+	 * The two tests above separate error diffusion from a plain threshold, but they do not separate
+	 * the right kernel from a wrong one. Transposing the 3/16 and 5/16 weights, scrambling all four,
+	 * or sending the entire error straight down all still produce a raster whose rows differ and
+	 * whose mid-tones are mixed — so both still pass while every printed image is subtly wrong. A
+	 * property test cannot catch that; only the bytes can.
+	 *
+	 * **If this hash fails, the printed output changed.** It is not a number to refresh until the
+	 * test goes green. Something moved — the kernel, the resize, the greyscale weights, the
+	 * threshold, the packing, or jimp's resampling under a version bump — and the question to answer
+	 * first is whether the new picture is the one that should come off the printer. Only then record
+	 * the new hash, and say in the commit message what changed about the printed image.
+	 */
+	it("renders the recorded raster, dot for dot", async () => {
+		const raster = await ditherToRaster(PNG, 384);
+		expect(createHash("sha256").update(raster.packed).digest("hex")).toBe(
+			"6d4655639de591f303d529377008a26ca1852064b1d1402e6ba21423243df49b",
+		);
 	});
 
 	/**
