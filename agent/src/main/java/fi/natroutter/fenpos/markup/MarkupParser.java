@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.markup;
 
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.markup.model.Directive;
 import fi.natroutter.fenpos.markup.model.Line;
@@ -12,6 +13,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Turns one {@code data} element into a {@link Line} of styled spans and directives.
@@ -28,6 +30,14 @@ import java.util.List;
  * <p>
  * Instances are not shared: {@link #parse(String)} creates one per element, so the class
  * carries per-parse state without being thread-unsafe.
+ * <p>
+ * A port of {@code fenpos/lib/markup/parser.ts}, and the two must not drift — a tag the panel
+ * accepts and this refuses is a job that previews cleanly and then fails behind a printer. Two
+ * differences are deliberate. {@code <drawer>} exists there and not here, so nothing printed from
+ * this agent's console can fire a till. And a block tag here is emitted rather than measured:
+ * there is no symbol encoder and no image decoder on this side, which is why an {@code <image>}
+ * resolves only against rasters the server already synced, and why {@code PrintCompiler} charges
+ * a symbol nothing against its line budget. Both are documented where they bite.
  */
 public final class MarkupParser {
 
@@ -37,7 +47,61 @@ public final class MarkupParser {
     /** Highest permitted feed distance, imposed by ESC/POS {@code ESC d}. */
     private static final int MAX_FEED_LINES = 255;
 
+    /** Dots per QR module when {@code <qr>} carries no argument. Mirrors the panel's default. */
+    private static final int DEFAULT_QR_MODULE_SIZE = 6;
+
+    /** Largest QR module size, imposed by ESC/POS {@code GS ( k} function 167. */
+    private static final int MAX_QR_MODULE_SIZE = 16;
+
+    /** PDF417 error-correction level when {@code <pdf417>} carries no argument. */
+    private static final int DEFAULT_PDF417_ERROR_LEVEL = 1;
+
+    /** Highest PDF417 error-correction level, imposed by ESC/POS {@code GS ( k} function 069. */
+    private static final int MAX_PDF417_ERROR_LEVEL = 8;
+
+    /**
+     * Data columns every PDF417 written in this parser's markup is laid out with.
+     * <p>
+     * A fixed number rather than a measured one, and that is the compromise this side accepts.
+     * {@link Directive.Pdf417} must state a column count — leaving it at zero lets the firmware
+     * pick a layout, which is the drift the field was added to close — but working out the layout
+     * an encoder would choose means running one, and there is no PDF417 encoder here by design.
+     * <p>
+     * Three is the widest layout that fits the narrowest paper this system prints on: a row of
+     * {@code n} data columns is {@code 17 * (n + 4) + 1} modules across at three dots each, so
+     * three columns is 360 dots and 58mm paper has 384. Content longer than three columns hold
+     * prints as more rows rather than being refused, which costs paper and never correctness.
+     * <p>
+     * The consequence to know about: the same markup previewed on the panel and printed from here
+     * can produce symbols of different shapes — the panel measures what its encoder chose, which
+     * for short content is usually fewer columns and more rows. Both encode the same string and
+     * both scan to it. The panel measures the real layout and sends it, so a job compiled there is
+     * unaffected.
+     */
+    private static final int PDF417_DATA_COLUMNS = 3;
+
+    /** Narrowest image this system will print, as a percentage of the paper. */
+    private static final int MIN_IMAGE_WIDTH_PERCENT = 1;
+
+    /** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
+    private static final int MAX_IMAGE_WIDTH_PERCENT = 100;
+
+    /** Printed width of {@code <image>} when it carries no argument. */
+    private static final int DEFAULT_IMAGE_WIDTH_PERCENT = MAX_IMAGE_WIDTH_PERCENT;
+
+    /**
+     * Highest code point a symbol's payload may contain.
+     * <p>
+     * The renderer declares a symbol's length in characters and sends it as UTF-8 bytes, so a
+     * payload outside ASCII encodes to more bytes than were declared and prints as a symbol that
+     * scans wrongly. Refused here, at a column, rather than on paper.
+     */
+    private static final int SYMBOL_MAX_CODE_POINT = 0x7F;
+
     private final String source;
+
+    /** Where the dots for an {@code <image>} come from; holds nothing when there is no device. */
+    private final ImageResolver images;
 
     private final List<Span> spans = new ArrayList<>();
     private final List<Directive> directives = new ArrayList<>();
@@ -60,27 +124,57 @@ public final class MarkupParser {
     private String closedOwnerName;
     private MarkupError closedOwnerError;
 
-    /** Column of the rule tag, or 0 if none, used to report a scope violation. */
-    private int ruleColumn;
+    /**
+     * The block tag currently open, or null when the scanner is reading ordinary text.
+     * <p>
+     * Its presence is what diverts characters away from {@link #pending}, so it is checked by
+     * every path that would otherwise produce a span.
+     */
+    private OpenBlock block;
+
+    /**
+     * The first directive that must occupy its printed line alone, used to report a violation.
+     * <p>
+     * The first rather than the last, matching this parser's habit of naming the earliest problem
+     * in the element. The error kind travels with it because {@code <hr>} and the blocks report
+     * different ones, both of which are frozen parts of the API contract.
+     */
+    private SoleOccupant soleOccupant;
 
     /** Source column where the text currently accumulating in {@link #pending} began. */
     private int pendingColumn = 1;
 
     private int index;
 
-    private MarkupParser(String source) {
+    private MarkupParser(String source, ImageResolver images) {
         this.source = source;
+        this.images = images;
     }
 
     /**
-     * Parses one element of the request's {@code data} array.
+     * Parses one element of the request's {@code data} array, with no images available.
+     * <p>
+     * An {@code <image>} tag is still recognised and still checked; it simply cannot resolve, and
+     * says so. Callers holding a device should use {@link #parse(String, ImageResolver)}.
      *
      * @param source the element text, as supplied by the client
      * @return the parsed line; a blank element yields a line with no spans
      * @throws MarkupException if the element is malformed, carrying the column at fault
      */
     public static Line parse(String source) throws MarkupException {
-        return new MarkupParser(source == null ? "" : source).run();
+        return parse(source, ImageResolver.NONE);
+    }
+
+    /**
+     * Parses one element of the request's {@code data} array.
+     *
+     * @param source the element text, as supplied by the client
+     * @param images where an {@code <image>} tag's dots come from
+     * @return the parsed line; a blank element yields a line with no spans
+     * @throws MarkupException if the element is malformed, carrying the column at fault
+     */
+    public static Line parse(String source, ImageResolver images) throws MarkupException {
+        return new MarkupParser(source == null ? "" : source, images).run();
     }
 
     private Line run() throws MarkupException {
@@ -102,7 +196,7 @@ public final class MarkupParser {
                     "Tag <" + unclosed.tag().tagName() + "> was never closed");
         }
 
-        verifyRuleScope();
+        verifyBlockScope();
 
         return new Line(align, wrap, spans, directives);
     }
@@ -118,6 +212,11 @@ public final class MarkupParser {
                     "Control characters cannot be printed; use markup tags for formatting");
         }
         requireInsideLineScope(index + 1);
+        if (block != null) {
+            block.content().append(current);
+            index++;
+            return;
+        }
         beginPendingAt(index + 1);
         pending.append(current);
         index++;
@@ -146,12 +245,21 @@ public final class MarkupParser {
      * what lets {@link Span#columnAt(int)} report an exact column: an entity consumes more
      * source characters than it produces, so a span spanning one could not be measured by
      * simple arithmetic.
+     * <p>
+     * Inside a block the decoded character joins the payload instead. {@code &amp;} is the only
+     * way to write an ampersand a symbology is meant to carry, so the entity has to survive into
+     * the encoded content rather than into a span.
      *
      * @param decoded       the character the entity stands for
      * @param sourceLength  how many source characters the entity occupies
      */
     private void emitEntity(char decoded, int sourceLength) throws MarkupException {
         requireInsideLineScope(index + 1);
+        if (block != null) {
+            block.content().append(decoded);
+            index += sourceLength;
+            return;
+        }
         flushPending();
         spans.add(new Span(String.valueOf(decoded), style, index + 1));
         index += sourceLength;
@@ -204,6 +312,10 @@ public final class MarkupParser {
                 MarkupError.UNKNOWN_TAG, column, name,
                 "Unknown tag '" + name + "'; write &lt; for a literal '<'"));
 
+        if (block != null) {
+            throw insideBlock(tag, column);
+        }
+
         requireArgumentPolicy(tag, argument, column);
 
         if (tag.kind() == Tag.Kind.VOID) {
@@ -223,6 +335,11 @@ public final class MarkupParser {
             return;
         }
 
+        if (tag.isBlock()) {
+            openBlock(tag, argument, column);
+            return;
+        }
+
         requireInsideLineScope(column);
         open.push(new OpenTag(tag, column, style));
         style = applyStyle(tag, argument, column);
@@ -231,6 +348,10 @@ public final class MarkupParser {
     private void closeTag(String name, int column) throws MarkupException {
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
                 MarkupError.UNKNOWN_TAG, column, name, "Unknown tag '" + name + "'"));
+
+        if (block != null && block.tag() != tag) {
+            throw insideBlock(tag, column);
+        }
 
         if (tag.kind() == Tag.Kind.VOID) {
             throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, tag.tagName(),
@@ -260,6 +381,10 @@ public final class MarkupParser {
 
         open.pop();
         style = current.styleBefore();
+
+        if (block != null) {
+            closeBlock(block);
+        }
     }
 
     /**
@@ -276,8 +401,9 @@ public final class MarkupParser {
             case SIZE -> applySize(argument, column);
             case FONT -> style.withFont(Enums.parse(Font.class, argument).orElseThrow(
                     () -> argumentError(tag, column, "must be 'a' or 'b'")));
-            case ALIGN, WRAP, NOWRAP, CUT, FEED, HR -> throw new IllegalStateException(
-                    "Tag " + tag + " does not carry a span style");
+            case ALIGN, WRAP, NOWRAP, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
+                    throw new IllegalStateException(
+                            "Tag " + tag + " does not carry a span style");
         };
     }
 
@@ -401,6 +527,138 @@ public final class MarkupParser {
     }
 
     // -------------------------------------------------------------------------
+    // Blocks
+    // -------------------------------------------------------------------------
+
+    /**
+     * Opens {@code <qr>}, {@code <barcode>}, {@code <pdf417>} or {@code <image>}.
+     * <p>
+     * Pushed onto the same tag stack as any other paired tag, so an unclosed block is reported by
+     * the same check that catches an unclosed {@code <bold>}. What differs is the parallel
+     * {@link #block} field: while it is set the scanner writes into the block's content instead of
+     * into a span.
+     * <p>
+     * The argument is resolved here rather than when the block closes, so a bad one is refused at
+     * the position it was written and before the rest of the element has been scanned.
+     */
+    private void openBlock(Tag tag, String argument, int column) throws MarkupException {
+        requireInsideLineScope(column);
+
+        int value = switch (tag) {
+            case QR -> argument == null
+                    ? DEFAULT_QR_MODULE_SIZE
+                    : requireInt(argument, 1, MAX_QR_MODULE_SIZE, tag, column);
+            case PDF417 -> argument == null
+                    ? DEFAULT_PDF417_ERROR_LEVEL
+                    : requireInt(argument, 0, MAX_PDF417_ERROR_LEVEL, tag, column);
+            case IMAGE -> argument == null
+                    ? DEFAULT_IMAGE_WIDTH_PERCENT
+                    : requireInt(argument, MIN_IMAGE_WIDTH_PERCENT, MAX_IMAGE_WIDTH_PERCENT,
+                            tag, column);
+            case BARCODE -> 0;
+            default -> throw new IllegalStateException("Tag " + tag + " is not a block");
+        };
+
+        BarcodeSystem system = tag == Tag.BARCODE
+                ? Enums.parse(BarcodeSystem.class, argument).orElseThrow(() -> argumentError(
+                        tag, column, "must name a symbology: " + Enums.names(BarcodeSystem.class)))
+                : null;
+
+        open.push(new OpenTag(tag, column, style));
+        block = new OpenBlock(tag, column, value, system, new StringBuilder());
+    }
+
+    /**
+     * Closes a block, turning the content it captured into a directive.
+     * <p>
+     * Validation happens here, where the whole payload is finally known, and reports the opening
+     * tag's column: the content runs to the end of the block, so the tag that says how it will be
+     * encoded is the more useful thing to point a caller at.
+     * <p>
+     * What is checked is only what can be checked without an encoder — that there is content, and
+     * that a symbol's content is ASCII. A symbology's own alphabet is not checked here, unlike on
+     * the panel: the renderer's encoder refuses that content and {@code PrintCompiler} turns the
+     * refusal into a request error, so the caller is told either way rather than the rule being
+     * written out twice and drifting.
+     */
+    private void closeBlock(OpenBlock finished) throws MarkupException {
+        String content = finished.content().toString();
+        Tag tag = finished.tag();
+        int column = finished.column();
+
+        if (content.isEmpty()) {
+            throw argumentError(tag, column, tag == Tag.IMAGE
+                    ? "must enclose the name of a stored image"
+                    : "must enclose the content to encode");
+        }
+
+        Directive directive = switch (tag) {
+            case QR -> {
+                requireSymbolAscii(tag, column, content);
+                yield new Directive.Qr(content, finished.value());
+            }
+            case PDF417 -> {
+                requireSymbolAscii(tag, column, content);
+                yield new Directive.Pdf417(content, finished.value(), PDF417_DATA_COLUMNS);
+            }
+            case BARCODE -> new Directive.Barcode(finished.system(), content);
+            case IMAGE -> syncedImage(content, finished.value(), column);
+            default -> throw new IllegalStateException("Tag " + tag + " is not a block");
+        };
+
+        claimLine(tag.tagName(), column, MarkupError.INVALID_BLOCK_SCOPE);
+        directives.add(directive);
+        block = null;
+    }
+
+    /**
+     * Finds the dots for a named image, or explains that this agent does not hold them.
+     * <p>
+     * The refusal is a markup error rather than a fault because it is genuinely about the element:
+     * the name may be wrong, or the image may be one the server has not synced yet. Either way the
+     * caller can see which tag, and at which column.
+     */
+    private Directive syncedImage(String name, int widthPercent, int column)
+            throws MarkupException {
+        Optional<Directive.Image> found = images.resolve(name, widthPercent);
+        if (found.isEmpty()) {
+            throw argumentError(Tag.IMAGE, column, "cannot print '" + name + "' at " + widthPercent
+                    + "% of the paper: this agent holds no such image at that width. Only images"
+                    + " the server has synced can be printed from here, at the width they were"
+                    + " synced for.");
+        }
+        return found.get();
+    }
+
+    /**
+     * Rejects a symbol payload outside ASCII.
+     * <p>
+     * The renderer declares a symbol's length in characters and writes it as UTF-8 bytes, so
+     * anything wider encodes to more bytes than were declared and prints as a symbol that scans
+     * wrongly. Refusing beats printing something that looks right and is not.
+     */
+    private void requireSymbolAscii(Tag tag, int column, String content) throws MarkupException {
+        if (content.chars().anyMatch(codePoint -> codePoint > SYMBOL_MAX_CODE_POINT)) {
+            throw argumentError(tag, column, "content must be ASCII; the symbol's length is"
+                    + " declared in characters and sent as UTF-8 bytes, so anything else prints as"
+                    + " a symbol that scans wrongly");
+        }
+    }
+
+    /**
+     * Rejects a tag written inside an open block.
+     * <p>
+     * A block encloses the payload of a symbology, or the name of an image, not markup — so a tag
+     * nested in one would have no effect on what is printed. Refusing says so, rather than
+     * discarding it silently.
+     */
+    private MarkupException insideBlock(Tag tag, int column) {
+        return new MarkupException(MarkupError.INVALID_BLOCK_SCOPE, column, tag.tagName(),
+                "<" + block.tag().tagName() + "> encloses data rather than markup, so <"
+                        + tag.tagName() + "> cannot appear inside it");
+    }
+
+    // -------------------------------------------------------------------------
     // Directives
     // -------------------------------------------------------------------------
 
@@ -411,7 +669,7 @@ public final class MarkupParser {
             case FEED -> directives.add(new Directive.Feed(
                     requireInt(argument, 1, MAX_FEED_LINES, Tag.FEED, column)));
             case HR -> {
-                ruleColumn = column;
+                claimLine("hr", column, MarkupError.INVALID_RULE_SCOPE);
                 directives.add(new Directive.Rule());
             }
             default -> throw new IllegalStateException("Tag " + tag + " is not a directive");
@@ -428,18 +686,33 @@ public final class MarkupParser {
         throw argumentError(Tag.CUT, column, "must be 'full' or 'partial'");
     }
 
-    /**
-     * Rejects a rule sharing its element with anything else.
-     * <p>
-     * A rule expands to the full paper width, so combining it with text would overflow the
-     * line by construction rather than by accident.
-     */
-    private void verifyRuleScope() throws MarkupException {
-        boolean hasRule = directives.stream().anyMatch(Directive.Rule.class::isInstance);
-        if (hasRule && (!spans.isEmpty() || directives.size() > 1)) {
-            throw new MarkupException(MarkupError.INVALID_RULE_SCOPE, ruleColumn, "hr",
-                    "<hr> fills the paper width and must be alone in its line");
+    /** Records a directive that must be the only thing printed on its line. */
+    private void claimLine(String name, int column, MarkupError error) {
+        if (soleOccupant == null) {
+            soleOccupant = new SoleOccupant(name, column, error);
         }
+    }
+
+    /**
+     * Rejects a rule, a symbol or an image sharing its element with anything else.
+     * <p>
+     * A rule expands to the full paper width, and a symbol or an image is a block of dots several
+     * lines tall, so either combined with text would overflow its line by construction rather than
+     * by accident.
+     * <p>
+     * Mirrors the panel's check of the same name, minus its exemption for {@code <drawer>}: that
+     * tag prints nothing and so may sit beside anything, and it does not exist on this side at
+     * all. Every directive this parser can produce costs paper.
+     */
+    private void verifyBlockScope() throws MarkupException {
+        if (soleOccupant == null) {
+            return;
+        }
+        if (spans.isEmpty() && directives.size() == 1) {
+            return;
+        }
+        throw new MarkupException(soleOccupant.error(), soleOccupant.column(), soleOccupant.name(),
+                "<" + soleOccupant.name() + "> takes a whole line and must be alone in its element");
     }
 
     // -------------------------------------------------------------------------
@@ -495,5 +768,29 @@ public final class MarkupParser {
      * from the remaining stack.
      */
     private record OpenTag(Tag tag, int column, SpanStyle styleBefore) {
+    }
+
+    /**
+     * The block tag currently open, and what is being built inside it.
+     * <p>
+     * {@code content} accumulates the block's text as the scanner passes over it, which is what
+     * keeps that text out of {@link #spans}: a line carrying a symbol or an image has to stay
+     * directive-only, because such a line advances the paper by a picture's worth of dots rather
+     * than by one line of type.
+     *
+     * @param value  the tag's argument, already resolved: a QR module size, a PDF417 error level,
+     *               or an image's width percentage. Unused for a barcode, which carries a
+     *               {@code system} instead.
+     * @param system the symbology, for {@code <barcode>} only; null for every other block
+     */
+    private record OpenBlock(Tag tag, int column, int value, BarcodeSystem system,
+                             StringBuilder content) {
+    }
+
+    /**
+     * A directive that must be the only thing printed on its element, remembered so the refusal
+     * can name it and point at the column it was written on.
+     */
+    private record SoleOccupant(String name, int column, MarkupError error) {
     }
 }

@@ -10,8 +10,10 @@ package fi.natroutter.fenpos.encoding;
  * {@code IllegalArgumentException} from anywhere else in the renderer says this code is wrong,
  * and must keep its stack trace and reach a log rather than being reported as a bad job.
  *
- * <p>Unchecked because the console print path shares this renderer and cannot produce a symbol
- * at all, so a checked exception would make every caller handle a case only one of them has.
+ * <p>Unchecked because it can arise from anywhere a symbol is written, and a checked exception
+ * would push the handling onto every caller of the renderer rather than onto the two that turn it
+ * into an answer: {@code IrRenderer} fails the dispatched job, and {@code PrintCompiler} refuses
+ * the console's request with {@code invalid_tag_argument}.
  */
 public class SymbolEncodingException extends RuntimeException {
 

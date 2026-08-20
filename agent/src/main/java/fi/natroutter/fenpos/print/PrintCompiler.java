@@ -10,8 +10,10 @@ import fi.natroutter.fenpos.device.LimitSettings;
 import fi.natroutter.fenpos.device.PrintSettings;
 import fi.natroutter.fenpos.encoding.CharsetValidator;
 import fi.natroutter.fenpos.encoding.EscPosRenderer;
+import fi.natroutter.fenpos.encoding.SymbolEncodingException;
 import fi.natroutter.fenpos.encoding.UnsupportedCharacterException;
 import fi.natroutter.fenpos.enums.Linefeed;
+import fi.natroutter.fenpos.markup.ImageResolver;
 import fi.natroutter.fenpos.markup.LineWrapper;
 import fi.natroutter.fenpos.markup.MarkupException;
 import fi.natroutter.fenpos.markup.MarkupParser;
@@ -60,13 +62,28 @@ public final class PrintCompiler {
      */
     public static CompiledJob compile(String body, Device device)
             throws PrintRequestException {
+        return compile(body, device, ImageResolver.NONE);
+    }
+
+    /**
+     * Compiles a request body for the given device.
+     *
+     * @param body   the raw JSON request body
+     * @param device the target device's resolved settings
+     * @param images where an {@code <image>} tag's dots come from, usually
+     *               {@link SyncedImages#forDevice}
+     * @return the rendered payload
+     * @throws PrintRequestException if the request cannot be printed as given
+     */
+    public static CompiledJob compile(String body, Device device, ImageResolver images)
+            throws PrintRequestException {
         JsonObject root = parseObject(body);
         requireKnownFields(root);
 
         List<String> elements = readData(root, device.limits());
         Linefeed linefeed = readLinefeed(root, device.print());
 
-        List<Line> lines = layOut(elements, device);
+        List<Line> lines = layOut(elements, device, images);
         requireOutputWithinLimit(lines, device.limits());
 
         return new CompiledJob(render(lines, device.print(), linefeed), countTextLines(lines));
@@ -179,7 +196,7 @@ public final class PrintCompiler {
      * Parses, validates and wraps each element, translating the positional failures raised
      * by the parser and the encoder into request-level errors carrying the element index.
      */
-    private static List<Line> layOut(List<String> elements, Device device)
+    private static List<Line> layOut(List<String> elements, Device device, ImageResolver images)
             throws PrintRequestException {
         PrintSettings print = device.print();
         List<Line> lines = new ArrayList<>(elements.size());
@@ -187,7 +204,7 @@ public final class PrintCompiler {
         for (int index = 0; index < elements.size(); index++) {
             int lineNumber = index + 1;
             try {
-                Line parsed = MarkupParser.parse(elements.get(index));
+                Line parsed = MarkupParser.parse(elements.get(index), images);
                 Line checked = CharsetValidator.validate(
                         parsed, print.codepage(), print.onUnsupported());
                 boolean wrap = checked.wrap() == null ? print.defaultWrap() : checked.wrap();
@@ -215,7 +232,27 @@ public final class PrintCompiler {
         }
     }
 
-    /** Counts lines that advance the paper; directive-only lines do not. */
+    /**
+     * Counts lines that advance the paper; directive-only lines do not.
+     * <p>
+     * <b>A symbol or an image is counted as zero lines, and it is not.</b> A QR code, a barcode, a
+     * PDF417 symbol and a picture each occupy a directive-only line here and are charged nothing
+     * against {@code maxOutputLines}, while on paper they are a block of dots several lines tall.
+     * A job printed from this agent's console can therefore exceed the line budget the panel would
+     * have enforced on the same markup — by the height of whatever symbols it contains.
+     * <p>
+     * <b>This is deliberate, not an oversight.</b> Charging a symbol correctly means knowing how
+     * tall it comes out, which means encoding it, which means a symbol-geometry encoder in Java
+     * alongside the one the server already has. Two encoders that must agree exactly is a worse
+     * failure mode than an undercharged budget: they would drift, and the drift would show up as a
+     * job the panel accepted and the printer laid out differently. The design keeps exactly one
+     * encoder, on the server, and the server remains the authority on the line budget. This path
+     * exists for the console and for {@code TestPage} — a convenience for whoever is standing at
+     * the machine — where the cost of getting it wrong is some extra paper.
+     * <p>
+     * If that ever stops being acceptable, the fix is not a second encoder: it is to stop
+     * accepting block tags from the console, or to charge each one a fixed pessimistic height.
+     */
     private static int countTextLines(List<Line> lines) {
         return (int) lines.stream().filter(line -> !line.isDirectiveOnly()).count();
     }
@@ -228,6 +265,15 @@ public final class PrintCompiler {
             // The renderer writes to an in-memory buffer, so this cannot arise from I/O.
             // Surfacing it unchanged would mislabel a genuine bug as a transport failure.
             throw new UncheckedIOException("Rendering to an in-memory buffer failed", e);
+        } catch (SymbolEncodingException e) {
+            // A symbol encoder refusing its content. The parser checks what it can without an
+            // encoder — that there is content, and that a symbol's is ASCII — and leaves each
+            // symbology's own alphabet and check digits to the encoder that computes them. So
+            // this is the caller's mistake arriving late rather than a fault in this agent, and
+            // it is reported as a bad request. Only this type is caught: an
+            // IllegalArgumentException from anywhere else in the renderer is a bug here, and
+            // reporting it as bad markup would hide it.
+            throw PrintRequestException.of("invalid_tag_argument", e.getMessage());
         }
     }
 }

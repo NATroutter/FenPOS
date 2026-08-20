@@ -22,22 +22,20 @@ export const MARKUP_ERRORS = {
 	invalidWrapScope: "invalid_wrap_scope",
 	/** A rule tag sharing an element with other content. */
 	invalidRuleScope: "invalid_rule_scope",
-	/**
-	 * A block tag sharing an element with other content, or containing markup rather than data.
-	 *
-	 * The one code here with no counterpart in `MarkupError.java`, deliberately: the agent's
-	 * parser was frozen before block tags existed and the server is now the only side that parses
-	 * markup, so the agent can never raise this and mirroring it there would be dead code.
-	 */
+	/** A block tag sharing an element with other content, or containing markup rather than data. */
 	invalidBlockScope: "invalid_block_scope",
 	/**
 	 * A symbol measured wider than the device's paper.
 	 *
-	 * Server-only for the same reason as `invalidBlockScope`, and raised later than every other
-	 * code here: how wide the paper is belongs to the device rather than to the element, so it is
-	 * the compiler that knows, not the parser. It still arrives as a markup error because it names
-	 * a tag and a column, and because what the caller has to change is the markup — a smaller
+	 * The one code here with no counterpart in `MarkupError.java`, and raised later than every
+	 * other code here: how wide the paper is belongs to the device rather than to the element, so
+	 * it is the compiler that knows, not the parser. It still arrives as a markup error because it
+	 * names a tag and a column, and because what the caller has to change is the markup — a smaller
 	 * module size, shorter content, a different symbology.
+	 *
+	 * Server-only because measuring a symbol needs an encoder, and the design keeps exactly one of
+	 * those. The agent parses block tags too, but cannot measure them and so cannot raise this —
+	 * see `PrintCompiler.countTextLines` for what that costs and why it is accepted.
 	 */
 	symbolTooWide: "symbol_too_wide",
 	/** A character that would be interpreted by the printer as a command. */

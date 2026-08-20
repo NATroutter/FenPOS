@@ -27,9 +27,14 @@ import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
  * once during the move: the Java copy is what the agent used to run, this is what the server runs
  * now, and the translated tests are what proves they agree.
  *
- * The block tags — `<qr>`, `<barcode>`, `<pdf417>`, `<image>` and `<drawer>` — are the exception,
- * and have no Java counterpart. They were added after the server became the only side that parses
- * markup, so the agent receives them already compiled and never sees the syntax.
+ * The block tags — `<qr>`, `<barcode>`, `<pdf417>` and `<image>` — were added after the move and
+ * back-ported to the Java parser afterwards, so they too must not drift. `<drawer>` is the one tag
+ * with no Java counterpart, deliberately: markup parsed on the agent comes from its own console and
+ * from its test page, and neither should be able to fire a cash drawer.
+ *
+ * What the Java copy cannot do is measure. It has no symbol encoder and no image decoder, so it
+ * charges a symbol nothing against its own line budget and resolves an `<image>` only against
+ * rasters the server already synced. This side remains the authority on both.
  */
 
 /** Highest permitted character multiplier, imposed by ESC/POS `GS !`. */

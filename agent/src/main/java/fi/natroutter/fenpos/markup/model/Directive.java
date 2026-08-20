@@ -11,11 +11,17 @@ import fi.natroutter.fenpos.enums.BarcodeSystem;
  * <p>
  * Not every kind has a source in every pipeline, and that asymmetry is deliberate. {@link Rule}
  * arrives only from markup the agent parses itself, because a job compiled by the server has
- * already had its rule expanded to characters. The symbols, the drawer pulse and {@link Image}
- * arrive only from the server, because measuring a symbol to charge it against a job's line budget
- * needs an encoder — and turning a picture into dots needs a dithering engine — and the design
- * keeps exactly one of each, on the server, so the budget, the preview and the paper cannot
- * disagree.
+ * already had its rule expanded to characters. {@link Drawer} arrives only from the server,
+ * because the markup this agent parses has no tag for it — a console or a test page that could
+ * pop the till is a surprise nobody wants.
+ * <p>
+ * The symbols and {@link Image} arrive from both, but not on equal terms. Measuring a symbol to
+ * charge it against a job's line budget needs an encoder, and turning a picture into dots needs a
+ * dithering engine, and the design keeps exactly one of each — on the server — so that the budget,
+ * the preview and the paper cannot disagree. What that leaves this side is a symbol it can emit
+ * but not measure, and an image it can print only if the dots were already synced to it. See
+ * {@code PrintCompiler.countTextLines} for what the first costs, and {@code SyncedImages} for the
+ * second.
  */
 public sealed interface Directive {
 
@@ -126,9 +132,10 @@ public sealed interface Directive {
      * byte, a set bit meaning ink. That is the layout ESC/POS {@code GS v 0} takes, so the bytes
      * pass through the renderer unrearranged.
      *
-     * <p>Arrives only from the link. The markup this agent parses for its own console has no
-     * image tag and deliberately never will: measuring one needs the image's dimensions, which
-     * live in a database row or behind an HTTP request that nothing on this side can reach.
+     * <p>Arrives from the link, and from the agent's own markup for the narrow case where the dots
+     * are already here: {@code <image>} resolves against the rasters that came with the device
+     * configuration and against nothing else. There is no decoder and no fetch path on this side,
+     * so an image the server has not synced cannot be printed from here at all.
      *
      * @param widthDots  width in printer dots
      * @param heightDots height in printer dots

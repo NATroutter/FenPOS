@@ -30,6 +30,9 @@ public enum MarkupError {
     /** A rule tag sharing an element with other content. */
     INVALID_RULE_SCOPE("invalid_rule_scope"),
 
+    /** A block tag sharing an element with other content, or containing markup rather than data. */
+    INVALID_BLOCK_SCOPE("invalid_block_scope"),
+
     /** A character that would be interpreted by the printer as a command. */
     CONTROL_CHARACTER("control_character");
 

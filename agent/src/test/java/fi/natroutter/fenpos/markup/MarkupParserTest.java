@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.markup;
 
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.markup.model.Directive;
 import fi.natroutter.fenpos.markup.model.Line;
@@ -420,5 +421,289 @@ class MarkupParserTest {
 
         assertEquals(MarkupError.INVALID_WRAP_SCOPE, thrown.error());
         assertEquals(8, thrown.column());
+    }
+
+    // -------------------------------------------------------------------------
+    // Blocks
+    // -------------------------------------------------------------------------
+
+    @Test
+    void parsesQrWithTheDefaultModuleSize() throws Exception {
+        Line line = MarkupParser.parse("<qr>https://fenpos.test/x</qr>");
+
+        assertTrue(line.isDirectiveOnly());
+        assertEquals(List.of(new Directive.Qr("https://fenpos.test/x", 6)), line.directives());
+    }
+
+    @Test
+    void parsesQrModuleSizeArgument() throws Exception {
+        assertEquals(List.of(new Directive.Qr("x", 12)),
+                MarkupParser.parse("<qr=12>x</qr>").directives());
+    }
+
+    @Test
+    void rejectsQrModuleSizeAboveSixteen() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr=17>x</qr>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(1, thrown.column());
+    }
+
+    @Test
+    void parsesBarcodeSymbology() throws Exception {
+        assertEquals(List.of(new Directive.Barcode(BarcodeSystem.CODE39, "FENPOS")),
+                MarkupParser.parse("<barcode=code39>FENPOS</barcode>").directives());
+    }
+
+    @Test
+    void acceptsEverySymbologyThePanelOffers() throws Exception {
+        for (BarcodeSystem system : BarcodeSystem.values()) {
+            Line line = MarkupParser.parse(
+                    "<barcode=" + system.name().toLowerCase() + ">12345670</barcode>");
+
+            assertEquals(List.of(new Directive.Barcode(system, "12345670")), line.directives(),
+                    "symbology " + system);
+        }
+    }
+
+    @Test
+    void rejectsUnknownBarcodeSymbology() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<barcode=qrcode>x</barcode>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void rejectsBarcodeWithoutASymbology() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<barcode>x</barcode>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void parsesPdf417WithTheDefaultErrorLevel() throws Exception {
+        List<Directive> directives = MarkupParser.parse("<pdf417>FENPOS</pdf417>").directives();
+
+        assertEquals(1, directives.size());
+        Directive.Pdf417 symbol = (Directive.Pdf417) directives.getFirst();
+        assertEquals("FENPOS", symbol.content());
+        assertEquals(1, symbol.errorLevel());
+    }
+
+    @Test
+    void parsesPdf417ErrorLevelArgument() throws Exception {
+        Directive.Pdf417 symbol =
+                (Directive.Pdf417) MarkupParser.parse("<pdf417=5>x</pdf417>").directives().getFirst();
+
+        assertEquals(5, symbol.errorLevel());
+    }
+
+    /**
+     * The agent has no PDF417 encoder, so it cannot measure the layout one would choose. It states
+     * a fixed column count instead, which must be one the record accepts and one that fits the
+     * narrowest paper: a row of {@code n} data columns is {@code 17 * (n + 4) + 1} modules across
+     * at three dots each, and 58mm paper is 384 dots.
+     */
+    @Test
+    void pdf417StatesAColumnCountThatFitsTheNarrowestPaper() throws Exception {
+        Directive.Pdf417 symbol =
+                (Directive.Pdf417) MarkupParser.parse("<pdf417>x</pdf417>").directives().getFirst();
+
+        int widthDots = (17 * (symbol.columns() + 4) + 1) * 3;
+        assertTrue(widthDots <= 384,
+                "a PDF417 of " + symbol.columns() + " columns is " + widthDots + " dots wide");
+    }
+
+    @Test
+    void rejectsPdf417ErrorLevelAboveEight() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<pdf417=9>x</pdf417>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void acceptsPdf417ErrorLevelZeroWhichIsNotAMissingArgument() throws Exception {
+        Directive.Pdf417 symbol =
+                (Directive.Pdf417) MarkupParser.parse("<pdf417=0>x</pdf417>").directives().getFirst();
+
+        assertEquals(0, symbol.errorLevel());
+    }
+
+    @Test
+    void capturesBlockContentAsDataRatherThanSpans() throws Exception {
+        Line line = MarkupParser.parse("<qr>a b c</qr>");
+
+        assertTrue(line.spans().isEmpty());
+        assertEquals("a b c", ((Directive.Qr) line.directives().getFirst()).content());
+    }
+
+    @Test
+    void decodesEntitiesInsideABlockIntoItsPayload() throws Exception {
+        Line line = MarkupParser.parse("<qr>a&amp;b&lt;c</qr>");
+
+        assertEquals("a&b<c", ((Directive.Qr) line.directives().getFirst()).content());
+    }
+
+    @Test
+    void rejectsMarkupInsideABlock() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr>a<bold>b</bold></qr>"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+        assertEquals(6, thrown.column());
+    }
+
+    @Test
+    void rejectsAnEmptyBlock() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr></qr>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    /**
+     * The renderer declares a symbol's length in characters and writes it as UTF-8, so a payload
+     * outside ASCII would print as a symbol that scans wrongly.
+     */
+    @Test
+    void rejectsNonAsciiSymbolContent() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr>Kahvilä</qr>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void rejectsBlockSharingItsElementWithText() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("Scan: <qr>x</qr>"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+        assertEquals(7, thrown.column());
+    }
+
+    @Test
+    void rejectsTwoBlocksInOneElement() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr>x</qr><qr>y</qr>"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+        assertEquals(1, thrown.column());
+    }
+
+    @Test
+    void rejectsABlockSharingItsElementWithARule() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<hr><qr>x</qr>"));
+
+        assertEquals(MarkupError.INVALID_RULE_SCOPE, thrown.error());
+    }
+
+    @Test
+    void permitsAlignmentAroundABlock() throws Exception {
+        Line line = MarkupParser.parse("<align=center><qr>x</qr></align>");
+
+        assertEquals(Align.CENTER, line.align());
+        assertEquals(List.of(new Directive.Qr("x", 6)), line.directives());
+    }
+
+    @Test
+    void rejectsAnUnclosedBlock() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<qr>x"));
+
+        assertEquals(MarkupError.UNCLOSED_TAG, thrown.error());
+        assertEquals(1, thrown.column());
+    }
+
+    // -------------------------------------------------------------------------
+    // Images
+    // -------------------------------------------------------------------------
+
+    /** A one-dot image, which is the smallest thing {@link Directive.Image} accepts. */
+    private static final Directive.Image ONE_DOT = new Directive.Image(1, 1, new byte[] {(byte) 0x80});
+
+    @Test
+    void resolvesAnImageAgainstWhatTheAgentHolds() throws Exception {
+        Line line = MarkupParser.parse("<image>logo</image>", holding("logo", 100));
+
+        assertTrue(line.isDirectiveOnly());
+        assertEquals(List.of(ONE_DOT), line.directives());
+    }
+
+    /** A bare {@code <image>} means the whole printable width, which is what gets looked up. */
+    @Test
+    void anImageWithNoArgumentAsksForTheWholePaperWidth() {
+        assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image>logo</image>", holding("logo", 50)));
+    }
+
+    @Test
+    void passesTheWidthPercentageToTheResolver() throws Exception {
+        assertEquals(List.of(ONE_DOT),
+                MarkupParser.parse("<image=40>logo</image>", holding("logo", 40)).directives());
+    }
+
+    @Test
+    void rejectsAnImageThisAgentDoesNotHold() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image>missing</image>", holding("logo", 100)));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(1, thrown.column());
+    }
+
+    @Test
+    void rejectsAnImageWhenNoResolverWasSupplied() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image>logo</image>"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void rejectsAnImageWidthAboveTheWholePaper() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image=101>logo</image>", holding("logo", 101)));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void rejectsAnImageNamingNothing() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image></image>", holding("logo", 100)));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    /**
+     * A resolver holding exactly one image at exactly one printed width.
+     *
+     * @param name         the only name it answers to
+     * @param widthPercent the only width it answers for
+     * @return a resolver returning {@link #ONE_DOT} for that pair and nothing else
+     */
+    private static ImageResolver holding(String name, int widthPercent) {
+        return (requested, requestedPercent) ->
+                name.equals(requested) && widthPercent == requestedPercent
+                        ? java.util.Optional.of(ONE_DOT)
+                        : java.util.Optional.empty();
+    }
+
+    /**
+     * {@code <drawer>} exists in the panel's grammar and deliberately not in this one, so that
+     * nothing printed from the console or from a test page can fire the till.
+     */
+    @Test
+    void hasNoDrawerTag() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<drawer>"));
+
+        assertEquals(MarkupError.UNKNOWN_TAG, thrown.error());
     }
 }

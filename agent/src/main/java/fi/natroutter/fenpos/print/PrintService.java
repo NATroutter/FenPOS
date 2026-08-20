@@ -157,7 +157,8 @@ public class PrintService {
      */
     public PrintJob submit(Device device, String body)
             throws PrintRequestException, QueueRejectedException {
-        CompiledJob compiled = PrintCompiler.compile(body, device);
+        CompiledJob compiled = PrintCompiler.compile(
+                body, device, SyncedImages.forDevice(device, devices));
         PrintJob job = jobs.create(device.name(), compiled);
         try {
             queue(device.name()).submit(job);
