@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.print;
 
 import com.google.gson.Gson;
 import fi.natroutter.fenpos.device.Device;
+import fi.natroutter.fenpos.markup.ImageResolver;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +19,15 @@ import java.util.List;
  * what the printer does with the settings this agent holds. Compiling it from the server's copy
  * of those settings would test the wrong thing — it would still pass if the two had diverged,
  * which is exactly the fault someone reaches for a test page to find.
+ * <p>
+ * <b>The logo is printed only if this agent holds it at this device's paper width.</b> The logo
+ * ships inside the agent rather than in the operator's asset library — see {@link BundledImages}
+ * for why, and for why holding one raster per bundled width is not a ditherer on this side. Not
+ * every paper width is bundled, and a width that is not bundled resolves to nothing rather than to
+ * a stretched picture. A diagnostic that fails for a reason having nothing to do with the printer
+ * is a worse diagnostic than one that quietly prints one block fewer, so the tag is written only
+ * when the resolver says the dots are here. The check asks the <i>same resolver</i> the compile
+ * will use, which is what makes "a page this builds always compiles" true rather than hopeful.
  * <p>
  * <b>There is no {@code <drawer>} here, and there is no way to add one.</b> The tag does not exist
  * in the markup this agent parses. A test page that popped the till every time someone checked a
@@ -41,16 +51,37 @@ public final class TestPage {
     /** Payload for the PDF417 symbol. */
     private static final String PDF417_CONTENT = "FENPOS TEST";
 
+    /**
+     * The width the logo is asked for, and the width the presence check asks about.
+     * <p>
+     * A hundred is what a bare {@code <image>} means, so the two must be the same number: the check
+     * has to ask the resolver exactly what the parser will ask it, or the page could include a tag
+     * that then fails to resolve.
+     */
+    private static final int LOGO_WIDTH_PERCENT = 100;
+
     private TestPage() {
+    }
+
+    /**
+     * Builds the request body for a device's test page, without printing the logo.
+     *
+     * @param device the printer to describe and print on
+     * @return a body the compile pipeline accepts
+     */
+    public static String bodyFor(Device device) {
+        return bodyFor(device, ImageResolver.NONE);
     }
 
     /**
      * Builds the request body for a device's test page.
      *
      * @param device the printer to describe and print on
+     * @param images the images this agent can print, used to decide whether the logo is one of
+     *               them; pass the same resolver the compile will use
      * @return a body the compile pipeline accepts
      */
-    public static String bodyFor(Device device) {
+    public static String bodyFor(Device device, ImageResolver images) {
         int columns = device.print().columns();
         List<String> lines = new ArrayList<>();
 
@@ -80,6 +111,9 @@ public final class TestPage {
         lines.add("<align=center><qr>" + QR_CONTENT + "</qr></align>");
         lines.add("<align=center><barcode=CODE39>" + BARCODE_CONTENT + "</barcode></align>");
         lines.add("<align=center><pdf417>" + PDF417_CONTENT + "</pdf417></align>");
+        if (images.resolve(BundledImages.NAME, LOGO_WIDTH_PERCENT).isPresent()) {
+            lines.add("<align=center><image>" + BundledImages.NAME + "</image></align>");
+        }
 
         lines.add("<feed=3>");
         lines.add("<cut>");

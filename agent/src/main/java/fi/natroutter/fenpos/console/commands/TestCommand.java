@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.console.commands;
 
 import fi.natroutter.fenpos.console.ConsoleOutput;
 import fi.natroutter.fenpos.device.Device;
+import fi.natroutter.fenpos.print.PrintImages;
 import fi.natroutter.fenpos.print.PrintJob;
 import fi.natroutter.fenpos.print.PrintRequestException;
 import fi.natroutter.fenpos.print.PrintService;
@@ -47,7 +48,8 @@ public class TestCommand extends DeviceCommand {
 
     private void printTestPage(Device device) {
         try {
-            PrintJob job = printing.submit(device, TestPage.bodyFor(device));
+            PrintJob job = printing.submit(device,
+                    TestPage.bodyFor(device, PrintImages.forDevice(device, printing.devices())));
             out.println("Queued test page " + job.id() + " on " + device.name() + ".");
         } catch (PrintRequestException e) {
             out.println("Test page rejected (" + e.apiCode() + "): " + e.getMessage());

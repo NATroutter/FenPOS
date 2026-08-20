@@ -24,17 +24,50 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Behavioural tests for {@link TestPage}.
  * <p>
  * The page's whole purpose is that it prints. So the tests that matter are that it compiles on a
- * real device — including the block tags added for the symbols — and that its content answers the
- * questions a test page exists to answer.
+ * real device — including the block tags added for the symbols and the bundled logo — and that it
+ * still compiles on a device whose paper width nothing was bundled for, which is the one case where
+ * the logo cannot be printed at all.
  */
 class TestPageTest {
 
+    /** The logo line, exactly as the page writes it. */
+    private static final String LOGO_LINE = "<align=center><image>fenpos/logo</image></align>";
+
     @Test
     void compilesOnADevice() throws Exception {
-        CompiledJob job = PrintCompiler.compile(
-                TestPage.bodyFor(device()), device(), ImageResolver.NONE);
+        ImageResolver images = BundledImages.forDevice(device());
+
+        CompiledJob job = PrintCompiler.compile(TestPage.bodyFor(device(), images), device(), images);
 
         assertTrue(job.payload().length > 0);
+    }
+
+    /**
+     * The case a device on unbundled paper is always in. The page must still compile: a diagnostic
+     * that fails for a reason having nothing to do with the printer is a worse diagnostic than one
+     * that quietly prints one block fewer.
+     */
+    @Test
+    void compilesWhenTheLogoCannotBeResolved() throws Exception {
+        CompiledJob job = PrintCompiler.compile(
+                TestPage.bodyFor(device(), ImageResolver.NONE), device(), ImageResolver.NONE);
+
+        assertTrue(job.payload().length > 0);
+    }
+
+    /**
+     * The two halves of the conditional, stated as behaviour.
+     * <p>
+     * Both matter and for different reasons. Printing it proves the logo did not quietly stop being
+     * part of the page; omitting it proves the guard is doing something, and this half fails the
+     * moment the line is added unconditionally.
+     */
+    @Test
+    void printsTheLogoOnlyWhenItResolves() {
+        assertTrue(elements(BundledImages.forDevice(device())).contains(LOGO_LINE),
+                "a 32-column device has a bundled logo and should print it");
+        assertTrue(elements(ImageResolver.NONE).stream().noneMatch(line -> line.contains("<image")),
+                "nothing resolves, so no <image> tag should be written");
     }
 
     @Test
@@ -83,7 +116,11 @@ class TestPageTest {
      * than on the markup.
      */
     private static List<String> elements() {
-        JsonArray data = JsonParser.parseString(TestPage.bodyFor(device()))
+        return elements(ImageResolver.NONE);
+    }
+
+    private static List<String> elements(ImageResolver images) {
+        JsonArray data = JsonParser.parseString(TestPage.bodyFor(device(), images))
                 .getAsJsonObject()
                 .getAsJsonArray("data");
         return data.asList().stream().map(JsonElement::getAsString).toList();

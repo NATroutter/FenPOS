@@ -113,6 +113,24 @@ interface Example {
 const CODEPAGE_SAMPLE = "AaBb 123 .,:;!? #%&*()[] +-=/ ÄÖÜäöü ÉÑÇ éñç";
 
 /**
+ * What the test page's `<image>` names.
+ *
+ * The application's own logo, which ships *inside the agent* — dithered at each bundled paper
+ * width by `pnpm agent:bundle-logo` and read from the jar by `BundledImages.java`. It is
+ * deliberately not an asset: the Assets tab holds the operator's content, and a diagnostic that
+ * breaks when someone tidies their library is a bad diagnostic. The slash puts it outside
+ * `NAME_PATTERN`, so no asset can ever be stored under this name.
+ *
+ * **This is the one line of the test page this editor cannot print.** Nothing here can reach the
+ * agent's jar, so previewing or printing this example reports `unknown_asset` for the logo — the
+ * true answer for the server to give, since the server really does not hold that picture. Delete
+ * the line to run the rest. It stays in the example because the example exists to be compared,
+ * element for element, against the page the agent prints, and an example missing a line the agent
+ * prints is the failure that matters more.
+ */
+const BUNDLED_LOGO = "fenpos/logo";
+
+/**
  * A ruler marking every tenth column, so a wrong `columns` setting is visible rather than counted.
  *
  * Ported from `TestPage.java`'s `ruler`, and must stay identical to it: the point of loading the
@@ -139,9 +157,11 @@ function ruler(columns: number): string {
  * through the editor.
  *
  * **The test page must stay in step with `TestPage.java`, element for element**, because comparing
- * this preview against what the agent actually prints is the whole point of having it here. One
- * difference is deliberate and is the only one: {@link CODEPAGE_SAMPLE}, which the agent filters
- * against the device's charset and this cannot. Documented where it is written.
+ * this preview against what the agent actually prints is the whole point of having it here. Two
+ * differences are deliberate and are the only two: {@link CODEPAGE_SAMPLE}, which the agent filters
+ * against the device's charset and this cannot, and {@link BUNDLED_LOGO}, which the agent omits on a
+ * paper width it holds no raster for and which nothing here can resolve at all. Both are documented
+ * where they are written.
  */
 const EXAMPLES: Example[] = [
 	{
@@ -176,6 +196,7 @@ const EXAMPLES: Example[] = [
 				"<align=center><qr>https://fenpos.test/page</qr></align>",
 				"<align=center><barcode=CODE39>FENPOS</barcode></align>",
 				"<align=center><pdf417>FENPOS TEST</pdf417></align>",
+				`<align=center><image>${BUNDLED_LOGO}</image></align>`,
 				"<feed=3>",
 				"<cut>",
 			].join("\n"),
