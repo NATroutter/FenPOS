@@ -1,6 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import {
 	BookOpen,
+	// `Image` is also a DOM global, and one that a React file legitimately reaches for. Aliased so
+	// the name in this file can only mean the icon.
+	Image as ImageIcon,
 	KeyRound,
 	LayoutDashboard,
 	ListOrdered,
@@ -114,6 +117,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Keys for machines that print. Each is shown once when created and stored only as a hash, so a lost key is replaced rather than recovered.",
 				icon: KeyRound,
+			},
+			{
+				href: "/assets",
+				label: "Assets",
+				title: "Assets",
+				description:
+					"Images receipts can print. Referenced from markup by name, and pushed to the agents that need them.",
+				icon: ImageIcon,
 			},
 			{
 				href: "/settings",
