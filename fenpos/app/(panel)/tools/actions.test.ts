@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { symbolGeometry } from "@/lib/markup/blocks";
+import { dotWidth, type SymbolSpec, symbolGeometry, symbolSvg } from "@/lib/markup/blocks";
 
 /**
  * Tests for what the Tools tab's preview reports.
@@ -21,28 +21,81 @@ const { preview } = await import("@/app/(panel)/tools/actions");
 
 const QR_CONTENT = "https://cafe.example/o/123";
 
+/** The width of the printer these previews are compiled against. */
+const COLUMNS = 32;
+
+/**
+ * The block a symbol should arrive as, drawn and measured from the shared module.
+ *
+ * Built from `blocks.ts` rather than from literals: the property under test is that the preview
+ * reports what that module says, so restating its answers here would only pin them to themselves.
+ *
+ * @param spec the symbol
+ * @returns the block the preview should carry for it
+ */
+function drawn(spec: SymbolSpec) {
+	const geometry = symbolGeometry(spec);
+	return {
+		spec,
+		svg: symbolSvg(spec),
+		heightLines: geometry.heightLines,
+		widthFraction: geometry.widthDots / dotWidth(COLUMNS),
+	};
+}
+
 describe("preview", () => {
 	let deviceId = "";
+	let agentId = "";
 
 	beforeAll(async () => {
 		const agent = await prisma.agent.create({ data: { name: `preview-${process.pid}` } });
 		const device = await prisma.device.create({
-			data: { agentId: agent.id, name: "counter", port: "COM1", columns: 32 },
+			data: { agentId: agent.id, name: "counter", port: "COM1", columns: COLUMNS },
 		});
+		agentId = agent.id;
 		deviceId = device.id;
 	});
 
-	it("draws a symbol at the height the compiler charged it", async () => {
+	it("draws a symbol at the size the compiler charged it", async () => {
+		const spec = { kind: "QR", content: QR_CONTENT, size: 6 } as const;
 		const result = await preview(deviceId, `<qr>${QR_CONTENT}</qr>`);
 
-		const charged = symbolGeometry({ kind: "QR", content: QR_CONTENT, size: 6 }).heightLines;
-		expect(charged).toBeGreaterThan(1);
+		const charged = symbolGeometry(spec);
+		expect(charged.heightLines).toBeGreaterThan(1);
 		expect(result.errors).toEqual([]);
-		expect(result.lines?.[0].blocks).toEqual([
-			{ spec: { kind: "QR", content: QR_CONTENT, size: 6 }, heightLines: charged },
-		]);
+		// Its width arrives as a share of 32 columns of paper, which is the number that answers
+		// whether it fits across the sheet.
+		expect(result.lines?.[0].blocks).toEqual([drawn(spec)]);
 		// The same number the budget is checked against, which is the whole point of carrying it.
-		expect(result.outputLines).toBe(charged);
+		expect(result.outputLines).toBe(charged.heightLines);
+	});
+
+	it("measures a symbol's width against the paper it is being previewed on", async () => {
+		const narrow = await prisma.device.create({
+			data: { agentId: agentId, name: "narrow", port: "COM2", columns: 32 },
+		});
+		const wide = await prisma.device.create({
+			data: { agentId: agentId, name: "wide", port: "COM3", columns: 42 },
+		});
+
+		const onNarrow = await preview(narrow.id, `<qr>${QR_CONTENT}</qr>`);
+		const onWide = await preview(wide.id, `<qr>${QR_CONTENT}</qr>`);
+
+		// The same symbol takes a smaller share of a wider printer's paper. Drawn off the vertical
+		// scale instead, both would be the same size and neither would answer "does this fit".
+		const narrowShare = onNarrow.lines?.[0].blocks[0].widthFraction ?? 0;
+		const wideShare = onWide.lines?.[0].blocks[0].widthFraction ?? 0;
+		expect(narrowShare).toBeGreaterThan(wideShare);
+		expect(narrowShare / wideShare).toBeCloseTo(42 / 32, 10);
+	});
+
+	it("reports a symbol too wide for the paper as wider than the paper", async () => {
+		// A Code 128 long enough to outgrow 32 columns. Nothing refuses it, so the only thing
+		// standing between it and a preview that looks printable is this figure.
+		const result = await preview(deviceId, `<barcode=CODE128>${"ORDER-1234567890".repeat(4)}</barcode>`);
+
+		expect(result.errors).toEqual([]);
+		expect(result.lines?.[0].blocks[0].widthFraction).toBeGreaterThan(1);
 	});
 
 	it("carries a symbol's own alignment, and marks it as nothing else", async () => {
@@ -54,25 +107,18 @@ describe("preview", () => {
 		expect(result.lines?.[0].marker).toBeNull();
 	});
 
-	it("charges a barcode and a PDF417 the heights they were measured at", async () => {
+	it("charges a barcode and a PDF417 the sizes they were measured at", async () => {
+		const barcode = { kind: "BARCODE", content: "5901234123457", system: "EAN13" } as const;
+		const pdf417 = { kind: "PDF417", content: "ORDER-123", errorLevel: 1 } as const;
+
 		const result = await preview(
 			deviceId,
 			["<barcode=EAN13>5901234123457</barcode>", "<pdf417>ORDER-123</pdf417>"].join("\n"),
 		);
 
 		expect(result.errors).toEqual([]);
-		expect(result.lines?.[0].blocks).toEqual([
-			{
-				spec: { kind: "BARCODE", content: "5901234123457", system: "EAN13" },
-				heightLines: symbolGeometry({ kind: "BARCODE", content: "5901234123457", system: "EAN13" }).heightLines,
-			},
-		]);
-		expect(result.lines?.[1].blocks).toEqual([
-			{
-				spec: { kind: "PDF417", content: "ORDER-123", errorLevel: 1 },
-				heightLines: symbolGeometry({ kind: "PDF417", content: "ORDER-123", errorLevel: 1 }).heightLines,
-			},
-		]);
+		expect(result.lines?.[0].blocks).toEqual([drawn(barcode)]);
+		expect(result.lines?.[1].blocks).toEqual([drawn(pdf417)]);
 	});
 
 	it("marks a drawer pulse without hiding the line it was written on", async () => {

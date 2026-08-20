@@ -11,6 +11,13 @@ import type { BarcodeSystem } from "@/lib/domain/enums";
  * themselves, so the budget a request is checked against and the height the preview draws
  * cannot disagree.
  *
+ * Drawing lives here too, for the same reason. {@link symbolSvg} renders the symbol the paper
+ * preview shows, from the same {@link encodeOptions} call that measured it, so the symbology, the
+ * error level and the content the preview draws cannot be a different symbol from the one the
+ * budget was charged for. It also keeps `bwip-js` out of the browser: the library statically pulls
+ * in every symbology it supports, some two megabytes of encoders, which would otherwise land in the
+ * panel's bundle to draw one QR code.
+ *
  * Measurement is delegated to `bwip-js` rather than reimplementing QR/PDF417/barcode sizing.
  * Its `raw()` call is synchronous and describes a symbol's shape before any rendering happens,
  * but in two different vocabularies depending on the symbol:
@@ -130,17 +137,67 @@ const BARCODE_HEIGHT_DOTS = 100;
 export function symbolGeometry(spec: SymbolSpec): SymbolGeometry {
 	switch (spec.kind) {
 		case "QR": {
-			const grid = moduleGrid("qrcode", spec.content);
+			const grid = moduleGrid(spec);
 			return toGeometry(grid.pixx * spec.size, grid.pixy * spec.size);
 		}
 		case "PDF417": {
-			const grid = moduleGrid("pdf417", spec.content, { eclevel: spec.errorLevel });
+			const grid = moduleGrid(spec);
 			return toGeometry(grid.pixx * PDF417_MODULE_DOTS, grid.pixy * PDF417_MODULE_DOTS);
 		}
 		case "BARCODE": {
-			const widthModules = barModuleWidth(BARCODE_BCID[spec.system], spec.content);
+			const widthModules = barModuleWidth(spec);
 			return toGeometry(widthModules * BARCODE_MODULE_WIDTH_DOTS, BARCODE_HEIGHT_DOTS);
 		}
+	}
+}
+
+/**
+ * bwip-js 4.11.3 writes its fill rule as `fill=rule="evenodd"`.
+ *
+ * That is the library's own typo, and it is fatal rather than cosmetic: the panel draws the symbol
+ * in an `<img>`, where an SVG is parsed as XML and an unquoted attribute value ends the parse, so
+ * the symbol would not appear at all. Repaired on the way out rather than by rendering the markup
+ * inline, which would trade a parse error for an injection surface. A release that fixes the typo
+ * makes this a no-op.
+ */
+const BWIPP_FILL_RULE = /fill=rule=/g;
+
+/**
+ * Draws a symbol, as an SVG so it stays crisp at any zoom.
+ *
+ * The same {@link encodeOptions} call {@link symbolGeometry} measures, so the symbol drawn is the
+ * symbol charged. Human-readable text is never drawn beside a barcode: the printer does not print
+ * it, and a preview showing it would be showing something that will not be on the paper.
+ *
+ * @param spec what to print
+ * @returns the symbol as an SVG document
+ * @throws SymbolEncodeError if the encoder refuses this content, e.g. a wrong check digit
+ */
+export function symbolSvg(spec: SymbolSpec): string {
+	return encoded(() => bwip.toSVG(encodeOptions(spec))).replace(BWIPP_FILL_RULE, "fill-rule=");
+}
+
+/**
+ * One call to bwip-js: which symbology, with what content, encoded how.
+ *
+ * The single place a {@link SymbolSpec} becomes something the library understands. Measuring and
+ * drawing both go through it, because a symbol measured as one symbology and drawn as another
+ * would be a preview of a receipt nobody is going to print.
+ *
+ * `eclevel` is absent from the library's own `RenderOptions` although the encoder reads it, so the
+ * option type is widened here rather than the value being smuggled past the type by a spread.
+ *
+ * @param spec what to print
+ * @returns the options bwip-js takes for it
+ */
+function encodeOptions(spec: SymbolSpec): Parameters<typeof bwip.toSVG>[0] & { eclevel?: number } {
+	switch (spec.kind) {
+		case "QR":
+			return { bcid: "qrcode", text: spec.content };
+		case "BARCODE":
+			return { bcid: BARCODE_BCID[spec.system], text: spec.content, includetext: false };
+		case "PDF417":
+			return { bcid: "pdf417", text: spec.content, eclevel: spec.errorLevel };
 	}
 }
 
@@ -153,20 +210,20 @@ function toGeometry(widthDots: number, heightDots: number): SymbolGeometry {
 }
 
 /**
- * Describes a symbol with bwip-js, naming a refusal of the content as such.
+ * Runs a bwip-js call, naming a refusal of the content as such.
  *
  * The whole of this module's contact with bwip-js goes through here, so that the one place that
  * knows the library's error format is the one place that has to change when that format does.
- * Only a refusal is converted: anything else out of `raw()` is a fault in this module or in the
- * install, and rethrowing it untouched is what keeps it visible as one.
+ * Only a refusal is converted: anything else out of the library is a fault in this module or in
+ * the install, and rethrowing it untouched is what keeps it visible as one.
  *
- * @param options the bwip-js call, as `raw()` takes it
- * @returns bwip-js's description of the symbol
+ * @param call the bwip-js call to make
+ * @returns whatever the call returned
  * @throws SymbolEncodeError if bwip-js refuses the content, with its identifier prefix removed
  */
-function rawSymbol(options: Parameters<typeof bwip.raw>[0]) {
+function encoded<T>(call: () => T): T {
 	try {
-		return bwip.raw(options)[0];
+		return call();
 	} catch (thrown) {
 		if (!(thrown instanceof Error) || !BWIPP_REFUSAL.test(thrown.message)) {
 			throw thrown;
@@ -175,20 +232,23 @@ function rawSymbol(options: Parameters<typeof bwip.raw>[0]) {
 	}
 }
 
+/** Describes a symbol with bwip-js, without drawing it. */
+function rawSymbol(spec: SymbolSpec) {
+	return encoded(() => bwip.raw(encodeOptions(spec))[0]);
+}
+
 /**
  * Reads a 2D symbol's module grid from bwip-js.
  *
- * @param bcid bwip-js's symbology identifier
- * @param text the content to encode
- * @param extra extra bwip-js options, e.g. `eclevel` for PDF417
+ * @param spec the symbol to measure
  * @returns the symbol's width and height in modules
  * @throws Error if bwip-js reports this symbology's shape in the linear (bar-width) vocabulary
  *         instead, which would mean this function was called for the wrong kind of symbol
  */
-function moduleGrid(bcid: string, text: string, extra?: Record<string, unknown>): { pixx: number; pixy: number } {
-	const symbol = rawSymbol({ bcid, text, ...extra });
+function moduleGrid(spec: SymbolSpec): { pixx: number; pixy: number } {
+	const symbol = rawSymbol(spec);
 	if (!("pixx" in symbol) || !("pixy" in symbol)) {
-		throw new Error(`bwip-js did not return a module matrix for '${bcid}'`);
+		throw new Error(`bwip-js did not return a module matrix for a ${spec.kind} symbol`);
 	}
 	return { pixx: symbol.pixx, pixy: symbol.pixy };
 }
@@ -200,15 +260,14 @@ function moduleGrid(bcid: string, text: string, extra?: Record<string, unknown>)
  * sum to the symbol's width. There is no module matrix to read a height from — see the module
  * doc comment for why that is not a gap.
  *
- * @param bcid bwip-js's symbology identifier
- * @param text the content to encode
+ * @param spec the barcode to measure
  * @returns the symbol's width in modules
  * @throws Error if bwip-js reports this symbology's shape as a module matrix instead
  */
-function barModuleWidth(bcid: string, text: string): number {
-	const symbol = rawSymbol({ bcid, text });
+function barModuleWidth(spec: SymbolSpec): number {
+	const symbol = rawSymbol(spec);
 	if (!("sbs" in symbol)) {
-		throw new Error(`bwip-js did not return bar widths for '${bcid}'`);
+		throw new Error(`bwip-js did not return bar widths for a ${spec.kind} symbol`);
 	}
 	return symbol.sbs.reduce((total, width) => total + width, 0);
 }

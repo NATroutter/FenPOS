@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
-import type { SymbolSpec } from "@/lib/markup/blocks";
+import { dotWidth, type SymbolSpec, symbolSvg } from "@/lib/markup/blocks";
 import {
 	type CompileSettings,
 	collectElementErrors,
@@ -17,7 +17,7 @@ import {
 	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
-import type { Line as ModelLine } from "@/lib/markup/model";
+import type { Directive, Line as ModelLine } from "@/lib/markup/model";
 import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
@@ -31,16 +31,20 @@ import { globalLimits } from "@/lib/settings/settings-service";
 /**
  * One symbol as the paper preview draws it.
  *
- * Carries the measurement rather than letting the browser take its own: `heightLines` is the figure
- * the compiler already charged against the job's line budget, so a symbol occupies exactly the paper
- * it was paid for and a receipt that will not fit still looks like one that will not fit. The
- * geometry is computed here because measuring imports `bwip-js`'s Node build, which has no business
- * in a browser bundle.
+ * Arrives already drawn and already measured, rather than as something for the browser to work out.
+ * Both come from `lib/markup/blocks.ts`, which is also what the compiler charged the line budget
+ * against, so the symbol on screen is the symbol that was paid for — at the height it was paid for,
+ * and at its true share of the paper's width. Encoding on this side also keeps `bwip-js`, which
+ * statically carries every symbology it supports, out of the panel's bundle.
  */
 export interface PreviewBlock {
 	spec: SymbolSpec;
+	/** The symbol itself, as an SVG document. */
+	svg: string;
 	/** Printed lines this symbol occupies, as charged against `maxOutputLines`. */
 	heightLines: number;
+	/** Its printed width as a share of the paper's own, where 1 is the full sheet. */
+	widthFraction: number;
 }
 
 /** One line as the paper preview renders it. */
@@ -162,7 +166,7 @@ export async function preview(
 			linefeed: request.linefeed,
 			lines: job.lines.map((line, index) => ({
 				align: line.align,
-				blocks: blocksOf(laidOut[index]),
+				blocks: blocksOf(laidOut[index], dotWidth(device.columns)),
 				marker: describe(laidOut[index]),
 				spans: line.spans.map((span) => ({
 					text: span.text,
@@ -248,43 +252,61 @@ function describe(line: ModelLine): string | null {
 }
 
 /**
- * Collects the symbols printed on a line, each with the height it was charged.
+ * Collects the symbols printed on a line, each drawn and sized as it will print.
  *
- * The height is read off the directive rather than measured again. Measuring it a second time
- * would produce the same number today and would be a second place for it to come from tomorrow,
- * which is exactly the drift the shared measurement exists to prevent.
+ * The size is read off the directive rather than measured again. Measuring it a second time would
+ * produce the same numbers today and would be a second place for them to come from tomorrow, which
+ * is exactly the drift the shared measurement exists to prevent.
  *
  * @param line the laid-out line
+ * @param paperDots the paper's printable width in dots
  * @returns its symbols, in the order they appear
+ * @throws SymbolEncodeError if the encoder refuses content it has already measured, which would
+ *         mean this module and the parser disagree about what a symbol is
  */
-function blocksOf(line: ModelLine): PreviewBlock[] {
+function blocksOf(line: ModelLine, paperDots: number): PreviewBlock[] {
 	return line.directives.flatMap((directive): PreviewBlock[] => {
-		switch (directive.kind) {
-			case "QR":
-				return [
-					{
-						spec: { kind: "QR", content: directive.content, size: directive.size },
-						heightLines: directive.heightLines,
-					},
-				];
-			case "BARCODE":
-				return [
-					{
-						spec: { kind: "BARCODE", content: directive.content, system: directive.system },
-						heightLines: directive.heightLines,
-					},
-				];
-			case "PDF417":
-				return [
-					{
-						spec: { kind: "PDF417", content: directive.content, errorLevel: directive.errorLevel },
-						heightLines: directive.heightLines,
-					},
-				];
-			default:
-				return [];
+		const measured = measuredSymbol(directive);
+		if (measured === null) {
+			return [];
 		}
+		return [
+			{
+				spec: measured.spec,
+				svg: symbolSvg(measured.spec),
+				heightLines: measured.heightLines,
+				widthFraction: measured.widthDots / paperDots,
+			},
+		];
 	});
+}
+
+/**
+ * Reads a directive as the symbol it prints and the size it was measured at, or null when it
+ * prints no symbol.
+ *
+ * @param directive one of a line's directives
+ * @returns what to draw and how big it is, or null
+ */
+function measuredSymbol(directive: Directive): { spec: SymbolSpec; heightLines: number; widthDots: number } | null {
+	switch (directive.kind) {
+		case "QR":
+			return { spec: { kind: "QR", content: directive.content, size: directive.size }, ...size(directive) };
+		case "BARCODE":
+			return { spec: { kind: "BARCODE", content: directive.content, system: directive.system }, ...size(directive) };
+		case "PDF417":
+			return {
+				spec: { kind: "PDF417", content: directive.content, errorLevel: directive.errorLevel },
+				...size(directive),
+			};
+		default:
+			return null;
+	}
+}
+
+/** The measured size a symbol directive carries. */
+function size(directive: { heightLines: number; widthDots: number }): { heightLines: number; widthDots: number } {
+	return { heightLines: directive.heightLines, widthDots: directive.widthDots };
 }
 
 /** The outcome of sending something to a printer. */

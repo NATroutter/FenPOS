@@ -55,8 +55,13 @@ export interface Span {
  * Directives occupy no columns and are invisible to wrapping, but most of them still consume
  * paper — a feed advances it, a rule prints across it, a symbol is a block of dots several lines
  * tall — so the line budget has to charge for them. A symbol's cost is not derivable from its
- * content, so it carries the measured `heightLines`; a cut and a drawer pulse carry no height at
- * all, because they genuinely move no paper.
+ * content, so it carries its measured size; a cut and a drawer pulse carry no size at all, because
+ * they genuinely move no paper.
+ *
+ * `heightLines` and `widthDots` are both compile-time figures and neither crosses the wire: the
+ * agent's own library measures a symbol when it draws it. They exist so that the line budget and
+ * the paper preview describe the same symbol — one charges the height, the other draws the symbol
+ * at that height and at its true share of the paper's width.
  */
 export type Directive =
 	| { kind: "CUT"; mode: "FULL" | "PARTIAL" }
@@ -64,11 +69,11 @@ export type Directive =
 	/** A full-width rule, expanded to characters at compile time once the width is known. */
 	| { kind: "RULE" }
 	/** A QR code. `size` is the module size in dots, 1-16. */
-	| { kind: "QR"; content: string; size: number; heightLines: number }
+	| { kind: "QR"; content: string; size: number; heightLines: number; widthDots: number }
 	/** A linear barcode in one of the printer's supported symbologies. */
-	| { kind: "BARCODE"; system: BarcodeSystem; content: string; heightLines: number }
+	| { kind: "BARCODE"; system: BarcodeSystem; content: string; heightLines: number; widthDots: number }
 	/** A PDF417 stacked symbol. `errorLevel` is its error-correction level, 0-8. */
-	| { kind: "PDF417"; content: string; errorLevel: number; heightLines: number }
+	| { kind: "PDF417"; content: string; errorLevel: number; heightLines: number; widthDots: number }
 	/**
 	 * A cash drawer kick on pin 2 or 5.
 	 *

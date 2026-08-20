@@ -600,7 +600,7 @@ class Parser {
 
 		const geometry = this.measure(block);
 		this.claimLine(block.tag.name, block.column, MARKUP_ERRORS.invalidBlockScope);
-		this.directives.push(blockDirective(block.spec, geometry.heightLines));
+		this.directives.push(blockDirective(block.spec, geometry));
 		this.block = null;
 	}
 
@@ -777,22 +777,23 @@ function isControl(value: string): boolean {
 /**
  * Turns a finished symbol into the directive that carries it.
  *
- * `heightLines` comes from {@link symbolGeometry} rather than from anything computed here, so
- * the paper the compiler's budget charges for a symbol and the height the preview draws it at
- * are the same number by construction.
+ * The size comes from {@link symbolGeometry} rather than from anything computed here, so the paper
+ * the compiler's budget charges for a symbol, and the height and width the preview draws it at, are
+ * the same measurement by construction.
  *
  * @param spec the symbol, with its content complete
- * @param heightLines the symbol's measured height in printed lines
+ * @param geometry the symbol's measured size
  * @returns the directive to append to the line
  */
-function blockDirective(spec: SymbolSpec, heightLines: number): Directive {
+function blockDirective(spec: SymbolSpec, geometry: SymbolGeometry): Directive {
+	const measured = { heightLines: geometry.heightLines, widthDots: geometry.widthDots };
 	switch (spec.kind) {
 		case "QR":
-			return { kind: "QR", content: spec.content, size: spec.size, heightLines };
+			return { kind: "QR", content: spec.content, size: spec.size, ...measured };
 		case "BARCODE":
-			return { kind: "BARCODE", system: spec.system, content: spec.content, heightLines };
+			return { kind: "BARCODE", system: spec.system, content: spec.content, ...measured };
 		case "PDF417":
-			return { kind: "PDF417", content: spec.content, errorLevel: spec.errorLevel, heightLines };
+			return { kind: "PDF417", content: spec.content, errorLevel: spec.errorLevel, ...measured };
 	}
 }
 

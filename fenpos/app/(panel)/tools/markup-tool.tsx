@@ -553,6 +553,20 @@ function Paper({ result }: { result: PreviewResult | null }) {
 										<SymbolPreview {...block} lineHeightPx={PAPER_LINE_HEIGHT_PX} />
 									</div>,
 								);
+
+								// A symbol too wide for the paper is drawn clamped to the sheet, so without
+								// this it would look like it fits. Said in words rather than drawn, because
+								// the one thing a preview may not do is make an unprintable receipt look
+								// printable.
+								if (block.widthFraction > 1) {
+									rows.push(
+										<Marker
+											key={`${lineKey(index, line)}:block:${blockIndex}:overflow`}
+											align={line.align}
+											text={`${Math.round(block.widthFraction * 100)}% of the paper's width — too wide to print`}
+										/>,
+									);
+								}
 							}
 
 							// One compiled line can occupy several lines of paper. The server breaks lines it
@@ -598,15 +612,7 @@ function Paper({ result }: { result: PreviewResult | null }) {
 							// the line it was written on. It marks paper the printer never inks, so it is
 							// drawn in grey and costs the receipt nothing.
 							if (line.marker) {
-								rows.push(
-									<div
-										key={`${lineKey(index, line)}:marker`}
-										className="whitespace-pre"
-										style={{ textAlign: align(line.align) }}
-									>
-										<span className="text-neutral-400">{`── ${line.marker} ──`}</span>
-									</div>,
-								);
+								rows.push(<Marker key={`${lineKey(index, line)}:marker`} align={line.align} text={line.marker} />);
 							}
 
 							// An element that produced nothing at all is still a line of blank paper, and an
@@ -624,6 +630,21 @@ function Paper({ result }: { result: PreviewResult | null }) {
 					)}
 				</div>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Something true about a line that the paper itself does not say.
+ *
+ * Grey and ruled off, because none of it is ink: a cut, a feed and a drawer pulse leave no mark,
+ * and neither does the note that a symbol is too wide to print. Sharing one register is what keeps
+ * "this is about the paper rather than on it" readable at a glance.
+ */
+function Marker({ text, align: alignment }: { text: string; align: PreviewLine["align"] }) {
+	return (
+		<div className="whitespace-pre" style={{ textAlign: align(alignment) }}>
+			<span className="text-neutral-400">{`── ${text} ──`}</span>
 		</div>
 	);
 }
