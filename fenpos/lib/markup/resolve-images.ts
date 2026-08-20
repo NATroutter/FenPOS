@@ -23,9 +23,10 @@ import { parseMarkup } from "@/lib/markup/parser";
  * `REMOTE_FETCH_TIMEOUT_MS` — and it is why stored assets are the documented default. What is
  * bounded here is how that cost grows: references are deduplicated, so a logo repeated on every
  * copy of a receipt is one fetch; they are resolved several at a time, so a receipt naming a few
- * hosts waits for the slowest rather than for the sum; and never more than
- * {@link RESOLVE_WINDOW} at a time, so what one request can make this server hold is a constant
- * rather than a multiple of how many URLs it chose to name.
+ * hosts waits for the slowest rather than for the sum; never more than {@link RESOLVE_WINDOW} at a
+ * time, so what one request can make this server hold is a constant rather than a multiple of how
+ * many URLs it chose to name; and never more than {@link MAX_REMOTE_IMAGES} of them at all, which
+ * is what turns the waiting into a number too.
  */
 
 /**
@@ -54,15 +55,48 @@ import { parseMarkup } from "@/lib/markup/parser";
 export const RESOLVE_WINDOW = 6;
 
 /**
+ * How many distinct images one request may name by URL.
+ *
+ * **The window bounds what this server holds; this bounds how long it waits.** They are different
+ * exposures and neither implies the other. With the window alone, a receipt naming enough URLs still
+ * waits one `REMOTE_FETCH_TIMEOUT_MS` per windowful — at the default line limit of 200 that is 34
+ * windows, over a minute of a request-handling slot held by one caller. Capping the references is
+ * what makes that a number: at most `ceil(12 / 6) = 2` windows, so six seconds, and a caller who
+ * writes a thirteenth URL is told so immediately instead of waiting to find out.
+ *
+ * Twelve, for three reasons. It is two whole windows, so the bound divides evenly and raising it by
+ * six is visibly another three seconds. It is far above any real receipt — the spec makes stored
+ * assets the default and URLs the escape hatch, and a repeated logo is one reference after
+ * deduplication — so nothing legitimate meets it. And it is deliberately *above*
+ * {@link RESOLVE_WINDOW} rather than equal to it: were the two the same, every permitted receipt
+ * would fit in one window and there would be no observable difference between windowing and not,
+ * which would quietly cost the concurrency bound its test.
+ *
+ * **Remote references only.** A stored asset is a local read of two integer columns — no socket, no
+ * buffer, no timeout to wait out — so counting them here would cap the thing this system asks people
+ * to use in place of URLs.
+ *
+ * A wall-clock budget was the alternative and is worse. Bounding the wait honestly means cancelling
+ * the fetches still in flight, which needs an `AbortController` threaded through every worker; a
+ * budget that merely stops waiting leaves those fetches running, still holding sockets and still
+ * burning CPU, after the caller has already been answered. That is a leak wearing the costume of a
+ * limit. Refusing up front costs nothing and cannot leak.
+ */
+export const MAX_REMOTE_IMAGES = 12;
+
+/**
  * Resolves every image a request refers to.
  *
  * @param data the request's elements, exactly as the caller wrote them
  * @returns each reference in them, mapped to the image's own pixel dimensions
- * @throws ApiError if a reference names no stored image, or a URL cannot be fetched or read as
- *         one; the element it was written on travels in `details.line`
+ * @throws ApiError if the request names more than {@link MAX_REMOTE_IMAGES} URLs, if a reference
+ *         names no stored image, or if a URL cannot be fetched or read as one; for the last two the
+ *         element it was written on travels in `details.line`
  */
 export async function resolveImages(data: readonly string[]): Promise<ResolvedImages> {
 	const queue = [...collect(data)];
+	requireWithinRemoteLimit(queue);
+
 	const sized = new Map<string, ImageSource>();
 
 	// A fixed set of workers sharing one queue, rather than one promise per reference: that is what
@@ -83,8 +117,11 @@ export async function resolveImages(data: readonly string[]): Promise<ResolvedIm
 		}
 	});
 
-	// Rejects with the first refusal, which is the one reported. The others are still awaited here,
-	// so a worker that fails on its way out cannot become an unhandled rejection.
+	// Rejects with the first refusal, which is the one reported — first in time among the workers
+	// running together, not necessarily first in the receipt. Any of them is a refusal of the whole
+	// request and each names its own element, so which one arrives first changes the message and
+	// nothing else. The others are still awaited here, so a worker that fails on its way out cannot
+	// become an unhandled rejection.
 	await Promise.all(workers);
 
 	return sized;
@@ -143,12 +180,49 @@ function collect(data: readonly string[]): Map<string, number> {
 }
 
 /**
- * Resolves one reference, whichever kind it is.
+ * Whether a reference names somewhere to fetch from rather than something already stored.
  *
- * A reference carrying a scheme is a URL; anything else is a stored asset's name. The test is the
- * scheme separator rather than an `http(s)` prefix on purpose, so that `ftp://…` is refused by the
- * fetch guard — which can say that only http and https are fetched — instead of being looked up as
- * an asset nobody would ever have named that way.
+ * The test is the scheme separator rather than an `http(s)` prefix on purpose, so that `ftp://…` is
+ * refused by the fetch guard — which can say that only http and https are fetched — instead of being
+ * looked up as an asset nobody would ever have named that way. It also means a reference this
+ * function calls remote is one the remote limit counts, even if the fetch will go on to reject it:
+ * the limit is about how much of this work a request may ask for, not about how much succeeds.
+ *
+ * @param reference the text between the tags
+ * @returns true when resolving it means going to the network
+ */
+function isRemote(reference: string): boolean {
+	return reference.includes("://");
+}
+
+/**
+ * Refuses a request naming more URLs than {@link MAX_REMOTE_IMAGES}.
+ *
+ * Runs before the workers start, which is the whole of its value: a limit enforced after the fetches
+ * were away would report the problem while still causing it.
+ *
+ * Raised as a request-level {@link ApiError} rather than a positioned `MarkupError`, because that is
+ * what it is. The count is of *distinct* references across every element, so no single tag is at
+ * fault — the one that crosses the line is merely the last one written, and pointing a column at it
+ * would name an innocent tag. Same reasoning the compiler already applies to `too_many_lines` and
+ * `text_too_large`, which are also whole-request refusals with no line to report.
+ *
+ * @param references every reference the request names, deduplicated
+ * @throws ApiError if too many of them are URLs
+ */
+function requireWithinRemoteLimit(references: readonly (readonly [string, number])[]): void {
+	const remote = references.filter(([reference]) => isRemote(reference)).length;
+	if (remote > MAX_REMOTE_IMAGES) {
+		throw new ApiError(
+			"too_many_remote_images",
+			`A receipt may name at most ${MAX_REMOTE_IMAGES} images by URL, and this one names ${remote}. Store them on the Assets tab and reference them by name instead.`,
+			{ limit: MAX_REMOTE_IMAGES, seen: remote },
+		);
+	}
+}
+
+/**
+ * Resolves one reference, whichever kind it is.
  *
  * @param reference the text between the tags
  * @param line the element it was written on
@@ -157,7 +231,7 @@ function collect(data: readonly string[]): Map<string, number> {
  */
 async function sizeOf(reference: string, line: number): Promise<ImageSource> {
 	try {
-		return reference.includes("://") ? await remoteImageSize(reference) : await storedImageSize(reference);
+		return isRemote(reference) ? await remoteImageSize(reference) : await storedImageSize(reference);
 	} catch (thrown) {
 		throw onLine(thrown, line);
 	}

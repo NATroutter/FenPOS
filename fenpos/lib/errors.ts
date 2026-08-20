@@ -37,6 +37,15 @@ export const API_ERROR_STATUS = {
 	invalid_block_scope: 400,
 	unsupported_character: 400,
 	too_many_output_lines: 400,
+	/**
+	 * A receipt naming more images by URL than one request may fetch.
+	 *
+	 * A limit on the request as a whole rather than on any one tag: it counts the distinct URLs
+	 * across every element, so the tag that crosses the line is only the last one written rather
+	 * than the one at fault. See `MAX_REMOTE_IMAGES` in `lib/markup/resolve-images.ts` for what the
+	 * number bounds.
+	 */
+	too_many_remote_images: 400,
 	invalid_linefeed: 400,
 	unknown_field: 400,
 

@@ -30,7 +30,17 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 }));
 
 const { createAsset } = await import("@/lib/assets/asset-service");
-const { RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
+const { MAX_REMOTE_IMAGES, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
+
+/**
+ * A receipt naming `count` distinct URLs, one per element.
+ *
+ * @param count how many distinct remote images to name
+ * @returns the elements
+ */
+function remoteImages(count: number): string[] {
+	return Array.from({ length: count }, (_, index) => `<image>https://x.test/${index}.png</image>`);
+}
 
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
@@ -114,12 +124,14 @@ describe("resolveImages", () => {
 	/**
 	 * The bound on what one request can make this server do at once.
 	 *
-	 * Without it a receipt naming 200 distinct URLs — which the default line limit permits — opens
-	 * 200 sockets, holds 200 buffers of up to 2 MB each before a single one is decoded, and pays 200
-	 * TLS handshakes, since the transport pools nothing. The window is what keeps that a constant.
+	 * Without it a receipt naming every URL it is allowed to opens that many sockets, holds that
+	 * many buffers of up to 2 MB each before a single one is decoded, and pays that many TLS
+	 * handshakes, since the transport pools nothing. The window is what keeps that a constant.
 	 *
 	 * Asserted as an equality rather than an upper bound so it fails in both directions: resolving
-	 * one at a time would peak at 1, and no window at all would peak at 20.
+	 * one at a time would peak at 1, and no window at all would peak at the whole receipt. The
+	 * receipt is a full complement of remote images, which is why {@link MAX_REMOTE_IMAGES} has to
+	 * stay above {@link RESOLVE_WINDOW} for this to be able to tell those apart.
 	 */
 	it("resolves at most a window of images at once, however many a receipt names", async () => {
 		let inFlight = 0;
@@ -132,21 +144,78 @@ describe("resolveImages", () => {
 			return PNG;
 		});
 
-		const images = await resolveImages(
-			Array.from({ length: 20 }, (_, index) => `<image>https://x.test/${index}.png</image>`),
-		);
+		const images = await resolveImages(remoteImages(MAX_REMOTE_IMAGES));
 
-		expect(images.size).toBe(20);
-		expect(fetchRemoteImage).toHaveBeenCalledTimes(20);
+		expect(images.size).toBe(MAX_REMOTE_IMAGES);
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(MAX_REMOTE_IMAGES);
 		expect(peak).toBe(RESOLVE_WINDOW);
 	});
 
 	it("stops at the first refusal instead of fetching the rest of the receipt", async () => {
 		fetchRemoteImage.mockRejectedValue(new ApiError("invalid_tag_argument", "nothing answers here"));
 
-		await refusal(Array.from({ length: 20 }, (_, index) => `<image>https://x.test/${index}.png</image>`));
+		await refusal(remoteImages(MAX_REMOTE_IMAGES));
 
 		expect(fetchRemoteImage.mock.calls.length).toBeLessThanOrEqual(RESOLVE_WINDOW);
+	});
+
+	/**
+	 * The bound on how long one request can wait, which the window alone does not give: a window
+	 * caps what is in flight, but a receipt naming enough URLs still waits one timeout per windowful.
+	 * Capping the references is what turns that into a number.
+	 *
+	 * A wall-clock budget was the alternative and is worse: bounding the wait honestly means
+	 * cancelling the fetches still running, and a budget that merely walks away from them leaves
+	 * sockets and CPU in use after the caller has already been answered.
+	 */
+	it("resolves a receipt naming as many remote images as it may", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const images = await resolveImages(remoteImages(MAX_REMOTE_IMAGES));
+
+		expect(images.size).toBe(MAX_REMOTE_IMAGES);
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(MAX_REMOTE_IMAGES);
+	});
+
+	it("refuses one image beyond the limit, before opening a single connection", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const thrown = await refusal(remoteImages(MAX_REMOTE_IMAGES + 1));
+
+		expect(thrown.code).toBe("too_many_remote_images");
+		expect(thrown.details).toMatchObject({ limit: MAX_REMOTE_IMAGES, seen: MAX_REMOTE_IMAGES + 1 });
+		// The whole point of checking before the workers start: refusing after the fetches are away
+		// would be a limit that reports the problem while still causing it.
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+
+	it("counts distinct references, so one URL on every copy of a receipt is one image", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const images = await resolveImages(
+			Array.from({ length: MAX_REMOTE_IMAGES + 5 }, () => "<image>https://x.test/l.png</image>"),
+		);
+
+		expect(images.size).toBe(1);
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * The limit is about the network, not about images. A stored asset is a read of two integer
+	 * columns with no socket, no buffer and no timeout to wait out, and the spec makes stored assets
+	 * the documented default with URLs as the escape hatch — so counting them here would cap the
+	 * thing this system wants people to use.
+	 */
+	it("does not count stored assets against the remote limit", async () => {
+		const names = Array.from({ length: MAX_REMOTE_IMAGES + 1 }, (_, index) => `logo-${index}`);
+		for (const name of names) {
+			await createAsset(name, PNG);
+		}
+
+		const images = await resolveImages(names.map((name) => `<image>${name}</image>`));
+
+		expect(images.size).toBe(MAX_REMOTE_IMAGES + 1);
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
 	it("refuses an image nobody has stored, naming the element it was written on", async () => {
