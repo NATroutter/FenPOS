@@ -1,11 +1,18 @@
 import "server-only";
-import { decodeImage, ditherToRaster, ImageDecodeError, type ImageRaster } from "@/lib/assets/dither";
+import {
+	type DecodedImage,
+	decodeImage,
+	ditherToRaster,
+	ImageDecodeError,
+	type ImageRaster,
+} from "@/lib/assets/dither";
 import { fetchRemoteImage, safeUrl } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { AssetKind } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
+import type { ImageSource } from "@/lib/markup/images";
 
 /**
  * The image library a receipt's `<image>` tag draws from.
@@ -21,7 +28,9 @@ import { logger } from "@/lib/logger";
  * behind a printer where nobody can act on it.
  *
  * Two entry points put bytes into this table — an upload and a URL import — and both go through
- * {@link store}, so a bound added here cannot be walked around by choosing the other door.
+ * {@link store}. A third reads bytes without storing them at all: {@link remoteImageSize} measures
+ * the live URL an `<image>` tag can name. All three go through {@link measured}, so a bound added
+ * here cannot be walked around by choosing another door.
  */
 
 /**
@@ -237,6 +246,57 @@ export async function rasterFor(name: string, targetDots: number): Promise<Image
 }
 
 /**
+ * Reads a stored image's own dimensions.
+ *
+ * What an `<image>` tag needs at compile time, and deliberately all it needs: the raster it will
+ * print as depends on the paper it is going to, so a job that has not chosen a printer yet has no
+ * use for one. The dimensions are read from the row rather than by decoding the bytes, so measuring
+ * a receipt does not decode every logo on it.
+ *
+ * @param name the asset's name, as written between the tags
+ * @returns the image's size in pixels, as it was stored
+ * @throws ApiError if no image of that name is stored
+ */
+export async function storedImageSize(name: string): Promise<ImageSource> {
+	const row = await prisma.asset.findUnique({
+		where: { kind_name: { kind: "IMAGE", name } },
+		select: { width: true, height: true },
+	});
+	if (!row) {
+		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
+	}
+	if (row.width === null || row.height === null) {
+		// Nullable for a future asset kind that is not a raster. Every IMAGE this module writes has
+		// both, so a null here is a row it did not write — a fault to surface, not a size to guess.
+		throw new Error(`The stored image '${name}' has no dimensions`);
+	}
+	return { width: row.width, height: row.height };
+}
+
+/**
+ * Fetches an image named by a URL and reads its dimensions, without storing it.
+ *
+ * The counterpart of {@link storedImageSize} for the live-URL half of the `<image>` tag, and the
+ * reason both live in this module: the bytes go through {@link measured}, the same gate an upload
+ * passes. A URL image is the only image here that no signed-in operator chose, so it must not be
+ * the one that reaches a decoder unmeasured.
+ *
+ * The bytes are then dropped, which is a trade rather than an oversight: only the size is wanted
+ * while compiling, and keeping two megabytes per referenced URL alive for the length of a compile
+ * costs every job something no job currently reads. Anything that needs the pixels — printing a URL
+ * image, or drawing one in the preview — fetches again, and the honest price of that is a second
+ * round trip to the same host.
+ *
+ * @param url the URL, exactly as it was written between the tags
+ * @returns the image's size in pixels
+ * @throws ApiError if the fetch is refused, or the bytes are not an image this pipeline prints
+ */
+export async function remoteImageSize(url: string): Promise<ImageSource> {
+	const decoded = await measured(await fetchRemoteImage(url));
+	return { width: decoded.width, height: decoded.height };
+}
+
+/**
  * The one way bytes become a stored asset.
  *
  * @param rawName the name as supplied
@@ -249,26 +309,7 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
 	const name = parseName(rawName);
 	await requireNameFree(name);
 
-	requireWithinByteCap(bytes.length);
-	requireDecodableSize(bytes);
-
-	let decoded: Awaited<ReturnType<typeof decodeImage>>;
-	try {
-		decoded = await decodeImage(bytes);
-	} catch (thrown) {
-		if (thrown instanceof ImageDecodeError) {
-			// The decoder's message is already written for whoever chose the file. Re-raised as an
-			// ApiError so the panel shows it, instead of the action's catch-all turning a bad
-			// upload into "something went wrong, check the server log".
-			throw new ApiError("invalid_type", thrown.message, {}, { cause: thrown });
-		}
-		throw thrown;
-	}
-
-	// Belt and braces: the header said one thing, the decoder is the authority on what was really
-	// there. They agree for every well-formed file, and where they do not the smaller claim was the
-	// one that got past the gate.
-	requireWithinDimensions(decoded.width, decoded.height);
+	const decoded = await measured(bytes);
 
 	let row: AssetRow;
 	try {
@@ -309,6 +350,44 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
 	});
 
 	return summarise(row);
+}
+
+/**
+ * The one gate bytes pass before anything here believes them.
+ *
+ * Every door into this module goes through it — an upload, a URL import, and the compile-time
+ * measurement of a URL image — so a bound added here cannot be walked around by choosing another
+ * door. The order is the load-bearing part: the size is read from the file's own header *before*
+ * the decoder is handed the bytes, because the allocation being defended against happens inside the
+ * decode. See {@link requireDecodableSize}.
+ *
+ * @param bytes the image, as uploaded or as fetched
+ * @returns what the bytes turned out to be
+ * @throws ApiError if they are too large, too big in pixels, or not an image this pipeline prints
+ */
+async function measured(bytes: Buffer): Promise<DecodedImage> {
+	requireWithinByteCap(bytes.length);
+	requireDecodableSize(bytes);
+
+	let decoded: DecodedImage;
+	try {
+		decoded = await decodeImage(bytes);
+	} catch (thrown) {
+		if (thrown instanceof ImageDecodeError) {
+			// The decoder's message is already written for whoever chose the file. Re-raised as an
+			// ApiError so the panel shows it, instead of the action's catch-all turning a bad
+			// upload into "something went wrong, check the server log".
+			throw new ApiError("invalid_type", thrown.message, {}, { cause: thrown });
+		}
+		throw thrown;
+	}
+
+	// Belt and braces: the header said one thing, the decoder is the authority on what was really
+	// there. They agree for every well-formed file, and where they do not the smaller claim was the
+	// one that got past the gate.
+	requireWithinDimensions(decoded.width, decoded.height);
+
+	return decoded;
 }
 
 /**

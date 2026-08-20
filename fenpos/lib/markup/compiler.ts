@@ -3,6 +3,7 @@ import { ApiError } from "@/lib/errors";
 import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as WireSpan } from "@/lib/link/protocol";
 import { validateCharset } from "@/lib/markup/charset";
 import { MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
+import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
@@ -18,6 +19,11 @@ import { wrapLine } from "@/lib/markup/wrapper";
  *
  * Stages are ordered cheapest-first. Limits are enforced before any element is parsed, so an
  * oversized request is refused without doing the work it was trying to provoke.
+ *
+ * One thing a request may need cannot be had synchronously: how large an image is. That is why
+ * `resolveImages` runs before {@link compile} rather than inside it, and its answers arrive through
+ * {@link CompileSettings}. Everything here stays a pure function of what it is handed, which is
+ * what lets the preview and the print path share it without either waiting on the other.
  *
  * Ported from `PrintCompiler.java`, whose tests are the specification. The one difference is the
  * output: the Java version rendered ESC/POS bytes because it owned the printer, while this stops
@@ -45,12 +51,30 @@ export interface CompileLimits {
 }
 
 /** Print settings the compiler needs, as configured on the device. */
-export interface CompileSettings {
+export interface DeviceSettings {
 	columns: number;
 	codepage: Codepage;
 	onUnsupported: UnsupportedPolicy;
 	defaultWrap: boolean;
 	defaultLinefeed: Linefeed;
+}
+
+/**
+ * Everything a compile needs: the device's own settings, plus what could only be found out
+ * asynchronously.
+ *
+ * `images` is the second kind and the only member of it. An image's printed height depends on the
+ * image's own dimensions, which are a database row for a stored asset and an HTTP response for a
+ * URL — so they cannot be reached from inside a synchronous compile, and making `compile` async
+ * would push `await` into every caller for the sake of one directive. Instead `resolveImages` runs
+ * once before compiling and its result arrives here.
+ *
+ * Required rather than optional deliberately. An absent map would compile a receipt whose images
+ * cost nothing, which is a job accepted against a budget it was never measured for; a required
+ * field makes every caller state what it resolved, and `new Map()` is how a caller says "none".
+ */
+export interface CompileSettings extends DeviceSettings {
+	images: ResolvedImages;
 }
 
 /** What a caller asked to print, after the request body has been read. */
@@ -65,13 +89,17 @@ export interface PrintRequest {
  * Lengths are measured on the raw strings, before markup is interpreted, so the totals a client
  * computes match the totals enforced here.
  *
+ * Takes the device's settings rather than the whole {@link CompileSettings}, because it runs before
+ * the images are resolved: what a request refers to cannot be known until its markup has been read,
+ * and reading it is what this does.
+ *
  * @param body the parsed JSON body
  * @param limits the limits to apply
  * @param settings the device's print settings, supplying defaults
  * @returns the request, validated
  * @throws ApiError when the body is malformed or exceeds a limit
  */
-export function readRequest(body: unknown, limits: CompileLimits, settings: CompileSettings): PrintRequest {
+export function readRequest(body: unknown, limits: CompileLimits, settings: DeviceSettings): PrintRequest {
 	if (typeof body !== "object" || body === null || Array.isArray(body)) {
 		throw new ApiError("invalid_json", "Body must be a JSON object");
 	}
@@ -130,7 +158,7 @@ export function readRequest(body: unknown, limits: CompileLimits, settings: Comp
 	};
 }
 
-function readLinefeed(value: unknown, settings: CompileSettings): Linefeed {
+function readLinefeed(value: unknown, settings: DeviceSettings): Linefeed {
 	if (value === undefined || value === null) {
 		return settings.defaultLinefeed;
 	}
@@ -163,7 +191,7 @@ export function compile(
 	settings: CompileSettings,
 ): CompiledJob {
 	const lines = layOut(request, settings);
-	requireOutputWithinLimit(lines, limits);
+	requireOutputWithinLimit(lines, limits, settings);
 
 	return {
 		jobId,
@@ -229,7 +257,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
  * @returns the number of lines that advance the paper
  */
 export function countOutputLines(request: PrintRequest, settings: CompileSettings): number {
-	return countTextLines(layOut(request, settings));
+	return countTextLines(layOut(request, settings), settings);
 }
 
 /**
@@ -244,11 +272,15 @@ export function countOutputLines(request: PrintRequest, settings: CompileSetting
  * the request as a whole are checked before this and after it, because "the whole thing is too
  * long" is not a mistake attributable to any one line.
  *
+ * Takes the device's settings rather than the whole {@link CompileSettings} so that it can run
+ * *before* the images are resolved, which is what it is worth: markup with an unclosed tag has no
+ * business making this server fetch a URL, and the person fixing it should not wait for one either.
+ *
  * @param request the validated request
- * @param settings the device's compile settings
+ * @param settings the device's print settings
  * @returns every element error, in element order; empty when the markup is sound
  */
-export function collectElementErrors(request: PrintRequest, settings: CompileSettings): ApiError[] {
+export function collectElementErrors(request: PrintRequest, settings: DeviceSettings): ApiError[] {
 	const errors: ApiError[] = [];
 
 	for (let index = 0; index < request.data.length; index++) {
@@ -287,8 +319,8 @@ function translate(error: unknown, line: number): unknown {
 	return error;
 }
 
-function requireOutputWithinLimit(lines: Line[], limits: CompileLimits): void {
-	const printed = countTextLines(lines);
+function requireOutputWithinLimit(lines: Line[], limits: CompileLimits, settings: CompileSettings): void {
+	const printed = countTextLines(lines, settings);
 	if (printed > limits.maxOutputLines) {
 		throw new ApiError(
 			"too_many_output_lines",
@@ -309,18 +341,32 @@ function requireOutputWithinLimit(lines: Line[], limits: CompileLimits): void {
  * which is also what the paper preview draws, so the two cannot disagree. `CUT`, `FEED` and
  * `DRAWER` still cost nothing: a cut and a feed act on the printer rather than laying dots on the
  * paper as text, and a drawer pulse is electrical and never touches the paper at all.
+ *
+ * An `IMAGE` costs its height too, but is the one directive whose height is worked out here rather
+ * than carried: it depends on the paper's width and on the image's own dimensions, which the parser
+ * has no way to reach. Both are in `settings` by the time this runs — see {@link CompileSettings}.
+ *
+ * @param lines the laid-out lines
+ * @param settings the device's compile settings, holding the paper width and the resolved images
+ * @returns the number of lines that advance the paper
  */
-export function countTextLines(lines: Line[]): number {
-	return lines.reduce((total, line) => total + lineCost(line), 0);
+export function countTextLines(lines: Line[], settings: CompileSettings): number {
+	return lines.reduce((total, line) => total + lineCost(line, settings), 0);
 }
 
 /** The paper cost of one line, in whole printed lines. */
-function lineCost(line: Line): number {
+function lineCost(line: Line, settings: CompileSettings): number {
 	let blockHeight = 0;
 	let hasRule = false;
 	for (const directive of line.directives) {
 		if (directive.kind === "QR" || directive.kind === "BARCODE" || directive.kind === "PDF417") {
 			blockHeight += directive.heightLines;
+		} else if (directive.kind === "IMAGE") {
+			blockHeight += imageGeometry(
+				resolved(directive.ref, settings),
+				directive.widthPercent,
+				settings.columns,
+			).heightLines;
 		} else if (directive.kind === "RULE") {
 			hasRule = true;
 		}
@@ -335,6 +381,28 @@ function lineCost(line: Line): number {
 }
 
 /**
+ * Looks up what an image reference resolved to.
+ *
+ * A missing entry is a fault on this side rather than a bad request. The pre-pass sees every
+ * reference this compile will meet — it reads the same elements with the same parser — and refuses
+ * the whole job, by name, for one it cannot resolve. So arriving here without an entry means the
+ * pre-pass was skipped, and the alternative to failing is a receipt whose images were never charged
+ * against the budget that was supposed to bound it.
+ *
+ * @param ref the reference as written between the tags
+ * @param settings the compile settings, carrying what the pre-pass resolved
+ * @returns the image's own dimensions
+ * @throws Error if the reference was never resolved
+ */
+function resolved(ref: string, settings: CompileSettings): ImageSource {
+	const source = settings.images.get(ref);
+	if (!source) {
+		throw new Error(`The image '${ref}' was not resolved before compiling; resolveImages must run first`);
+	}
+	return source;
+}
+
+/**
  * Converts one parsed line to its wire shape, expanding any rule.
  *
  * The rule is expanded here rather than on the agent because only the server knows the device's
@@ -346,6 +414,12 @@ function lineCost(line: Line): number {
  * has to carry the content across. `heightLines` does not travel with them — it is a compile-time
  * budgeting value with no wire field, kept off the wire so the model and wire types stay the
  * distinct shapes {@link WireDirective}'s module documents.
+ *
+ * `IMAGE` is the one directive that does not cross at all yet, because {@link WireDirective} has
+ * nowhere to put it: an image reaches an agent by a different route from its reference — a stored
+ * asset's raster travels once with the device configuration, while a URL image's bytes have to ride
+ * inside the job — and neither route exists on the wire so far. Until it does, an image is parsed,
+ * resolved and charged its paper here but the agent is never told about it, so it prints nothing.
  */
 function toWireLine(line: Line, columns: number): WireLine {
 	const rule = line.directives.find((directive) => directive.kind === "RULE");

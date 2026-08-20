@@ -13,11 +13,13 @@ import {
 	collectElementErrors,
 	compile,
 	countOutputLines,
+	type DeviceSettings,
 	layOut,
 	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
+import { resolveImages } from "@/lib/markup/resolve-images";
 import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
@@ -105,7 +107,7 @@ export async function preview(
 			throw new ApiError("unknown_device", "That printer no longer exists.");
 		}
 
-		const settings: CompileSettings = {
+		const deviceSettings: DeviceSettings = {
 			columns: device.columns,
 			codepage: device.codepage as Codepage,
 			onUnsupported: device.onUnsupported as UnsupportedPolicy,
@@ -128,7 +130,7 @@ export async function preview(
 			columns: device.columns,
 			outputLines: 0,
 			maxOutputLines: limits.maxOutputLines,
-			linefeed: linefeed ?? settings.defaultLinefeed,
+			linefeed: linefeed ?? deviceSettings.defaultLinefeed,
 		} as const;
 
 		// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
@@ -141,14 +143,26 @@ export async function preview(
 		// many elements, too many characters — which is one problem, not one per line.
 		let request: PrintRequest;
 		try {
-			request = readRequest(body, limits, settings);
+			request = readRequest(body, limits, deviceSettings);
 		} catch (error) {
 			return { ...measured, errors: [asPreviewError(error)] };
 		}
 
-		const elementErrors = collectElementErrors(request, settings);
+		const elementErrors = collectElementErrors(request, deviceSettings);
 		if (elementErrors.length > 0) {
 			return { ...measured, errors: elementErrors.map(asPreviewError) };
+		}
+
+		// After the element errors, deliberately: markup that does not compile has no business
+		// making this server fetch a URL, and whoever is mid-edit should not wait for one to find
+		// out about an unclosed tag. A refusal here — a deleted asset, a host that will not answer —
+		// is the caller's to fix like any other, so it is reported beside them rather than as a
+		// server fault, and the preview keeps its measurements.
+		let settings: CompileSettings;
+		try {
+			settings = { ...deviceSettings, images: await resolveImages(request.data) };
+		} catch (error) {
+			return { ...measured, errors: [asPreviewError(error)] };
 		}
 
 		const job = compile("preview", device.name, request, limits, settings);

@@ -565,3 +565,91 @@ describe("block tags", () => {
 		expect(line.directives[0]).toMatchObject({ kind: "QR" });
 	});
 });
+
+/**
+ * The image tag, which is a block like the symbols but carries no measurement.
+ *
+ * Everything asserted here is everything the parser can know. How tall an image prints depends on
+ * the device's dot width and on the image's own dimensions, and the second of those is either a
+ * database row or an HTTP fetch — so it is settled by the compiler's pre-pass, not here. A test in
+ * `compiler.test.ts` pins the height; these pin what reaches it.
+ */
+describe("the image tag", () => {
+	/** Parses and returns the error, failing the test if the parse succeeded. */
+	const imageError = (source: string): MarkupError => {
+		try {
+			parseMarkup(source);
+		} catch (thrown) {
+			if (thrown instanceof MarkupError) {
+				return thrown;
+			}
+			throw thrown;
+		}
+		throw new Error(`expected '${source}' to be rejected`);
+	};
+
+	it("takes a stored asset name", () => {
+		expect(parseMarkup("<image>logo</image>").directives[0]).toMatchObject({
+			kind: "IMAGE",
+			ref: "logo",
+			widthPercent: 100,
+		});
+	});
+
+	it("takes a width percentage", () => {
+		expect(parseMarkup("<image=50>logo</image>").directives[0]).toMatchObject({ widthPercent: 50 });
+	});
+
+	it("refuses a percentage outside 1-100", () => {
+		expect(imageError("<image=0>logo</image>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(imageError("<image=101>logo</image>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	/**
+	 * The reason the tag is paired rather than `<image=…>`: a URL routinely carries `=` in a query
+	 * string, so an argument-shaped reference would be split at the first one.
+	 */
+	it("keeps a URL with a query string intact", () => {
+		expect(parseMarkup("<image>https://x.test/l.png?v=2</image>").directives[0]).toMatchObject({
+			ref: "https://x.test/l.png?v=2",
+		});
+	});
+
+	/** The other half of that reason: an escaped separator has to survive into the reference. */
+	it("decodes an entity inside the reference, so a two-parameter URL survives", () => {
+		expect(parseMarkup("<image>https://x.test/l.png?a=1&amp;b=2</image>").directives[0]).toMatchObject({
+			ref: "https://x.test/l.png?a=1&b=2",
+		});
+	});
+
+	it("must be alone in its element", () => {
+		expect(() => parseMarkup("Logo <image>logo</image>")).toThrow(/alone/);
+		expect(imageError("Logo <image>logo</image>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("keeps the reference out of the spans, so the line stays directive-only", () => {
+		const line = parseMarkup("<image>logo</image>");
+
+		expect(line.spans).toHaveLength(0);
+		expect(isDirectiveOnly(line)).toBe(true);
+	});
+
+	it("refuses an empty reference", () => {
+		expect(imageError("<image></image>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("refuses markup inside it, whose content is a reference rather than text", () => {
+		expect(imageError("<image><bold>logo</bold></image>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("carries no height, which only the compiler can know", () => {
+		expect(parseMarkup("<image>logo</image>").directives[0]).not.toHaveProperty("heightLines");
+	});
+
+	it("obeys an alignment that owns the line", () => {
+		const line = parseMarkup("<align=center><image=25>logo</image></align>");
+
+		expect(line.align).toBe("CENTER");
+		expect(line.directives[0]).toMatchObject({ kind: "IMAGE", ref: "logo", widthPercent: 25 });
+	});
+});

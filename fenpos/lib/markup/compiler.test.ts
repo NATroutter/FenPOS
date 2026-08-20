@@ -26,6 +26,7 @@ describe("compile pipeline", () => {
 		onUnsupported: "REJECT",
 		defaultWrap: true,
 		defaultLinefeed: "LF",
+		images: new Map(),
 	};
 
 	const limits: CompileLimits = {
@@ -210,7 +211,7 @@ describe("compile pipeline", () => {
 
 		expect(job.lines).toHaveLength(2);
 		expect(
-			countTextLines([{ align: "LEFT", wrap: null, spans: [], directives: [{ kind: "CUT", mode: "FULL" }] }]),
+			countTextLines([{ align: "LEFT", wrap: null, spans: [], directives: [{ kind: "CUT", mode: "FULL" }] }], settings),
 		).toBe(0);
 	});
 
@@ -285,12 +286,26 @@ describe("compile pipeline", () => {
  * so a request accepted or measured there is accepted and measured the same way here.
  */
 describe("block line budget", () => {
+	/**
+	 * Two images as the pre-pass resolves them, one stored and one remote.
+	 *
+	 * Ten columns is 120 dots, so the portrait logo is exactly the paper's width and twice its
+	 * height — ten lines of 24 dots — and halving its width halves the paper it costs. Sizes chosen
+	 * to divide evenly so the expected line counts below can be checked by eye rather than
+	 * recomputed by the same arithmetic they are meant to be testing.
+	 */
+	const IMAGES = new Map([
+		["logo", { width: 120, height: 240 }],
+		["https://x.test/l.png?v=2", { width: 240, height: 120 }],
+	]);
+
 	const SETTINGS: CompileSettings = {
 		columns: 10,
 		codepage: "CP858",
 		onUnsupported: "REJECT",
 		defaultWrap: true,
 		defaultLinefeed: "LF",
+		images: IMAGES,
 	};
 
 	it("charges a QR code its printed height, not one line", () => {
@@ -333,6 +348,36 @@ describe("block line budget", () => {
 		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
 		const withRule = countOutputLines({ data: ["Hello", "<hr>"], linefeed: "LF" }, SETTINGS);
 		expect(withRule - plain).toBe(1);
+	});
+
+	it("charges an image the paper its dots will cover", () => {
+		// 120 dots wide, so 240 dots tall, which is ten lines of 24.
+		expect(countOutputLines({ data: ["<image>logo</image>"], linefeed: "LF" }, SETTINGS)).toBe(10);
+	});
+
+	it("charges a half-width image half the paper", () => {
+		expect(countOutputLines({ data: ["<image=50>logo</image>"], linefeed: "LF" }, SETTINGS)).toBe(5);
+	});
+
+	it("charges a URL image from its own dimensions, the same as a stored one", () => {
+		// Landscape, so at full width it is half as tall as the paper is wide: 60 dots, three lines.
+		expect(countOutputLines({ data: ["<image>https://x.test/l.png?v=2</image>"], linefeed: "LF" }, SETTINGS)).toBe(3);
+	});
+
+	it("refuses a job whose images do not fit, the same as one whose text does not", () => {
+		const limits: CompileLimits = { maxLines: 5, maxLineChars: 40, maxTotalChars: 100, maxOutputLines: 9 };
+		const request = readRequest({ data: ["<image>logo</image>"], linefeed: "LF" }, limits, SETTINGS);
+
+		expect(() => compile("job-1", "kitchen", request, limits, SETTINGS)).toThrow(ApiError);
+	});
+
+	/**
+	 * An image that nobody resolved is a fault on this side, not a bad request: the pre-pass either
+	 * produced its size or refused the whole job by name. Charging it nothing would be worse than
+	 * failing, because the job would print an image the budget never counted.
+	 */
+	it("refuses to charge an image nobody resolved, rather than charging it nothing", () => {
+		expect(() => countOutputLines({ data: ["<image>missing</image>"], linefeed: "LF" }, SETTINGS)).toThrow(/missing/);
 	});
 
 	it("charges a line carrying both text and a drawer pulse exactly one line", () => {

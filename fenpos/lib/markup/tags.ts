@@ -52,22 +52,33 @@ export const TAGS: Record<string, Tag> = {
 	pdf417: { name: "pdf417", kind: "PAIRED", argument: "OPTIONAL" },
 	/** A cash drawer pulse. Argument is the pin, 2 or 5. */
 	drawer: { name: "drawer", kind: "VOID", argument: "OPTIONAL" },
+	/**
+	 * A stored image or an `http(s)` URL. Argument is the printed width as a percentage of the
+	 * paper, 1-100.
+	 *
+	 * Paired rather than `<image=logo>`, which is the shape the reference first had. A URL routinely
+	 * contains `=` — `?v=2` — and may contain `>`, so an argument-shaped reference would be split at
+	 * the first one. Putting it in the content reuses the `&lt;` and `&amp;` escaping every other
+	 * block already has, and adds no parsing rule of its own.
+	 */
+	image: { name: "image", kind: "PAIRED", argument: "OPTIONAL" },
 };
 
 /**
- * Whether a tag encloses data to be encoded as a symbol rather than text to be printed.
+ * Whether a tag encloses data rather than text to be printed.
  *
- * The three block tags are paired like a styling tag but behave nothing like one: what they
- * enclose is the payload of a symbology, so it is captured verbatim into a directive instead of
- * becoming styled spans. Naming the set here keeps the parser's several checks on it in step.
+ * The four block tags are paired like a styling tag but behave nothing like one: what they enclose
+ * is the payload of a symbology, or the name of an image, so it is captured verbatim into a
+ * directive instead of becoming styled spans. Naming the set here keeps the parser's several checks
+ * on it in step.
  *
  * `<drawer>` is not one: it encloses nothing and prints nothing.
  *
  * @param name a tag name, as written in markup
- * @returns true when the tag's content is symbol data
+ * @returns true when the tag's content is data rather than text
  */
 export function isBlockTag(name: string): boolean {
-	return name === "qr" || name === "barcode" || name === "pdf417";
+	return name === "qr" || name === "barcode" || name === "pdf417" || name === "image";
 }
 
 /**

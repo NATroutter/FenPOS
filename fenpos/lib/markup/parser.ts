@@ -26,9 +26,9 @@ import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
  * once during the move: the Java copy is what the agent used to run, this is what the server runs
  * now, and the translated tests are what proves they agree.
  *
- * The block tags — `<qr>`, `<barcode>`, `<pdf417>` and `<drawer>` — are the exception, and have
- * no Java counterpart. They were added after the server became the only side that parses markup,
- * so the agent receives them already compiled and never sees the syntax.
+ * The block tags — `<qr>`, `<barcode>`, `<pdf417>`, `<image>` and `<drawer>` — are the exception,
+ * and have no Java counterpart. They were added after the server became the only side that parses
+ * markup, so the agent receives them already compiled and never sees the syntax.
  */
 
 /** Highest permitted character multiplier, imposed by ESC/POS `GS !`. */
@@ -49,6 +49,15 @@ const DEFAULT_PDF417_ERROR_LEVEL = 1;
 /** Highest PDF417 error-correction level, imposed by ESC/POS `GS ( k` function 069. */
 const MAX_PDF417_ERROR_LEVEL = 8;
 
+/** Narrowest image this system will print, as a percentage of the paper. */
+const MIN_IMAGE_WIDTH_PERCENT = 1;
+
+/** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
+const MAX_IMAGE_WIDTH_PERCENT = 100;
+
+/** Printed width of `<image>` when it carries no argument. */
+const DEFAULT_IMAGE_WIDTH_PERCENT = MAX_IMAGE_WIDTH_PERCENT;
+
 /** A paired tag currently open, remembering the style to restore when it closes. */
 interface OpenTag {
 	tag: Tag;
@@ -57,16 +66,33 @@ interface OpenTag {
 }
 
 /**
- * The block tag currently open, and the symbol being built inside it.
+ * An image reference being built inside an open `<image>`.
+ *
+ * Shaped like a {@link SymbolSpec} so the scanner can accumulate into `content` without caring
+ * which kind of block it is in, but it is not one: nothing encodes it, and unlike a symbol its
+ * printed size cannot be worked out here at all.
+ */
+interface ImageSpec {
+	kind: "IMAGE";
+	content: string;
+	widthPercent: number;
+}
+
+/** What a block tag is building: a symbol to encode, or an image to fetch later. */
+type BlockSpec = SymbolSpec | ImageSpec;
+
+/**
+ * The block tag currently open, and the symbol or image being built inside it.
  *
  * `spec.content` accumulates the block's text as the scanner passes over it, which is what keeps
  * that text out of `spans`: a line carrying a symbol has to stay directive-only, because the
- * compiler charges it `heightLines` of paper rather than measuring it as text.
+ * compiler charges it `heightLines` of paper rather than measuring it as text. An image is the
+ * same story with the reference in place of the payload.
  */
 interface OpenBlock {
 	tag: Tag;
 	column: number;
-	spec: SymbolSpec;
+	spec: BlockSpec;
 }
 
 /**
@@ -533,7 +559,7 @@ class Parser {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Opens `<qr>`, `<barcode>` or `<pdf417>`.
+	 * Opens `<qr>`, `<barcode>`, `<pdf417>` or `<image>`.
 	 *
 	 * Pushed onto the same tag stack as any other paired tag, so an unclosed block is reported by
 	 * the same check that catches an unclosed `<bold>`. What differs is the parallel {@link block}
@@ -542,19 +568,29 @@ class Parser {
 	private openBlock(tag: Tag, argument: string | null, column: number): void {
 		this.requireInsideLineScope(column);
 		this.open.push({ tag, column, styleBefore: this.style });
-		this.block = { tag, column, spec: this.emptySymbol(tag, argument, column) };
+		this.block = { tag, column, spec: this.emptyBlock(tag, argument, column) };
 	}
 
 	/**
-	 * Builds the symbol a block will encode, with its content still to be read.
+	 * Builds what a block will carry, with its content still to be read.
 	 *
 	 * The argument is resolved when the block opens rather than when it closes, so a bad one is
 	 * refused at the position it was written and before the rest of the element has been scanned.
 	 *
-	 * @throws MarkupError if the argument is not a size, error level or symbology this tag accepts
+	 * @throws MarkupError if the argument is not a size, error level, symbology or width this tag
+	 *         accepts
 	 */
-	private emptySymbol(tag: Tag, argument: string | null, column: number): SymbolSpec {
+	private emptyBlock(tag: Tag, argument: string | null, column: number): BlockSpec {
 		switch (tag.name) {
+			case "image":
+				return {
+					kind: "IMAGE",
+					content: "",
+					widthPercent:
+						argument === null
+							? DEFAULT_IMAGE_WIDTH_PERCENT
+							: this.requireInt(argument, MIN_IMAGE_WIDTH_PERCENT, MAX_IMAGE_WIDTH_PERCENT, tag, column),
+				};
 			case "qr":
 				return {
 					kind: "QR",
@@ -586,22 +622,54 @@ class Parser {
 	/**
 	 * Closes a block, turning the content it captured into a directive.
 	 *
-	 * Validation and measurement both happen here, where the whole payload is finally known, and
-	 * both report the opening tag's column: the content runs to the end of the block, so the tag
-	 * that says how it will be encoded is the more useful thing to point a caller at.
+	 * Validation happens here, where the whole payload is finally known, and reports the opening
+	 * tag's column: the content runs to the end of the block, so the tag that says how it will be
+	 * encoded is the more useful thing to point a caller at.
 	 *
-	 * @throws MarkupError if the symbology cannot encode this content
+	 * @throws MarkupError if the symbology cannot encode this content, or an image names nothing
 	 */
 	private closeBlock(block: OpenBlock): void {
-		const refusal = validateSymbolContent(block.spec);
+		const spec = block.spec;
+		const directive = spec.kind === "IMAGE" ? this.imageDirective(block, spec) : this.symbolDirective(block, spec);
+
+		this.claimLine(block.tag.name, block.column, MARKUP_ERRORS.invalidBlockScope);
+		this.directives.push(directive);
+		this.block = null;
+	}
+
+	/**
+	 * Turns a finished symbol into its directive, validated and measured.
+	 *
+	 * @throws MarkupError if the symbology refuses this content
+	 */
+	private symbolDirective(block: OpenBlock, spec: SymbolSpec): Directive {
+		const refusal = validateSymbolContent(spec);
 		if (refusal) {
 			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, block.column, block.tag.name, refusal);
 		}
+		return blockDirective(spec, this.measure(block, spec));
+	}
 
-		const geometry = this.measure(block);
-		this.claimLine(block.tag.name, block.column, MARKUP_ERRORS.invalidBlockScope);
-		this.directives.push(blockDirective(block.spec, geometry));
-		this.block = null;
+	/**
+	 * Turns a finished image reference into its directive, unmeasured.
+	 *
+	 * The one block that leaves the parser without a height. Whether `ref` names anything — a
+	 * stored asset, a host that answers — is not knowable from the element either, so the only
+	 * check available here is that something was written at all. The rest is the compiler's
+	 * pre-pass, which reports a missing asset or an unreachable host as its own refusal.
+	 *
+	 * @throws MarkupError if the tags enclose nothing
+	 */
+	private imageDirective(block: OpenBlock, spec: ImageSpec): Directive {
+		if (spec.content.length === 0) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				block.column,
+				block.tag.name,
+				"<image> must enclose a stored image's name or an http(s) URL",
+			);
+		}
+		return { kind: "IMAGE", ref: spec.content, widthPercent: spec.widthPercent };
 	}
 
 	/**
@@ -615,9 +683,9 @@ class Parser {
 	 * fault on this side, and reporting it as a 400 would both tell the caller to fix content
 	 * that is fine and hide a server defect from the error rate that is supposed to show it.
 	 */
-	private measure(block: OpenBlock): SymbolGeometry {
+	private measure(block: OpenBlock, spec: SymbolSpec): SymbolGeometry {
 		try {
-			return symbolGeometry(block.spec);
+			return symbolGeometry(spec);
 		} catch (thrown) {
 			if (!(thrown instanceof SymbolEncodeError)) {
 				throw thrown;
@@ -701,11 +769,11 @@ class Parser {
 	}
 
 	/**
-	 * Rejects a rule or a symbol sharing its element with anything else.
+	 * Rejects a rule, a symbol or an image sharing its element with anything else.
 	 *
-	 * A rule expands to the full paper width and a symbol is a block of dots several lines tall,
-	 * so either combined with text would overflow its line by construction rather than by
-	 * accident. `<drawer>` is exempt because it prints nothing at all: it pulses a solenoid, so
+	 * A rule expands to the full paper width, and a symbol or an image is a block of dots several
+	 * lines tall, so either combined with text would overflow its line by construction rather than
+	 * by accident. `<drawer>` is exempt because it prints nothing at all: it pulses a solenoid, so
 	 * it costs the line no paper and may legally sit beside anything.
 	 */
 	private verifyBlockScope(): void {

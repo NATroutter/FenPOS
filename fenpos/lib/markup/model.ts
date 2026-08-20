@@ -56,7 +56,9 @@ export interface Span {
  * paper — a feed advances it, a rule prints across it, a symbol is a block of dots several lines
  * tall — so the line budget has to charge for them. A symbol's cost is not derivable from its
  * content, so it carries its measured size; a cut and a drawer pulse carry no size at all, because
- * they genuinely move no paper.
+ * they genuinely move no paper. An image is the exception in both directions: it consumes paper and
+ * still carries no size, because measuring it needs the paper's width and the image's own
+ * dimensions, neither of which the parser can reach. See `IMAGE` below.
  *
  * `heightLines` and `widthDots` are both compile-time figures and neither crosses the wire: the
  * agent's own library measures a symbol when it draws it. They exist so that the line budget and
@@ -81,7 +83,22 @@ export type Directive =
 	 * drawer, so unlike every other directive here it never touches the paper at all. That is
 	 * also why it is the one directive allowed to share a line with text.
 	 */
-	| { kind: "DRAWER"; pin: 2 | 5 };
+	| { kind: "DRAWER"; pin: 2 | 5 }
+	/**
+	 * A stored image or an `http(s)` URL, printed at `widthPercent` of the paper's width.
+	 *
+	 * The one paper-consuming directive carrying no measurement, and it is the parser that cannot
+	 * supply one. A symbol's height follows from its content, which the parser holds; an image's
+	 * height follows from the image's own dimensions and the device's dot width, and the first of
+	 * those is a database row or an HTTP response. `parseMarkup` is synchronous and knows nothing
+	 * of either, so the height is settled later — see `imageGeometry` in `lib/markup/images.ts` and
+	 * the `images` field of `CompileSettings`, which is where the compiler picks it up.
+	 *
+	 * The width is a percentage rather than a dot count because one install can have both 80mm and
+	 * 58mm printers behind a single agent. A dot count would print a logo that fits one of them and
+	 * overruns the other, which is the very problem storing the source image exists to avoid.
+	 */
+	| { kind: "IMAGE"; ref: string; widthPercent: number };
 
 /** One parsed element. Alignment is a line property because ESC/POS justifies whole lines. */
 export interface Line {

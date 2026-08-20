@@ -5,7 +5,14 @@ import { ApiError } from "@/lib/errors";
 import { publish } from "@/lib/events/bus";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
-import { type CompileLimits, type CompileSettings, compile, readRequest } from "@/lib/markup/compiler";
+import {
+	type CompileLimits,
+	type CompileSettings,
+	compile,
+	type DeviceSettings,
+	readRequest,
+} from "@/lib/markup/compiler";
+import { resolveImages } from "@/lib/markup/resolve-images";
 import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
@@ -59,7 +66,7 @@ export async function submitJob(
 		throw new ApiError("device_paused", "That printer is paused.");
 	}
 
-	const settings: CompileSettings = {
+	const deviceSettings: DeviceSettings = {
 		columns: device.columns,
 		codepage: device.codepage as Codepage,
 		onUnsupported: device.onUnsupported as UnsupportedPolicy,
@@ -81,7 +88,7 @@ export async function submitJob(
 
 	// Validated before anything is written. A request that cannot be printed never becomes a
 	// job, so the job table is a record of work that was genuinely accepted.
-	const request = readRequest(body, limits, settings);
+	const request = readRequest(body, limits, deviceSettings);
 
 	const link = getLink(device.agentId);
 	if (!link) {
@@ -90,6 +97,13 @@ export async function submitJob(
 		// honest answer and the one the caller can act on.
 		throw new ApiError("agent_offline", "That agent is not connected, so it cannot print.");
 	}
+
+	// The one stage of accepting a job that waits on something outside this server: an `<image>`
+	// naming a URL is fetched here, so a host that will not answer fails the submission — naming the
+	// element at fault — rather than a job already recorded and sent. Still before the row
+	// exists, like every other content problem, and last among the checks that can refuse without
+	// one, so neither an oversized body nor a disconnected agent costs a fetch.
+	const settings: CompileSettings = { ...deviceSettings, images: await resolveImages(request.data) };
 
 	const job = await prisma.job.create({
 		data: {
