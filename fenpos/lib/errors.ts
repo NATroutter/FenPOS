@@ -57,6 +57,8 @@ export const API_ERROR_STATUS = {
 	unknown_agent: 404,
 	unknown_device: 404,
 	unknown_job: 404,
+	/** An `<image>` tag, or the Assets tab, naming a stored image that is not there. */
+	unknown_asset: 404,
 
 	// --- 409: the resource is in the wrong state for this action ---
 	job_not_cancellable: 409,
