@@ -9,6 +9,7 @@ import {
 	type RemoteResponse,
 	type RemoteTransport,
 } from "@/lib/assets/fetch-remote";
+import { ApiError } from "@/lib/errors";
 
 /**
  * These tests never touch DNS and never open a socket to anything but loopback.
@@ -55,8 +56,8 @@ interface Stub {
 	transport: RemoteTransport;
 	/** Every URL the transport was asked to open, in order. Redirect hops show up here. */
 	readonly asked: string[];
-	/** Every address the transport was told to connect to, in order. */
-	readonly pinned: PinnedAddress[];
+	/** The addresses the transport was offered for each hop, in order. */
+	readonly offered: PinnedAddress[][];
 	/** How many times a response was cancelled rather than read to the end. */
 	cancelled: number;
 }
@@ -67,11 +68,11 @@ interface Stub {
  * `reply` is called per hop, so a test can redirect the first hop and serve bytes on the second.
  */
 function stubTransport(reply: (url: URL, hop: number) => StubResponse): Stub {
-	const stub: Stub = { asked: [], pinned: [], cancelled: 0, transport: null as unknown as RemoteTransport };
-	stub.transport = async (url, pinned) => {
+	const stub: Stub = { asked: [], offered: [], cancelled: 0, transport: null as unknown as RemoteTransport };
+	stub.transport = async (url, offered) => {
 		const hop = stub.asked.length;
 		stub.asked.push(url.href);
-		stub.pinned.push(pinned);
+		stub.offered.push(offered);
 		const scripted = reply(url, hop);
 		const response: RemoteResponse = {
 			status: scripted.status ?? 200,
@@ -149,7 +150,7 @@ describe("fetchRemoteImage", () => {
 		await expect(
 			fetchRemoteImage("http://[2606:4700:4700::1111]/logo.png", { transport: stub.transport }),
 		).resolves.toBeInstanceOf(Buffer);
-		expect(stub.pinned[0]).toEqual(PUBLIC_V6);
+		expect(stub.offered).toEqual([[PUBLIC_V6]]);
 	});
 
 	it("accepts a non-standard port on a public host", async () => {
@@ -247,7 +248,120 @@ describe("fetchRemoteImage", () => {
 	it("connects to the address it validated, not to the hostname", async () => {
 		const stub = stubTransport(() => ({}));
 		await fetchRemoteImage("http://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport });
-		expect(stub.pinned).toEqual([PUBLIC_V4]);
+		expect(stub.offered).toEqual([[PUBLIC_V4]]);
+	});
+
+	/**
+	 * Every one of these was validated, so every one of them may be connected to — and the transport
+	 * needs all of them, not just the first.
+	 *
+	 * `dns.lookup` is asked with `verbatim: true`, which means no IPv4-first reordering: a dual-stack
+	 * CDN commonly answers with its AAAA record first. Offering only the first address would pin an
+	 * IPv6 address on a shop LAN that has no IPv6 route and fail a perfectly legitimate public image
+	 * that ordinary `fetch` would have retrieved, because Node would never get to try the A record.
+	 * Handing over the whole validated set lets Node fall through them (Happy Eyeballs) while every
+	 * address it can possibly reach is still one the guard approved.
+	 */
+	it("offers every validated address to the transport, not just the first", async () => {
+		const answers = [PUBLIC_V6, PUBLIC_V4];
+		const stub = stubTransport(() => ({}));
+		await fetchRemoteImage("http://cdn.example.com/logo.png", {
+			resolve: resolverFor({ "cdn.example.com": answers }),
+			transport: stub.transport,
+		});
+		expect(stub.offered).toEqual([answers]);
+	});
+
+	it("offers the full validated set on every redirect hop", async () => {
+		const answers = [PUBLIC_V6, PUBLIC_V4];
+		const stub = stubTransport((_url, hop) =>
+			hop === 0 ? { status: 302, location: "https://images.example.net/logo.png" } : {},
+		);
+		await fetchRemoteImage("http://cdn.example.com/logo.png", {
+			resolve: resolverFor({ "cdn.example.com": answers, "images.example.net": answers }),
+			transport: stub.transport,
+		});
+		expect(stub.offered).toEqual([answers, answers]);
+	});
+});
+
+/**
+ * A URL may carry credentials, and they must not come back out.
+ *
+ * `ApiError.toBody()` spreads `details` into the response body, and the panel writes those same
+ * details into the log it displays. A receipt author who writes
+ * `<image>https://alice:hunter2@cdn.example.com/logo.png</image>` would otherwise have the password
+ * echoed to whoever submitted the job and left sitting in the log afterwards. They are leaking their
+ * own credential rather than someone else's, which is why this is not an emergency — but a security
+ * control should not be the thing that copies a password into two new places.
+ */
+describe("fetchRemoteImage credentials", () => {
+	const SECRET = "hunter2";
+
+	async function refusalFrom(url: string, options: Parameters<typeof fetchRemoteImage>[1] = {}): Promise<ApiError> {
+		const thrown = await fetchRemoteImage(url, { transport: neverCalled, ...options }).catch((error: unknown) => error);
+		expect(thrown).toBeInstanceOf(ApiError);
+		return thrown as ApiError;
+	}
+
+	it("keeps the password out of the details of an address refusal", async () => {
+		const failure = await refusalFrom(`http://alice:${SECRET}@127.0.0.1/logo.png`);
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of the details of a refusal on a resolved hostname", async () => {
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: resolverFor({ "cdn.example.com": [{ address: "10.0.0.7", family: 4 }] }),
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of a refusal for a URL that would not even parse", async () => {
+		const failure = await refusalFrom(`//alice:${SECRET}@cdn.example.com/logo.png`);
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of a redirect-limit refusal", async () => {
+		const stub = stubTransport((url) => ({ status: 302, location: url.href }));
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of a refusal from an upstream status", async () => {
+		const stub = stubTransport(() => ({ status: 404 }));
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	it("keeps the password out of an oversize refusal", async () => {
+		const stub = stubTransport(() => ({ contentLength: MAX_REMOTE_IMAGE_BYTES + 1 }));
+		const failure = await refusalFrom(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(JSON.stringify(failure.toBody())).not.toContain(SECRET);
+	});
+
+	/** Redacting must not reduce the detail to uselessness: the host and path still have to be there. */
+	it("still names the host and path it refused", async () => {
+		const failure = await refusalFrom(`http://alice:${SECRET}@127.0.0.1/logo.png`);
+		expect(failure.details.url).toBe("http://127.0.0.1/logo.png");
+	});
+
+	/** The credentials are stripped from what is reported, never from what is requested. */
+	it("still sends the credentials to the server itself", async () => {
+		const stub = stubTransport(() => ({}));
+		await fetchRemoteImage(`http://alice:${SECRET}@cdn.example.com/logo.png`, {
+			resolve: alwaysPublic,
+			transport: stub.transport,
+		});
+		expect(stub.asked).toEqual([`http://alice:${SECRET}@cdn.example.com/logo.png`]);
 	});
 });
 
@@ -546,7 +660,7 @@ describe("pinnedTransport", () => {
 	 */
 	it("connects to the pinned address rather than resolving the hostname", async () => {
 		const url = new URL(`http://not-a-real-host.invalid:${port}/logo.png`);
-		const response = await pinnedTransport(url, { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+		const response = await pinnedTransport(url, [{ address: "127.0.0.1", family: 4 }], AbortSignal.timeout(5000));
 		expect(response.status).toBe(200);
 		expect(response.contentLength).toBe(PNG_BYTES.length);
 		expect((await drain(response.body)).equals(PNG_BYTES)).toBe(true);
@@ -554,7 +668,7 @@ describe("pinnedTransport", () => {
 
 	it("surfaces a redirect rather than following it itself", async () => {
 		const url = new URL(`http://not-a-real-host.invalid:${port}/redirect`);
-		const response = await pinnedTransport(url, { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+		const response = await pinnedTransport(url, [{ address: "127.0.0.1", family: 4 }], AbortSignal.timeout(5000));
 		expect(response.status).toBe(302);
 		expect(response.location).toBe("/logo.png");
 		response.cancel();
@@ -562,7 +676,7 @@ describe("pinnedTransport", () => {
 
 	it("stops an oversized body when the response is cancelled", async () => {
 		const url = new URL(`http://not-a-real-host.invalid:${port}/oversized`);
-		const response = await pinnedTransport(url, { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+		const response = await pinnedTransport(url, [{ address: "127.0.0.1", family: 4 }], AbortSignal.timeout(5000));
 		let read = 0;
 		await expect(
 			(async () => {
@@ -579,6 +693,6 @@ describe("pinnedTransport", () => {
 
 	it("rejects when the signal is already aborted", async () => {
 		const url = new URL(`http://not-a-real-host.invalid:${port}/logo.png`);
-		await expect(pinnedTransport(url, { address: "127.0.0.1", family: 4 }, AbortSignal.abort())).rejects.toThrow();
+		await expect(pinnedTransport(url, [{ address: "127.0.0.1", family: 4 }], AbortSignal.abort())).rejects.toThrow();
 	});
 });

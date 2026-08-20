@@ -43,6 +43,24 @@ import { ApiError } from "@/lib/errors";
  * Every refusal is an `ApiError`, so the caller reports it the same way as any other bad tag
  * argument rather than as a server fault. Fetching an internal address is not a recoverable
  * mistake; refusing a legitimate public image is. Where the two conflict, this module refuses.
+ *
+ * **Two things this guard deliberately does not stop, stated so nobody has to discover them.**
+ *
+ * A URL may carry credentials, and `node:http` turns them into a request header: given
+ * `https://alice:hunter2@example.com/logo.png`, `urlToHttpOptions` lifts the userinfo into
+ * `options.auth` and the client sends `Authorization: Basic YWxpY2U6aHVudGVyMg==`. Verified, not
+ * assumed. So a job author can make this server send Basic credentials of their choosing to any
+ * host — but only to a *public* one, since the address guard runs first, and only credentials they
+ * supplied themselves. That is a small capability rather than a hole, and it is left in place
+ * because image hosts behind Basic auth are a real thing. What is *not* left in place is those
+ * credentials coming back out: {@link safeUrl} strips them from everything that reaches an error's
+ * `details`, because `ApiError.toBody()` spreads `details` into the response body and the panel
+ * writes the same details into a log a human reads. The credentials go to the server and nowhere
+ * else.
+ *
+ * And a public address that is *routed* somewhere private — a hijacked prefix, or a public IP
+ * NATed to an internal box — is indistinguishable from any other public address at this layer.
+ * Nothing here can see it.
  */
 
 /**
@@ -109,11 +127,14 @@ export interface RemoteResponse {
 /**
  * Opens one hop.
  *
- * Takes the address to connect to as a separate argument from the URL, which is the whole point:
- * the caller has already decided which address is acceptable, and the transport must not get a
+ * Takes the addresses to connect to as a separate argument from the URL, which is the whole point:
+ * the caller has already decided which addresses are acceptable, and the transport must not get a
  * second opinion from DNS. Injected so tests can script responses without a socket.
+ *
+ * It is a list rather than one address because every entry has already been checked, so there is
+ * no reason to make the transport connect to only the first — see {@link pinnedLookup}.
  */
-export type RemoteTransport = (url: URL, pinned: PinnedAddress, signal: AbortSignal) => Promise<RemoteResponse>;
+export type RemoteTransport = (url: URL, approved: PinnedAddress[], signal: AbortSignal) => Promise<RemoteResponse>;
 
 /** Seams for tests. Every one of these has a working default; production passes none of them. */
 export interface RemoteFetchOptions {
@@ -141,11 +162,11 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
 	let target = parseTarget(url);
 
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		const pinned = await guardAddress(target, resolve, signal, budget);
+		const approved = await guardAddress(target, resolve, signal, budget);
 
 		let response: RemoteResponse;
 		try {
-			response = await untilAborted(transport(target, pinned, signal), signal);
+			response = await untilAborted(transport(target, approved, signal), signal);
 		} catch (thrown) {
 			throw transportRefusal(target, signal, budget, thrown);
 		}
@@ -157,7 +178,7 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
 			}
 			if (response.status < 200 || response.status >= 300) {
 				throw new ApiError("invalid_tag_argument", `${target.host} answered ${response.status} for this image.`, {
-					url: target.href,
+					url: safeUrl(target),
 					status: response.status,
 				});
 			}
@@ -180,8 +201,43 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
 	throw new ApiError(
 		"invalid_tag_argument",
 		`This image redirected more than ${MAX_REDIRECTS} times, so it was not fetched.`,
-		{ url },
+		{ url: safeUrl(url) },
 	);
+}
+
+/**
+ * The URL with any embedded credentials removed, for reporting rather than requesting.
+ *
+ * Every `details.url` in this module goes through here. `ApiError.toBody()` spreads `details` into
+ * the JSON response and the panel writes the same object into the log it displays, so a password in
+ * `https://alice:hunter2@cdn.example.com/logo.png` would otherwise be echoed to whoever submitted
+ * the job and then left sitting in a log. The credential belongs to the person who wrote the
+ * receipt, which is why this is a leak rather than a breach — but copying a password into two new
+ * places is not something a security control should be doing.
+ *
+ * The host and path survive, because a refusal that will not say which image it refused is not
+ * much use to the person trying to fix their receipt.
+ *
+ * @param url a parsed URL, or the raw string when it was too malformed to parse
+ * @returns the same URL with userinfo removed
+ */
+function safeUrl(url: URL | string): string {
+	if (typeof url === "string") {
+		try {
+			return safeUrl(new URL(url));
+		} catch {
+			// It did not parse, so there is no structure to trust. Strip anything in the position
+			// userinfo would occupy and accept that this is a best effort on a malformed string.
+			return url.replace(/\/\/[^/@]*@/, "//");
+		}
+	}
+	if (url.username === "" && url.password === "") {
+		return url.href;
+	}
+	const stripped = new URL(url.href);
+	stripped.username = "";
+	stripped.password = "";
+	return stripped.href;
 }
 
 // --- Which addresses may be connected to ---
@@ -322,7 +378,7 @@ function parseTarget(url: string): URL {
 		parsed = new URL(url);
 	} catch {
 		throw new ApiError("invalid_tag_argument", "This image is not a URL that can be fetched over http or https.", {
-			url,
+			url: safeUrl(url),
 		});
 	}
 	requireWebScheme(parsed);
@@ -338,7 +394,7 @@ function requireWebScheme(target: URL): void {
 		throw new ApiError(
 			"invalid_tag_argument",
 			`Images may only be fetched over http or https, not ${target.protocol.replace(":", "")}.`,
-			{ url: target.href },
+			{ url: safeUrl(target) },
 		);
 	}
 }
@@ -360,7 +416,7 @@ function requireWebScheme(target: URL): void {
  * @param resolve the resolver
  * @param signal the shared deadline
  * @param budget the deadline in milliseconds, for the message if it expires
- * @returns the address to connect to
+ * @returns every address that may be connected to, in the order the resolver gave them
  * @throws ApiError if the hostname does not resolve, or resolves to anything not public
  */
 async function guardAddress(
@@ -368,7 +424,7 @@ async function guardAddress(
 	resolve: HostResolver,
 	signal: AbortSignal,
 	budget: number,
-): Promise<PinnedAddress> {
+): Promise<PinnedAddress[]> {
 	// `URL.hostname` keeps the brackets around an IPv6 literal; nothing downstream wants them.
 	const hostname = target.hostname.replace(/^\[|\]$/g, "");
 
@@ -378,7 +434,7 @@ async function guardAddress(
 	// kind of thing a guard should not be relying on being impossible.
 	if (hostname === "") {
 		throw new ApiError("invalid_tag_argument", "This image URL names no host to fetch it from.", {
-			url: target.href,
+			url: safeUrl(target),
 		});
 	}
 
@@ -396,7 +452,7 @@ async function guardAddress(
 
 	if (candidates.length === 0) {
 		throw new ApiError("invalid_tag_argument", `The hostname ${hostname} did not resolve to any address.`, {
-			url: target.href,
+			url: safeUrl(target),
 		});
 	}
 
@@ -408,14 +464,16 @@ async function guardAddress(
 			// why a URL that looks entirely ordinary was refused.
 			const found = candidate.address === hostname ? hostname : `${hostname}, which resolves to ${candidate.address},`;
 			throw new ApiError("invalid_tag_argument", `This image cannot be fetched: ${found} is ${why}.`, {
-				url: target.href,
+				url: safeUrl(target),
 				address: candidate.address,
 			});
 		}
 	}
 
-	// Any of them would do — they all passed. The first is the one DNS preferred.
-	return candidates[0];
+	// All of them, not just the first. Every one has been checked, so handing the whole set on is
+	// no less safe than handing on one of them — and it is what lets a dual-stack host still work
+	// on a network that can only reach one of its families. See {@link pinnedLookup}.
+	return candidates;
 }
 
 /**
@@ -494,7 +552,7 @@ async function readCapped(response: RemoteResponse, target: URL): Promise<Buffer
 function tooLarge(target: URL, seen: number): ApiError {
 	const limit = MAX_REMOTE_IMAGE_BYTES / (1024 * 1024);
 	return new ApiError("invalid_tag_argument", `This image is larger than the ${limit} MB limit.`, {
-		url: target.href,
+		url: safeUrl(target),
 		limit: MAX_REMOTE_IMAGE_BYTES,
 		seen,
 	});
@@ -525,13 +583,13 @@ function transportRefusal(
 		return new ApiError(
 			"invalid_tag_argument",
 			`This image timed out after ${budget} ms.`,
-			{ url: target.href },
+			{ url: safeUrl(target) },
 			{
 				cause,
 			},
 		);
 	}
-	return new ApiError("invalid_tag_argument", fallback, { url: target.href }, { cause });
+	return new ApiError("invalid_tag_argument", fallback, { url: safeUrl(target) }, { cause });
 }
 
 /**
@@ -568,30 +626,44 @@ const systemResolver: HostResolver = async (hostname) => {
 };
 
 /**
- * A `lookup` that ignores the hostname and always answers with an address already checked.
+ * A `lookup` that ignores the hostname and can only answer with addresses already checked.
  *
  * This is what closes the gap between checking an address and connecting to it. Resolving a
  * hostname, approving what came back and then handing the *hostname* to an HTTP client asks DNS a
  * second question, and nothing obliges the second answer to match the first: a record with a
  * one-second TTL can return a public address to the check and a private one to the connection,
  * which is DNS rebinding and is a real attack, not a theoretical one. Giving the client a resolver
- * that cannot say anything except the approved address removes the second question entirely.
+ * that cannot say anything except what was approved removes the second question entirely.
  *
  * The hostname is still what goes in the `Host` header and in TLS SNI and certificate validation,
- * because only DNS is overridden and not the request's idea of who it is talking to.
+ * because only DNS is overridden and not the request's idea of who it is talking to. Verified: a
+ * request pinned to `127.0.0.1` for `logo.example.test` still sends `logo.example.test` as the SNI
+ * name and still validates the certificate against it.
  *
- * @param pinned the approved address
+ * **All** the approved addresses are offered, not just the first, and that is a correctness
+ * requirement rather than a nicety. {@link systemResolver} asks with `verbatim: true`, so there is
+ * no IPv4-first reordering and a dual-stack CDN commonly answers with its AAAA record first.
+ * Offering only that one would pin an IPv6 address on a shop LAN with no IPv6 route, and a
+ * perfectly ordinary public logo would fail where a plain `fetch` would have succeeded. Handing
+ * over the whole set lets Node try them in turn (Happy Eyeballs) — and costs nothing, because
+ * every address in the list has already been through {@link blockedReason}. The guard's promise is
+ * that this list contains nothing private; it was never that the list has one entry.
+ *
+ * @param approved the addresses that passed the guard, in resolver order
  * @returns a lookup function for `node:http`
  */
-function pinnedLookup(pinned: PinnedAddress): LookupFunction {
+function pinnedLookup(approved: PinnedAddress[]): LookupFunction {
 	return (_hostname, options, callback) => {
-		// Node asks with `all: true` when it is prepared to try several addresses (Happy Eyeballs)
-		// and without it otherwise. There is only ever one address to offer either way.
+		// Node asks with `all: true` when it is prepared to try several addresses and without it
+		// otherwise, in which case only the first can be offered.
 		if (options.all === true) {
-			callback(null, [{ address: pinned.address, family: pinned.family }]);
+			callback(
+				null,
+				approved.map((one) => ({ address: one.address, family: one.family })),
+			);
 			return;
 		}
-		callback(null, pinned.address, pinned.family);
+		callback(null, approved[0].address, approved[0].family);
 	};
 }
 
@@ -605,11 +677,11 @@ function pinnedLookup(pinned: PinnedAddress): LookupFunction {
  * not need the handshake back.
  *
  * @param url the URL for this hop
- * @param pinned the address approved for it
+ * @param approved the addresses approved for it
  * @param signal the shared deadline
  * @returns the response, with its body unread
  */
-export const pinnedTransport: RemoteTransport = (url, pinned, signal) =>
+export const pinnedTransport: RemoteTransport = (url, approved, signal) =>
 	new Promise<RemoteResponse>((resolve, reject) => {
 		if (signal.aborted) {
 			reject(signal.reason);
@@ -620,7 +692,7 @@ export const pinnedTransport: RemoteTransport = (url, pinned, signal) =>
 		const request = send(
 			url,
 			{
-				lookup: pinnedLookup(pinned),
+				lookup: pinnedLookup(approved),
 				agent: false,
 				signal,
 				headers: {
