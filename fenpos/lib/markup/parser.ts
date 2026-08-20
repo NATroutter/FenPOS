@@ -648,7 +648,7 @@ class Parser {
 		if (refusal) {
 			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, block.column, block.tag.name, refusal);
 		}
-		return blockDirective(spec, this.measure(block, spec));
+		return blockDirective(spec, this.measure(block, spec), block.column);
 	}
 
 	/**
@@ -850,12 +850,18 @@ function isControl(value: string): boolean {
  * the compiler's budget charges for a symbol, and the height and width the preview draws it at, are
  * the same measurement by construction.
  *
+ * The opening tag's column travels with it, because the compiler is where a symbol is finally
+ * compared against the paper's width and by then the element text is gone. The opening tag rather
+ * than the closing one, matching what every other refusal about this block points at: the tag that
+ * says how the content will be encoded is the more useful thing to show a caller.
+ *
  * @param spec the symbol, with its content complete
  * @param geometry the symbol's measured size
+ * @param sourceColumn the column the opening tag was written at
  * @returns the directive to append to the line
  */
-function blockDirective(spec: SymbolSpec, geometry: SymbolGeometry): Directive {
-	const measured = { heightLines: geometry.heightLines, widthDots: geometry.widthDots };
+function blockDirective(spec: SymbolSpec, geometry: SymbolGeometry, sourceColumn: number): Directive {
+	const measured = { heightLines: geometry.heightLines, widthDots: geometry.widthDots, sourceColumn };
 	switch (spec.kind) {
 		case "QR":
 			return { kind: "QR", content: spec.content, size: spec.size, ...measured };

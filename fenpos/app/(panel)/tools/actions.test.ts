@@ -142,13 +142,31 @@ describe("preview", () => {
 		expect(narrowShare / wideShare).toBeCloseTo(42 / 32, 10);
 	});
 
-	it("reports a symbol too wide for the paper as wider than the paper", async () => {
-		// A Code 128 long enough to outgrow 32 columns. Nothing refuses it, so the only thing
-		// standing between it and a preview that looks printable is this figure.
+	/**
+	 * A symbol too wide for the paper is now refused rather than drawn overhanging it.
+	 *
+	 * This case used to assert the opposite — that the preview showed a `widthFraction` above 1 and
+	 * left the decision to whoever was looking. That was the stated mitigation for having no
+	 * refusal anywhere, and it did not hold: the figure was wrong for Code 128, measured in bwip-js's
+	 * automatic code set while the agent forces set B, and it is still wrong for ITF. A marker that
+	 * under-reports by 43% is not a mitigation, so the compiler refuses instead and the preview
+	 * reports that refusal like any other markup error, while the markup is still being written.
+	 */
+	it("refuses a symbol too wide for the paper rather than drawing it overhanging", async () => {
 		const result = await preview(deviceId, `<barcode=CODE128>${"ORDER-1234567890".repeat(4)}</barcode>`);
 
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0].code).toBe("symbol_too_wide");
+		expect(result.errors[0].line).toBe(1);
+		expect(result.lines).toBeNull();
+	});
+
+	it("still previews a symbol that fits the paper", async () => {
+		// The other side of that boundary: the refusal must be about the width, not about the tag.
+		const result = await preview(deviceId, "<barcode=CODE128>ORDER-1234</barcode>");
+
 		expect(result.errors).toEqual([]);
-		expect(result.lines?.[0].blocks[0].widthFraction).toBeGreaterThan(1);
+		expect(result.lines?.[0].blocks[0].widthFraction).toBeLessThanOrEqual(1);
 	});
 
 	it("carries a symbol's own alignment, and marks it as nothing else", async () => {

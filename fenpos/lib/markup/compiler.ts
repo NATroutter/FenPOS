@@ -3,7 +3,7 @@ import { ApiError } from "@/lib/errors";
 import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as WireSpan } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { validateCharset } from "@/lib/markup/charset";
-import { MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
+import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
@@ -227,6 +227,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 		const lineNumber = index + 1;
 		try {
 			const parsed = parseMarkup(request.data[index]);
+			requireSymbolsFitThePaper(parsed, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
 			const wrap = checked.wrap ?? settings.defaultWrap;
 			if (wrap) {
@@ -286,7 +287,11 @@ export function collectElementErrors(request: PrintRequest, settings: DeviceSett
 
 	for (let index = 0; index < request.data.length; index++) {
 		try {
-			validateCharset(parseMarkup(request.data[index]), settings.codepage, settings.onUnsupported);
+			const parsed = parseMarkup(request.data[index]);
+			// Collected alongside the parse failures, so the preview shows an over-wide symbol as a
+			// refusal while it is being written rather than only when the job is submitted.
+			requireSymbolsFitThePaper(parsed, settings.columns);
+			validateCharset(parsed, settings.codepage, settings.onUnsupported);
 		} catch (error) {
 			const translated = translate(error, index + 1);
 			if (!(translated instanceof ApiError)) {
@@ -298,6 +303,44 @@ export function collectElementErrors(request: PrintRequest, settings: DeviceSett
 	}
 
 	return errors;
+}
+
+/**
+ * Refuses a symbol measured wider than the device's paper.
+ *
+ * **Nothing else in the system says no to this.** A symbol wider than the print head does not come
+ * out smaller; it comes out with bars missing off the right edge, and a barcode with bars missing is
+ * not a narrower barcode — it is one that will not scan, discovered by whoever is holding the
+ * receipt. The check is one comparison between two numbers the compiler already holds, and it fails
+ * closed.
+ *
+ * It was previously left to the preview's over-wide marker, on the grounds that showing the operator
+ * was enough. That mitigation did not exist as described: the marker was wrong for Code 128, which
+ * was measured in the wrong code set and under-reported by 43%, and it is still wrong for ITF, whose
+ * width is measured at a 2:1 bar ratio while the renderers draw 3:1. A warning that does not fire is
+ * not a warning.
+ *
+ * Images are not checked here: `<image>` is bounded to 100% of the paper by the parser, so it cannot
+ * reach this state.
+ *
+ * @param line the parsed line
+ * @param columns the device's width in printer columns
+ * @throws MarkupError naming the tag and its column
+ */
+function requireSymbolsFitThePaper(line: Line, columns: number): void {
+	const paper = dotWidth(columns);
+	for (const directive of line.directives) {
+		if (!("widthDots" in directive) || directive.widthDots <= paper) {
+			continue;
+		}
+		const tag = directive.kind.toLowerCase();
+		throw new MarkupError(
+			MARKUP_ERRORS.symbolTooWide,
+			directive.sourceColumn,
+			tag,
+			`This <${tag}> prints ${directive.widthDots} dots wide, more than the ${paper} this device's paper has. Shorten its content, or print it on wider paper.`,
+		);
+	}
 }
 
 /** Turns a positional failure into the API error that reports it. */

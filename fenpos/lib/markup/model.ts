@@ -64,6 +64,11 @@ export interface Span {
  * agent's own library measures a symbol when it draws it. They exist so that the line budget and
  * the paper preview describe the same symbol — one charges the height, the other draws the symbol
  * at that height and at its true share of the paper's width.
+ *
+ * `sourceColumn` travels with them for the same reason and one step further. Whether a symbol fits
+ * the paper is not knowable in the parser — the paper's width belongs to the device — so the
+ * refusal happens in the compiler, by which point the element text is gone. The column is what lets
+ * that refusal still point at the tag the caller has to change.
  */
 export type Directive =
 	| { kind: "CUT"; mode: "FULL" | "PARTIAL" }
@@ -71,9 +76,16 @@ export type Directive =
 	/** A full-width rule, expanded to characters at compile time once the width is known. */
 	| { kind: "RULE" }
 	/** A QR code. `size` is the module size in dots, 1-16. */
-	| { kind: "QR"; content: string; size: number; heightLines: number; widthDots: number }
+	| { kind: "QR"; content: string; size: number; heightLines: number; widthDots: number; sourceColumn: number }
 	/** A linear barcode in one of the printer's supported symbologies. */
-	| { kind: "BARCODE"; system: BarcodeSystem; content: string; heightLines: number; widthDots: number }
+	| {
+			kind: "BARCODE";
+			system: BarcodeSystem;
+			content: string;
+			heightLines: number;
+			widthDots: number;
+			sourceColumn: number;
+	  }
 	/**
 	 * A PDF417 stacked symbol. `errorLevel` is its error-correction level, 0-8.
 	 *
@@ -89,6 +101,7 @@ export type Directive =
 			columns: number;
 			heightLines: number;
 			widthDots: number;
+			sourceColumn: number;
 	  }
 	/**
 	 * A cash drawer kick on pin 2 or 5.

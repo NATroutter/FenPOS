@@ -30,6 +30,16 @@ export const MARKUP_ERRORS = {
 	 * markup, so the agent can never raise this and mirroring it there would be dead code.
 	 */
 	invalidBlockScope: "invalid_block_scope",
+	/**
+	 * A symbol measured wider than the device's paper.
+	 *
+	 * Server-only for the same reason as `invalidBlockScope`, and raised later than every other
+	 * code here: how wide the paper is belongs to the device rather than to the element, so it is
+	 * the compiler that knows, not the parser. It still arrives as a markup error because it names
+	 * a tag and a column, and because what the caller has to change is the markup — a smaller
+	 * module size, shorter content, a different symbology.
+	 */
+	symbolTooWide: "symbol_too_wide",
 	/** A character that would be interpreted by the printer as a command. */
 	controlCharacter: "control_character",
 } as const;

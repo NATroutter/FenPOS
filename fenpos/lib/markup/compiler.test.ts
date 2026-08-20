@@ -308,10 +308,58 @@ describe("block line budget", () => {
 		images: IMAGES,
 	};
 
+	/**
+	 * The same device on 80mm paper, for the symbol cases.
+	 *
+	 * They need it now: a QR code is a couple of hundred dots wide and the ten-column paper above is
+	 * 120, so the compiler refuses the symbol outright — which is a real property, tested in its own
+	 * right below, but a different one from the height accounting these cases are about. The image
+	 * cases stay on the narrow paper, where their arithmetic stays legible.
+	 */
+	const WIDE_SETTINGS: CompileSettings = { ...SETTINGS, columns: 42 };
+
 	it("charges a QR code its printed height, not one line", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
-		const withQr = countOutputLines({ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF" }, SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, WIDE_SETTINGS);
+		const withQr = countOutputLines(
+			{ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF" },
+			WIDE_SETTINGS,
+		);
 		expect(withQr - plain).toBeGreaterThan(1);
+	});
+
+	/**
+	 * Nothing else in the system refuses this.
+	 *
+	 * A symbol wider than the print head prints with bars missing off the right edge, and a barcode
+	 * with bars missing is not a narrower barcode — it is one that will not scan, found out by
+	 * whoever is holding the receipt. It was left to the preview's over-wide marker until that
+	 * marker turned out to be wrong for Code 128 and for ITF, so the refusal is here now, where it
+	 * fails closed.
+	 *
+	 * Both sides of the boundary, and the message has to name the tag and the two widths: an error
+	 * saying only "too wide" leaves the caller guessing which of several symbols and by how much.
+	 */
+	it("refuses a symbol wider than the device's paper, naming the tag and its column", () => {
+		// Wrapped in an alignment so the tag is not at column 1, which is what shows the column
+		// really travelled from the parser rather than being a constant the compiler made up.
+		const element = "<align=center><qr=8>https://example.com/o/1</qr></align>";
+		const thrown = (() => {
+			try {
+				countOutputLines({ data: ["Hello", element], linefeed: "LF" }, SETTINGS);
+				return null;
+			} catch (error) {
+				return error as ApiError;
+			}
+		})();
+
+		expect(thrown).toBeInstanceOf(ApiError);
+		expect(thrown?.code).toBe("symbol_too_wide");
+		expect(thrown?.status).toBe(400);
+		expect(thrown?.details).toMatchObject({ line: 2, column: element.indexOf("<qr=8>") + 1, detail: "qr" });
+		expect(thrown?.message).toMatch(/200 dots wide, more than the 120/);
+
+		// The same symbol on paper wide enough for it compiles, so this is the width and not the tag.
+		expect(() => countOutputLines({ data: [element], linefeed: "LF" }, WIDE_SETTINGS)).not.toThrow();
 	});
 
 	it("charges a drawer pulse nothing, because it prints nothing", () => {
@@ -321,7 +369,7 @@ describe("block line budget", () => {
 	});
 
 	it("charges a barcode and a PDF417 symbol exactly their measured height", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, WIDE_SETTINGS);
 
 		const barcodeHeight = symbolGeometry({
 			kind: "BARCODE",
@@ -330,12 +378,12 @@ describe("block line budget", () => {
 		}).heightLines;
 		const withBarcode = countOutputLines(
 			{ data: ["Hello", "<barcode=EAN13>1234567890128</barcode>"], linefeed: "LF" },
-			SETTINGS,
+			WIDE_SETTINGS,
 		);
 		expect(withBarcode - plain).toBe(barcodeHeight);
 
 		const pdf417Height = symbolGeometry({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 }).heightLines;
-		const withPdf417 = countOutputLines({ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF" }, SETTINGS);
+		const withPdf417 = countOutputLines({ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF" }, WIDE_SETTINGS);
 		expect(withPdf417 - plain).toBe(pdf417Height);
 	});
 
@@ -399,9 +447,9 @@ describe("block line budget", () => {
 				linefeed: "LF",
 			},
 			limits,
-			SETTINGS,
+			WIDE_SETTINGS,
 		);
-		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
+		const job = compile("job-1", "kitchen", request, limits, WIDE_SETTINGS);
 
 		expect(job.lines[0].directives).toEqual([{ type: "QR", content: "https://example.com/o/1", size: 8 }]);
 		expect(job.lines[1].directives).toEqual([{ type: "BARCODE", system: "EAN13", content: "1234567890128" }]);

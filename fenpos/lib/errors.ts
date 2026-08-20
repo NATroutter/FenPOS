@@ -35,6 +35,14 @@ export const API_ERROR_STATUS = {
 	invalid_wrap_scope: 400,
 	invalid_rule_scope: 400,
 	invalid_block_scope: 400,
+	/**
+	 * A `<qr>`, `<barcode>` or `<pdf417>` measured wider than the device's paper.
+	 *
+	 * Refused at compile time rather than printed clipped. A symbol wider than the head has bars
+	 * missing off the right edge, and a barcode with bars missing is not a narrower barcode — it is
+	 * one that will not scan, discovered by whoever is holding the receipt.
+	 */
+	symbol_too_wide: 400,
 	unsupported_character: 400,
 	too_many_output_lines: 400,
 	/**

@@ -574,11 +574,15 @@ function Paper({ result }: { result: PreviewResult | null }) {
 									</div>,
 								);
 
-								// A symbol too wide for the paper is drawn clamped to the sheet, so without
-								// this it would look like it fits. Said in words rather than drawn, because
-								// the one thing a preview may not do is make an unprintable receipt look
-								// printable. Only a symbol reaches this: an image's width is a percentage of
-								// the paper, and the tag stops at a hundred.
+								// A backstop that should no longer fire. The compiler refuses a symbol wider
+								// than the paper outright — `symbol_too_wide` — so a preview carrying lines
+								// at all has already passed that check, and an image's width is a percentage
+								// of the paper with the tag stopping at a hundred. It stays because a symbol
+								// drawn clamped to the sheet would otherwise look like it fits, and the one
+								// thing a preview may not do is make an unprintable receipt look printable.
+								// It was once the *only* thing standing between an over-wide symbol and a
+								// job; it under-reported Code 128 by 43% while it held that job, which is
+								// why the refusal now lives in the compiler instead.
 								if (block.widthFraction > 1) {
 									rows.push(
 										<Marker
