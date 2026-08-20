@@ -326,6 +326,7 @@ mvn package
 | `pnpm admin:set-password "…"` | Sets the password directly against the database. This is the recovery path for a lost password, not setup — first boot generates one. |
 | `pnpm admin:reset-password` | Drops the credential and every session, so the next start generates a fresh password. Leaves agents, devices, keys and history alone. Useful for re-testing the first-run flow. |
 | `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it. |
+| `pnpm db:seed:logo` | Stores the FenPOS logo as an asset called `fenpos-logo`, which the device test page prints. Idempotent, and deletes nothing — if the asset already exists it is left alone. Agents pick it up on their next config sync. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 
 If a page in `pnpm dev` renders but never becomes interactive (dead buttons, live values stuck
