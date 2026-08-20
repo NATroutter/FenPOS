@@ -178,6 +178,20 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
             log.warn("Refused job " + job.jobId() + ": " + e.getMessage(), job.device());
             report(job.jobId(), JobState.FAILED, null, null, UNRENDERABLE, e.getMessage());
             return;
+        } catch (RuntimeException e) {
+            // Everything a renderer can throw that nobody planned for: an UncheckedIOException out
+            // of the byte stream, an IllegalArgumentException from inside escpos-coffee, a
+            // NullPointerException from a bug here. These used to escape to LinkClient's top-level
+            // frame handler, which logs and carries on — leaving the panel showing QUEUED forever,
+            // which the comment above this method already calls the most confusing state this
+            // system produces. The reason reported is deliberately generic: an internal exception
+            // message is not written for whoever wrote the markup, and the stack that explains it
+            // belongs in this agent's log rather than in a job row on someone's screen.
+            logger.error("Could not render job " + job.jobId() + " for device '" + job.device() + "'", e);
+            log.error("Job " + job.jobId() + " failed while being rendered; see the agent log", job.device());
+            report(job.jobId(), JobState.FAILED, null, null, UNRENDERABLE,
+                    "This agent could not render that job.");
+            return;
         }
 
         // Registered before submission so that a state change fired by the queue the instant it

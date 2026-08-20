@@ -186,6 +186,38 @@ class LinkDispatcherTest {
         assertEquals("invalid_job", failed.errorCode());
     }
 
+    /**
+     * The same outcome for a throw out of the renderer that is not a {@link ProtocolException}.
+     * <p>
+     * {@code IrRenderer.render} converts an encoder's refusal and wraps a directive's, but a span
+     * with an out-of-range multiplier is validated by {@code SpanStyle}'s own constructor, outside
+     * either of those — so an {@code IllegalArgumentException} escaped {@code render}, escaped this
+     * method, and was swallowed by {@code LinkClient}'s top-level frame handler, which logs and
+     * carries on. The job was never reported, so the panel showed QUEUED forever. An
+     * {@code UncheckedIOException} out of the byte stream had the same shape.
+     * <p>
+     * Reported with a generic reason on purpose: an internal exception message is not written for
+     * whoever wrote the markup, and the stack that explains it belongs in the agent's log.
+     */
+    @Test
+    void reportsAJobWhoseRenderFailsForAReasonNobodyEnumerated() {
+        configure("kitchen");
+
+        // Past what SpanStyle accepts. The codec bounds this too, but a job reaching the dispatcher
+        // some other way must still be reported rather than vanish.
+        Frames.WireLine bad = new Frames.WireLine(
+                Align.LEFT,
+                List.of(new Frames.WireSpan("Kahvi", false, 0, false, 99, 1, Font.A)),
+                List.of());
+        dispatcher.accept(new Frames.JobDispatch(
+                new Frames.CompiledJob("job-1", "kitchen", Linefeed.LF, List.of(bad))));
+
+        Frames.JobUpdate failed = awaitUpdate("job-1", JobState.FAILED);
+        assertEquals("invalid_job", failed.errorCode());
+        assertFalse(failed.errorMessage().contains("widthMult"),
+                "an internal exception message must not be reported to the server as the job's reason");
+    }
+
     @Test
     void printsARepeatedJobIdentifierOnlyOnce() throws Exception {
         FakePrinterPort port = configure("kitchen");
