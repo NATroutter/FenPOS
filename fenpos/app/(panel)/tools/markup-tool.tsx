@@ -113,6 +113,21 @@ interface Example {
 const CODEPAGE_SAMPLE = "AaBb 123 .,:;!? #%&*()[] +-=/ ÄÖÜäöü ÉÑÇ éñç";
 
 /**
+ * The stored image the test page prints.
+ *
+ * The application's own logo, seeded into the asset library by `pnpm db:seed:logo` so that an
+ * install which has never uploaded anything can still see the image path work. Named here rather
+ * than inline because `TestPage.java` names the same string, and the two are meant to be read
+ * side by side.
+ *
+ * **This is the one line of the test page that can fail on an install.** The agent's copy omits
+ * the tag when it holds no such raster; this copy cannot, because nothing here knows what any
+ * agent was synced. Deleting the asset therefore makes this example report `unknown_asset` — which
+ * is a true answer about the install, and recoverable by re-seeding.
+ */
+const LOGO_ASSET = "fenpos-logo";
+
+/**
  * A ruler marking every tenth column, so a wrong `columns` setting is visible rather than counted.
  *
  * Ported from `TestPage.java`'s `ruler`, and must stay identical to it: the point of loading the
@@ -137,6 +152,12 @@ function ruler(columns: number): string {
  * `device.test`, reproduced here so it can be edited, previewed and printed as a job — which the
  * agent's own version cannot be, because that one is composed on the agent and never passes
  * through the editor.
+ *
+ * **The test page must stay in step with `TestPage.java`, element for element**, because comparing
+ * this preview against what the agent actually prints is the whole point of having it here. Two
+ * differences are deliberate and are the only two: {@link CODEPAGE_SAMPLE}, which the agent filters
+ * against the device's charset and this cannot, and the logo, which the agent omits when it holds
+ * no raster for it. Both are documented where they are written.
  */
 const EXAMPLES: Example[] = [
 	{
@@ -146,7 +167,7 @@ const EXAMPLES: Example[] = [
 	},
 	{
 		label: "Device test page",
-		note: "Width ruler, styles and codepage",
+		note: "Width ruler, styles, codepage and blocks",
 		build: (device) =>
 			[
 				"<align=center><bold>FenPOS test page</bold></align>",
@@ -166,6 +187,12 @@ const EXAMPLES: Example[] = [
 				"<hr>",
 				"Codepage sample:",
 				CODEPAGE_SAMPLE,
+				"<hr>",
+				"Blocks:",
+				"<align=center><qr>https://fenpos.test/page</qr></align>",
+				"<align=center><barcode=CODE39>FENPOS</barcode></align>",
+				"<align=center><pdf417>FENPOS TEST</pdf417></align>",
+				`<align=center><image>${LOGO_ASSET}</image></align>`,
 				"<feed=3>",
 				"<cut>",
 			].join("\n"),

@@ -6,6 +6,7 @@ import fi.natroutter.fenpos.print.PrintJob;
 import fi.natroutter.fenpos.print.PrintRequestException;
 import fi.natroutter.fenpos.print.PrintService;
 import fi.natroutter.fenpos.print.QueueRejectedException;
+import fi.natroutter.fenpos.print.SyncedImages;
 import fi.natroutter.fenpos.print.TestPage;
 
 /**
@@ -47,7 +48,8 @@ public class TestCommand extends DeviceCommand {
 
     private void printTestPage(Device device) {
         try {
-            PrintJob job = printing.submit(device, TestPage.bodyFor(device));
+            PrintJob job = printing.submit(device,
+                    TestPage.bodyFor(device, SyncedImages.forDevice(device, printing.devices())));
             out.println("Queued test page " + job.id() + " on " + device.name() + ".");
         } catch (PrintRequestException e) {
             out.println("Test page rejected (" + e.apiCode() + "): " + e.getMessage());
