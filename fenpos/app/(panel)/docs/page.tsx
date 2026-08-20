@@ -275,10 +275,12 @@ export default async function DocsPage() {
 
 								<P>
 									What an agent holds is bounded: at most {IMAGE_LIMITS.maxSyncedRasters} rasters, one per stored image
-									per distinct paper width behind that agent, taken in name order. Past that an image is not on the
-									agent at all, so printing it at the paper's full width — the one case whose dots do not travel with
-									the job — fails at the printer rather than in the response. At any other width it still prints,
-									because those dots are carried.
+									per distinct paper width behind that agent, taken in name order — and fewer than that when one does
+									not fit the configuration frame or is too tall for the protocol to carry, which a handful of large
+									images reach long before the count does. An image the agent does not hold, for any of those reasons or
+									because it was stored while a job was already in flight, still prints at any width whose dots the job
+									carries. At the paper's full width, the one case whose dots do not travel, it fails at the printer
+									rather than in the response.
 								</P>
 
 								<P>
@@ -455,7 +457,8 @@ export default async function DocsPage() {
 
 								<P>
 									Everything is decided before the response. Past a <Status>202</Status>, a job can only fail for
-									hardware reasons — which is what makes these codes worth branching on.
+									hardware reasons, or for an image the agent turns out not to hold — see Blocks — which is what makes
+									these codes worth branching on.
 								</P>
 							</Col>
 
