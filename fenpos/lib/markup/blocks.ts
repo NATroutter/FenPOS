@@ -72,17 +72,16 @@ const BARCODE_BCID: Record<BarcodeSystem, string> = {
 	CODE128: "code128",
 };
 
-/** Dots per PDF417 column module. */
-const PDF417_MODULE_WIDTH_DOTS = 3;
-
 /**
- * Dots per PDF417 row.
+ * Dots per PDF417 module, in both directions.
  *
- * PDF417 rows are conventionally rendered about three modules tall, so a scanner sweeping
- * across the symbol can tell a row boundary from noise in a single module. This keeps that
- * aspect ratio.
+ * `bwip.raw()`'s `pixx`/`pixy` for PDF417 are already module-scaled and share one unit system —
+ * confirmed against `toBuffer(..., {scale:1})`'s rendered PNG dimensions, which match `pixx`x
+ * `pixy` exactly (e.g. 103x15 and 205x66 for two different inputs). There is no separate "row
+ * height" to derive: applying a different multiplier to `pixy` than to `pixx` would rescale one
+ * axis relative to the other for no reason bwip's own output supports.
  */
-const PDF417_ROW_HEIGHT_DOTS = PDF417_MODULE_WIDTH_DOTS * 3;
+const PDF417_MODULE_DOTS = 3;
 
 /** Dots per narrow-bar module in a linear barcode. */
 const BARCODE_MODULE_WIDTH_DOTS = 2;
@@ -91,10 +90,10 @@ const BARCODE_MODULE_WIDTH_DOTS = 2;
  * Printed height of a linear barcode, fixed regardless of symbology or content.
  *
  * Unlike a QR code or PDF417, a 1D barcode's height carries no data — it is purely a device
- * setting (ESC/POS's `GS h`). 96 dots is four printed lines at the default font, tall enough to
- * stay comfortably scannable.
+ * setting (ESC/POS's `GS h`). 100 dots is the spec's stated default, `ceil(100 / 24)` = 5
+ * printed lines.
  */
-const BARCODE_HEIGHT_DOTS = 96;
+const BARCODE_HEIGHT_DOTS = 100;
 
 /**
  * Measures the printed size of a symbol.
@@ -110,7 +109,7 @@ export function symbolGeometry(spec: SymbolSpec): SymbolGeometry {
 		}
 		case "PDF417": {
 			const grid = moduleGrid("pdf417", spec.content, { eclevel: spec.errorLevel });
-			return toGeometry(grid.pixx * PDF417_MODULE_WIDTH_DOTS, grid.pixy * PDF417_ROW_HEIGHT_DOTS);
+			return toGeometry(grid.pixx * PDF417_MODULE_DOTS, grid.pixy * PDF417_MODULE_DOTS);
 		}
 		case "BARCODE": {
 			const widthModules = barModuleWidth(BARCODE_BCID[spec.system], spec.content);
