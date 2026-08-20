@@ -98,7 +98,7 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
 	ITF: "An even number of digits: it encodes them in pairs.",
 	CODABAR: "A, B, C or D at each end, with digits and -$:./+ between.",
 	CODE93: "Digits, A–Z, spaces and -.$/+%",
-	CODE128: "Any non-empty text, taken literally.",
+	CODE128: "Any non-empty ASCII text, taken literally.",
 };
 
 /**
@@ -270,7 +270,9 @@ export default async function DocsPage() {
 									<Mono>CODE128</Mono> takes its content literally. Code 128 has no field for which of its three code
 									sets is in use, so the selector travels inside the data as <Mono>{"{A"}</Mono>, <Mono>{"{B"}</Mono> or{" "}
 									<Mono>{"{C"}</Mono>; the agent names code set B itself and doubles every brace it was given. A brace
-									prints as a brace, and there is no way to switch code set or emit an FNC character.
+									prints as a brace, and there is no way to switch code set or emit an FNC character. Code set B is an
+									ASCII range and nothing wider, so non-ASCII content is refused here rather than by the agent after the
+									job has been accepted.
 								</P>
 
 								<Aside>

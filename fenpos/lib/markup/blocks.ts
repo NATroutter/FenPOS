@@ -293,18 +293,28 @@ const CODE_39_93_PATTERN = /^[0-9A-Z \-.$/+%]+$/;
  */
 const UPCE_PATTERN = /^0\d{6,7}$/;
 
-/** Highest code point a two-dimensional symbol's content may contain. */
+/** Highest code point a symbol's content may contain. */
 const SYMBOL_MAX_CODE_POINT = 0x7f;
 
 /**
- * Whether a two-dimensional symbol can carry this content.
+ * Whether a symbol can carry this content.
  *
- * ASCII only, and that is a limit of the agent rather than of QR or PDF417, both of which encode
- * arbitrary bytes perfectly well. The agent's escpos-coffee builds the `GS ( k` store-data
- * command with a length counted in characters while writing the string's UTF-8 bytes, so one
- * character above U+007F makes the declared length short and the printer reads a truncated
- * payload as a valid symbol. The failure mode is a symbol that scans and is wrong, which is why
- * it is refused at compile time here instead of being left to the paper.
+ * ASCII only, and that is a limit of the agent rather than of the symbologies, which encode
+ * arbitrary bytes perfectly well. Two unrelated mechanisms in escpos-coffee land on the same
+ * bound, and the consequence of exceeding it differs enough to be worth naming both:
+ *
+ *  - QR and PDF417 are written with `GS ( k`, whose store-data command the library builds with a
+ *    length counted in characters while writing the string's UTF-8 bytes. One character above
+ *    U+007F makes the declared length short, and the printer reads a truncated payload as a valid
+ *    symbol. The failure mode is a symbol that scans and is wrong.
+ *  - Code 128 is written with `GS k`, whose data the library checks against
+ *    `^\{[A-C][\x00-\x7F]+$` before sending. A character above U+007F fails that match and it
+ *    throws — after the job has been acknowledged, since nothing else on this side would have
+ *    stopped it. `bwip-js` measures such content happily, so without this check the server hands
+ *    back a `202` for a job the agent cannot print.
+ *
+ * Both are refused at compile time here so the caller gets a position instead of paper, or in the
+ * Code 128 case instead of an accepted job that fails behind a printer.
  *
  * Written as a scan rather than a character-class regex because the range is expressed in code
  * points, and spelling it into a pattern means embedding control characters in source.
@@ -355,7 +365,17 @@ const BARCODE_CONTENT_RULES: Record<BarcodeSystem, (content: string) => string |
 		CODE_39_93_PATTERN.test(content)
 			? null
 			: "CODE93 accepts only digits, uppercase letters, spaces and the symbols -.$/+%",
-	CODE128: (content) => (content.length > 0 ? null : "CODE128 requires non-empty content"),
+	// The one symbology here with no alphabet of its own — Code 128 covers the printable ASCII
+	// range and the agent escapes the content rather than interpreting it — so ASCII is the whole
+	// rule beyond being non-empty. See {@link isSymbolAscii} for what the agent does with anything wider.
+	CODE128: (content) => {
+		if (content.length === 0) {
+			return "CODE128 requires non-empty content";
+		}
+		return isSymbolAscii(content)
+			? null
+			: "CODE128 content must be ASCII; the agent's Code 128 command carries one byte per character and refuses anything above U+007F";
+	},
 };
 
 /**

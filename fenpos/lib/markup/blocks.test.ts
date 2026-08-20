@@ -93,6 +93,39 @@ describe("symbolGeometry", () => {
 		expect(validateSymbolContent({ kind: "QR", content: "https://x.test/a?b=1&c=~", size: 6 })).toBeNull();
 	});
 
+	/**
+	 * Code 128 has no alphabet of its own — it covers printable ASCII and the agent escapes rather
+	 * than interprets what it is given — so its rule was once "non-empty" and nothing more. That
+	 * left the one gap the other rules exist to close: bwip-js measures `café` without complaint,
+	 * so the server acknowledged the job, and escpos-coffee then refused it against
+	 * `^\{[A-C][\x00-\x7F]+$` on the agent. A 202 for a job that cannot print is the single
+	 * outcome this API promises does not happen.
+	 *
+	 * The measurement is asserted alongside the refusal on purpose: without it this test would
+	 * still pass if bwip-js were the one rejecting the content, which would make the rule look
+	 * like belt and braces rather than the only thing standing between a caller and that 202.
+	 */
+	it("refuses non-ASCII CODE128 content that the encoder would happily measure", () => {
+		expect(symbolGeometry({ kind: "BARCODE", content: "café", system: "CODE128" }).heightLines).toBe(5);
+		expect(validateSymbolContent({ kind: "BARCODE", content: "café", system: "CODE128" })).toMatch(/ASCII/);
+		expect(validateSymbolContent({ kind: "BARCODE", content: "cafe", system: "CODE128" })).toBeNull();
+	});
+
+	/**
+	 * The same bound across every symbology, which the other eight hold by their own alphabets
+	 * rather than by an ASCII check: each is digits or a named ASCII character class, so none can
+	 * admit a character the agent's regex would then reject. Written as a sweep so a symbology
+	 * added later with a broader alphabet fails here rather than on a printer, and substituting
+	 * the last character rather than appending one so each sample stays a legal length and the
+	 * refusal is about the character rather than the count.
+	 */
+	it("admits no non-ASCII content in any symbology", () => {
+		for (const system of BarcodeSystem.values) {
+			const content = `${BARCODE_SAMPLES[system].slice(0, -1)}ä`;
+			expect(validateSymbolContent({ kind: "BARCODE", content, system })).not.toBeNull();
+		}
+	});
+
 	it("measures an EAN13 barcode at the spec's fixed 100-dot height", () => {
 		const geometry = symbolGeometry({ kind: "BARCODE", content: "5901234123457", system: "EAN13" });
 		expect(geometry.heightLines).toBe(5);
