@@ -36,6 +36,43 @@ describe("symbolGeometry", () => {
 		expect(geometry.heightLines).toBeGreaterThan(0);
 	});
 
+	/**
+	 * The server measured one code set and the agent printed another.
+	 *
+	 * bwip-js selects Code 128's code set automatically and packs two digits into one character in
+	 * set C, so it encoded sixteen digits in 123 modules — 246 dots. `EscPosRenderer.barcodeData`
+	 * forces set B, which is one character per character throughout, so the printer laid down 211
+	 * modules — 422 dots. On 58mm paper that is a preview drawing 64% of the sheet against a
+	 * printer covering 110%, and the over-wide check saw only the 64%.
+	 *
+	 * Pinned at the exact number rather than as an inequality: a measurement that fell back to
+	 * bwip-js for digits would give 246 and fail here.
+	 */
+	it("measures CODE128 in the code set the agent forces, not the one bwip-js picks", () => {
+		expect(symbolGeometry({ kind: "BARCODE", content: "1234567890123456", system: "CODE128" }).widthDots).toBe(422);
+	});
+
+	/**
+	 * The formula against a real Code 128 encoding.
+	 *
+	 * bwip-js has no way to be told which code set to use, so the arithmetic cannot be checked
+	 * against it directly — but bwip-js *chooses* set B whenever the content is not digit-heavy, and
+	 * on those inputs its own module count is ground truth for `11n + 35`. Every string below is one
+	 * bwip-js encodes in set B of its own accord. If the formula's fixed cost or its per-character
+	 * cost were wrong, these would disagree.
+	 */
+	it("matches bwip-js wherever bwip-js chooses set B by itself", () => {
+		for (const content of ["A", "AB", "ABCDEFGH", "Hello World", "abc-def_1"]) {
+			const symbol = bwip.raw({ bcid: "code128", text: content, includetext: false })[0];
+			if (!("sbs" in symbol)) {
+				throw new Error(`bwip-js did not return bar widths for '${content}'`);
+			}
+			const modules = symbol.sbs.reduce((total, width) => total + width, 0);
+			expect(symbolGeometry({ kind: "BARCODE", content, system: "CODE128" }).widthDots, content).toBe(modules * 2);
+			expect(modules, `${content} must be 11n + 35`).toBe(11 * content.length + 35);
+		}
+	});
+
 	it("refuses an EAN13 that is not thirteen digits", () => {
 		expect(validateSymbolContent({ kind: "BARCODE", content: "123", system: "EAN13" })).toMatch(/13/);
 		expect(validateSymbolContent({ kind: "BARCODE", content: "5901234123457", system: "EAN13" })).toBeNull();

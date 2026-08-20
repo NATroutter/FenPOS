@@ -145,7 +145,7 @@ export function symbolGeometry(spec: SymbolSpec): SymbolGeometry {
 			return toGeometry(grid.pixx * PDF417_MODULE_DOTS, grid.pixy * PDF417_MODULE_DOTS);
 		}
 		case "BARCODE": {
-			const widthModules = barModuleWidth(spec);
+			const widthModules = spec.system === "CODE128" ? code128SetBModules(spec.content) : barModuleWidth(spec);
 			return toGeometry(widthModules * BARCODE_MODULE_WIDTH_DOTS, BARCODE_HEIGHT_DOTS);
 		}
 	}
@@ -168,6 +168,12 @@ const BWIPP_FILL_RULE = /fill=rule=/g;
  * The same {@link encodeOptions} call {@link symbolGeometry} measures, so the symbol drawn is the
  * symbol charged. Human-readable text is never drawn beside a barcode: the printer does not print
  * it, and a preview showing it would be showing something that will not be on the paper.
+ *
+ * One exception, stated rather than hidden: for Code 128 the *width* is measured by
+ * {@link code128SetBModules} instead, because the agent forces code set B and bwip-js cannot be
+ * told to. The drawing is still bwip-js's, so on all-digit content the bars on screen are a set-C
+ * encoding stretched to the set-B footprint. The footprint is what the layout and the over-wide
+ * refusal depend on, and that is right; the individual bars are decorative.
  *
  * @param spec what to print
  * @returns the symbol as an SVG document
@@ -271,6 +277,46 @@ function barModuleWidth(spec: SymbolSpec): number {
 	}
 	return symbol.sbs.reduce((total, width) => total + width, 0);
 }
+
+/**
+ * How wide a Code 128 symbol is in modules, encoded the way the agent actually prints it.
+ *
+ * **Not what bwip-js would choose.** Code 128 has three code sets, and set C packs two digits into
+ * one 11-module character — so bwip-js, which selects automatically, encodes sixteen digits in 123
+ * modules. The agent does not select: `EscPosRenderer.barcodeData` writes a fixed `{B` in front of
+ * the data and doubles any brace, because letting a caller name its own code set would make
+ * `{Barcode` ambiguous between literal text and a switch. Set B is one character per module group
+ * throughout, so the same sixteen digits are 211 modules — 422 dots against the 246 this function
+ * used to report. On 58mm paper the preview drew 64% of the sheet while the printer laid down 110%,
+ * and the over-wide marker never fired.
+ *
+ * Measuring it arithmetically rather than asking bwip-js for a set-B encoding is the honest option:
+ * the library has no way to be told which code set to use, and the arithmetic is exact. Start
+ * character, one character per input character, the modulo-103 check character — 11 modules each —
+ * and a 13-module stop. Verified against bwip-js on every input where it stays in set B of its own
+ * accord: `A` 46, `AB` 57, `ABCDEFGH` 123, `Hello World` 156, `abc-def_1` 134, all matching.
+ *
+ * A doubled brace still costs one character: the printer reads `{{` as a literal `{`, so the escape
+ * the agent applies is invisible to the width. Content is ASCII-only — `validateSymbolContent`
+ * refuses anything wider — so `length` is the character count.
+ *
+ * Known residual: {@link symbolSvg} still draws bwip-js's automatic encoding, so for all-digit
+ * content the preview shows a set-C symbol stretched to the set-B footprint. The space it occupies
+ * on the paper is now right, which is what the layout and the over-wide refusal depend on; the
+ * individual bars are not. Forcing bwip-js into set B is not something the library exposes.
+ *
+ * @param content the data as written between the tags, before the agent escapes it
+ * @returns the symbol's width in narrow-bar modules
+ */
+function code128SetBModules(content: string): number {
+	return CODE128_MODULES_PER_CHARACTER * content.length + CODE128_FIXED_MODULES;
+}
+
+/** Modules in one Code 128 character, in every code set. */
+const CODE128_MODULES_PER_CHARACTER = 11;
+
+/** Modules a Code 128 symbol costs regardless of content: start, check character, and a 13-module stop. */
+const CODE128_FIXED_MODULES = 2 * CODE128_MODULES_PER_CHARACTER + 13;
 
 /** Basic Code 39 / Code 93 alphabet: digits, uppercase letters, space, and `-.$/+%`. */
 const CODE_39_93_PATTERN = /^[0-9A-Z \-.$/+%]+$/;

@@ -33,6 +33,16 @@ public enum BarcodeSystem {
     /** Code 93: a denser superset of Code 39's alphabet. */
     CODE93,
 
-    /** Code 128: the full ASCII range, switching code sets automatically. */
+    /**
+     * Code 128: the full printable ASCII range, always in code set B.
+     * <p>
+     * Not automatic. {@code EscPosRenderer.barcodeData} writes a fixed {@code {B} in front of the
+     * data and doubles every brace, because letting the content name its own code set would make
+     * {@code {Barcode} ambiguous between literal text and a switch. So a symbol is eleven modules
+     * per character throughout, and set C's two-digits-per-character packing never happens — which
+     * is what the server's {@code code128SetBModules} measures against. This comment said
+     * "switching code sets automatically" while the renderer forced set B, and the server believed
+     * it: sixteen digits were charged at 246 dots and printed at 422.
+     */
     CODE128
 }
