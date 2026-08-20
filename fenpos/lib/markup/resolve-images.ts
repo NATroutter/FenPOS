@@ -1,5 +1,6 @@
 import "server-only";
 import { rasterFor, remoteImage, storedImageSize } from "@/lib/assets/asset-service";
+import { BUNDLED_LOGO_NAME, bundledLogoRaster, bundledLogoSize, isBundledLogo } from "@/lib/assets/bundled-logo";
 import { ditherToRaster, type ImageRaster } from "@/lib/assets/dither";
 import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
@@ -295,12 +296,51 @@ async function resolveOne(
 	budget: InlineBudget,
 ): Promise<ImageSource> {
 	try {
-		return isRemote(reference)
-			? await resolveRemote(reference, use.widths, budget)
-			: await resolveStored(reference, use.widths, columns, budget);
+		if (isRemote(reference)) {
+			return await resolveRemote(reference, use.widths, budget);
+		}
+		// Before the asset lookup, and that order is the guarantee rather than a convenience. The
+		// name is refused at creation, so no row should exist under it — but one committed before
+		// the reservation existed still could, and if it were consulted first the test page would
+		// quietly print somebody's picture instead of the application's logo.
+		if (isBundledLogo(reference)) {
+			return await resolveBundledLogo(use.widths, budget);
+		}
+		return await resolveStored(reference, use.widths, columns, budget);
 	} catch (thrown) {
 		throw onLine(thrown, use.line);
 	}
+}
+
+/**
+ * Resolves the application's own logo, which is a file on this server rather than a row or a URL.
+ *
+ * **Its dots always travel with the job, at every width including the paper's own.** A stored asset
+ * at the paper width answers with a REF because its dots were pushed to the agent with the device's
+ * configuration; the logo's were not — the agent's copy came from its own jar, dithered whenever
+ * that jar was built. A REF would therefore print *the agent's* logo while the preview showed the
+ * panel's, and a panel and an agent updated at different times would differ with nothing on either
+ * side to say so. Inline costs one raster in the frame and makes the paper show what was previewed.
+ * The agent's bundle keeps its purpose: it is what `device.test` composes from, on the agent, with
+ * no panel involved.
+ *
+ * @param widths every printed width, in dots, this request needs
+ * @param budget what the request has spent of its inline allowance
+ * @returns the logo's own dimensions and a raster per width
+ * @throws ApiError if a width is one the agent bundles nothing for, or the dots take the request
+ *         past {@link MAX_INLINE_IMAGE_CHARS}
+ */
+async function resolveBundledLogo(widths: ReadonlySet<number>, budget: InlineBudget): Promise<ImageSource> {
+	const size = await bundledLogoSize();
+
+	const inline = new Map<number, ImageRaster>();
+	for (const width of widths) {
+		const raster = await bundledLogoRaster(width);
+		charge(BUNDLED_LOGO_NAME, raster, budget);
+		inline.set(width, raster);
+	}
+
+	return { width: size.width, height: size.height, inline };
 }
 
 /**

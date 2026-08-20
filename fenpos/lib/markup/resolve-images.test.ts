@@ -3,7 +3,8 @@ import { Jimp, JimpMime } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
-import { IMAGE_LIMITS } from "@/lib/link/protocol";
+import { compiledJobSchema, IMAGE_LIMITS } from "@/lib/link/protocol";
+import { type CompileSettings, compile, readRequest } from "@/lib/markup/compiler";
 
 /**
  * Tests for the pre-pass that gives the compiler an image's dimensions.
@@ -443,5 +444,105 @@ describe("dots that have to travel with the job", () => {
 		const images = await resolveImages(["<image>https://x.test/l.png</image>"], 32);
 
 		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])]).toEqual([384]);
+	});
+
+	/**
+	 * The reserved name, which is the application's own logo and not an asset at all.
+	 *
+	 * Until this existed, previewing the Tools tab's own "Device test page" example reported
+	 * `unknown_asset` on the line that prints the logo — the panel had no way to reach the rasters
+	 * bundled in the agent's jar. It resolves from `public/fenpos-logo.png` instead, through the
+	 * same ditherer, and `bundled-logo.test.ts` is what pins those dots to the agent's committed
+	 * ones.
+	 */
+	describe("the bundled logo", () => {
+		it("resolves the reserved name without anything being stored under it", async () => {
+			const images = await resolve(["<image>fenpos</image>"]);
+
+			const logo = images.get("fenpos");
+			expect(logo?.width).toBeGreaterThan(0);
+			expect(logo?.height).toBeGreaterThan(0);
+			expect(fetchRemoteImage).not.toHaveBeenCalled();
+		});
+
+		/**
+		 * **Inline rather than a REF, on purpose.** A REF would have the agent print the logo out of
+		 * its own jar, so a panel and an agent built at different times would print one logo and
+		 * preview another with nothing to say so. The dots that were previewed are the dots that
+		 * are sent.
+		 */
+		it("carries its dots inside the job rather than naming a raster on the agent", async () => {
+			const images = await resolve(["<image>fenpos</image>"]);
+
+			// 504 is this device's own paper width — the case a stored asset would answer with a
+			// REF and no dots at all.
+			expect([...(images.get("fenpos")?.inline?.keys() ?? [])]).toEqual([PAPER_DOTS]);
+			expect(images.get("fenpos")?.inline?.get(PAPER_DOTS)?.widthDots).toBe(PAPER_DOTS);
+		});
+
+		/**
+		 * A row under the reserved name cannot be created through `createAsset`, but one committed
+		 * before the name was reserved could still be sitting in a database. The logo is resolved
+		 * before anything is looked up, so such a row changes nothing.
+		 */
+		it("wins over a row that predates the name being reserved", async () => {
+			await prisma.asset.create({
+				data: { kind: "IMAGE", name: "fenpos", mimeType: "image/png", width: 128, height: 40, data: PNG },
+			});
+
+			const images = await resolve(["<image>fenpos</image>"]);
+
+			// The stored row is 128x40. The logo is not, so the answer is demonstrably not the row's.
+			expect(images.get("fenpos")).not.toMatchObject({ width: 128, height: 40 });
+		});
+
+		/**
+		 * The agent matches a bundled width exactly and never scales, so the panel refuses every
+		 * other width rather than previewing a picture the paper cannot carry.
+		 */
+		it("refuses a width the agent bundles nothing for, naming the element", async () => {
+			const thrown = await refusal(["Kahvi 2.50", "<image=50>fenpos</image>"]);
+
+			expect(thrown.code).toBe("unbundled_logo_width");
+			expect(thrown.details.line).toBe(2);
+		});
+
+		/**
+		 * The decision, checked through the compile rather than argued for in a comment: the job an
+		 * agent is handed carries the logo's dots. A `REF` would name the agent's own bundle, and
+		 * an agent built from a different commit would then print a logo the preview never showed.
+		 */
+		it("compiles to a job carrying the dots, not a REF into the agent's bundle", async () => {
+			const images = await resolve(["<image>fenpos</image>"]);
+			const settings: CompileSettings = {
+				columns: COLUMNS,
+				codepage: "CP858",
+				onUnsupported: "REJECT",
+				defaultWrap: true,
+				defaultLinefeed: "LF",
+				images,
+			};
+			const limits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
+
+			const request = readRequest({ data: ["<image>fenpos</image>"], linefeed: "LF" }, limits, settings);
+			const job = compile("job-1", "kitchen", request, limits, settings);
+
+			expect(compiledJobSchema.safeParse(job).success).toBe(true);
+			expect(job.lines[0].directives[0]).toMatchObject({
+				type: "IMAGE",
+				source: {
+					kind: "INLINE",
+					widthDots: PAPER_DOTS,
+					data: images.get("fenpos")?.inline?.get(PAPER_DOTS)?.packed.toString("base64"),
+				},
+			});
+		});
+
+		it("still reports a genuinely missing asset as unknown_asset", async () => {
+			const thrown = await refusal(["<image>fenpos-logo</image>"]);
+
+			expect(thrown.code).toBe("unknown_asset");
+			expect(thrown.message).toContain("fenpos-logo");
+		});
 	});
 });

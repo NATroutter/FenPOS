@@ -1,4 +1,5 @@
 import "server-only";
+import { BUNDLED_LOGO_NAME } from "@/lib/assets/bundled-logo";
 import {
 	type DecodedImage,
 	decodeImage,
@@ -62,10 +63,15 @@ export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
  * every device that has this logo bundled for its paper width. Refusing the name at creation is
  * what turns that into an error an operator can act on instead.
  *
+ * The panel answers for the same name itself, out of `bundled-logo.ts`, and does so *before* any
+ * row is looked up — so a row committed before this guard existed cannot shadow the logo either.
+ * The constant is that module's, rather than a second copy of the string, so the name refused here
+ * and the name resolved there cannot drift apart.
+ *
  * Deliberately not part of {@link nameSchema}: that schema also governs agent and device names,
  * which have nothing to do with the bundled logo and should not be told `"fenpos"` is off limits.
  */
-export const RESERVED_ASSET_NAME = "fenpos";
+export const RESERVED_ASSET_NAME = BUNDLED_LOGO_NAME;
 
 /**
  * The largest image this system will decode, in pixels on either side.

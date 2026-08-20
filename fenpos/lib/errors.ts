@@ -64,6 +64,16 @@ export const API_ERROR_STATUS = {
 	 */
 	image_too_large: 400,
 	/**
+	 * An `<image>` naming the application's own logo at a width nothing was bundled for.
+	 *
+	 * The logo is not an asset and is not scaled: the agent holds one raster per bundled paper
+	 * width and `BundledImages` matches a width exactly, so a device on some other paper — or a
+	 * `<image=50>` asking for half of one — names dots that do not exist on either side. The panel
+	 * could dither any width and deliberately does not, since a preview of something no printer can
+	 * produce is worse than a refusal. See `BUNDLED_LOGO_WIDTHS` in `lib/assets/bundled-logo.ts`.
+	 */
+	unbundled_logo_width: 400,
+	/**
 	 * A receipt that compiled but is too large to hand to a printer in one message.
 	 *
 	 * The backstop behind every content limit rather than one of them. `maxTotalChars` is
