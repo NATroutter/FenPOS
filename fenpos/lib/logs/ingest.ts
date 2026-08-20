@@ -4,6 +4,7 @@ import type { LogLevel } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
+import { LOG_SEVERITY } from "@/lib/logs/log-sort";
 
 /**
  * Recording log lines an agent forwarded.
@@ -74,6 +75,9 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 	const entry = await prisma.logEntry.create({
 		data: {
 			level: frame.level,
+			// Derived here rather than at read time: the filter and the Level ordering both run in the
+			// database, and neither can compare a level string.
+			severity: LOG_SEVERITY[frame.level],
 			message: frame.message.slice(0, MAX_MESSAGE_LENGTH),
 			agentId,
 			deviceId: device?.id ?? null,

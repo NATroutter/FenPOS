@@ -16,6 +16,8 @@
 		"db:migrate": "prisma migrate dev",
 		"db:deploy": "prisma migrate deploy",
 		"db:studio": "prisma studio",
+		"db:seed": "tsx scripts/seed-demo-data.ts",
+		"db:seed:clean": "tsx scripts/seed-demo-data.ts --clean",
 		"admin:set-password": "tsx scripts/set-admin-password.ts",
 		"admin:reset-password": "tsx scripts/reset-admin-password.ts",
 		"db:reset": "prisma migrate reset"

@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
 import { JOB_PAGE_SIZE, listJobs } from "@/lib/jobs/job-service";
+import { isJobSortColumn } from "@/lib/jobs/job-sort";
 
-export const metadata = { title: "Print jobs · FenPOS" };
+export const metadata = { title: "Print jobs" };
 
 /** Never cached: a job's state changes without any request to this page causing it. */
 export const dynamic = "force-dynamic";
@@ -21,11 +22,22 @@ export const dynamic = "force-dynamic";
 export default async function JobsPage({
 	searchParams,
 }: {
-	searchParams: Promise<{ agent?: string; device?: string; status?: string; skip?: string }>;
+	searchParams: Promise<{
+		agent?: string;
+		device?: string;
+		status?: string;
+		skip?: string;
+		sort?: string;
+		dir?: string;
+	}>;
 }) {
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
 	const status = params.status && JobStatus.is(params.status) ? params.status : undefined;
+	// An unknown column falls back to the default rather than erroring: a link someone saved before
+	// a column was renamed should still list jobs.
+	const sort = params.sort && isJobSortColumn(params.sort) ? params.sort : undefined;
+	const desc = params.dir ? params.dir !== "asc" : undefined;
 
 	const [agents, devices, page] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -33,7 +45,7 @@ export default async function JobsPage({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
-		listJobs({ agentId: params.agent, deviceId: params.device, status, skip }),
+		listJobs({ agentId: params.agent, deviceId: params.device, status, skip, sort, desc }),
 	]);
 
 	const query = (next: Record<string, string | undefined>): string => {
@@ -49,15 +61,6 @@ export default async function JobsPage({
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
-				<div className="min-w-[220px] flex-1">
-					<h2 className="text-[15px] font-semibold tracking-tight">Print jobs</h2>
-					<p className="mt-1 text-[12.5px] text-muted-foreground">
-						Every job and what became of it. A job that failed carries the agent's own words about why.
-					</p>
-				</div>
-			</div>
-
 			<Filters
 				filters={[
 					{

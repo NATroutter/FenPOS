@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
+import { FollowProvider, FollowToggle } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
 import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/db";
-import { LogLevel } from "@/lib/domain/enums";
-import { LOG_PAGE_SIZE, listLogs } from "@/lib/logs/log-service";
+import { FILTERABLE_LEVELS, isFilterableLevel, LOG_PAGE_SIZE, listLogs } from "@/lib/logs/log-service";
+import { isLogSortColumn } from "@/lib/logs/log-sort";
 
-export const metadata = { title: "Logs · FenPOS" };
+export const metadata = { title: "Logs" };
 
 /** Never cached: lines arrive without any request to this page causing them. */
 export const dynamic = "force-dynamic";
@@ -21,20 +22,27 @@ export const dynamic = "force-dynamic";
 export default async function LogsPage({
 	searchParams,
 }: {
-	searchParams: Promise<{ agent?: string; level?: string; skip?: string }>;
+	searchParams: Promise<{ agent?: string; level?: string; skip?: string; sort?: string; dir?: string }>;
 }) {
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	const level = params.level && LogLevel.is(params.level) ? params.level : undefined;
+	// Anything else in the URL — including `DEBUG`, which the dropdown used to offer — falls back to
+	// no filter. That is the same set of rows `DEBUG` would have selected, and it keeps a stale
+	// bookmark from putting a value in the trigger that the dropdown has no label for.
+	const level = params.level && isFilterableLevel(params.level) ? params.level : undefined;
+	const sort = params.sort && isLogSortColumn(params.sort) ? params.sort : undefined;
+	const desc = params.dir ? params.dir !== "asc" : undefined;
 
 	const [agents, page] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-		listLogs({ agentId: params.agent, level, skip }),
+		listLogs({ agentId: params.agent, level, skip, sort, desc }),
 	]);
 
-	// The live stream is paused whenever a filter or a page is in play: showing lines the current
-	// view excludes would make the filter mean nothing.
-	const live = !params.agent && !level && skip === 0;
+	// The live stream is paused whenever a filter, a page or a sort is in play. A filter or a page
+	// would be shown lines it excludes; a sort would have them pushed onto the top of an ordering
+	// that does not put them there. In every case the arriving line contradicts what the view says
+	// it is, so the honest move is to stop and let the operator reload.
+	const live = !params.agent && !level && skip === 0 && !sort;
 
 	const query = (next: Record<string, string | undefined>): string => {
 		const search = new URLSearchParams();
@@ -48,61 +56,64 @@ export default async function LogsPage({
 	};
 
 	return (
-		<div className="flex flex-col gap-5">
-			<div className="flex flex-wrap items-end gap-4 border-b border-border pb-3">
-				<div className="min-w-[220px] flex-1">
-					<h2 className="text-[15px] font-semibold tracking-tight">Logs</h2>
-					<p className="mt-1 text-[12.5px] text-muted-foreground">
-						What the agents forwarded. Each also keeps its own complete log on the machine it runs on.
-					</p>
+		<FollowProvider streamable={live}>
+			<div className="flex flex-col gap-5">
+				<div className="flex flex-wrap items-center gap-3">
+					<Filters
+						filters={[
+							{
+								name: "agent",
+								label: "Agent",
+								value: params.agent ?? null,
+								options: agents.map((agent) => ({ value: agent.id, label: agent.name })),
+							},
+							{
+								name: "level",
+								label: "Level",
+								value: level ?? null,
+								options: FILTERABLE_LEVELS.map((value) => ({
+									value,
+									label: `${value.toLowerCase()} and worse`,
+								})),
+							},
+						]}
+					/>
+
+					<div className="flex-1" />
+
+					{/* Beside the toggle rather than under the list: it is the reason the toggle is
+				    disabled, and the two only read correctly together. */}
+					{live ? null : (
+						<span className="text-[11.5px] text-subtle-foreground">Live updates paused while filtered.</span>
+					)}
+					<FollowToggle />
 				</div>
+
+				<LogStream lines={page.lines} />
+
+				{skip > 0 || page.more ? (
+					<div className="flex items-center gap-2">
+						{skip > 0 ? (
+							<Button
+								variant="outline"
+								size="sm"
+								render={<Link href={query({ skip: String(Math.max(0, skip - LOG_PAGE_SIZE)) })} />}
+							>
+								Newer
+							</Button>
+						) : null}
+						{page.more ? (
+							<Button
+								variant="outline"
+								size="sm"
+								render={<Link href={query({ skip: String(skip + LOG_PAGE_SIZE) })} />}
+							>
+								Older
+							</Button>
+						) : null}
+					</div>
+				) : null}
 			</div>
-
-			<div className="flex flex-wrap items-center gap-3">
-				<Filters
-					filters={[
-						{
-							name: "agent",
-							label: "Agent",
-							value: params.agent ?? null,
-							options: agents.map((agent) => ({ value: agent.id, label: agent.name })),
-						},
-						{
-							name: "level",
-							label: "Level",
-							value: level ?? null,
-							options: LogLevel.values.map((value) => ({
-								value,
-								label: `${value.toLowerCase()} and worse`,
-							})),
-						},
-					]}
-				/>
-				{live ? null : (
-					<span className="text-[11.5px] text-subtle-foreground">Live updates paused while filtered.</span>
-				)}
-			</div>
-
-			<LogStream lines={page.lines} live={live} />
-
-			{skip > 0 || page.more ? (
-				<div className="flex items-center gap-2">
-					{skip > 0 ? (
-						<Button
-							variant="outline"
-							size="sm"
-							render={<Link href={query({ skip: String(Math.max(0, skip - LOG_PAGE_SIZE)) })} />}
-						>
-							Newer
-						</Button>
-					) : null}
-					{page.more ? (
-						<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + LOG_PAGE_SIZE) })} />}>
-							Older
-						</Button>
-					) : null}
-				</div>
-			) : null}
-		</div>
+		</FollowProvider>
 	);
 }

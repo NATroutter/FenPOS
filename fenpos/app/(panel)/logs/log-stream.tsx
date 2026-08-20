@@ -2,20 +2,67 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useFollow } from "@/app/(panel)/logs/follow";
 import { useEventStream } from "@/components/panel/event-stream";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTable, type DataTableColumns } from "@/components/ui/data-table";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import type { LogLevel } from "@/lib/domain/enums";
+import { formatDateTime } from "@/lib/format/datetime";
 import type { LogLine } from "@/lib/logs/log-service";
+import { LOG_DEFAULT_SORT } from "@/lib/logs/log-sort";
 
 /** Chip styling per severity. */
 const LEVEL_STYLE: Record<LogLevel, string> = {
 	DEBUG: "border-border bg-muted text-subtle-foreground",
-	INFO: "border-border bg-muted text-muted-foreground",
+	INFO: "border-emerald-900 bg-emerald-950 text-emerald-400",
 	WARN: "border-amber-900 bg-amber-950 text-amber-400",
 	ERROR: "border-destructive/40 bg-destructive/10 text-destructive",
 };
+
+/**
+ * The columns, at module scope so the table is not rebuilt on every render.
+ *
+ * Level orders by the stored severity rather than by its own text, so descending puts errors
+ * first — see `log-sort.ts`. The accessor still returns the level string, which is what the column
+ * shows; the ordering it drives happens in the query.
+ */
+const columns: DataTableColumns<LogLine> = [
+	{
+		id: "time",
+		header: "Time",
+		accessorFn: (line) => line.at,
+		meta: { headClassName: "w-[170px]", cellClassName: "font-mono text-[11px] text-subtle-foreground" },
+		cell: ({ row }) => formatDateTime(row.original.at),
+	},
+	{
+		id: "level",
+		header: "Level",
+		accessorFn: (line) => line.level,
+		meta: { headClassName: "w-[80px]" },
+		cell: ({ row }) => (
+			<Badge variant="outline" className={`w-[62px] justify-center ${LEVEL_STYLE[row.original.level]}`}>
+				{row.original.level.toLowerCase()}
+			</Badge>
+		),
+	},
+	{
+		id: "source",
+		header: "Source",
+		accessorFn: (line) => line.agentName ?? "",
+		meta: { headClassName: "w-[170px]", cellClassName: "truncate font-mono text-[11px] text-subtle-foreground" },
+		cell: ({ row }) =>
+			`${row.original.agentName ?? "—"}${row.original.deviceName ? `/${row.original.deviceName}` : ""}`,
+	},
+	{
+		id: "message",
+		header: "Message",
+		accessorFn: (line) => line.message,
+		meta: { cellClassName: "text-[12px]" },
+		cell: ({ row }) => row.original.message,
+	},
+];
 
 /**
  * The log, with new lines arriving as they are recorded.
@@ -27,10 +74,19 @@ const LEVEL_STYLE: Record<LogLevel, string> = {
  *
  * Live lines are not filtered client-side. They arrive already narrowed by nothing, so a stream
  * showing lines the current filter excludes would be lying about what the filter means; instead
- * the stream is paused whenever a filter is set and the operator refreshes deliberately.
+ * the stream is paused whenever a filter is set and the operator refreshes deliberately. A chosen
+ * sort pauses it for the same reason: a line pushed onto the top of a list ordered by anything but
+ * newest-first lands in the one place the ordering says it does not belong.
+ *
+ * Whether lines are taken at all is the Follow toggle's call, read from context rather than passed
+ * down: the control sits on the filter row, which is this component's sibling. Nothing accumulates
+ * while it is off, matching the header chip — someone who stopped the view wants it to hold still,
+ * and what they missed is a reload away.
  */
-export function LogStream({ lines, live }: { lines: LogLine[]; live: boolean }) {
+export function LogStream({ lines, sortable = true }: { lines: LogLine[]; sortable?: boolean }) {
 	const router = useRouter();
+	const { following, streamable } = useFollow();
+	const live = streamable && following;
 	const [arrived, setArrived] = useState<LogLine[]>([]);
 
 	// Lines that arrived live are dropped whenever the server sends a new page, since that page
@@ -60,20 +116,6 @@ export function LogStream({ lines, live }: { lines: LogLine[]; live: boolean }) 
 
 	const all = [...arrived, ...lines];
 
-	if (all.length === 0) {
-		return (
-			<Empty className="border border-dashed border-border">
-				<EmptyHeader>
-					<EmptyTitle>No log lines</EmptyTitle>
-					<EmptyDescription>
-						Agents forward what an operator would act on — jobs accepted and refused, ports opened and refused. Nothing
-						has happened yet.
-					</EmptyDescription>
-				</EmptyHeader>
-			</Empty>
-		);
-	}
-
 	return (
 		<div className="flex flex-col gap-2">
 			{arrived.length > 0 ? (
@@ -87,25 +129,24 @@ export function LogStream({ lines, live }: { lines: LogLine[]; live: boolean }) 
 				</div>
 			) : null}
 
-			<div className="overflow-x-auto rounded-md border border-border">
-				<div className="min-w-[640px] divide-y divide-border">
-					{all.map((line) => (
-						<div key={line.id} className="flex items-start gap-3 px-3 py-2">
-							<span className="w-[150px] shrink-0 font-mono text-[11px] text-subtle-foreground">
-								{new Date(line.at).toLocaleString()}
-							</span>
-							<Badge variant="outline" className={`w-[62px] shrink-0 justify-center ${LEVEL_STYLE[line.level]}`}>
-								{line.level.toLowerCase()}
-							</Badge>
-							<span className="w-[150px] shrink-0 truncate font-mono text-[11px] text-subtle-foreground">
-								{line.agentName ?? "—"}
-								{line.deviceName ? `/${line.deviceName}` : ""}
-							</span>
-							<span className="min-w-0 flex-1 text-[12px]">{line.message}</span>
-						</div>
-					))}
-				</div>
-			</div>
+			<DataTable
+				rows={all}
+				columns={columns}
+				defaultSort={{ id: LOG_DEFAULT_SORT.column, desc: LOG_DEFAULT_SORT.desc }}
+				minWidth="640px"
+				sortable={sortable}
+				empty={
+					<Empty className="border border-dashed border-border">
+						<EmptyHeader>
+							<EmptyTitle>No log lines</EmptyTitle>
+							<EmptyDescription>
+								Agents forward what an operator would act on — jobs accepted and refused, ports opened and refused.
+								Nothing has happened yet.
+							</EmptyDescription>
+						</EmptyHeader>
+					</Empty>
+				}
+			/>
 		</div>
 	);
 }

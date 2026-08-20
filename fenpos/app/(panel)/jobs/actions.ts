@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { cancelJob as cancelJobRequest } from "@/lib/jobs/job-service";
 import { logger } from "@/lib/logger";
@@ -21,10 +21,11 @@ import { logger } from "@/lib/logger";
  * @returns the state to render
  */
 export async function cancelJob(jobId: string): Promise<ActionState> {
+	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
+	// it here would turn being signed out into a toast over a panel that no longer works.
+	await requireSession();
+
 	try {
-		if (!(await getCurrentSession())) {
-			throw new ApiError("missing_key", "Not signed in.");
-		}
 		await cancelJobRequest(jobId);
 		revalidatePath("/jobs");
 		return { error: null };

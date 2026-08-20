@@ -2,8 +2,10 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { isTerminalJobStatus, type JobStatus, JobStatus as JobStatusSet } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
+import { JOB_DEFAULT_SORT, type JobSortColumn } from "@/lib/jobs/job-sort";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
+import type { SortDirection } from "@/lib/table/sort";
 
 /**
  * Reading and cancelling jobs from the panel.
@@ -32,6 +34,21 @@ export interface JobSummary {
 	errorMessage: string | null;
 }
 
+/**
+ * How each sortable column becomes an `orderBy`.
+ *
+ * The names themselves live in {@link JOB_SORT_COLUMNS}, which the table imports too; this is the
+ * half that reaches Prisma and so stays behind `server-only`. Keyed by that same union, so a
+ * column added there without a mapping here is a type error rather than a silent no-op.
+ */
+const JOB_ORDER = {
+	submitted: (dir: SortDirection) => ({ submittedAt: dir }),
+	status: (dir: SortDirection) => ({ status: dir }),
+	lines: (dir: SortDirection) => ({ lines: dir }),
+	bytes: (dir: SortDirection) => ({ bytes: dir }),
+	printer: (dir: SortDirection) => [{ agent: { name: dir } }, { device: { name: dir } }],
+} as const satisfies Record<JobSortColumn, (dir: SortDirection) => unknown>;
+
 /** What the list is narrowed to. */
 export interface JobFilter {
 	agentId?: string;
@@ -39,6 +56,10 @@ export interface JobFilter {
 	status?: JobStatus;
 	/** How many to skip, for paging. */
 	skip?: number;
+	/** Which column to order by. Defaults to {@link JOB_DEFAULT_SORT}. */
+	sort?: JobSortColumn;
+	/** Which way that ordering runs. Defaults to {@link JOB_DEFAULT_SORT}. */
+	desc?: boolean;
 }
 
 /**
@@ -54,11 +75,18 @@ export async function listJobs(filter: JobFilter = {}): Promise<{ jobs: JobSumma
 		...(filter.status ? { status: filter.status } : {}),
 	};
 
+	const direction: SortDirection = (filter.desc ?? JOB_DEFAULT_SORT.desc) ? "desc" : "asc";
+	const chosen = JOB_ORDER[filter.sort ?? JOB_DEFAULT_SORT.column](direction);
+	// Ties broken by submission time so a page boundary is stable. Without it, two jobs with the
+	// same byte count could swap places between one page view and the next, which on a paged list
+	// shows a row twice and hides another.
+	const orderBy = [...(Array.isArray(chosen) ? chosen : [chosen]), { submittedAt: "desc" as const }];
+
 	// One extra row is fetched rather than counting the whole table, which on a busy install is a
 	// scan run on every page view to answer a question worth one boolean.
 	const rows = await prisma.job.findMany({
 		where,
-		orderBy: { submittedAt: "desc" },
+		orderBy,
 		skip: filter.skip ?? 0,
 		take: JOB_PAGE_SIZE + 1,
 		include: {

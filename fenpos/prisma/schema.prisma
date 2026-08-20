@@ -21,11 +21,11 @@ datasource db {
 /// Singleton row holding the one administrator credential for this install.
 /// Kept a singleton by the fixed primary key rather than by convention.
 model AdminAuth {
-  id           Int      @id @default(1)
-  passwordHash String   @map("password_hash")
+  id                Int      @id @default(1)
+  passwordHash      String   @map("password_hash")
   /// True while the password is the one generated at first boot. While set, the panel is
   /// unreachable: signing in leads only to the page that replaces this password.
-  isGenerated  Boolean  @default(false) @map("is_generated")
+  isGenerated       Boolean  @default(false) @map("is_generated")
   /// The generated password in the clear, so it can be reprinted on every start for as long
   /// as it is still in use — an operator who missed the first boot's output should not have
   /// to reset the install to get back in.
@@ -34,8 +34,8 @@ model AdminAuth {
   /// chose. It is readable in the database until then, which is the price of reprinting it;
   /// the same value is already in the startup log, and it cannot be used to reach anything
   /// except the page that replaces it.
-  generatedPassword String? @map("generated_password")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  generatedPassword String?  @map("generated_password")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@map("admin_auth")
 }
@@ -98,7 +98,7 @@ model Agent {
 /// flight cannot be replayed. Rows are retained after consumption for the audit trail.
 model PairingCode {
   id         String    @id @default(cuid())
-  agentId     String    @map("agent_id")
+  agentId    String    @map("agent_id")
   /// The formatted code, stored in the clear.
   ///
   /// Hashing was considered and rejected: the panel must be able to redisplay the code when
@@ -124,9 +124,9 @@ model PairingCode {
 /// keep printing through a disconnect. Names are unique per agent rather than globally,
 /// which is what makes agent-scoped API paths work.
 model Device {
-  id     String @id @default(cuid())
+  id      String @id @default(cuid())
   agentId String @map("agent_id")
-  name   String
+  name    String
 
   // --- Serial transport ---
   port                  String
@@ -165,7 +165,7 @@ model Device {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  agent       Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent      Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
   jobs       Job[]
   keyGrants  ApiKeyDevice[]
   logEntries LogEntry[]
@@ -232,7 +232,7 @@ model ApiKeyDevice {
 /// answerable from metadata alone.
 model Job {
   id       String  @id @default(cuid())
-  agentId   String  @map("agent_id")
+  agentId  String  @map("agent_id")
   deviceId String  @map("device_id")
   /// Null when the job originated from the admin panel rather than from an API key.
   apiKeyId String? @map("api_key_id")
@@ -253,7 +253,7 @@ model Job {
   errorCode    String? @map("error_code")
   errorMessage String? @map("error_message")
 
-  agent   Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
   device Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   apiKey ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
 
@@ -273,15 +273,21 @@ model LogEntry {
   ts       DateTime @default(now())
   /// DEBUG | INFO | WARN | ERROR
   level    String
+  /// DEBUG 0, INFO 1, WARN 2, ERROR 3. Derived from level when the row is written.
+  ///
+  /// Stored rather than computed because both the severity filter and the Level column ordering
+  /// need it in the database: ordering the level string gives DEBUG, ERROR, INFO, WARN, which
+  /// looks like severity and is not, and a page of rows cannot be reordered after the fact.
+  severity Int      @default(1)
   message  String
-  agentId   String?  @map("agent_id")
+  agentId  String?  @map("agent_id")
   deviceId String?  @map("device_id")
 
-  agent   Agent?   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent  Agent?  @relation(fields: [agentId], references: [id], onDelete: Cascade)
   device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([ts])
-  @@index([level, ts])
+  @@index([severity, ts])
   @@index([agentId, ts])
   @@map("log_entries")
 }
