@@ -38,7 +38,22 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 		if (error instanceof ApiError) {
 			return { error: error.message };
 		}
-		logger.error(`Asset action failed: ${label}`, error);
+		// The message and the stack, never the error object. `importAsset` is where an operator types
+		// a URL, and a URL is exactly where credentials get embedded. `safeUrl` strips them from
+		// everything that reaches an `ApiError`, but a failure inside `fetchRemoteImage` arrives as an
+		// undici error whose `cause` chain can still be carrying the address as it was written — and
+		// `logger.error`'s second argument serialises that whole chain into a line the panel displays.
+		// Three rounds of fixes went into keeping credentials out of these logs; this is the door they
+		// were still open at.
+		//
+		// The name, the message and the stack are all kept, so what is actually given up is the cause
+		// chain — which is the part that carries the untrusted URL and the part least often needed to
+		// find a fault. A genuine failure still logs its type, its wording and where it was raised.
+		logger.error(`Asset action failed: ${label}`, undefined, {
+			failure: error instanceof Error ? error.name : typeof error,
+			reason: error instanceof Error ? error.message : "unknown failure",
+			stack: error instanceof Error ? error.stack : undefined,
+		});
 		return { error: "Something went wrong. Check the server log." };
 	}
 
