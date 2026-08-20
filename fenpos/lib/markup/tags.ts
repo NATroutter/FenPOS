@@ -91,5 +91,10 @@ export function tagByName(name: string): Tag | undefined {
 	if (!name) {
 		return undefined;
 	}
-	return TAGS[name.toLowerCase()];
+	// `hasOwn` rather than a bare index, because {@link TAGS} is an object literal and so carries
+	// `Object.prototype`. Without this, `<constructor>` resolves to a function and `<toString>` to a
+	// method, and the parser then reads `.kind` off something that is not a tag — a raw `Error` and a
+	// 500 for markup whose only fault is naming a tag that does not exist.
+	const lower = name.toLowerCase();
+	return Object.hasOwn(TAGS, lower) ? TAGS[lower] : undefined;
 }

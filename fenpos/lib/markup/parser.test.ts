@@ -220,6 +220,27 @@ describe("parseMarkup", () => {
 		expect(thrown.detail).toBe("blink");
 	});
 
+	/**
+	 * A tag name that is a property of `Object.prototype` is an unknown tag like any other.
+	 *
+	 * The registry is an object literal, so a bare index found `constructor`, `valueOf`,
+	 * `hasOwnProperty` and the rest on the prototype chain. The parser then read `.kind` off a
+	 * function, which threw a raw `Error` — a 500 for markup whose only fault was naming a tag that
+	 * does not exist. `toString` happened to be refused, because its inherited value is a function
+	 * whose `.kind` is undefined and the parser's next check caught that; `constructor` was not.
+	 *
+	 * Every inherited name is walked, because the ones that behave differently are exactly the ones a
+	 * spot check would miss.
+	 */
+	it("rejects a tag named after an inherited property, as an unknown tag rather than a fault", () => {
+		for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__", "isPrototypeOf"]) {
+			const thrown = error(`<${name}>`);
+
+			expect(thrown.code, name).toBe(MARKUP_ERRORS.unknownTag);
+			expect(thrown.detail, name).toBe(name);
+		}
+	});
+
 	it("rejects an unclosed tag at the opening column", () => {
 		const thrown = error("Total: <bold>12.30");
 
