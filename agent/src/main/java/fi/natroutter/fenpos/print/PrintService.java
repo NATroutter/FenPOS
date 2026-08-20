@@ -149,6 +149,12 @@ public class PrintService {
     /**
      * Compiles a request body and queues it for printing.
      *
+     * <p>Images resolve through {@link PrintImages}, which is both sets — what the server synced
+     * and the logo this agent ships. That the bundled logo is reachable from any body this agent
+     * compiles, not only from a test page, follows from a requirement rather than a preference:
+     * {@code TestPage} decides whether to write its {@code <image>} tag by asking a resolver, and
+     * that answer is only worth anything if this compile asks the same one.
+     *
      * @param device the target device
      * @param body   the raw JSON request body
      * @return the queued job
@@ -158,7 +164,7 @@ public class PrintService {
     public PrintJob submit(Device device, String body)
             throws PrintRequestException, QueueRejectedException {
         CompiledJob compiled = PrintCompiler.compile(
-                body, device, SyncedImages.forDevice(device, devices));
+                body, device, PrintImages.forDevice(device, devices));
         PrintJob job = jobs.create(device.name(), compiled);
         try {
             queue(device.name()).submit(job);
