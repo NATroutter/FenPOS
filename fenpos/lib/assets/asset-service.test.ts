@@ -26,7 +26,13 @@ import { ApiError } from "@/lib/errors";
  * seams; what matters here is only that URL import runs the bytes through the same gate as an upload.
  */
 const fetchRemoteImage = vi.hoisted(() => vi.fn<(url: string) => Promise<Buffer>>());
-vi.mock("@/lib/assets/fetch-remote", () => ({ fetchRemoteImage }));
+
+// Only the network call is replaced. `safeUrl` is kept as the real implementation on purpose: the
+// credential redaction is a thing under test here, and a stubbed one would assert nothing.
+vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/assets/fetch-remote")>()),
+	fetchRemoteImage,
+}));
 
 const { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION, createAsset, deleteAsset, importAssetFromUrl, listAssets, rasterFor } =
 	await import("@/lib/assets/asset-service");
@@ -54,6 +60,24 @@ function headerClaiming(width: number, height: number): Buffer {
 	png.writeUInt32BE(height, 20);
 	png[24] = 8; // bit depth
 	png[25] = 6; // RGBA
+	png[28] = 0; // interlace: none
+	return png;
+}
+
+/**
+ * Builds a PNG header that declares a harmless size and sets Adam7 interlacing.
+ *
+ * The dimensions are deliberately tiny and well inside every cap, because that is the whole shape
+ * of the problem: `pngjs` bounds its inflate by the declared width and height only on the
+ * non-interlaced branch. Set interlace and the declared size stops governing the allocation, so a
+ * guard that reads only width and height passes this file and then hands it to an unbounded
+ * `zlib.inflateSync`. Measured: 255 KB of this drove a 256 MB inflate and +524 MB of RSS.
+ *
+ * @returns a 16x16 PNG header with the interlace method set to Adam7
+ */
+function interlacedHeader(): Buffer {
+	const png = headerClaiming(16, 16);
+	png[28] = 1;
 	return png;
 }
 
@@ -205,6 +229,27 @@ describe("createAsset", () => {
 		expect((await refusal(() => createAsset("bomb", bomb))).message).toMatch(/9000x9000/);
 	});
 
+	/**
+	 * The bound is only worth having if the decoder then allocates according to it, and for Adam7
+	 * `pngjs` does not — it takes an unbounded `zlib.inflateSync` instead. So a 16x16 declaration
+	 * passes every dimension check and still drives an inflate limited only by zlib's compression
+	 * ratio against the byte cap. Refusing interlacing is what puts every PNG on the bounded branch.
+	 */
+	it("refuses an interlaced PNG, whose declared size does not bound its decode", async () => {
+		const refused = await refusal(() => createAsset("adam7", interlacedHeader()));
+
+		expect(refused.code).toBe("invalid_type");
+		expect(refused.message).toMatch(/interlac/i);
+	});
+
+	it("accepts the same header without interlacing set", async () => {
+		// Pins that the refusal above is about the interlace byte and not about the fixture being
+		// 33 bytes of unreadable PNG: this one fails later, in the decoder, with a different message.
+		const refused = await refusal(() => createAsset("plain", headerClaiming(16, 16)));
+
+		expect(refused.message).not.toMatch(/interlac/i);
+	});
+
 	it("refuses a file whose dimensions cannot be read at all", async () => {
 		// A BMP decodes perfectly well in jimp and would otherwise reach the decoder unmeasured.
 		const bmp = await new Jimp({ width: 4, height: 4, color: 0xff0000ff }).getBuffer("image/bmp");
@@ -247,6 +292,34 @@ describe("importAssetFromUrl", () => {
 		await refusal(() => importAssetFromUrl("Not A Slug", URL));
 
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * `fetch-remote.ts` supports a URL carrying credentials — image hosts behind Basic auth exist —
+	 * and holds the line that they reach the server and nowhere else, which took that module two
+	 * rounds to get right in its error messages. `sourceUrl` is provenance and is never re-fetched,
+	 * so a password in it buys nothing and costs a secret sitting in a database column and a log
+	 * line, which outlasts any error message.
+	 */
+	it("keeps URL credentials out of the stored provenance", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const asset = await importAssetFromUrl("logo", "https://alice:hunter2@images.example/logo.png");
+
+		expect(asset.sourceUrl).toBe("https://images.example/logo.png");
+		const row = await prisma.asset.findUniqueOrThrow({ where: { id: asset.id } });
+		expect(row.sourceUrl).not.toMatch(/hunter2|alice/);
+	});
+
+	it("still fetches with the credentials it was given", async () => {
+		// Redaction is for what is kept, not for the request. Stripping them here instead would
+		// silently break every image host behind Basic auth.
+		fetchRemoteImage.mockResolvedValue(PNG);
+		const withCredentials = "https://alice:hunter2@images.example/logo.png";
+
+		await importAssetFromUrl("logo", withCredentials);
+
+		expect(fetchRemoteImage).toHaveBeenCalledWith(withCredentials);
 	});
 
 	it("reports what the fetch refused", async () => {
@@ -295,6 +368,44 @@ describe("deleteAsset", () => {
 
 	it("refuses an id that is not there", async () => {
 		await refusal(() => deleteAsset("nope"));
+	});
+});
+
+/**
+ * What happens when the pre-checks lose the race they cannot win.
+ *
+ * `requireNameFree` then `create`, and `findUnique` then `delete`, are two statements each, so two
+ * operators acting at once can both pass the check. The database constraint is what keeps that
+ * *correct*; these tests are about how it reads. Without the mapping, the loser is told to go and
+ * check a server log for a situation this module has a plain word for.
+ *
+ * The race is produced by making the pre-check return the wrong answer, which is exactly what a
+ * concurrent write does to it. Everything after that is real: a real insert against a real unique
+ * constraint, and a real delete of a row that is really not there.
+ */
+describe("losing a concurrent write", () => {
+	it("reports the unique constraint as a taken name, not a server fault", async () => {
+		await createAsset("logo", PNG);
+		const missed = vi.spyOn(prisma.asset, "findUnique").mockResolvedValueOnce(null as never);
+
+		try {
+			const refused = await refusal(() => createAsset("logo", PNG));
+
+			expect(refused.code).toBe("name_taken");
+			expect(refused.message).toMatch(/already an image/);
+		} finally {
+			missed.mockRestore();
+		}
+	});
+
+	it("reports a row deleted from under it as unknown, not a server fault", async () => {
+		const stale = vi.spyOn(prisma.asset, "findUnique").mockResolvedValueOnce({ id: "gone", name: "logo" } as never);
+
+		try {
+			expect((await refusal(() => deleteAsset("gone"))).code).toBe("unknown_asset");
+		} finally {
+			stale.mockRestore();
+		}
 	});
 });
 

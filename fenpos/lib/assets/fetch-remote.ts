@@ -223,10 +223,15 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
  * and the two that were missed were both on the redirect path, where the URL is least likely to be
  * the one a reader is looking at and a leak is least likely to be noticed.
  *
+ * Exported because that rule does not stop at this module's edge. Anything that *keeps* a URL that
+ * came through here — the asset store writes one to `assets.source_url` for provenance — has to
+ * keep the redacted form, or the credential this function exists to contain ends up somewhere far
+ * more durable than an error message. Only the request itself gets the raw URL.
+ *
  * @param url a parsed URL, or the raw string when it was too malformed to parse
  * @returns the same URL with userinfo removed
  */
-function safeUrl(url: URL | string): string {
+export function safeUrl(url: URL | string): string {
 	if (typeof url === "string") {
 		try {
 			return safeUrl(new URL(url));
