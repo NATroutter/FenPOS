@@ -199,8 +199,14 @@ public final class EscPosRenderer {
             }
             case Directive.Pdf417 pdf417 -> {
                 try {
+                    // The column count is set explicitly, and that is the point of carrying it.
+                    // `new PDF417()` leaves it at zero, which function 65 reads as "printer
+                    // decides" — so the firmware would choose a layout while the server charged
+                    // the job's line budget against its own. Module width and row height already
+                    // matched; the layout is the piece that did not.
                     escpos.write(new PDF417()
                             .setJustification(justification(align))
+                            .setNumberOfColumns(pdf417.columns())
                             .setErrorLevel(errorLevel(pdf417.errorLevel())), pdf417.content());
                 } catch (IllegalArgumentException e) {
                     throw encodingFailure("PDF417 symbol", e);

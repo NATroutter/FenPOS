@@ -416,6 +416,10 @@ function resolved(ref: string, settings: CompileSettings): ImageSource {
  * budgeting value with no wire field, kept off the wire so the model and wire types stay the
  * distinct shapes {@link WireDirective}'s module documents.
  *
+ * PDF417's `columns` is the one measured figure that does travel, because the printer's default is
+ * to choose its own layout and a symbol laid out differently is a different number of rows from the
+ * one charged. See the note on `directiveSchema` in `lib/link/protocol.ts`.
+ *
  * `IMAGE` crosses by one of two routes, and which one is settled here — see {@link toWireImage}.
  */
 function toWireLine(line: Line, settings: CompileSettings): WireLine {
@@ -455,7 +459,12 @@ function toWireLine(line: Line, settings: CompileSettings): WireLine {
 		} else if (directive.kind === "BARCODE") {
 			directives.push({ type: "BARCODE", system: directive.system, content: directive.content });
 		} else if (directive.kind === "PDF417") {
-			directives.push({ type: "PDF417", content: directive.content, errorLevel: directive.errorLevel });
+			directives.push({
+				type: "PDF417",
+				content: directive.content,
+				errorLevel: directive.errorLevel,
+				columns: directive.columns,
+			});
 		} else if (directive.kind === "DRAWER") {
 			directives.push({ type: "DRAWER", pin: directive.pin });
 		} else if (directive.kind === "IMAGE") {

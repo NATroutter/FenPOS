@@ -174,10 +174,28 @@ class FrameCodecTest {
     @Test
     void decodesAPdf417Directive() throws Exception {
         JsonObject json = JsonParser.parseString(
-                "{\"type\":\"PDF417\",\"content\":\"ORDER-42\",\"errorLevel\":0}").getAsJsonObject();
+                "{\"type\":\"PDF417\",\"content\":\"ORDER-42\",\"errorLevel\":0,\"columns\":5}").getAsJsonObject();
 
-        assertEquals(0, assertInstanceOf(
-                WireDirective.Pdf417.class, FrameCodec.readDirective(json)).errorLevel());
+        WireDirective.Pdf417 pdf417 = assertInstanceOf(
+                WireDirective.Pdf417.class, FrameCodec.readDirective(json));
+        assertEquals(0, pdf417.errorLevel());
+        assertEquals(5, pdf417.columns());
+    }
+
+    /**
+     * A symbol whose layout was never stated is a symbol the server could not have charged a line
+     * budget for, so the column count is required rather than defaulted. Zero is refused for the
+     * same reason and not merely because it is out of range: zero is exactly the value function 65
+     * reads as "printer decides".
+     */
+    @Test
+    void refusesAPdf417WithNoColumnCount() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":1}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":1,\"columns\":0}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":1,\"columns\":31}")));
     }
 
     @Test
@@ -338,7 +356,7 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read(
                 dispatch("", "{\"type\":\"QR\",\"content\":\"\",\"size\":6}")));
         assertThrows(ProtocolException.class, () -> codec.read(
-                dispatch("", "{\"type\":\"PDF417\",\"content\":\"\",\"errorLevel\":1}")));
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"\",\"errorLevel\":1,\"columns\":5}")));
         assertThrows(ProtocolException.class, () -> codec.read(
                 dispatch("", "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"\"}")));
     }
@@ -354,7 +372,7 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read(
                 dispatch("", "{\"type\":\"QR\",\"content\":\"kahvi ä\",\"size\":6}")));
         assertThrows(ProtocolException.class, () -> codec.read(
-                dispatch("", "{\"type\":\"PDF417\",\"content\":\"kahvi ä\",\"errorLevel\":1}")));
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"kahvi ä\",\"errorLevel\":1,\"columns\":5}")));
     }
 
     @Test
@@ -373,7 +391,7 @@ class FrameCodecTest {
     @Test
     void refusesAPdf417ErrorLevelOutsideTheEscPosRange() {
         assertThrows(ProtocolException.class, () -> codec.read(
-                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":9}")));
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":9,\"columns\":5}")));
     }
 
     @Test

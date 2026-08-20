@@ -356,7 +356,7 @@ describe("block directives on the wire", () => {
 	});
 
 	it("accepts a PDF417 directive", () => {
-		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4 })).toMatchObject({
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4, columns: 5 })).toMatchObject({
 			type: "PDF417",
 			content: "x",
 			errorLevel: 4,
@@ -364,23 +364,47 @@ describe("block directives on the wire", () => {
 	});
 
 	it("accepts a PDF417 error level at the low edge", () => {
-		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 0 })).toMatchObject({ errorLevel: 0 });
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 0, columns: 5 })).toMatchObject({
+			errorLevel: 0,
+		});
 	});
 
 	it("accepts a PDF417 error level at the high edge", () => {
-		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 8 })).toMatchObject({ errorLevel: 8 });
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 8, columns: 5 })).toMatchObject({
+			errorLevel: 8,
+		});
 	});
 
 	it("refuses a PDF417 error level below the low edge", () => {
-		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: -1 })).toThrow();
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: -1, columns: 5 })).toThrow();
 	});
 
 	it("refuses a PDF417 error level above the high edge", () => {
-		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 9 })).toThrow();
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 9, columns: 5 })).toThrow();
+	});
+
+	/**
+	 * The one piece of measured geometry on this schema, and it is required.
+	 *
+	 * Zero is refused rather than treated as a default because zero is exactly what `GS ( k`
+	 * function 65 reads as "printer decides" — and a symbol the printer laid out is not the symbol
+	 * the server charged a line budget for. A schema that made this optional, or that allowed zero,
+	 * would let that state back onto the wire.
+	 */
+	it("requires a PDF417 column count inside what function 65 encodes", () => {
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4 })).toThrow();
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4, columns: 0 })).toThrow();
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4, columns: 31 })).toThrow();
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4, columns: 1 })).toMatchObject({
+			columns: 1,
+		});
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4, columns: 30 })).toMatchObject({
+			columns: 30,
+		});
 	});
 
 	it("refuses a PDF417 directive with empty content", () => {
-		expect(() => directiveSchema.parse({ type: "PDF417", content: "", errorLevel: 4 })).toThrow();
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "", errorLevel: 4, columns: 5 })).toThrow();
 	});
 
 	it("accepts a drawer pulse on pin 2", () => {

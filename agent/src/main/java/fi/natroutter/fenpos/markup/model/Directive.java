@@ -79,12 +79,22 @@ public sealed interface Directive {
         }
     }
 
-    /** A PDF417 stacked barcode. */
-    record Pdf417(String content, int errorLevel) implements Directive {
+    /**
+     * A PDF417 stacked barcode, laid out in a stated number of data columns.
+     * <p>
+     * The column count is not the printer's to choose here. {@code GS ( k} function 65 treats zero
+     * as "lay it out however you like", and the server has already charged a line budget against
+     * one particular layout — so a symbol whose columns were left unstated could print a different
+     * number of rows from the number that was counted.
+     */
+    record Pdf417(String content, int errorLevel, int columns) implements Directive {
         public Pdf417 {
             requireContent(content, "PDF417");
             if (errorLevel < 0 || errorLevel > 8) {
                 throw new IllegalArgumentException("PDF417 error level must be 0..8, got " + errorLevel);
+            }
+            if (columns < 1 || columns > 30) {
+                throw new IllegalArgumentException("PDF417 column count must be 1..30, got " + columns);
             }
         }
     }

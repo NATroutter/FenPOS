@@ -130,7 +130,7 @@ public final class IrRenderer {
                 case Frames.WireDirective.Barcode barcode ->
                         new Directive.Barcode(barcode.system(), barcode.content());
                 case Frames.WireDirective.Pdf417 pdf417 ->
-                        new Directive.Pdf417(pdf417.content(), pdf417.errorLevel());
+                        new Directive.Pdf417(pdf417.content(), pdf417.errorLevel(), pdf417.columns());
                 case Frames.WireDirective.Drawer drawer -> new Directive.Drawer(drawer.pin());
                 case Frames.WireDirective.StoredImage stored -> synced(stored, registry);
                 case Frames.WireDirective.InlineImage inline ->

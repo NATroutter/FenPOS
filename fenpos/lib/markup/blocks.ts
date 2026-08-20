@@ -115,6 +115,41 @@ const BARCODE_BCID: Record<BarcodeSystem, string> = {
  */
 const PDF417_MODULE_DOTS = 3;
 
+/**
+ * Modules in one PDF417 codeword, and in each of the four fixed columns beside the data.
+ *
+ * Every PDF417 row is a start pattern, a left row indicator, the data columns, a right row
+ * indicator and a stop pattern. All of those are seventeen modules except the stop, which carries
+ * one extra bar — so a symbol of `n` data columns is `17 * (n + 4) + 1` modules across.
+ */
+const PDF417_MODULES_PER_COLUMN = 17;
+
+/** Columns of a PDF417 row that are not data: start, both row indicators, and stop. */
+const PDF417_FIXED_COLUMNS = 4;
+
+/**
+ * How many data columns a measured PDF417 symbol has.
+ *
+ * **The layout has to cross the wire.** `GS ( k` function 65 reads a column count of zero as
+ * "printer decides", and `new PDF417()` leaves it at zero — so the agent was letting the printer
+ * lay the symbol out however it liked while the server charged a line budget against bwip-js's
+ * layout. Module width and row height already matched; only the number of columns did not, and a
+ * printer that picks a different one prints a different number of rows from the one that was
+ * charged.
+ *
+ * Inverting the width rather than asking bwip-js again: `symbolGeometry` has already paid for the
+ * encode, `widthDots` is `pixx * PDF417_MODULE_DOTS` exactly, and the row structure above inverts
+ * without rounding. Verified against bwip-js across payloads from one to twelve hundred characters:
+ * 103 dots-wide modules give 2 columns, 120 give 3, 154 give 5, 307 give 14, every one integral.
+ *
+ * @param widthDots the symbol's measured width, from {@link symbolGeometry}
+ * @returns the number of data columns bwip-js laid the symbol out with
+ */
+export function pdf417Columns(widthDots: number): number {
+	const modules = widthDots / PDF417_MODULE_DOTS;
+	return (modules - 1) / PDF417_MODULES_PER_COLUMN - PDF417_FIXED_COLUMNS;
+}
+
 /** Dots per narrow-bar module in a linear barcode. */
 const BARCODE_MODULE_WIDTH_DOTS = 2;
 

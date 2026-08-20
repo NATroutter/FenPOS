@@ -74,8 +74,22 @@ export type Directive =
 	| { kind: "QR"; content: string; size: number; heightLines: number; widthDots: number }
 	/** A linear barcode in one of the printer's supported symbologies. */
 	| { kind: "BARCODE"; system: BarcodeSystem; content: string; heightLines: number; widthDots: number }
-	/** A PDF417 stacked symbol. `errorLevel` is its error-correction level, 0-8. */
-	| { kind: "PDF417"; content: string; errorLevel: number; heightLines: number; widthDots: number }
+	/**
+	 * A PDF417 stacked symbol. `errorLevel` is its error-correction level, 0-8.
+	 *
+	 * `columns` is the exception to the note above: it is a compile-time figure that *does* cross
+	 * the wire. `GS ( k` function 65 reads a column count of zero as "printer decides", so a symbol
+	 * sent without one is laid out by the firmware while the budget was charged against the layout
+	 * the server measured. Carrying the number is what makes the two the same symbol.
+	 */
+	| {
+			kind: "PDF417";
+			content: string;
+			errorLevel: number;
+			columns: number;
+			heightLines: number;
+			widthDots: number;
+	  }
 	/**
 	 * A cash drawer kick on pin 2 or 5.
 	 *

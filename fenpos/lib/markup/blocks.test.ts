@@ -4,6 +4,7 @@ import { BarcodeSystem } from "@/lib/domain/enums";
 import {
 	dotWidth,
 	LINE_HEIGHT_DOTS,
+	pdf417Columns,
 	SymbolEncodeError,
 	symbolGeometry,
 	symbolSvg,
@@ -70,6 +71,32 @@ describe("symbolGeometry", () => {
 			const modules = symbol.sbs.reduce((total, width) => total + width, 0);
 			expect(symbolGeometry({ kind: "BARCODE", content, system: "CODE128" }).widthDots, content).toBe(modules * 2);
 			expect(modules, `${content} must be 11n + 35`).toBe(11 * content.length + 35);
+		}
+	});
+
+	/**
+	 * The layout the agent has to be told, checked against bwip-js's own account of it.
+	 *
+	 * A PDF417 row is a start pattern, a left row indicator, the data columns, a right row
+	 * indicator and a stop that carries one extra bar — `17 * (n + 4) + 1` modules. `pixx` is read
+	 * straight from bwip-js rather than from `blocks.ts`, so this is the library's layout and not a
+	 * restatement of the same arithmetic. Payloads are spread across the range where bwip-js changes
+	 * its mind about the column count, and the count has to be a whole number every time: a
+	 * structure that did not invert exactly would show up as a fraction.
+	 */
+	it("recovers the data-column count bwip-js laid the symbol out with", () => {
+		for (const length of [1, 20, 40, 80, 160, 320, 640, 1200]) {
+			const content = "A".repeat(length);
+			const symbol = bwip.raw({ bcid: "pdf417", text: content, eclevel: 2 } as never)[0];
+			if (!("pixx" in symbol)) {
+				throw new Error(`bwip-js did not return a module matrix for a ${length}-character payload`);
+			}
+			const columns = pdf417Columns(symbolGeometry({ kind: "PDF417", content, errorLevel: 2 }).widthDots);
+
+			expect(columns, `${length} characters`).toBe((symbol.pixx - 1) / 17 - 4);
+			expect(Number.isInteger(columns), `${length} characters must invert exactly`).toBe(true);
+			expect(columns).toBeGreaterThanOrEqual(1);
+			expect(columns).toBeLessThanOrEqual(30);
 		}
 	});
 

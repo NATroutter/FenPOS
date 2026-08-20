@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema } from "@/lib/link/protocol";
-import { symbolGeometry } from "@/lib/markup/blocks";
+import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
 	type CompileSettings,
@@ -405,7 +405,16 @@ describe("block line budget", () => {
 
 		expect(job.lines[0].directives).toEqual([{ type: "QR", content: "https://example.com/o/1", size: 8 }]);
 		expect(job.lines[1].directives).toEqual([{ type: "BARCODE", system: "EAN13", content: "1234567890128" }]);
-		expect(job.lines[2].directives).toEqual([{ type: "PDF417", content: "ORDER-1", errorLevel: 4 }]);
+		// `columns` is the exception to "unchanged": the symbol's layout is measured here and has to
+		// travel, because the printer's own default is to choose one. See `directiveSchema`.
+		expect(job.lines[2].directives).toEqual([
+			{
+				type: "PDF417",
+				content: "ORDER-1",
+				errorLevel: 4,
+				columns: pdf417Columns(symbolGeometry({ kind: "PDF417", content: "ORDER-1", errorLevel: 4 }).widthDots),
+			},
+		]);
 		expect(job.lines[3].directives).toEqual([{ type: "DRAWER", pin: 5 }]);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 	});

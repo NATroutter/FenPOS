@@ -553,10 +553,17 @@ public final class Frames {
         /**
          * A PDF417 stacked barcode.
          *
+         * <p>Alone among the symbols this carries a piece of the server's measured geometry.
+         * {@code GS ( k} function 65 reads a column count of zero as "printer decides", so a
+         * symbol sent without one is laid out by the firmware while the server has already charged
+         * a line budget against its own layout — the same symbol printing a different number of
+         * rows from the one that was counted. The count crosses the link so the two agree.
+         *
          * @param content    the data to encode
          * @param errorLevel error correction level, 0..8
+         * @param columns    data columns in the symbol, 1..30, as the server laid it out
          */
-        record Pdf417(String content, int errorLevel) implements WireDirective {
+        record Pdf417(String content, int errorLevel, int columns) implements WireDirective {
         }
 
         /**

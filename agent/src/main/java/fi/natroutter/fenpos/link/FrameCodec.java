@@ -356,9 +356,13 @@ public final class FrameCodec {
             case "BARCODE" -> new WireDirective.Barcode(
                     requireEnum(directive, "system", BarcodeSystem.class),
                     requireContent(directive));
+            // The column count is bounded 1..30 rather than 0..30: zero is what function 65 reads
+            // as "printer decides", and a server that meant to say that would be sending a symbol
+            // it could not have charged a line budget for.
             case "PDF417" -> new WireDirective.Pdf417(
                     requireAsciiContent(directive),
-                    requireBoundedInt(directive, "errorLevel", 0, 8));
+                    requireBoundedInt(directive, "errorLevel", 0, 8),
+                    requireBoundedInt(directive, "columns", 1, 30));
             case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
             case "IMAGE" -> readImage(requireObject(directive, "source"));
             default -> throw new ProtocolException("unknown directive type '" + type + "'");

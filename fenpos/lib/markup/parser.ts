@@ -1,5 +1,6 @@
 import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
 import {
+	pdf417Columns,
 	SymbolEncodeError,
 	type SymbolGeometry,
 	type SymbolSpec,
@@ -861,7 +862,13 @@ function blockDirective(spec: SymbolSpec, geometry: SymbolGeometry): Directive {
 		case "BARCODE":
 			return { kind: "BARCODE", system: spec.system, content: spec.content, ...measured };
 		case "PDF417":
-			return { kind: "PDF417", content: spec.content, errorLevel: spec.errorLevel, ...measured };
+			return {
+				kind: "PDF417",
+				content: spec.content,
+				errorLevel: spec.errorLevel,
+				columns: pdf417Columns(geometry.widthDots),
+				...measured,
+			};
 	}
 }
 

@@ -109,7 +109,7 @@ class IrRendererTest {
     void sendsThePdf417ErrorLevelItWasGiven() throws Exception {
         for (int level = 0; level <= 8; level++) {
             CompiledJob rendered = IrRenderer.render(
-                    job(directiveLine(new Frames.WireDirective.Pdf417("x", level))), device(), registry);
+                    job(directiveLine(new Frames.WireDirective.Pdf417("x", level, 5))), device(), registry);
 
             assertTrue(contains(rendered.payload(),
                             new byte[]{0x1D, '(', 'k', 0x04, 0x00, 48, 69, 48, (byte) (48 + level)}),
@@ -177,10 +177,31 @@ class IrRendererTest {
         assertEquals("{B{{X", code128Data(rendered));
     }
 
+    /**
+     * The column count, asserted as the byte in function 065 — {@code GS ( k 03 00 48 65 n}.
+     * <p>
+     * The whole point of carrying it. Left unset the library sends {@code n = 0}, which the printer
+     * reads as "lay the symbol out however you like" — while the server has already charged a line
+     * budget against its own layout, so the same data prints a different number of rows from the
+     * number that was counted. Several counts are walked so that a renderer sending a constant, or
+     * sending the error level here by mistake, fails rather than passing on one lucky value.
+     */
+    @Test
+    void sendsThePdf417ColumnCountItWasGiven() throws Exception {
+        for (int columns : new int[] {1, 2, 5, 14, 30}) {
+            CompiledJob rendered = IrRenderer.render(
+                    job(directiveLine(new Frames.WireDirective.Pdf417("ORDER-42", 3, columns))), device(), registry);
+
+            assertTrue(contains(rendered.payload(),
+                            new byte[]{0x1D, '(', 'k', 0x03, 0x00, 48, 65, (byte) columns}),
+                    "column count " + columns + " should reach function 065");
+        }
+    }
+
     @Test
     void rendersPdf417() throws Exception {
         CompiledJob rendered = IrRenderer.render(
-                job(directiveLine(new Frames.WireDirective.Pdf417("ORDER-42", 3))), device(), registry);
+                job(directiveLine(new Frames.WireDirective.Pdf417("ORDER-42", 3, 5))), device(), registry);
 
         assertTrue(new String(rendered.payload(), StandardCharsets.ISO_8859_1).contains("ORDER-42"));
     }
