@@ -41,8 +41,13 @@ import {
  * connect happily to a new server and then fail partway through the first receipt containing
  * a block. `Hello`/`Welcome` compare this value exactly, so the bump turns that into a clean
  * refusal at connect time, which is the failure worth having while both sides are moving.
+ *
+ * Bumped 2 -> 3 for the IMAGE directive, the config.sync asset payload, and making `columns`
+ * required on the PDF417 directive — a version-2 agent would not recognise the new directive
+ * or payload, and would silently fall back to printer-decided layout on a version-2 PDF417
+ * block that omits `columns`, which is exactly the ambiguity the field was added to remove.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /**
  * Largest frame accepted, in bytes.

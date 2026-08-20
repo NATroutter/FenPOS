@@ -40,8 +40,14 @@ public final class Frames {
      * an older agent handed one of these would fail the job rather than print it incomplete. The
      * version is what turns that into a refusal to connect at all, which an operator sees once
      * instead of discovering per receipt.
+     *
+     * <p>Bumped 2 -&gt; 3 for the {@code IMAGE} directive, the {@code config.sync} asset payload,
+     * and making {@code columns} required on the {@code PDF417} directive — a version-2 agent
+     * would not recognise the new directive or payload, and would silently fall back to
+     * printer-decided layout on a version-2 PDF417 block that omits {@code columns}, which is
+     * exactly the ambiguity the field was added to remove.
      */
-    public static final int PROTOCOL_VERSION = 2;
+    public static final int PROTOCOL_VERSION = 3;
 
     private Frames() {
     }
