@@ -30,7 +30,7 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 }));
 
 const { createAsset } = await import("@/lib/assets/asset-service");
-const { resolveImages } = await import("@/lib/markup/resolve-images");
+const { RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
 
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
@@ -109,6 +109,44 @@ describe("resolveImages", () => {
 
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
 		expect(images.size).toBe(1);
+	});
+
+	/**
+	 * The bound on what one request can make this server do at once.
+	 *
+	 * Without it a receipt naming 200 distinct URLs — which the default line limit permits — opens
+	 * 200 sockets, holds 200 buffers of up to 2 MB each before a single one is decoded, and pays 200
+	 * TLS handshakes, since the transport pools nothing. The window is what keeps that a constant.
+	 *
+	 * Asserted as an equality rather than an upper bound so it fails in both directions: resolving
+	 * one at a time would peak at 1, and no window at all would peak at 20.
+	 */
+	it("resolves at most a window of images at once, however many a receipt names", async () => {
+		let inFlight = 0;
+		let peak = 0;
+		fetchRemoteImage.mockImplementation(async () => {
+			inFlight++;
+			peak = Math.max(peak, inFlight);
+			await new Promise((settle) => setTimeout(settle, 5));
+			inFlight--;
+			return PNG;
+		});
+
+		const images = await resolveImages(
+			Array.from({ length: 20 }, (_, index) => `<image>https://x.test/${index}.png</image>`),
+		);
+
+		expect(images.size).toBe(20);
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(20);
+		expect(peak).toBe(RESOLVE_WINDOW);
+	});
+
+	it("stops at the first refusal instead of fetching the rest of the receipt", async () => {
+		fetchRemoteImage.mockRejectedValue(new ApiError("invalid_tag_argument", "nothing answers here"));
+
+		await refusal(Array.from({ length: 20 }, (_, index) => `<image>https://x.test/${index}.png</image>`));
+
+		expect(fetchRemoteImage.mock.calls.length).toBeLessThanOrEqual(RESOLVE_WINDOW);
 	});
 
 	it("refuses an image nobody has stored, naming the element it was written on", async () => {

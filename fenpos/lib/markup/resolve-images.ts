@@ -22,9 +22,36 @@ import { parseMarkup } from "@/lib/markup/parser";
  * option — an unreachable host makes the print fail, and a slow one makes the request wait, up to
  * `REMOTE_FETCH_TIMEOUT_MS` — and it is why stored assets are the documented default. What is
  * bounded here is how that cost grows: references are deduplicated, so a logo repeated on every
- * copy of a receipt is one fetch, and the fetches run together rather than in turn, so a receipt
- * naming several hosts waits for the slowest rather than for the sum. See {@link resolveImages}.
+ * copy of a receipt is one fetch; they are resolved several at a time, so a receipt naming a few
+ * hosts waits for the slowest rather than for the sum; and never more than
+ * {@link RESOLVE_WINDOW} at a time, so what one request can make this server hold is a constant
+ * rather than a multiple of how many URLs it chose to name.
  */
+
+/**
+ * How many images may be resolved at once.
+ *
+ * **This is a bound on what a single request can make this server do, and it is the reason the
+ * parallelism above is safe.** A request may carry up to `maxLines` elements — 200 by default — so
+ * resolving every reference together let one authenticated caller open 200 sockets, hold 200 buffers
+ * of up to `MAX_REMOTE_IMAGE_BYTES` each before anything was decoded, and pay 200 TLS handshakes,
+ * since `pinnedTransport` deliberately pools no connections. Six holds the same shape at a constant
+ * cost: at most six sockets and about twelve megabytes in flight, whatever the receipt says.
+ *
+ * Six rather than one, because resolving in turn is what the parallelism was for: a receipt naming
+ * three hosts should wait once, not three times. Six rather than sixty, because a receipt with more
+ * than a handful of *distinct* images is already unusual — a logo repeated on every copy is one
+ * entry — so the window is only reached by receipts that are pathological or hostile, and those are
+ * exactly the ones that should be made to queue.
+ *
+ * The honest cost: a receipt naming many distinct *working* slow hosts now waits
+ * `ceil(count / 6)` timeouts instead of one. A hostile receipt does not, because the first refusal
+ * stops the rest — see {@link resolveImages} — so the tail belongs to receipts that are succeeding.
+ *
+ * Stored assets pass through the same window and are unaffected by it in any measurable way: they
+ * are local reads of two integer columns, holding no socket and no buffer.
+ */
+export const RESOLVE_WINDOW = 6;
 
 /**
  * Resolves every image a request refers to.
@@ -35,17 +62,32 @@ import { parseMarkup } from "@/lib/markup/parser";
  *         one; the element it was written on travels in `details.line`
  */
 export async function resolveImages(data: readonly string[]): Promise<ResolvedImages> {
-	const references = collect(data);
+	const queue = [...collect(data)];
+	const sized = new Map<string, ImageSource>();
 
-	// Together rather than in turn. Each fetch carries its own deadline, so resolving five URLs
-	// sequentially would let a receipt wait five times the timeout; this way it waits once. The
-	// cost is that a receipt naming many distinct hosts opens that many connections at once, which
-	// is bounded only by the request's own line limit.
-	const sized = await Promise.all(
-		[...references].map(async ([reference, line]) => [reference, await sizeOf(reference, line)] as const),
-	);
+	// A fixed set of workers sharing one queue, rather than one promise per reference: that is what
+	// makes {@link RESOLVE_WINDOW} the number in flight rather than merely the number started.
+	let refused = false;
+	const workers = Array.from({ length: Math.min(RESOLVE_WINDOW, queue.length) }, async () => {
+		for (let entry = queue.shift(); entry !== undefined && !refused; entry = queue.shift()) {
+			const [reference, line] = entry;
+			try {
+				sized.set(reference, await sizeOf(reference, line));
+			} catch (thrown) {
+				// The whole request is going to be refused for this, so the rest of the receipt is
+				// work nobody will read. Stopping matters most for the case that matters most: a
+				// receipt full of unreachable hosts costs one window of timeouts, not all of them.
+				refused = true;
+				throw thrown;
+			}
+		}
+	});
 
-	return new Map(sized);
+	// Rejects with the first refusal, which is the one reported. The others are still awaited here,
+	// so a worker that fails on its way out cannot become an unhandled rejection.
+	await Promise.all(workers);
+
+	return sized;
 }
 
 /**

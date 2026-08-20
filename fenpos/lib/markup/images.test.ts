@@ -88,6 +88,21 @@ describe("imageGeometry", () => {
 		expect(geometry.heightLines).toBe(1);
 	});
 
+	/**
+	 * The case the clamp actually exists for, and the one the test above does *not* cover: three
+	 * dots of height over 2000 rounds to one on its own, so that test passes with the clamp deleted.
+	 * This one does not. A 4096-pixel source at one percent of 32 columns is four dots wide, which
+	 * puts its height at `round(1 x 4 / 4096)` = 0 — an image charged nothing at all against
+	 * `maxOutputLines`, which is precisely the undercount the whole measurement exists to prevent.
+	 */
+	it("charges a line for an image the arithmetic would round out of existence", () => {
+		expect(imageGeometry({ width: 4096, height: 1 }, 1, PAPER_COLUMNS)).toEqual({
+			widthDots: 4,
+			heightDots: 1,
+			heightLines: 1,
+		});
+	});
+
 	it("refuses a source with no pixels, rather than charging a NaN of paper", () => {
 		expect(() => imageGeometry({ width: 0, height: 0 }, 100, PAPER_COLUMNS)).toThrow(RangeError);
 	});
