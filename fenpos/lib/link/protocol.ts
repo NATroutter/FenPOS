@@ -589,16 +589,52 @@ export function parseAgentFrame(raw: string): { ok: true; frame: AgentFrame } | 
 }
 
 /**
+ * A frame this server built that is too large to send.
+ *
+ * **The agent does not merely refuse an oversized frame — it closes the link.** `LinkClient.java`
+ * treats one as a protocol violation, which is right on the receiving side and is exactly why the
+ * sending side must never produce one: a single job that overran the cap would drop the connection
+ * and take every printer behind that agent offline until it reconnected.
+ *
+ * Its own type so callers can tell it from a schema failure. A schema failure is a bug in this
+ * server; this one is usually a property of what a caller asked to print, and the caller can be told
+ * so instead of watching their printers disappear.
+ */
+export class FrameTooLargeError extends Error {
+	constructor(
+		readonly bytes: number,
+		frameType: string,
+	) {
+		super(`A ${frameType} frame of ${bytes} bytes exceeds the ${MAX_FRAME_BYTES} byte limit`);
+		this.name = "FrameTooLargeError";
+	}
+}
+
+/**
  * Serialises a frame for transmission to a agent.
  *
  * Validated on the way out as well as on the way in. The cost is negligible next to the
  * failure it prevents: a malformed dispatch would be rejected by the agent after the server
  * had already recorded the job as sent.
  *
+ * **Measured as well as validated.** The size is checked here rather than at the socket because this
+ * is the one place every outgoing frame passes through, and because refusing before the write is the
+ * whole point: the agent closes the link on an oversized frame, so a frame that is built and then
+ * sent has already done the damage. Nothing downstream of this function can send what it refuses.
+ *
  * @param frame the frame to send
  * @returns the JSON text to write to the socket
  * @throws Error when the frame does not satisfy its schema, which is a server bug
+ * @throws FrameTooLargeError when it would exceed {@link MAX_FRAME_BYTES}
  */
 export function serialiseServerFrame(frame: ServerFrame): string {
-	return JSON.stringify(serverFrameSchema.parse(frame));
+	const parsed = serverFrameSchema.parse(frame);
+	const text = JSON.stringify(parsed);
+
+	const bytes = Buffer.byteLength(text, "utf8");
+	if (bytes > MAX_FRAME_BYTES) {
+		throw new FrameTooLargeError(bytes, parsed.type);
+	}
+
+	return text;
 }

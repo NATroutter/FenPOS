@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { publish } from "@/lib/events/bus";
+import { FrameTooLargeError, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
 import {
@@ -129,7 +130,27 @@ export async function submitJob(
 		throw error;
 	}
 
-	if (!link.send({ type: "job.dispatch", job: compiled })) {
+	let sent: boolean;
+	try {
+		sent = link.send({ type: "job.dispatch", job: compiled });
+	} catch (error) {
+		// A frame too large to send. Caught here rather than left to escape, because the caller's
+		// alternative is a 500 for something that was a property of their request all along — and
+		// because an agent handed an oversized frame closes the link, so this is the last point at
+		// which one job's problem can be stopped from becoming every printer's.
+		if (!(error instanceof FrameTooLargeError)) {
+			throw error;
+		}
+		await fail(job.id, "job_too_large", error.message);
+		throw new ApiError(
+			"job_too_large",
+			`This receipt is ${error.bytes} bytes once compiled, more than the ${MAX_FRAME_BYTES} a printer can be sent in one message. Shorten it, or print its images smaller.`,
+			{ bytes: error.bytes, limit: MAX_FRAME_BYTES },
+			{ cause: error },
+		);
+	}
+
+	if (!sent) {
 		// The socket closed between the registry lookup and the write. Ordinary on a link to a
 		// shop network, and the job must not be left claiming to be queued.
 		await fail(job.id, "agent_offline", "The agent disconnected before the job was sent.");

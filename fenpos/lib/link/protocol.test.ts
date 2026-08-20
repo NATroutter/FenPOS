@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	directiveSchema,
+	FrameTooLargeError,
 	IMAGE_LIMITS,
 	JOB_LIMITS,
 	type Line,
@@ -149,6 +150,85 @@ describe("serialiseServerFrame", () => {
 			job: { jobId: "job-1", device: "kitchen", linefeed: "LF", lines: [line()] },
 		});
 		expect(JSON.parse(text)).toMatchObject({ type: "job.dispatch" });
+	});
+
+	/**
+	 * The failure this prevents is not a rejected job — it is a dropped agent. `LinkClient.java`
+	 * treats an oversized frame as a protocol violation and closes the link, so a single receipt that
+	 * overran the cap would take every printer behind that agent offline. Refusing at the one point
+	 * every outgoing frame passes through is what makes the write impossible rather than merely
+	 * unlikely.
+	 *
+	 * Reachable without any of the per-field limits being broken: `maxTotalChars` is
+	 * operator-configurable to a million characters, so a lawful receipt on such an install can
+	 * compile to more than a frame will carry.
+	 */
+	it("refuses a frame larger than the cap rather than letting it reach the socket", () => {
+		const thrown = (() => {
+			try {
+				serialiseServerFrame({
+					type: "job.dispatch",
+					job: {
+						jobId: "job-1",
+						device: "kitchen",
+						linefeed: "LF",
+						// Each line is a full-length span, so the cap is met with lawful lines rather
+						// than by breaking any other limit.
+						lines: Array.from({ length: 600 }, () =>
+							line({
+								spans: [
+									{
+										text: "x".repeat(JOB_LIMITS.maxSpanChars),
+										bold: false,
+										underline: 0,
+										invert: false,
+										widthMult: 1,
+										heightMult: 1,
+										font: "A",
+									},
+								],
+							}),
+						),
+					},
+				});
+				return null;
+			} catch (error) {
+				return error;
+			}
+		})();
+
+		expect(thrown).toBeInstanceOf(FrameTooLargeError);
+		expect((thrown as FrameTooLargeError).bytes).toBeGreaterThan(MAX_FRAME_BYTES);
+	});
+
+	it("serialises a frame that only just fits", () => {
+		// The edge matters in both directions: a guard that refused a legal frame would be a
+		// different outage from the one it was added to prevent.
+		const text = serialiseServerFrame({
+			type: "job.dispatch",
+			job: {
+				jobId: "job-1",
+				device: "kitchen",
+				linefeed: "LF",
+				lines: Array.from({ length: 400 }, () =>
+					line({
+						spans: [
+							{
+								text: "x".repeat(JOB_LIMITS.maxSpanChars),
+								bold: false,
+								underline: 0,
+								invert: false,
+								widthMult: 1,
+								heightMult: 1,
+								font: "A",
+							},
+						],
+					}),
+				),
+			},
+		});
+
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_FRAME_BYTES);
 	});
 
 	it("refuses to send a job exceeding the line cap", () => {

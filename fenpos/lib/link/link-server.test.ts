@@ -6,7 +6,7 @@ import WebSocket from "ws";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { AGENT_LINK_PATH, attachAgentLink, type LinkUpgradeHandler } from "@/lib/link/link-server";
-import { PROTOCOL_VERSION } from "@/lib/link/protocol";
+import { FrameTooLargeError, JOB_LIMITS, PROTOCOL_VERSION } from "@/lib/link/protocol";
 import { connectedAgentIds, getLink, isConnected } from "@/lib/link/registry";
 
 /**
@@ -357,6 +357,63 @@ describe("agent link", () => {
 			expect(getLink(agent.id)).not.toBe(firstLink);
 			expect(connectedAgentIds()).toEqual([agent.id]);
 			expect(await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } })).toMatchObject({ status: "ONLINE" });
+		});
+
+		/**
+		 * The one outgoing failure that must never reach the wire.
+		 *
+		 * `LinkClient.java` treats an oversized frame as a protocol violation and closes the link, so
+		 * writing one would take every printer behind this agent offline over a single receipt.
+		 * Driven through the registered `AgentLink` — the same object a dispatch uses — over a real
+		 * socket, and the assertion is what the *client* did not receive, because "the guard threw"
+		 * and "nothing was written" are different claims and only the second one matters here.
+		 */
+		it("refuses to write a frame larger than the cap, leaving the link untouched", async () => {
+			const agent = await pairedAgent();
+			const socket = connect(agent.token);
+			await new Promise<void>((resolve) => socket.once("open", resolve));
+			socket.send(helloFrame());
+			// welcome, then config.sync.
+			await frameAt(socket, 1);
+
+			const link = getLink(agent.id);
+			if (!link) {
+				throw new Error("the agent should be registered after its hello");
+			}
+			const before = buffers.get(socket)?.length ?? 0;
+
+			expect(() =>
+				link.send({
+					type: "job.dispatch",
+					job: {
+						jobId: "job-1",
+						device: "kitchen",
+						linefeed: "LF",
+						// Every line, span and character is within what the schema permits, so what is
+						// asserted is the size guard rather than any other validation.
+						lines: Array.from({ length: 600 }, () => ({
+							align: "LEFT" as const,
+							spans: [
+								{
+									text: "x".repeat(JOB_LIMITS.maxSpanChars),
+									bold: false,
+									underline: 0 as const,
+									invert: false,
+									widthMult: 1,
+									heightMult: 1,
+									font: "A" as const,
+								},
+							],
+							directives: [],
+						})),
+					},
+				}),
+			).toThrow(FrameTooLargeError);
+
+			await delay(120);
+			expect(buffers.get(socket)?.length ?? 0).toBe(before);
+			expect(socket.readyState).toBe(WebSocket.OPEN);
+			expect(isConnected(agent.id)).toBe(true);
 		});
 
 		it("keeps the connection open when a malformed frame arrives", async () => {

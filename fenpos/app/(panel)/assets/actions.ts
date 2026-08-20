@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { createAsset, deleteAsset, importAssetFromUrl, requireWithinByteCap } from "@/lib/assets/asset-service";
 import { requireSession } from "@/lib/auth/require-session";
@@ -32,12 +33,7 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 
 	try {
 		await work();
-		// Every action here changes the image library, and every connected agent holds a copy of it
-		// dithered for its own paper. Pushed now rather than left to the next reconnect, so a logo
-		// uploaded during service is on the printers before the next receipt asks for it.
-		await pushConfigToEveryAgent();
 		revalidatePath("/assets");
-		return { error: null };
 	} catch (error) {
 		if (error instanceof ApiError) {
 			return { error: error.message };
@@ -45,6 +41,21 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 		logger.error(`Asset action failed: ${label}`, error);
 		return { error: "Something went wrong. Check the server log." };
 	}
+
+	// Every action here changes the image library, and every connected agent holds a copy of it
+	// dithered for its own paper — so each one has to be sent a fresh configuration, rather than the
+	// change waiting for whenever that agent next reconnects.
+	//
+	// **Scheduled rather than awaited, and deliberately outside the try.** Fanning out is work that
+	// scales with how many agents are connected and how many images are stored, and none of it is
+	// work the operator who pressed Upload is waiting for: their file is already saved. Leaving it on
+	// the response path made an upload's latency somebody else's printer count. Being outside the
+	// try is the other half: a sync that failed must not report "something went wrong" for an upload
+	// that plainly succeeded, and that must be true by construction rather than because
+	// `pushDeviceConfig` happens to swallow its own errors today.
+	after(pushConfigToEveryAgent);
+
+	return { error: null };
 }
 
 /**

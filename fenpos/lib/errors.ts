@@ -55,6 +55,16 @@ export const API_ERROR_STATUS = {
 	 * `MAX_INLINE_IMAGE_CHARS` in `lib/markup/resolve-images.ts`.
 	 */
 	image_too_large: 400,
+	/**
+	 * A receipt that compiled but is too large to hand to a printer in one message.
+	 *
+	 * The backstop behind every content limit rather than one of them. `maxTotalChars` is
+	 * operator-configurable up to a million characters, so an install that raises it can write a
+	 * receipt that passes every check and still exceeds `MAX_FRAME_BYTES` once compiled — and an
+	 * agent sent an oversized frame closes the link, taking its printers offline. Refused at
+	 * submission instead.
+	 */
+	job_too_large: 400,
 	invalid_linefeed: 400,
 	unknown_field: 400,
 

@@ -22,6 +22,25 @@ vi.mock("next/cache", () => ({
 	revalidatePath: () => {},
 }));
 
+/**
+ * The agent sync, captured rather than run.
+ *
+ * Two things are being pinned. The first is that it is *scheduled* rather than awaited: fanning a
+ * fresh configuration out to every connected agent is work that grows with how many agents are
+ * connected and how many images are stored, and none of it is work the operator who pressed Upload
+ * is waiting for. The second is that it happens after everything that can fail the action, so a sync
+ * that failed cannot report "something went wrong" for a file that was plainly saved.
+ */
+const scheduled = vi.hoisted(() => [] as (() => unknown)[]);
+const pushConfigToEveryAgent = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("next/server", () => ({
+	after: (work: () => unknown) => {
+		scheduled.push(work);
+	},
+}));
+vi.mock("@/lib/link/agent-connection", () => ({ pushConfigToEveryAgent }));
+
 const { removeAsset, uploadAsset } = await import("@/app/(panel)/assets/actions");
 
 const PNG = readFileSync("test/fixtures/logo.png");
@@ -42,6 +61,8 @@ function upload(name: string, bytes: Buffer): FormData {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
+	scheduled.length = 0;
+	pushConfigToEveryAgent.mockClear();
 });
 
 describe("uploadAsset", () => {
@@ -69,6 +90,28 @@ describe("uploadAsset", () => {
 		// The distinction matters: a refusal the operator can act on must not arrive as the
 		// catch-all, which tells them to go and read a server log they cannot reach.
 		expect((await uploadAsset(upload("Not A Slug", PNG))).error).not.toMatch(/server log/);
+	});
+
+	/**
+	 * Every connected agent holds the image library dithered for its own paper, so an upload has to
+	 * reach all of them — but not before the operator gets their answer. Asserted as "not called by
+	 * the time the action returned, and called when what was scheduled runs", which is the difference
+	 * between deferring the work and merely moving the line it sits on.
+	 */
+	it("schedules the agent sync after the response rather than blocking on it", async () => {
+		expect(await uploadAsset(upload("logo", PNG))).toEqual({ error: null });
+
+		expect(pushConfigToEveryAgent).not.toHaveBeenCalled();
+		expect(scheduled).toHaveLength(1);
+
+		await scheduled[0]();
+		expect(pushConfigToEveryAgent).toHaveBeenCalledTimes(1);
+	});
+
+	it("schedules nothing when the upload was refused", async () => {
+		await uploadAsset(upload("Not A Slug", PNG));
+
+		expect(scheduled).toHaveLength(0);
 	});
 });
 

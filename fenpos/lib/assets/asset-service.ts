@@ -218,12 +218,58 @@ export async function deleteAsset(id: string): Promise<void> {
 }
 
 /**
+ * How many bytes of dithered rasters this process keeps in memory.
+ *
+ * A real receipt logo at the widest common paper is 20-30 KB of dots, so eight megabytes holds a few
+ * hundred — far more than any install's library across its paper widths, which means the eviction
+ * below is a safety net rather than a working part. It is a cap on a *derived* value: everything in
+ * here can be rebuilt from `Asset.data`, so losing it costs time and nothing else.
+ */
+const RASTER_CACHE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Dithered rasters, keyed by the asset revision and the width they were dithered for.
+ *
+ * **Memoisation, not storage.** The source image is what is stored; this is a saved result, held
+ * because the same few (image, width) pairs are asked for over and over — once per agent connect,
+ * once per device edit, once per asset upload, and once per print of an image at an unusual width.
+ * Each miss is a multi-megabyte blob read plus a jimp decode, a resize and a Floyd-Steinberg pass.
+ *
+ * The key carries the asset's id *and* its `updatedAt`, so nothing here can outlive the bytes it was
+ * derived from: a re-upload under the same name is a different row and therefore a different key,
+ * and an in-place edit moves the timestamp. That is the whole invalidation story — there is no
+ * eviction on write to forget, because a stale entry is unreachable rather than merely wrong.
+ *
+ * Held on `globalThis` for the same reason the link registry is: a development hot reload would
+ * otherwise strand the previous module's entries and accumulate a second copy.
+ */
+const globalForRasters = globalThis as unknown as {
+	fenposRasterCache: { entries: Map<string, ImageRaster>; bytes: number } | undefined;
+};
+
+if (!globalForRasters.fenposRasterCache) {
+	globalForRasters.fenposRasterCache = { entries: new Map(), bytes: 0 };
+}
+
+const rasterCache = globalForRasters.fenposRasterCache;
+
+/**
  * Renders a stored image as a 1-bit raster for a given paper width.
  *
- * Derived on every call rather than cached. Dithering half a megapixel is real work, so this is not
- * for the print path — the print path resolves an image while compiling, not while printing. If a
- * cache ever becomes necessary it belongs in its own table keyed by asset and width, never in
- * `Asset.data`, which holds the source and must keep holding the source.
+ * **Memoised by asset revision and width.** Dithering is real work — a blob read, a decode, a resize
+ * and an error-diffusion pass over every dot — and the same handful of rasters are asked for
+ * repeatedly: every agent that connects is sent one per stored image per paper width, and so is
+ * every agent when any of them is edited or an image is uploaded. Without this, ten agents with a
+ * modest library re-derived the same pictures on every one of those events.
+ *
+ * The cache lives in memory rather than in a table, which is a smaller commitment than the one this
+ * function's earlier note anticipated and enough for what it costs: it is bounded by
+ * {@link RASTER_CACHE_BYTES}, it is correct across restarts by being empty, and it keeps `Asset.data`
+ * holding nothing but the source. A cheap read of the row's id and timestamp happens on every call,
+ * so a hit still cannot serve dots from bytes that have been replaced.
+ *
+ * **The returned raster is shared.** Callers read it — encode it, measure it — and must not write
+ * through `packed`, which several of them would then be holding.
  *
  * @param name the asset's name
  * @param targetDots the paper width in printer dots, from `dotWidth(columns)`
@@ -232,17 +278,77 @@ export async function deleteAsset(id: string): Promise<void> {
  * @throws RangeError if `targetDots` is not a positive whole number of dots
  */
 export async function rasterFor(name: string, targetDots: number): Promise<ImageRaster> {
-	const row = await prisma.asset.findUnique({
+	// Deliberately not selecting `data`: this read runs on every call, including the hits, and the
+	// bytes are the expensive part. Two megabytes fetched only to be thrown away would undo most of
+	// what the cache is for.
+	const revision = await prisma.asset.findUnique({
 		where: { kind_name: { kind: "IMAGE", name } },
-		select: { data: true },
+		select: { id: true, updatedAt: true },
 	});
-	if (!row) {
+	if (!revision) {
+		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
+	}
+
+	const key = `${revision.id}:${revision.updatedAt.getTime()}:${targetDots}`;
+	const remembered = rasterCache.entries.get(key);
+	if (remembered) {
+		// Re-inserted so the map's iteration order is least-recently-used first, which is the order
+		// eviction walks. One delete and one set against a decode and a dither.
+		rasterCache.entries.delete(key);
+		rasterCache.entries.set(key, remembered);
+		return remembered;
+	}
+
+	const stored = await prisma.asset.findUnique({ where: { id: revision.id }, select: { data: true } });
+	if (!stored) {
+		// Deleted between the two reads. Ordinary with two operators on the Assets tab, and the
+		// caller gets the same answer as if it had been gone all along.
 		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
 	}
 
 	// Not wrapped: these bytes decoded once already, on the way in. A failure now is this server
 	// disagreeing with itself, which is a 500 and a log line, not something the caller did wrong.
-	return ditherToRaster(Buffer.from(row.data), targetDots);
+	const raster = await ditherToRaster(Buffer.from(stored.data), targetDots);
+	remember(key, raster);
+	return raster;
+}
+
+/**
+ * Stores a raster, evicting the least recently used until the cache is back within its cap.
+ *
+ * A raster larger than the whole cap is returned to its caller and never stored, rather than
+ * emptying the cache to hold one thing nothing else can share.
+ *
+ * @param key the asset revision and width this was derived from
+ * @param raster the dots
+ */
+function remember(key: string, raster: ImageRaster): void {
+	if (raster.packed.length > RASTER_CACHE_BYTES) {
+		return;
+	}
+
+	rasterCache.entries.set(key, raster);
+	rasterCache.bytes += raster.packed.length;
+
+	for (const [oldest, evicted] of rasterCache.entries) {
+		if (rasterCache.bytes <= RASTER_CACHE_BYTES) {
+			break;
+		}
+		rasterCache.entries.delete(oldest);
+		rasterCache.bytes -= evicted.packed.length;
+	}
+}
+
+/**
+ * Empties the raster cache.
+ *
+ * For tests, which need to tell a hit from a miss and share one process across cases. Nothing in the
+ * product calls it: an entry is keyed by the revision it came from, so there is never anything stale
+ * to clear.
+ */
+export function forgetRasters(): void {
+	rasterCache.entries.clear();
+	rasterCache.bytes = 0;
 }
 
 /**

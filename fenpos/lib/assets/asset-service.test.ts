@@ -35,8 +35,44 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 	fetchRemoteImage,
 }));
 
-const { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION, createAsset, deleteAsset, importAssetFromUrl, listAssets, rasterFor } =
-	await import("@/lib/assets/asset-service");
+/**
+ * The real dither, counted.
+ *
+ * `rasterFor` memoises its result, and the claim worth testing is that the expensive part does not
+ * run — a blob read, a decode, a resize and an error-diffusion pass over every dot. Counting calls
+ * says that directly, where a timing assertion would only say it on an idle machine.
+ */
+const ditherToRaster = vi.hoisted(() => vi.fn<typeof import("@/lib/assets/dither").ditherToRaster>());
+
+vi.mock("@/lib/assets/dither", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/assets/dither")>();
+	ditherToRaster.mockImplementation(actual.ditherToRaster);
+	return { ...actual, ditherToRaster };
+});
+
+const {
+	MAX_ASSET_BYTES,
+	MAX_IMAGE_DIMENSION,
+	createAsset,
+	deleteAsset,
+	forgetRasters,
+	importAssetFromUrl,
+	listAssets,
+	rasterFor,
+} = await import("@/lib/assets/asset-service");
+
+/**
+ * A plain grey PNG of a given size.
+ *
+ * Grey rather than black or white so the dither produces a mixture of set and clear bits.
+ *
+ * @param width pixels across
+ * @param height pixels down
+ * @returns the encoded PNG
+ */
+async function solidPng(width: number, height: number): Promise<Buffer> {
+	return Buffer.from(await new Jimp({ width, height, color: 0x808080ff }).getBuffer("image/png"));
+}
 
 /** A real 128x40 PNG, the same fixture the dither tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
@@ -441,5 +477,71 @@ describe("rasterFor", () => {
 
 	it("refuses a name that is not stored", async () => {
 		await refusal(() => rasterFor("absent", 384));
+	});
+
+	/**
+	 * Memoisation, and why it is worth a test rather than being taken on trust.
+	 *
+	 * Every agent that connects is sent one raster per stored image per paper width, and so is every
+	 * agent whenever any image or device changes. Each miss is a multi-megabyte blob read plus a
+	 * decode, a resize and an error-diffusion pass over every dot, so a library of any size made an
+	 * upload or a reconnect proportionally expensive.
+	 *
+	 * Counted at the decoder rather than timed: a timing assertion is the kind that passes on a fast
+	 * machine and fails on a loaded one, and what is being claimed here is that the work does not
+	 * happen at all.
+	 */
+	it("dithers a given image and width once, however often it is asked for", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+		ditherToRaster.mockClear();
+
+		const first = await rasterFor("logo", 384);
+		const second = await rasterFor("logo", 384);
+
+		expect(ditherToRaster).toHaveBeenCalledTimes(1);
+		expect(second).toBe(first);
+	});
+
+	it("keeps a raster per width, since one width's dots are not another's picture", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+		ditherToRaster.mockClear();
+
+		await rasterFor("logo", 384);
+		await rasterFor("logo", 504);
+		await rasterFor("logo", 384);
+
+		expect(ditherToRaster).toHaveBeenCalledTimes(2);
+	});
+
+	/**
+	 * The invalidation, and the failure it prevents: a logo replaced under the same name printing as
+	 * the old one until the process restarted. The key carries the row's identity and its
+	 * `updatedAt`, so the new bytes cannot be reached by the old key.
+	 */
+	it("does not serve a stale raster after the image is replaced under the same name", async () => {
+		await createAsset("logo", PNG);
+		forgetRasters();
+		const before = await rasterFor("logo", 384);
+
+		const stored = await prisma.asset.findFirstOrThrow({ where: { name: "logo" }, select: { id: true } });
+		await deleteAsset(stored.id);
+		await createAsset("logo", await solidPng(64, 64));
+
+		const after = await rasterFor("logo", 384);
+
+		expect(after.heightDots).not.toBe(before.heightDots);
+	});
+
+	/** A cache that outlived its bytes would be worse than none: a deleted image must be gone. */
+	it("refuses an image deleted after its raster was remembered", async () => {
+		await createAsset("logo", PNG);
+		await rasterFor("logo", 384);
+
+		const stored = await prisma.asset.findFirstOrThrow({ where: { name: "logo" }, select: { id: true } });
+		await deleteAsset(stored.id);
+
+		await refusal(() => rasterFor("logo", 384));
 	});
 });
