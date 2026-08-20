@@ -43,6 +43,54 @@ describe("symbolGeometry", () => {
 		expect(validateSymbolContent({ kind: "BARCODE", content: "ABCDEFGHIJKLM", system: "EAN13" })).not.toBeNull();
 	});
 
+	/**
+	 * Interleaved 2 of 5 encodes digits in pairs, so an odd count has nothing to pair the last
+	 * digit with and the agent's encoder refuses it. Accepting it here only moved that refusal
+	 * from a positioned compile error to a job that failed after being acknowledged.
+	 */
+	it("refuses an ITF with an odd number of digits", () => {
+		expect(validateSymbolContent({ kind: "BARCODE", content: "12345", system: "ITF" })).toMatch(/even/);
+		expect(validateSymbolContent({ kind: "BARCODE", content: "123456", system: "ITF" })).toBeNull();
+	});
+
+	/**
+	 * Two encoders have to agree about a UPC-E: bwip-js measures it, escpos-coffee prints it, and
+	 * they accept different strings. `1234567` measures here and is refused on the agent, which is
+	 * the failure the rule exists to stop; `123456` is the reverse. The accepted form is the
+	 * overlap, and both rejections are asserted so narrowing the rule to one encoder fails.
+	 */
+	it("refuses a UPCE that only one of the two encoders accepts", () => {
+		expect(validateSymbolContent({ kind: "BARCODE", content: "1234567", system: "UPCE" })).not.toBeNull();
+		expect(validateSymbolContent({ kind: "BARCODE", content: "123456", system: "UPCE" })).not.toBeNull();
+		expect(validateSymbolContent({ kind: "BARCODE", content: "0123456", system: "UPCE" })).toBeNull();
+	});
+
+	/**
+	 * And the overlap is real, not just agreed on paper: the accepted form measures without the
+	 * encoder throwing. A check digit is arithmetic rather than format, so it stays the encoder's
+	 * to report, exactly as it is for EAN13 above.
+	 */
+	it("measures the UPCE form it accepts", () => {
+		expect(symbolGeometry({ kind: "BARCODE", content: "0123456", system: "UPCE" }).heightLines).toBe(5);
+	});
+
+	/**
+	 * Not a limit of QR or PDF417, both of which encode arbitrary bytes. It is a limit of the
+	 * agent: escpos-coffee declares the symbol's payload length in characters while writing UTF-8
+	 * bytes, so one character above U+007F leaves the printer reading a truncated payload as a
+	 * valid symbol. It scans, and it scans as the wrong thing — refused here so the caller gets a
+	 * position rather than a receipt.
+	 */
+	it("refuses non-ASCII content in a two-dimensional symbol", () => {
+		expect(validateSymbolContent({ kind: "QR", content: "kahvi ä", size: 6 })).toMatch(/ASCII/);
+		expect(validateSymbolContent({ kind: "PDF417", content: "kahvi ä", errorLevel: 1 })).toMatch(/ASCII/);
+	});
+
+	it("accepts the whole ASCII range in a two-dimensional symbol", () => {
+		// The bound is ASCII, not "letters and digits": a URL's punctuation must survive it.
+		expect(validateSymbolContent({ kind: "QR", content: "https://x.test/a?b=1&c=~", size: 6 })).toBeNull();
+	});
+
 	it("measures an EAN13 barcode at the spec's fixed 100-dot height", () => {
 		const geometry = symbolGeometry({ kind: "BARCODE", content: "5901234123457", system: "EAN13" });
 		expect(geometry.heightLines).toBe(5);

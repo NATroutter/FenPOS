@@ -217,23 +217,77 @@ function barModuleWidth(bcid: string, text: string): number {
 const CODE_39_93_PATTERN = /^[0-9A-Z \-.$/+%]+$/;
 
 /**
+ * The UPC-E forms both encoders accept.
+ *
+ * Two encoders have to agree about a symbol: bwip-js measures it here, and escpos-coffee prints
+ * it on the agent. For UPC-E they do not accept the same strings, so the rule is their overlap —
+ * seven or eight digits led by number system 0.
+ *
+ *  - `1234567` — bwip-js measures it; escpos-coffee refuses it, because a UPC-E longer than six
+ *    digits must carry the number system. Accepting it gives the caller a preview of a receipt
+ *    that then fails to print.
+ *  - `123456` and the eleven-to-twelve digit forms — escpos-coffee accepts them; bwip-js refuses
+ *    them, so they would fail while being measured instead, which is a compile error that names
+ *    the encoder rather than the rule the caller broke.
+ *
+ * Either way the caller is better served by hearing the actual constraint here.
+ */
+const UPCE_PATTERN = /^0\d{6,7}$/;
+
+/** Highest code point a two-dimensional symbol's content may contain. */
+const SYMBOL_MAX_CODE_POINT = 0x7f;
+
+/**
+ * Whether a two-dimensional symbol can carry this content.
+ *
+ * ASCII only, and that is a limit of the agent rather than of QR or PDF417, both of which encode
+ * arbitrary bytes perfectly well. The agent's escpos-coffee builds the `GS ( k` store-data
+ * command with a length counted in characters while writing the string's UTF-8 bytes, so one
+ * character above U+007F makes the declared length short and the printer reads a truncated
+ * payload as a valid symbol. The failure mode is a symbol that scans and is wrong, which is why
+ * it is refused at compile time here instead of being left to the paper.
+ *
+ * Written as a scan rather than a character-class regex because the range is expressed in code
+ * points, and spelling it into a pattern means embedding control characters in source.
+ *
+ * @param content the symbol's payload
+ * @returns whether every character is within ASCII
+ */
+function isSymbolAscii(content: string): boolean {
+	for (const character of content) {
+		if ((character.codePointAt(0) ?? 0) > SYMBOL_MAX_CODE_POINT) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
  * One content rule per barcode symbology.
  *
  * Format-level only — length and alphabet, the mistakes a caller can fix by looking at the
  * string. Not check-digit arithmetic: content that passes here can still be rejected by the
  * encoder inside {@link symbolGeometry} if, say, an explicit check digit is wrong. That failure
  * belongs to the encoder to report, not to this function to predict.
+ *
+ * Where a rule looks stricter than the symbology's textbook definition, it is matching what the
+ * agent's encoder will actually accept. A rule looser than that turns validation the caller gets
+ * synchronously into a job that fails after being acknowledged.
  */
 const BARCODE_CONTENT_RULES: Record<BarcodeSystem, (content: string) => string | null> = {
 	UPCA: (content) => (/^\d{12}$/.test(content) ? null : "UPCA requires exactly 12 digits"),
-	UPCE: (content) => (/^\d{7,8}$/.test(content) ? null : "UPCE requires 7 or 8 digits"),
+	UPCE: (content) =>
+		UPCE_PATTERN.test(content) ? null : "UPCE requires 7 or 8 digits beginning with 0, the number system",
 	EAN13: (content) => (/^\d{13}$/.test(content) ? null : "EAN13 requires exactly 13 digits"),
 	EAN8: (content) => (/^\d{8}$/.test(content) ? null : "EAN8 requires exactly 8 digits"),
 	CODE39: (content) =>
 		CODE_39_93_PATTERN.test(content)
 			? null
 			: "CODE39 accepts only digits, uppercase letters, spaces and the symbols -.$/+%",
-	ITF: (content) => (/^\d+$/.test(content) ? null : "ITF (interleaved 2 of 5) accepts only digits"),
+	ITF: (content) =>
+		/^(\d{2})+$/.test(content)
+			? null
+			: "ITF (interleaved 2 of 5) accepts an even number of digits, because it encodes them in pairs",
 	CODABAR: (content) =>
 		/^[A-D][0-9\-$:./+]*[A-D]$/.test(content)
 			? null
@@ -254,10 +308,29 @@ const BARCODE_CONTENT_RULES: Record<BarcodeSystem, (content: string) => string |
 export function validateSymbolContent(spec: SymbolSpec): string | null {
 	switch (spec.kind) {
 		case "QR":
-			return spec.content.length > 0 ? null : "QR code content must not be empty";
+			return twoDimensionalContentError("QR code", spec.content);
 		case "PDF417":
-			return spec.content.length > 0 ? null : "PDF417 content must not be empty";
+			return twoDimensionalContentError("PDF417", spec.content);
 		case "BARCODE":
 			return BARCODE_CONTENT_RULES[spec.system](spec.content);
 	}
+}
+
+/**
+ * The reason a two-dimensional symbol refuses this content, if any.
+ *
+ * Shared by QR and PDF417 because both are refused for the same two reasons and by the same
+ * mechanism — see {@link isSymbolAscii} for why the ASCII bound exists at all.
+ *
+ * @param kind the symbol's name, as it should read in the message
+ * @param content the symbol's payload
+ * @returns the reason the content is refused, or null when it is accepted
+ */
+function twoDimensionalContentError(kind: string, content: string): string | null {
+	if (content.length === 0) {
+		return `${kind} content must not be empty`;
+	}
+	return isSymbolAscii(content)
+		? null
+		: `${kind} content must be ASCII; the agent declares the symbol's length in characters but sends it as UTF-8 bytes, so anything else prints as a symbol that scans wrongly`;
 }

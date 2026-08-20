@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.link;
 
 import fi.natroutter.fenpos.device.Device;
+import fi.natroutter.fenpos.encoding.SymbolEncodingException;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
@@ -17,6 +18,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -79,6 +81,41 @@ class IrRendererTest {
         assertEquals(0, rendered.lines());
     }
 
+    /**
+     * The size off the wire is the size the server budgeted and previewed, so it has to be the
+     * size on the paper. Asserted as the byte in function 067 — {@code GS ( k 03 00 49 67 n} —
+     * because a hardcoded {@code setSize(3)} would satisfy every other assertion in this class.
+     */
+    @Test
+    void sendsTheQrModuleSizeItWasGiven() throws Exception {
+        for (int size : new int[] {1, 6, 16}) {
+            CompiledJob rendered = IrRenderer.render(
+                    job(directiveLine(new Frames.WireDirective.Qr("x", size))), device());
+
+            assertTrue(contains(rendered.payload(),
+                            new byte[]{0x1D, '(', 'k', 0x03, 0x00, 49, 67, (byte) size}),
+                    "module size " + size + " should reach function 067");
+        }
+    }
+
+    /**
+     * Likewise the error correction level, asserted as the byte in function 069 —
+     * {@code GS ( k 04 00 48 69 48 n}, where n is 48 + the level. Walked across the whole range
+     * because the mapping is nine hand-written cases and an off-by-one in any of them would
+     * silently change how much damage a printed symbol survives.
+     */
+    @Test
+    void sendsThePdf417ErrorLevelItWasGiven() throws Exception {
+        for (int level = 0; level <= 8; level++) {
+            CompiledJob rendered = IrRenderer.render(
+                    job(directiveLine(new Frames.WireDirective.Pdf417("x", level))), device());
+
+            assertTrue(contains(rendered.payload(),
+                            new byte[]{0x1D, '(', 'k', 0x04, 0x00, 48, 69, 48, (byte) (48 + level)}),
+                    "error level " + level + " should reach function 069");
+        }
+    }
+
     @Test
     void rendersALinearBarcode() throws Exception {
         CompiledJob rendered = IrRenderer.render(
@@ -98,18 +135,45 @@ class IrRendererTest {
                 job(directiveLine(new Frames.WireDirective.Barcode(
                         BarcodeSystem.CODE128, "ORDER-42"))), device()));
 
-        assertTrue(new String(rendered.payload(), StandardCharsets.ISO_8859_1).contains("{BORDER-42"));
+        assertEquals("{BORDER-42", code128Data(rendered));
     }
 
+    /**
+     * A brace in Code 128 data is an escape, so a literal one is written twice. Without this the
+     * printer reads the caller's own text as a mid-stream code set switch and drops it: content
+     * {@code A{B} would print as {@code A}, scanning cleanly and saying the wrong thing.
+     */
     @Test
-    void keepsACode128CodeSetTheCallerChose() {
+    void doublesABraceInsideCode128Content() {
         CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.CODE128, "{C123456"))), device()));
+                        BarcodeSystem.CODE128, "A{B"))), device()));
 
-        String payload = new String(rendered.payload(), StandardCharsets.ISO_8859_1);
-        assertTrue(payload.contains("{C123456"));
-        assertTrue(!payload.contains("{B"), payload);
+        assertEquals("{BA{{B", code128Data(rendered));
+    }
+
+    /**
+     * Content that happens to begin with what looks like a code set selector is data like any
+     * other. There is no pass-through branch to be fooled: {@code {Barcode} is a caller who
+     * wants a brace printed, not one switching to code set B.
+     */
+    @Test
+    void treatsContentThatLooksLikeACodeSetAsLiteralData() {
+        CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
+                job(directiveLine(new Frames.WireDirective.Barcode(
+                        BarcodeSystem.CODE128, "{Barcode"))), device()));
+
+        assertEquals("{B{{Barcode", code128Data(rendered));
+    }
+
+    /** A brace followed by no defined escape is data too, not a dangling escape. */
+    @Test
+    void escapesABraceThatNamesNoCodeSet() {
+        CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
+                job(directiveLine(new Frames.WireDirective.Barcode(
+                        BarcodeSystem.CODE128, "{X"))), device()));
+
+        assertEquals("{B{{X", code128Data(rendered));
     }
 
     @Test
@@ -158,6 +222,9 @@ class IrRendererTest {
 
         assertTrue(thrown.getMessage() != null && !thrown.getMessage().isBlank(),
                 "the encoder's own words are all the operator has to go on");
+        // Kept rather than discarded: the operator gets the sentence, the local log gets the
+        // stack that says which encoder produced it.
+        assertInstanceOf(SymbolEncodingException.class, thrown.getCause());
     }
 
     @Test
@@ -196,8 +263,28 @@ class IrRendererTest {
         return new Frames.WireDirective.Feed(lines);
     }
 
+    /**
+     * The exact data bytes of the Code 128 command in a payload.
+     * <p>
+     * Read out of the command rather than searched for as a substring, because the point of
+     * these tests is what the printer is told the data <em>is</em> — the length prefix and the
+     * bytes it counts. {@code GS k 73 n d1..dn}, function B.
+     */
+    private static String code128Data(CompiledJob rendered) {
+        byte[] payload = rendered.payload();
+        int command = indexOf(payload, new byte[]{0x1D, 'k', 73});
+        assertTrue(command >= 0, "payload carries no Code 128 command");
+
+        int length = payload[command + 3] & 0xFF;
+        return new String(payload, command + 4, length, StandardCharsets.ISO_8859_1);
+    }
+
     /** Whether {@code payload} contains {@code needle}, so a command can be located by its bytes. */
     private static boolean contains(byte[] payload, byte[] needle) {
+        return indexOf(payload, needle) >= 0;
+    }
+
+    private static int indexOf(byte[] payload, byte[] needle) {
         outer:
         for (int start = 0; start + needle.length <= payload.length; start++) {
             for (int offset = 0; offset < needle.length; offset++) {
@@ -205,9 +292,9 @@ class IrRendererTest {
                     continue outer;
                 }
             }
-            return true;
+            return start;
         }
-        return false;
+        return -1;
     }
 
     private static Device device() {

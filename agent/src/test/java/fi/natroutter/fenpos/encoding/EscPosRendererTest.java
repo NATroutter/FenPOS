@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.encoding;
 
 import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.markup.MarkupParser;
@@ -13,6 +14,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -205,6 +208,24 @@ class EscPosRendererTest {
 
         assertEquals(1, count(output, BOLD_ON),
                 "a pulse changes no style, so the preamble should not be re-sent");
+    }
+
+    /**
+     * A symbology refusing its content must arrive as {@link SymbolEncodingException} and carry
+     * the encoder's own words, so callers can tell it apart from a bug in this class. An
+     * {@link IllegalArgumentException} escaping raw would be reported as a bad job and blame the
+     * server for something this code got wrong.
+     */
+    @Test
+    void reportsAnEncoderRefusalAsAnEncodingFailureCarryingItsCause() {
+        SymbolEncodingException thrown = assertThrows(SymbolEncodingException.class, () ->
+                EscPosRenderer.render(
+                        List.of(directiveLine(Align.LEFT,
+                                new Directive.Barcode(BarcodeSystem.EAN8, "not-digits"))),
+                        Codepage.CP858, Linefeed.LF, 42));
+
+        assertTrue(thrown.getMessage().contains("EAN8"), thrown.getMessage());
+        assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
     }
 
     // -------------------------------------------------------------------------

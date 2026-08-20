@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.link;
 
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.encoding.EscPosRenderer;
+import fi.natroutter.fenpos.encoding.SymbolEncodingException;
 import fi.natroutter.fenpos.enums.CutMode;
 import fi.natroutter.fenpos.markup.model.Directive;
 import fi.natroutter.fenpos.markup.model.Line;
@@ -65,12 +66,14 @@ public final class IrRenderer {
             // The renderer writes to an in-memory buffer, so this cannot arise from I/O.
             // Surfacing it unchanged would mislabel a genuine bug as a transport failure.
             throw new UncheckedIOException("Rendering to an in-memory buffer failed", e);
-        } catch (IllegalArgumentException e) {
+        } catch (SymbolEncodingException e) {
             // A symbol encoder refusing its content, which the server's format rules do not
             // catch in every case — a check digit it cannot verify, a symbology whose alphabet
             // is narrower there than here. The job is reported failed with the encoder's own
-            // words rather than taking the print thread down with it.
-            throw new ProtocolException(e.getMessage());
+            // words rather than taking the print thread down with it. Only this one type is
+            // caught: an IllegalArgumentException from anywhere else in the renderer is a bug
+            // in this agent, and reporting it as a bad job would blame the server for it.
+            throw new ProtocolException(e.getMessage(), e);
         }
     }
 

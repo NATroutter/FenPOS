@@ -217,6 +217,27 @@ class FrameCodecTest {
                 dispatch("", "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"\"}")));
     }
 
+    /**
+     * The agent's library builds the symbol's store-data command with a length counted in
+     * characters while writing UTF-8 bytes, so one character above U+007F makes the printer read
+     * a truncated payload as a valid symbol. It scans, and it scans wrongly, which is worse than
+     * a job that fails. The server refuses the same content at compile time; this is the backstop.
+     */
+    @Test
+    void refusesNonAsciiSymbolContentItCannotSizeCorrectly() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"QR\",\"content\":\"kahvi ä\",\"size\":6}")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                dispatch("", "{\"type\":\"PDF417\",\"content\":\"kahvi ä\",\"errorLevel\":1}")));
+    }
+
+    @Test
+    void acceptsTheAsciiRangeInFull() {
+        // The bound is ASCII, not "letters and digits": a URL's punctuation must survive it.
+        assertDoesNotThrow(() -> codec.read(
+                dispatch("", "{\"type\":\"QR\",\"content\":\"https://x.test/a?b=1&c=~\",\"size\":6}")));
+    }
+
     @Test
     void refusesASymbologyThisAgentDoesNotHave() {
         assertThrows(ProtocolException.class, () -> codec.read(

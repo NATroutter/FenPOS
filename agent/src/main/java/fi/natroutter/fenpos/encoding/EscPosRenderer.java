@@ -173,27 +173,51 @@ public final class EscPosRenderer {
             // a state the cached style no longer describes. Forgetting it costs one preamble on
             // the next span; keeping it would cost a span printed in the wrong style.
             case Directive.Qr qr -> {
-                escpos.write(new QRCode()
-                        .setJustification(justification(align))
-                        .setSize(qr.size()), qr.content());
+                try {
+                    escpos.write(new QRCode()
+                            .setJustification(justification(align))
+                            .setSize(qr.size()), qr.content());
+                } catch (IllegalArgumentException e) {
+                    throw encodingFailure("QR code", e);
+                }
                 state.activeStyle = null;
             }
             case Directive.Barcode barcode -> {
-                escpos.write(new BarCode()
-                        .setJustification(justification(align))
-                        .setSystem(system(barcode.system())), barcodeData(barcode));
+                try {
+                    escpos.write(new BarCode()
+                            .setJustification(justification(align))
+                            .setSystem(system(barcode.system())), barcodeData(barcode));
+                } catch (IllegalArgumentException e) {
+                    throw encodingFailure(barcode.system().name() + " barcode", e);
+                }
                 state.activeStyle = null;
             }
             case Directive.Pdf417 pdf417 -> {
-                escpos.write(new PDF417()
-                        .setJustification(justification(align))
-                        .setErrorLevel(errorLevel(pdf417.errorLevel())), pdf417.content());
+                try {
+                    escpos.write(new PDF417()
+                            .setJustification(justification(align))
+                            .setErrorLevel(errorLevel(pdf417.errorLevel())), pdf417.content());
+                } catch (IllegalArgumentException e) {
+                    throw encodingFailure("PDF417 symbol", e);
+                }
                 state.activeStyle = null;
             }
             // Alone among these, the pulse writes no style of its own and none of the printer's
             // state it touches is style, so the cached style still describes the printer.
             case Directive.Drawer drawer -> out.write(drawerPulse(drawer.pin()));
         }
+    }
+
+    /**
+     * Labels an encoder's refusal so the reason reaches whoever wrote the markup.
+     * <p>
+     * Applied per symbol rather than around the whole render, so that an
+     * {@link IllegalArgumentException} raised anywhere else — a style, a codepage lookup, a bug
+     * in this class — keeps its own identity and stack instead of being reported as a bad job.
+     */
+    private static SymbolEncodingException encodingFailure(String what, IllegalArgumentException cause) {
+        return new SymbolEncodingException(
+                "this printer cannot encode that " + what + ": " + cause.getMessage(), cause);
     }
 
     /**
@@ -214,34 +238,56 @@ public final class EscPosRenderer {
     }
 
     /**
-     * Maps a 0..8 error correction level onto the library's constants, which are declared in
-     * ascending order so the ordinal is the level itself.
+     * Maps a 0..8 error correction level onto the library's constant.
+     * <p>
+     * Written out case by case rather than indexed by ordinal. {@code values()[level]} reads the
+     * same today, but it makes how much damage a printed symbol survives depend on the order the
+     * library happens to declare its constants in, which a version bump can change without
+     * anything failing to compile.
+     * <p>
+     * The default is a backstop rather than a live path: {@link Directive.Pdf417} already refuses
+     * a level outside 0..8, so nothing can reach it today. It throws
+     * {@link IllegalArgumentException}, which the symbol's caller converts, rather than the
+     * {@code ArrayIndexOutOfBoundsException} an index would raise — that one is nobody's to catch
+     * and would escape onto the print path.
      */
     private static PDF417.PDF417ErrorLevel errorLevel(int level) {
-        return PDF417.PDF417ErrorLevel.values()[level];
+        return switch (level) {
+            case 0 -> PDF417.PDF417ErrorLevel._0;
+            case 1 -> PDF417.PDF417ErrorLevel._1_Default;
+            case 2 -> PDF417.PDF417ErrorLevel._2;
+            case 3 -> PDF417.PDF417ErrorLevel._3;
+            case 4 -> PDF417.PDF417ErrorLevel._4;
+            case 5 -> PDF417.PDF417ErrorLevel._5;
+            case 6 -> PDF417.PDF417ErrorLevel._6;
+            case 7 -> PDF417.PDF417ErrorLevel._7;
+            case 8 -> PDF417.PDF417ErrorLevel._8;
+            default -> throw new IllegalArgumentException(
+                    "PDF417 error level must be 0..8, got " + level);
+        };
     }
 
     /**
-     * The data a barcode command carries, which is not always the content verbatim.
+     * The data a Code 128 command carries, which is never the content verbatim.
      * <p>
-     * Code 128 encodes its data in one of three code sets, and the ESC/POS command has no field
-     * for which: the selector is the first two characters of the data. Content that already
-     * names a set is passed through, because the caller chose it deliberately; anything else is
-     * prefixed with code set B, the full printable ASCII range and so the one that can carry
-     * whatever a caller wrote as plain text.
+     * Code 128 chooses among three code sets and the ESC/POS command has no field for which, so
+     * the selector lives in the data: {@code &#123;A}, {@code &#123;B} and {@code &#123;C} switch
+     * code set, {@code &#123;1} through {@code &#123;4} are the FNC characters, and a literal
+     * brace is written twice. What arrives from the server is plain data that knows nothing of
+     * that convention, so every brace in it is doubled and code set B — the full printable ASCII
+     * range — is named in front.
+     * <p>
+     * There is deliberately no path that passes content through unescaped. Letting a caller name
+     * its own code set makes {@code &#123;Barcode} ambiguous between literal text and a code set
+     * switch, and the server's preview, which encodes the same string as plain data, would then
+     * disagree with the paper. A barcode that scans as the wrong thing is worse than one that
+     * fails to print.
      */
     private static String barcodeData(Directive.Barcode barcode) {
-        if (barcode.system() != BarcodeSystem.CODE128 || namesACode128Set(barcode.content())) {
+        if (barcode.system() != BarcodeSystem.CODE128) {
             return barcode.content();
         }
-        return CODE128_SET_B + barcode.content();
-    }
-
-    private static boolean namesACode128Set(String content) {
-        return content.length() >= 2
-                && content.charAt(0) == '{'
-                && content.charAt(1) >= 'A'
-                && content.charAt(1) <= 'C';
+        return CODE128_SET_B + barcode.content().replace("{", "{{");
     }
 
     /**

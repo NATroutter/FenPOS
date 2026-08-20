@@ -253,13 +253,13 @@ public final class FrameCodec {
             // server applies the same bounds; repeating them is what makes this a boundary
             // rather than a place that trusts the server got it right.
             case "QR" -> new WireDirective.Qr(
-                    requireContent(directive),
+                    requireAsciiContent(directive),
                     requireBoundedInt(directive, "size", 1, 16));
             case "BARCODE" -> new WireDirective.Barcode(
                     requireEnum(directive, "system", BarcodeSystem.class),
                     requireContent(directive));
             case "PDF417" -> new WireDirective.Pdf417(
-                    requireContent(directive),
+                    requireAsciiContent(directive),
                     requireBoundedInt(directive, "errorLevel", 0, 8));
             case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
             default -> throw new ProtocolException("unknown directive type '" + type + "'");
@@ -277,6 +277,31 @@ public final class FrameCodec {
         String content = requireString(directive, "content");
         if (content.isEmpty()) {
             throw new ProtocolException("field 'content' must not be empty");
+        }
+        return content;
+    }
+
+    /**
+     * Reads a two-dimensional symbol's payload, refusing anything outside ASCII.
+     *
+     * <p>Not a preference: escpos-coffee assembles the {@code GS ( k} store-data command with a
+     * length taken from {@code String.length()} — a count of characters — while writing the
+     * string's UTF-8 bytes. One character above U+007F makes the two disagree, and the printer
+     * reads a truncated payload as a valid symbol. It scans, and it scans as the wrong thing.
+     *
+     * <p>Refused here because this is the last point at which the job can still be reported as
+     * failed. The server refuses the same content at compile time, where the caller gets a line
+     * and column; this is the backstop for a server that did not. The linear symbologies need no
+     * equivalent — the library's own alphabets are ASCII-only, so they refuse it themselves.
+     */
+    private static String requireAsciiContent(JsonObject directive) throws ProtocolException {
+        String content = requireContent(directive);
+        for (int index = 0; index < content.length(); index++) {
+            if (content.charAt(index) > 0x7F) {
+                throw new ProtocolException("field 'content' must be ASCII; '"
+                        + content.charAt(index) + "' at index " + index
+                        + " cannot be encoded into a symbol this agent can size correctly");
+            }
         }
         return content;
     }
