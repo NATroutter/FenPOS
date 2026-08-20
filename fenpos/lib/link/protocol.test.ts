@@ -239,15 +239,77 @@ describe("block directives on the wire", () => {
 		expect(directiveSchema.parse({ type: "QR", content: "https://x.test", size: 6 })).toMatchObject({ type: "QR" });
 	});
 
-	it("accepts a drawer pulse", () => {
+	it("accepts a QR size at the low edge", () => {
+		expect(directiveSchema.parse({ type: "QR", content: "x", size: 1 })).toMatchObject({ size: 1 });
+	});
+
+	it("accepts a QR size at the high edge", () => {
+		expect(directiveSchema.parse({ type: "QR", content: "x", size: 16 })).toMatchObject({ size: 16 });
+	});
+
+	it("refuses a QR size below the low edge", () => {
+		expect(() => directiveSchema.parse({ type: "QR", content: "x", size: 0 })).toThrow();
+	});
+
+	it("refuses a QR size above the high edge", () => {
+		expect(() => directiveSchema.parse({ type: "QR", content: "x", size: 17 })).toThrow();
+	});
+
+	it("refuses a QR directive with empty content", () => {
+		expect(() => directiveSchema.parse({ type: "QR", content: "", size: 6 })).toThrow();
+	});
+
+	it("accepts a barcode with a known symbology", () => {
+		expect(directiveSchema.parse({ type: "BARCODE", system: "CODE128", content: "12345" })).toMatchObject({
+			system: "CODE128",
+		});
+	});
+
+	it("refuses an unknown symbology", () => {
+		expect(() => directiveSchema.parse({ type: "BARCODE", system: "NOPE", content: "1" })).toThrow();
+	});
+
+	it("refuses a barcode directive with empty content", () => {
+		expect(() => directiveSchema.parse({ type: "BARCODE", system: "CODE128", content: "" })).toThrow();
+	});
+
+	it("accepts a PDF417 directive", () => {
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 4 })).toMatchObject({
+			type: "PDF417",
+			content: "x",
+			errorLevel: 4,
+		});
+	});
+
+	it("accepts a PDF417 error level at the low edge", () => {
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 0 })).toMatchObject({ errorLevel: 0 });
+	});
+
+	it("accepts a PDF417 error level at the high edge", () => {
+		expect(directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 8 })).toMatchObject({ errorLevel: 8 });
+	});
+
+	it("refuses a PDF417 error level below the low edge", () => {
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: -1 })).toThrow();
+	});
+
+	it("refuses a PDF417 error level above the high edge", () => {
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "x", errorLevel: 9 })).toThrow();
+	});
+
+	it("refuses a PDF417 directive with empty content", () => {
+		expect(() => directiveSchema.parse({ type: "PDF417", content: "", errorLevel: 4 })).toThrow();
+	});
+
+	it("accepts a drawer pulse on pin 2", () => {
+		expect(directiveSchema.parse({ type: "DRAWER", pin: 2 })).toMatchObject({ pin: 2 });
+	});
+
+	it("accepts a drawer pulse on pin 5", () => {
 		expect(directiveSchema.parse({ type: "DRAWER", pin: 5 })).toMatchObject({ pin: 5 });
 	});
 
 	it("refuses a drawer pin the hardware does not have", () => {
 		expect(() => directiveSchema.parse({ type: "DRAWER", pin: 3 })).toThrow();
-	});
-
-	it("refuses an unknown symbology", () => {
-		expect(() => directiveSchema.parse({ type: "BARCODE", system: "NOPE", content: "1" })).toThrow();
 	});
 });
