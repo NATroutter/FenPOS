@@ -2,7 +2,7 @@
 
 import CodeMirror from "@uiw/react-codemirror";
 import { BookOpen, ChevronDown, CircleAlert, CircleCheck, Code, Eraser, Printer, ReceiptText } from "lucide-react";
-import { Fragment, useEffect, useState, useTransition } from "react";
+import { Fragment, type ReactNode, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
 	type PreviewError,
@@ -15,6 +15,7 @@ import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
 import { useSessionState } from "@/components/panel/session-state";
+import { SymbolPreview } from "@/components/panel/symbol-preview";
 import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
 import {
@@ -29,6 +30,19 @@ import { Linefeed } from "@/lib/domain/enums";
 
 /** How long the editor sits still before a preview is compiled. */
 const DEBOUNCE_MS = 300;
+
+/**
+ * The paper's type size and line spacing, as numbers rather than as classes.
+ *
+ * A symbol is drawn as tall as the lines it was charged, which means the preview has to know its
+ * own line height in pixels. Written here and applied as a style so that the height the text rows
+ * are set at and the height the symbols are measured against are the same figure — a Tailwind class
+ * beside a constant would be two figures, and a symbol would drift a fraction of a line off the
+ * text the day either changed.
+ */
+const PAPER_FONT_SIZE_PX = 12;
+const PAPER_LINE_HEIGHT = 1.45;
+const PAPER_LINE_HEIGHT_PX = PAPER_FONT_SIZE_PX * PAPER_LINE_HEIGHT;
 
 /**
  * The picker's value for "whatever this printer is set to".
@@ -165,6 +179,25 @@ const EXAMPLES: Example[] = [
 				"<wrap>Wrapped at the last space that fits, which is what an operator asking to wrap wants.</wrap>",
 				"<hr>",
 				"<nowrap>Not wrapped by the server, so the printer runs out of paper and cuts mid-word.</nowrap>",
+				"<feed=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Receipt with a QR code",
+		note: "A symbol drawn at the height it prints",
+		build: (device) =>
+			[
+				"<align=center><bold>THE CORNER CAFE</bold></align>",
+				"<hr>",
+				"Coffee           2.50",
+				"Pastry           3.00",
+				"<hr>",
+				"<bold>Total            5.50</bold>",
+				"<feed=1>",
+				"<align=center>Scan for the full receipt</align>",
+				"<align=center><qr>https://cafe.example/o/1042</qr></align>",
+				`<align=center>Printed on ${device.deviceName}</align>`,
 				"<feed=3>",
 				"<cut>",
 			].join("\n"),
@@ -474,8 +507,10 @@ function LinefeedPicker({ value, onChange }: { value: string; onChange: (next: s
  * reason a preview exists. A `ch` is the advance width of a digit in the element's own font, and
  * the font is monospace, so `columns` of them is the sheet.
  *
- * Directive-only lines are drawn as a marker rather than as blank paper, so a cut is visible
- * where it will happen.
+ * Directives that print nothing are drawn as a marker rather than as blank paper, so a cut is
+ * visible where it will happen. A symbol is drawn as the symbol it is, occupying the lines the
+ * compiler charged for it: a QR code that pushes a receipt past its line limit takes up as much of
+ * the sheet here as it will there.
  */
 function Paper({ result }: { result: PreviewResult | null }) {
 	if (!result?.lines) {
@@ -496,24 +531,27 @@ function Paper({ result }: { result: PreviewResult | null }) {
 				className="mx-auto w-fit rounded-sm bg-white px-3 py-3 shadow-sm ring-1 ring-black/10"
 				style={{ minWidth: "fit-content" }}
 			>
-				<div className="font-mono text-[12px] leading-[1.45] text-black" style={{ width: `${result.columns}ch` }}>
+				<div
+					className="font-mono text-black"
+					style={{
+						width: `${result.columns}ch`,
+						fontSize: `${PAPER_FONT_SIZE_PX}px`,
+						lineHeight: PAPER_LINE_HEIGHT,
+					}}
+				>
 					{result.lines.length === 0 ? (
 						<span className="text-neutral-400">(nothing to print)</span>
 					) : (
 						result.lines.flatMap((line, index) => {
-							if (line.marker) {
-								return (
-									<div key={lineKey(index, line)} className="whitespace-pre" style={{ textAlign: align(line.align) }}>
-										<span className="text-neutral-400">{`── ${line.marker} ──`}</span>
-									</div>
-								);
-							}
+							const rows: ReactNode[] = [];
 
-							if (line.spans.length === 0) {
-								return (
-									<div key={lineKey(index, line)} className="whitespace-pre">
-										{" "}
-									</div>
+							// Symbols first, because a symbol takes its element alone: nothing else on this
+							// line can print beside one, and only a drawer pulse can accompany it at all.
+							for (const [blockIndex, block] of line.blocks.entries()) {
+								rows.push(
+									<div key={`${lineKey(index, line)}:block:${blockIndex}`} style={{ textAlign: align(line.align) }}>
+										<SymbolPreview {...block} lineHeightPx={PAPER_LINE_HEIGHT_PX} />
+									</div>,
 								);
 							}
 
@@ -522,35 +560,66 @@ function Paper({ result }: { result: PreviewResult | null }) {
 							// runs out of paper and continues on the next line — cutting mid-word at the
 							// column count, not at a space. Drawing that is the only way the preview matches
 							// what comes out.
-							return toPaperRows(line, result.columns).map((row, rowIndex) => (
-								<div
-									key={`${lineKey(index, line)}:${rowIndex}`}
-									className="whitespace-pre"
-									style={{ textAlign: align(line.align) }}
-								>
-									{row.map((span, spanIndex) => (
-										<span
-											key={`${index}:${rowIndex}:${spanIndex}:${span.text}`}
-											style={{
-												fontWeight: span.bold ? 700 : 400,
-												textDecoration: span.underline > 0 ? "underline" : undefined,
-												// A double-width character occupies two columns on paper, so it must occupy
-												// two here. In `ch` that is exact; the old `0.6em` was a guess that drifted
-												// further from the truth the longer the span.
-												letterSpacing: span.widthMult > 1 ? `${span.widthMult - 1}ch` : undefined,
-												// Letter spacing is added after the last character too, which would push
-												// everything after it — and shift a centred line — by a column it does not
-												// occupy on paper.
-												marginInlineEnd: span.widthMult > 1 ? `${-(span.widthMult - 1)}ch` : undefined,
-												backgroundColor: span.invert ? "black" : undefined,
-												color: span.invert ? "white" : undefined,
-											}}
+							if (line.spans.some((span) => span.text.length > 0)) {
+								rows.push(
+									...toPaperRows(line, result.columns).map((row, rowIndex) => (
+										<div
+											key={`${lineKey(index, line)}:${rowIndex}`}
+											className="whitespace-pre"
+											style={{ textAlign: align(line.align) }}
 										>
-											{span.text}
-										</span>
-									))}
-								</div>
-							));
+											{row.map((span, spanIndex) => (
+												<span
+													key={`${index}:${rowIndex}:${spanIndex}:${span.text}`}
+													style={{
+														fontWeight: span.bold ? 700 : 400,
+														textDecoration: span.underline > 0 ? "underline" : undefined,
+														// A double-width character occupies two columns on paper, so it must occupy
+														// two here. In `ch` that is exact; the old `0.6em` was a guess that drifted
+														// further from the truth the longer the span.
+														letterSpacing: span.widthMult > 1 ? `${span.widthMult - 1}ch` : undefined,
+														// Letter spacing is added after the last character too, which would push
+														// everything after it — and shift a centred line — by a column it does not
+														// occupy on paper.
+														marginInlineEnd: span.widthMult > 1 ? `${-(span.widthMult - 1)}ch` : undefined,
+														backgroundColor: span.invert ? "black" : undefined,
+														color: span.invert ? "white" : undefined,
+													}}
+												>
+													{span.text}
+												</span>
+											))}
+										</div>
+									)),
+								);
+							}
+
+							// Under whatever printed, because a cut, a feed or a drawer pulse happens after
+							// the line it was written on. It marks paper the printer never inks, so it is
+							// drawn in grey and costs the receipt nothing.
+							if (line.marker) {
+								rows.push(
+									<div
+										key={`${lineKey(index, line)}:marker`}
+										className="whitespace-pre"
+										style={{ textAlign: align(line.align) }}
+									>
+										<span className="text-neutral-400">{`── ${line.marker} ──`}</span>
+									</div>,
+								);
+							}
+
+							// An element that produced nothing at all is still a line of blank paper, and an
+							// empty div would collapse to no height rather than showing it.
+							if (rows.length === 0) {
+								rows.push(
+									<div key={`${lineKey(index, line)}:blank`} className="whitespace-pre">
+										{" "}
+									</div>,
+								);
+							}
+
+							return rows;
 						})
 					)}
 				</div>
@@ -627,7 +696,11 @@ function toPaperRows(line: PreviewLine, columns: number): PreviewLine["spans"][]
  * and printed lines carry no identity of their own, so the key is position plus what is on it.
  */
 function lineKey(index: number, line: PreviewLine): string {
-	const content = line.marker ?? line.spans.map((span) => span.text).join("");
+	const content = [
+		...line.blocks.map((block) => block.spec.content),
+		...line.spans.map((span) => span.text),
+		line.marker ?? "",
+	].join("");
 	return `${index}:${content}`;
 }
 

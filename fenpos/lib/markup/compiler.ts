@@ -179,8 +179,19 @@ export function compile(
  * Positional failures raised by the parser and the charset check are translated into
  * request-level errors carrying the element index, so a caller can point at the exact element as
  * well as the exact character.
+ *
+ * Exported for the paper preview, which needs a symbol's measured `heightLines` to draw it at the
+ * height it was charged. That figure is deliberately absent from the wire — see {@link toWireLine}
+ * — so the preview reads the lines at this stage instead. {@link compile} maps these lines to the
+ * wire one for one and in order, so the two can be read side by side.
+ *
+ * @param request the validated request
+ * @param settings the device's compile settings
+ * @returns one line per line of paper, before the rule is expanded and the symbols leave for the
+ *          agent
+ * @throws ApiError when an element is malformed
  */
-function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
+export function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
 	const lines: Line[] = [];
 
 	for (let index = 0; index < request.data.length; index++) {

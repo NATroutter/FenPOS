@@ -7,14 +7,17 @@ import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
+import type { SymbolSpec } from "@/lib/markup/blocks";
 import {
 	type CompileSettings,
 	collectElementErrors,
 	compile,
 	countOutputLines,
+	layOut,
 	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
+import type { Line as ModelLine } from "@/lib/markup/model";
 import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
@@ -25,11 +28,28 @@ import { globalLimits } from "@/lib/settings/settings-service";
  * value of a preview is that what it shows is what will print.
  */
 
+/**
+ * One symbol as the paper preview draws it.
+ *
+ * Carries the measurement rather than letting the browser take its own: `heightLines` is the figure
+ * the compiler already charged against the job's line budget, so a symbol occupies exactly the paper
+ * it was paid for and a receipt that will not fit still looks like one that will not fit. The
+ * geometry is computed here because measuring imports `bwip-js`'s Node build, which has no business
+ * in a browser bundle.
+ */
+export interface PreviewBlock {
+	spec: SymbolSpec;
+	/** Printed lines this symbol occupies, as charged against `maxOutputLines`. */
+	heightLines: number;
+}
+
 /** One line as the paper preview renders it. */
 export interface PreviewLine {
 	spans: { text: string; bold: boolean; underline: number; invert: boolean; widthMult: number }[];
 	align: "LEFT" | "CENTER" | "RIGHT";
-	/** A directive-only line, drawn as a marker rather than as blank paper. */
+	/** Symbols printed on this line, drawn at the height they were charged. */
+	blocks: PreviewBlock[];
+	/** Directives that print nothing, drawn as a marker rather than as blank paper. */
 	marker: string | null;
 }
 
@@ -129,15 +149,21 @@ export async function preview(
 
 		const job = compile("preview", device.name, request, limits, settings);
 
+		// The same lines the job was built from, before they lost what the wire has no field for: a
+		// symbol's measured height. Laying out again is the preview's cost alone, and the preview is
+		// debounced. The two arrays are the same lines in the same order, one entry each.
+		const laidOut = layOut(request, settings);
+
 		return {
 			columns: device.columns,
 			errors: [],
 			outputLines: countOutputLines(request, settings),
 			maxOutputLines: limits.maxOutputLines,
 			linefeed: request.linefeed,
-			lines: job.lines.map((line) => ({
+			lines: job.lines.map((line, index) => ({
 				align: line.align,
-				marker: describe(line.directives),
+				blocks: blocksOf(laidOut[index]),
+				marker: describe(laidOut[index]),
 				spans: line.spans.map((span) => ({
 					text: span.text,
 					bold: span.bold,
@@ -194,16 +220,71 @@ function asPreviewError(error: unknown): PreviewError {
 	};
 }
 
-/** Describes a line's directives for the preview, or null when it has none. */
-function describe(directives: { type: string; mode?: string; lines?: number }[]): string | null {
-	if (directives.length === 0) {
-		return null;
-	}
-	return directives
-		.map((directive) =>
-			directive.type === "CUT" ? `cut (${directive.mode?.toLowerCase()})` : `feed ${directive.lines}`,
-		)
-		.join(", ");
+/**
+ * Describes the directives on a line that print nothing, or null when it has none.
+ *
+ * A cut, a feed and a drawer pulse leave no ink, so there is nothing for the preview to draw and a
+ * marker is what says where they happen. A rule and the three symbols are absent on purpose: they
+ * do print, and the preview draws them as the paper they will become.
+ *
+ * @param line the laid-out line
+ * @returns the marker text, or null when the line has nothing to mark
+ */
+function describe(line: ModelLine): string | null {
+	const markers = line.directives.flatMap((directive) => {
+		switch (directive.kind) {
+			case "CUT":
+				return [`cut (${directive.mode.toLowerCase()})`];
+			case "FEED":
+				return [`feed ${directive.lines}`];
+			case "DRAWER":
+				return [`drawer (pin ${directive.pin})`];
+			default:
+				return [];
+		}
+	});
+
+	return markers.length === 0 ? null : markers.join(", ");
+}
+
+/**
+ * Collects the symbols printed on a line, each with the height it was charged.
+ *
+ * The height is read off the directive rather than measured again. Measuring it a second time
+ * would produce the same number today and would be a second place for it to come from tomorrow,
+ * which is exactly the drift the shared measurement exists to prevent.
+ *
+ * @param line the laid-out line
+ * @returns its symbols, in the order they appear
+ */
+function blocksOf(line: ModelLine): PreviewBlock[] {
+	return line.directives.flatMap((directive): PreviewBlock[] => {
+		switch (directive.kind) {
+			case "QR":
+				return [
+					{
+						spec: { kind: "QR", content: directive.content, size: directive.size },
+						heightLines: directive.heightLines,
+					},
+				];
+			case "BARCODE":
+				return [
+					{
+						spec: { kind: "BARCODE", content: directive.content, system: directive.system },
+						heightLines: directive.heightLines,
+					},
+				];
+			case "PDF417":
+				return [
+					{
+						spec: { kind: "PDF417", content: directive.content, errorLevel: directive.errorLevel },
+						heightLines: directive.heightLines,
+					},
+				];
+			default:
+				return [];
+		}
+	});
 }
 
 /** The outcome of sending something to a printer. */
