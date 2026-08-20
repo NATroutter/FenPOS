@@ -14,6 +14,7 @@ import {
 import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
+import { ImagePreview } from "@/components/panel/image-preview";
 import { useSessionState } from "@/components/panel/session-state";
 import { SymbolPreview } from "@/components/panel/symbol-preview";
 import { Button } from "@/components/ui/button";
@@ -545,19 +546,39 @@ function Paper({ result }: { result: PreviewResult | null }) {
 						result.lines.flatMap((line, index) => {
 							const rows: ReactNode[] = [];
 
-							// Symbols first, because a symbol takes its element alone: nothing else on this
+							// Blocks first, because a block takes its element alone: nothing else on this
 							// line can print beside one, and only a drawer pulse can accompany it at all.
 							for (const [blockIndex, block] of line.blocks.entries()) {
 								rows.push(
 									<div key={`${lineKey(index, line)}:block:${blockIndex}`} style={{ textAlign: align(line.align) }}>
-										<SymbolPreview {...block} lineHeightPx={PAPER_LINE_HEIGHT_PX} />
+										{/* Both arrive finished — an SVG for a symbol, the printer's own dots as a
+										    PNG for an image — and differ only in how they are placed on the paper. */}
+										{block.kind === "SYMBOL" ? (
+											<SymbolPreview
+												spec={block.spec}
+												svg={block.svg}
+												heightLines={block.heightLines}
+												widthFraction={block.widthFraction}
+												lineHeightPx={PAPER_LINE_HEIGHT_PX}
+											/>
+										) : (
+											<ImagePreview
+												reference={block.ref}
+												png={block.png}
+												heightLines={block.heightLines}
+												inkedLines={block.inkedLines}
+												widthFraction={block.widthFraction}
+												lineHeightPx={PAPER_LINE_HEIGHT_PX}
+											/>
+										)}
 									</div>,
 								);
 
 								// A symbol too wide for the paper is drawn clamped to the sheet, so without
 								// this it would look like it fits. Said in words rather than drawn, because
 								// the one thing a preview may not do is make an unprintable receipt look
-								// printable.
+								// printable. Only a symbol reaches this: an image's width is a percentage of
+								// the paper, and the tag stops at a hundred.
 								if (block.widthFraction > 1) {
 									rows.push(
 										<Marker
@@ -718,7 +739,7 @@ function toPaperRows(line: PreviewLine, columns: number): PreviewLine["spans"][]
  */
 function lineKey(index: number, line: PreviewLine): string {
 	const content = [
-		...line.blocks.map((block) => block.spec.content),
+		...line.blocks.map((block) => (block.kind === "SYMBOL" ? block.spec.content : block.ref)),
 		...line.spans.map((span) => span.text),
 		line.marker ?? "",
 	].join("");

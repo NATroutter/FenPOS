@@ -1,5 +1,7 @@
 "use server";
 
+import { rasterFor } from "@/lib/assets/asset-service";
+import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
@@ -7,7 +9,7 @@ import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
-import { dotWidth, type SymbolSpec, symbolSvg } from "@/lib/markup/blocks";
+import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/markup/blocks";
 import {
 	type CompileSettings,
 	collectElementErrors,
@@ -18,6 +20,7 @@ import {
 	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
+import { imageGeometry } from "@/lib/markup/images";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { globalLimits } from "@/lib/settings/settings-service";
@@ -31,29 +34,73 @@ import { globalLimits } from "@/lib/settings/settings-service";
  */
 
 /**
- * One symbol as the paper preview draws it.
+ * What every block on the paper carries, whichever kind it is.
  *
- * Arrives already drawn and already measured, rather than as something for the browser to work out.
- * Both come from `lib/markup/blocks.ts`, which is also what the compiler charged the line budget
- * against, so the symbol on screen is the symbol that was paid for — at the height it was paid for,
- * and at its true share of the paper's width. Encoding on this side also keeps `bwip-js`, which
- * statically carries every symbology it supports, out of the panel's bundle.
+ * Both figures are measured server-side by the module that charged the line budget for them, so a
+ * block on screen is the block that was paid for — at the height it was paid for, and at its true
+ * share of the paper's width. The browser is given no measurements to make.
  */
-export interface PreviewBlock {
-	spec: SymbolSpec;
-	/** The symbol itself, as an SVG document. */
-	svg: string;
-	/** Printed lines this symbol occupies, as charged against `maxOutputLines`. */
+interface DrawnBlock {
+	/** Printed lines this block occupies, as charged against `maxOutputLines`. */
 	heightLines: number;
 	/** Its printed width as a share of the paper's own, where 1 is the full sheet. */
 	widthFraction: number;
 }
 
+/**
+ * One symbol as the paper preview draws it.
+ *
+ * Arrives already drawn as well as already measured. Both come from `lib/markup/blocks.ts`, which
+ * is also what the compiler charged the line budget against. Encoding on this side keeps `bwip-js`,
+ * which statically carries every symbology it supports, out of the panel's bundle.
+ */
+export interface PreviewSymbol extends DrawnBlock {
+	kind: "SYMBOL";
+	spec: SymbolSpec;
+	/** The symbol itself, as an SVG document. */
+	svg: string;
+}
+
+/**
+ * One `<image>` as the paper preview draws it.
+ *
+ * **The dots, not the picture.** What travels is the finished 1-bit raster — the same one the agent
+ * is sent for a stored image at the paper's own width, and the same one the job carries for anything
+ * else — rendered as a PNG by `lib/assets/preview.ts`. A preview built from the stored file would
+ * show an operator a smooth photograph that no thermal head can produce, which is the one thing a
+ * preview may not do; and dithering in the browser would be a second answer to a question that
+ * already has one, drifting from the printer's the first time either side changed.
+ *
+ * The PNG is inlined into the action's result and paid for on every compile. `lib/assets/preview.ts`
+ * measured the fixture logo at 384 dots as 9,690 bytes, so of the order of thirteen kilobytes of
+ * base64 for a real logo. What keeps that bounded is the debounce the preview already had for the
+ * round trip: it is paid per compile, not per keystroke.
+ */
+export interface PreviewImage extends DrawnBlock {
+	kind: "IMAGE";
+	/** The reference as it was written between the tags: a stored image's name, or a URL. */
+	ref: string;
+	/** The dithered raster, as a `data:image/png;base64,…` URI. */
+	png: string;
+	/**
+	 * Lines of paper the dots really cover, before the budget rounded them up to a whole one.
+	 *
+	 * Separate from {@link DrawnBlock.heightLines} because for an image the two routinely differ and
+	 * the difference is visible: a logo 60 dots tall inks two and a half lines and is charged three,
+	 * so drawing it at the charged height would stretch it by a fifth. The block occupies what it
+	 * was charged; the picture inside it covers only what it inks.
+	 */
+	inkedLines: number;
+}
+
+/** One block printed on a line: a symbol, or an image. */
+export type PreviewBlock = PreviewSymbol | PreviewImage;
+
 /** One line as the paper preview renders it. */
 export interface PreviewLine {
 	spans: { text: string; bold: boolean; underline: number; invert: boolean; widthMult: number }[];
 	align: "LEFT" | "CENTER" | "RIGHT";
-	/** Symbols printed on this line, drawn at the height they were charged. */
+	/** Symbols and images printed on this line, drawn at the height they were charged. */
 	blocks: PreviewBlock[];
 	/** Directives that print nothing, drawn as a marker rather than as blank paper. */
 	marker: string | null;
@@ -172,15 +219,15 @@ export async function preview(
 		// debounced. The two arrays are the same lines in the same order, one entry each.
 		const laidOut = layOut(request, settings);
 
-		return {
-			columns: device.columns,
-			errors: [],
-			outputLines: countOutputLines(request, settings),
-			maxOutputLines: limits.maxOutputLines,
-			linefeed: request.linefeed,
-			lines: job.lines.map((line, index) => ({
+		// One line at a time rather than `Promise.all`. Drawing an image can mean decoding and
+		// dithering it, and `MAX_IMAGE_DIMENSION` bounds *one* decode — a receipt naming several
+		// would otherwise hold that many bitmaps at once and the bound would mean nothing. The same
+		// reasoning the Assets tab renders its cards in sequence for, and the preview is debounced.
+		const lines: PreviewLine[] = [];
+		for (const [index, line] of job.lines.entries()) {
+			lines.push({
 				align: line.align,
-				blocks: blocksOf(laidOut[index], dotWidth(device.columns)),
+				blocks: await blocksOf(laidOut[index], settings),
 				marker: describe(laidOut[index]),
 				spans: line.spans.map((span) => ({
 					text: span.text,
@@ -189,7 +236,16 @@ export async function preview(
 					invert: span.invert,
 					widthMult: span.widthMult,
 				})),
-			})),
+			});
+		}
+
+		return {
+			columns: device.columns,
+			errors: [],
+			outputLines: countOutputLines(request, settings),
+			maxOutputLines: limits.maxOutputLines,
+			linefeed: request.linefeed,
+			lines,
 		};
 	} catch (error) {
 		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
@@ -242,8 +298,10 @@ function asPreviewError(error: unknown): PreviewError {
  * Describes the directives on a line that print nothing, or null when it has none.
  *
  * A cut, a feed and a drawer pulse leave no ink, so there is nothing for the preview to draw and a
- * marker is what says where they happen. A rule and the three symbols are absent on purpose: they
- * do print, and the preview draws them as the paper they will become.
+ * marker is what says where they happen. A rule, the three symbols and an image are absent on
+ * purpose: they do print, and the preview draws them as the paper they will become. An image was
+ * the odd one out until it could be drawn — a marker in its place would now be a second description
+ * of a line the preview already shows in full.
  *
  * @param line the laid-out line
  * @returns the marker text, or null when the line has nothing to mark
@@ -266,33 +324,87 @@ function describe(line: ModelLine): string | null {
 }
 
 /**
- * Collects the symbols printed on a line, each drawn and sized as it will print.
+ * Collects the blocks printed on a line, each drawn and sized as it will print.
  *
- * The size is read off the directive rather than measured again. Measuring it a second time would
- * produce the same numbers today and would be a second place for them to come from tomorrow, which
- * is exactly the drift the shared measurement exists to prevent.
+ * A symbol's size is read off the directive rather than measured again, and an image's comes from
+ * `imageGeometry`, the function the compiler charged the budget with. Measuring either a second
+ * time would produce the same numbers today and would be a second place for them to come from
+ * tomorrow, which is exactly the drift the shared measurement exists to prevent.
+ *
+ * In order, though nothing can currently exercise it: a block takes its element alone, so a line
+ * holds at most one of these beside a drawer pulse.
  *
  * @param line the laid-out line
- * @param paperDots the paper's printable width in dots
- * @returns its symbols, in the order they appear
+ * @param settings the compile settings, carrying the paper width and what the pre-pass resolved
+ * @returns its blocks, in the order they appear
  * @throws SymbolEncodeError if the encoder refuses content it has already measured, which would
  *         mean this module and the parser disagree about what a symbol is
+ * @throws Error if an image reference was never resolved, which would mean the same of the pre-pass
  */
-function blocksOf(line: ModelLine, paperDots: number): PreviewBlock[] {
-	return line.directives.flatMap((directive): PreviewBlock[] => {
+async function blocksOf(line: ModelLine, settings: CompileSettings): Promise<PreviewBlock[]> {
+	const paperDots = dotWidth(settings.columns);
+	const blocks: PreviewBlock[] = [];
+
+	for (const directive of line.directives) {
 		const measured = measuredSymbol(directive);
-		if (measured === null) {
-			return [];
-		}
-		return [
-			{
+		if (measured !== null) {
+			blocks.push({
+				kind: "SYMBOL",
 				spec: measured.spec,
 				svg: symbolSvg(measured.spec),
 				heightLines: measured.heightLines,
 				widthFraction: measured.widthDots / paperDots,
-			},
-		];
-	});
+			});
+		} else if (directive.kind === "IMAGE") {
+			blocks.push(await drawnImage(directive.ref, directive.widthPercent, settings));
+		}
+	}
+
+	return blocks;
+}
+
+/**
+ * Draws one image as the dots it will print, at the size the compiler charged for them.
+ *
+ * **Every raster here is one the print path produced or would produce.** A URL, and a stored image
+ * at any width other than the paper's own, were dithered by the pre-pass and are already in
+ * `settings.images` — the very rasters that will ride inside the job, so the preview cannot show
+ * different dots from the ones that are sent. Everything left is a stored image at the paper's own
+ * width, whose dots do not travel with the job because they went to the agent with its device
+ * configuration; `rasterFor` is what produced those, and it is memoised by asset revision and width,
+ * so asking it again here is a map lookup on any agent that has connected since.
+ *
+ * The width is taken from the dot geometry rather than from the preview's own scales. The sheet
+ * measures across in columns and down in lines, and the two do not agree on what a dot is, so a
+ * share of the paper's *width* is the only figure that answers "does this fit across my 32 columns".
+ *
+ * @param ref the reference as written between the tags
+ * @param widthPercent the tag's argument: the share of the paper's width to print at
+ * @param settings the compile settings, carrying the paper width and what the pre-pass resolved
+ * @returns the image as the preview draws it
+ * @throws Error if the reference was never resolved, which the compile above would already have
+ *         failed on: `resolveImages` must run first
+ */
+async function drawnImage(ref: string, widthPercent: number, settings: CompileSettings): Promise<PreviewImage> {
+	const source = settings.images.get(ref);
+	if (!source) {
+		throw new Error(`The image '${ref}' was not resolved before previewing; resolveImages must run first`);
+	}
+
+	const { widthDots, heightLines } = imageGeometry(source, widthPercent, settings.columns);
+	const raster = source.inline?.get(widthDots) ?? (await rasterFor(ref, widthDots));
+
+	return {
+		kind: "IMAGE",
+		ref,
+		png: await rasterToPngDataUrl(raster),
+		heightLines,
+		// The raster's own height rather than the geometry's, though `images.test.ts` pins them to
+		// each other against jimp's resize: if they ever came apart, drawing the dots that exist is
+		// what would make it visible instead of quietly squashing them into what was charged.
+		inkedLines: raster.heightDots / LINE_HEIGHT_DOTS,
+		widthFraction: raster.widthDots / dotWidth(settings.columns),
+	};
 }
 
 /**

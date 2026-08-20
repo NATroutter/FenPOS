@@ -3,10 +3,13 @@ import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection, type Verb } from "@/app/(panel)/docs/doc-section";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION } from "@/lib/assets/asset-service";
+import { MAX_REMOTE_IMAGE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { BarcodeSystem } from "@/lib/domain/enums";
 import { PERMISSIONS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
+import { MAX_REMOTE_IMAGES } from "@/lib/markup/resolve-images";
 import { getPublicAddress } from "@/lib/public-url";
 
 export const metadata = { title: "Docs" };
@@ -28,7 +31,7 @@ const SECTIONS = [
 		path: "/api/print/{agent}/{device}",
 	},
 	{ id: "markup", title: "Markup", note: "What a data element may contain" },
-	{ id: "blocks", title: "Blocks", note: "Symbols and the drawer, and the paper they cost" },
+	{ id: "blocks", title: "Blocks", note: "Symbols, images and the drawer, and the paper they cost" },
 	{ id: "authentication", title: "Authentication", note: "Bearer keys, permissions and device grants" },
 	{
 		id: "following",
@@ -70,6 +73,11 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		syntax: "<pdf417>…</pdf417>",
 		meaning:
 			"A PDF417 symbol. <pdf417=4> sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its element.",
+	},
+	{
+		syntax: "<image>name</image>",
+		meaning:
+			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. Must be alone in its element.",
 	},
 	{
 		syntax: "<drawer>",
@@ -247,6 +255,43 @@ export default async function DocsPage() {
 								</P>
 
 								<P>
+									<Mono>&lt;image&gt;</Mono> is the fourth block, and it names its picture rather than carrying it:
+									between the tags goes either the name of an image stored on the Assets tab or an <Mono>http(s)</Mono>{" "}
+									URL. Both rules above hold — no tag inside it, nothing else on the element.{" "}
+									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width; the argument is a
+									percentage, 1–100, defaulting to 100, rather than a number of dots, because one install can have both
+									80mm and 58mm printers behind a single agent and a dot count that fits one overruns the other.
+								</P>
+
+								<P>
+									A stored image is the default and a URL is the escape hatch. Stored images are dithered here, once per
+									paper width, and reach the agent with its device configuration — so a receipt printing one at the
+									paper's full width carries only its name, however many times it repeats. Any other width has to be
+									dithered for that width and carried inside the job, exactly as a URL's dots always are, and a receipt
+									whose images come to more than one job can hold is refused with <Status>400</Status>{" "}
+									<Mono>image_too_large</Mono>.
+								</P>
+
+								<P>
+									A URL is fetched while the job compiles, which is the cost of naming a live image: an unreachable host
+									fails the print with <Status>400</Status> <Mono>invalid_tag_argument</Mono> instead of printing a
+									receipt with a hole in it, and a slow one holds the request up. The fetch is guarded — http or https
+									only, {seconds(REMOTE_FETCH_TIMEOUT_MS)} for the whole of it including redirects,{" "}
+									{megabytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so a
+									receipt cannot use this server to read something inside your network. One request may name at most{" "}
+									{MAX_REMOTE_IMAGES} distinct URLs, or <Status>400</Status> <Mono>too_many_remote_images</Mono>; stored
+									images are not counted against that.
+								</P>
+
+								<P>
+									Images are added on the Assets tab, by upload or by importing a URL once, and markup refers to one by
+									its slug: the request beside names an image called <Mono>logo</Mono>, and a name that is not stored on
+									this install is <Status>404</Status> <Mono>unknown_asset</Mono>. Whichever door a picture comes
+									through, it must be a PNG or a JPEG of at most {megabytes(MAX_ASSET_BYTES)} and {MAX_IMAGE_DIMENSION}{" "}
+									pixels on each side, and a PNG must not be interlaced.
+								</P>
+
+								<P>
 									<Mono>&lt;drawer&gt;</Mono> is the exception. It pulses a solenoid rather than laying down dots, so it
 									costs the paper nothing and may sit beside text — the line that prints the total can open the till.
 								</P>
@@ -277,12 +322,14 @@ export default async function DocsPage() {
 
 								<Aside>
 									<Mono>maxOutputLines</Mono> counts paper, not elements. A symbol costs the height it really prints —
-									seven lines for a default-size QR code of a short URL, five for any linear barcode — so a receipt of
-									symbols spends the limit far faster than a receipt of text, and can come back <Status>400</Status>{" "}
-									<Mono>too_many_output_lines</Mono>. A <Mono>&lt;hr&gt;</Mono> costs the one line it prints;{" "}
-									<Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and <Mono>&lt;drawer&gt;</Mono> cost nothing,
-									since none of them lays dots on the paper as text. The Tools tab shows what a job would spend against
-									the limit before it is sent.
+									seven lines for a default-size QR code of a short URL, five for any linear barcode — and an image
+									costs the lines its dots cover, rounded up to a whole one, which at the paper's full width is the
+									picture's own proportions applied to the paper: a square logo on 32-column paper is 384 dots each way,
+									or sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of text, and can
+									come back <Status>400</Status> <Mono>too_many_output_lines</Mono>. A <Mono>&lt;hr&gt;</Mono> costs the
+									one line it prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and{" "}
+									<Mono>&lt;drawer&gt;</Mono> cost nothing, since none of them lays dots on the paper as text. The Tools
+									tab shows what a job would spend against the limit before it is sent.
 								</Aside>
 							</Col>
 
@@ -315,6 +362,7 @@ export default async function DocsPage() {
   -H "Content-Type: application/json" \\
   -d '{
     "data": [
+      "<align=center><image>logo</image></align>",
       "<align=center><qr>https://corner.cafe/r/8f21</qr></align>",
       "<align=center><barcode=EAN13>5901234123457</barcode></align>",
       "<bold>Total            5.50</bold><drawer>",
@@ -458,6 +506,31 @@ export default async function DocsPage() {
 			</div>
 		</div>
 	);
+}
+
+/**
+ * States a byte limit the way the refusal that enforces it states it.
+ *
+ * Read from the constant rather than written out, for the same reason the error table is read from
+ * `API_ERROR_STATUS`: a documented limit that has to be remembered when the real one changes is a
+ * limit this page will eventually be wrong about. Floored to match `requireWithinByteCap`, which is
+ * what an operator is actually told when a file is refused.
+ *
+ * @param bytes the limit
+ * @returns it in whole megabytes
+ */
+function megabytes(bytes: number): string {
+	return `${Math.floor(bytes / 1024 / 1024)} MB`;
+}
+
+/**
+ * States a millisecond budget in the units a person waiting for it would use.
+ *
+ * @param ms the budget
+ * @returns it in seconds
+ */
+function seconds(ms: number): string {
+	return `${ms / 1000} seconds`;
 }
 
 /**
