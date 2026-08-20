@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { BarcodeSystem } from "@/lib/domain/enums";
 import { PERMISSIONS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
+import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { MAX_REMOTE_IMAGES } from "@/lib/markup/resolve-images";
 import { getPublicAddress } from "@/lib/public-url";
 
@@ -270,6 +271,14 @@ export default async function DocsPage() {
 									dithered for that width and carried inside the job, exactly as a URL's dots always are, and a receipt
 									whose images come to more than one job can hold is refused with <Status>400</Status>{" "}
 									<Mono>image_too_large</Mono>.
+								</P>
+
+								<P>
+									What an agent holds is bounded: at most {IMAGE_LIMITS.maxSyncedRasters} rasters, one per stored image
+									per distinct paper width behind that agent, taken in name order. Past that an image is not on the
+									agent at all, so printing it at the paper's full width — the one case whose dots do not travel with
+									the job — fails at the printer rather than in the response. At any other width it still prints,
+									because those dots are carried.
 								</P>
 
 								<P>
