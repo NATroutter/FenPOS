@@ -2,7 +2,6 @@ package fi.natroutter.fenpos.print;
 
 import com.google.gson.Gson;
 import fi.natroutter.fenpos.device.Device;
-import fi.natroutter.fenpos.markup.ImageResolver;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,14 +19,6 @@ import java.util.List;
  * of those settings would test the wrong thing — it would still pass if the two had diverged,
  * which is exactly the fault someone reaches for a test page to find.
  * <p>
- * <b>The logo is printed only if this agent holds it.</b> An {@code <image>} names a raster the
- * server dithered and synced; a fresh install, or one where the asset was never seeded, has no
- * such raster, and a tag naming it would be refused with {@code invalid_tag_argument}. A
- * diagnostic that fails for a reason having nothing to do with the printer is a worse diagnostic
- * than one that quietly prints one block fewer — so the tag is included only when the resolver
- * says the dots are already here. The check asks exactly what the parser will ask, so a page this
- * builds always compiles.
- * <p>
  * <b>There is no {@code <drawer>} here, and there is no way to add one.</b> The tag does not exist
  * in the markup this agent parses. A test page that popped the till every time someone checked a
  * printer's alignment would be an unpleasant surprise, and the surest way not to write one is for
@@ -40,23 +31,6 @@ public final class TestPage {
     /** Characters worth checking, of which only the representable ones are printed. */
     private static final String CANDIDATES =
             "ABC abc 123 .,:;!? #%&*()[] +-=/ ÄÖÅäöå éèü ñ ç £ € §";
-
-    /**
-     * The stored image the page prints, when this agent holds it.
-     * <p>
-     * The application's own logo, seeded into the asset library by {@code pnpm db:seed:logo}, so
-     * that an install which has never uploaded anything still exercises the image path.
-     */
-    private static final String LOGO = "fenpos-logo";
-
-    /**
-     * The width the logo is asked for, and the width the presence check asks about.
-     * <p>
-     * A hundred is what a bare {@code <image>} means, so the two must be the same number: the check
-     * has to ask the resolver exactly what the parser will ask it, or the page could include a tag
-     * that then fails to resolve.
-     */
-    private static final int LOGO_WIDTH_PERCENT = 100;
 
     /** Payload for the barcode. Code 39's alphabet is digits, uppercase, space and {@code -.$/+%}. */
     private static final String BARCODE_CONTENT = "FENPOS";
@@ -71,24 +45,12 @@ public final class TestPage {
     }
 
     /**
-     * Builds the request body for a device's test page, without printing the logo.
+     * Builds the request body for a device's test page.
      *
      * @param device the printer to describe and print on
      * @return a body the compile pipeline accepts
      */
     public static String bodyFor(Device device) {
-        return bodyFor(device, ImageResolver.NONE);
-    }
-
-    /**
-     * Builds the request body for a device's test page.
-     *
-     * @param device the printer to describe and print on
-     * @param images the images this agent can print, used to decide whether the logo is one of
-     *               them; pass the same resolver the compile will use
-     * @return a body the compile pipeline accepts
-     */
-    public static String bodyFor(Device device, ImageResolver images) {
         int columns = device.print().columns();
         List<String> lines = new ArrayList<>();
 
@@ -118,9 +80,6 @@ public final class TestPage {
         lines.add("<align=center><qr>" + QR_CONTENT + "</qr></align>");
         lines.add("<align=center><barcode=CODE39>" + BARCODE_CONTENT + "</barcode></align>");
         lines.add("<align=center><pdf417>" + PDF417_CONTENT + "</pdf417></align>");
-        if (images.resolve(LOGO, LOGO_WIDTH_PERCENT).isPresent()) {
-            lines.add("<align=center><image>" + LOGO + "</image></align>");
-        }
 
         lines.add("<feed=3>");
         lines.add("<cut>");

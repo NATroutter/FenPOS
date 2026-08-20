@@ -11,7 +11,6 @@ import fi.natroutter.fenpos.print.PrintQueue;
 import fi.natroutter.fenpos.print.PrintRequestException;
 import fi.natroutter.fenpos.print.PrintService;
 import fi.natroutter.fenpos.print.QueueRejectedException;
-import fi.natroutter.fenpos.print.SyncedImages;
 import fi.natroutter.fenpos.print.TestPage;
 import fi.natroutter.fenpos.serial.DeviceConnectionManager;
 import fi.natroutter.fenpos.serial.PrinterPort;
@@ -349,8 +348,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private void test(Frames.DeviceCommand command, String name) {
         Device device = devices.device(name).orElseThrow();
         try {
-            PrintJob job = printing.submit(device,
-                    TestPage.bodyFor(device, SyncedImages.forDevice(device, devices)));
+            PrintJob job = printing.submit(device, TestPage.bodyFor(device));
             answer(command, true, "Queued test page " + job.id());
         } catch (PrintRequestException | QueueRejectedException e) {
             answer(command, false, e.getMessage());

@@ -13,12 +13,10 @@ import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.enums.Parity;
 import fi.natroutter.fenpos.enums.UnsupportedPolicy;
 import fi.natroutter.fenpos.markup.ImageResolver;
-import fi.natroutter.fenpos.markup.model.Directive;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,51 +24,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Behavioural tests for {@link TestPage}.
  * <p>
  * The page's whole purpose is that it prints. So the tests that matter are that it compiles on a
- * real device — including the block tags added for the symbols and the logo — and that it still
- * compiles on an agent that was never sent the logo, which is the ordinary state of a fresh
- * install.
+ * real device — including the block tags added for the symbols — and that its content answers the
+ * questions a test page exists to answer.
  */
 class TestPageTest {
 
-    /** A one-dot image, standing in for a synced logo. */
-    private static final Directive.Image LOGO_RASTER =
-            new Directive.Image(1, 1, new byte[] {(byte) 0x80});
-
-    /** Answers for the logo at the whole paper width, which is what a bare {@code <image>} asks. */
-    private static final ImageResolver HOLDS_LOGO = (name, widthPercent) ->
-            "fenpos-logo".equals(name) && widthPercent == 100
-                    ? Optional.of(LOGO_RASTER)
-                    : Optional.empty();
-
     @Test
-    void compilesOnADeviceHoldingTheLogo() throws Exception {
+    void compilesOnADevice() throws Exception {
         CompiledJob job = PrintCompiler.compile(
-                TestPage.bodyFor(device(), HOLDS_LOGO), device(), HOLDS_LOGO);
+                TestPage.bodyFor(device()), device(), ImageResolver.NONE);
 
         assertTrue(job.payload().length > 0);
-    }
-
-    /**
-     * The case a fresh install is always in. The page must still compile, because a diagnostic
-     * that fails for a reason having nothing to do with the printer is a worse diagnostic.
-     */
-    @Test
-    void compilesOnADeviceThatWasNeverSentTheLogo() throws Exception {
-        CompiledJob job = PrintCompiler.compile(
-                TestPage.bodyFor(device(), ImageResolver.NONE), device(), ImageResolver.NONE);
-
-        assertTrue(job.payload().length > 0);
-    }
-
-    @Test
-    void printsTheLogoOnlyWhenTheAgentHoldsIt() {
-        assertTrue(elements(HOLDS_LOGO).contains("<align=center><image>fenpos-logo</image></align>"));
-        assertTrue(elements(ImageResolver.NONE).stream().noneMatch(line -> line.contains("<image")));
     }
 
     @Test
     void printsEachOfTheSymbolBlocks() {
-        List<String> lines = elements(ImageResolver.NONE);
+        List<String> lines = elements();
 
         assertTrue(lines.contains("<align=center><qr>https://fenpos.test/page</qr></align>"),
                 "no QR code");
@@ -87,19 +56,19 @@ class TestPageTest {
      */
     @Test
     void neverOpensTheCashDrawer() {
-        assertTrue(elements(HOLDS_LOGO).stream().noneMatch(line -> line.contains("drawer")));
+        assertTrue(elements().stream().noneMatch(line -> line.contains("drawer")));
     }
 
     @Test
     void keepsTheRulerExactlyAsWideAsThePaper() {
-        assertTrue(elements(ImageResolver.NONE).contains(
+        assertTrue(elements().contains(
                         "....+....1....+....2....+....3.."),
                 "a 32-column ruler should end two dots past the third ten");
     }
 
     @Test
     void namesTheDeviceAndItsSettings() {
-        List<String> lines = elements(ImageResolver.NONE);
+        List<String> lines = elements();
 
         assertTrue(lines.contains("Device:   kitchen"));
         assertTrue(lines.contains("Codepage: CP858"));
@@ -113,8 +82,8 @@ class TestPageTest {
      * {@code =}, so a substring check against the body would be a check on Gson's escaping rather
      * than on the markup.
      */
-    private static List<String> elements(ImageResolver images) {
-        JsonArray data = JsonParser.parseString(TestPage.bodyFor(device(), images))
+    private static List<String> elements() {
+        JsonArray data = JsonParser.parseString(TestPage.bodyFor(device()))
                 .getAsJsonObject()
                 .getAsJsonArray("data");
         return data.asList().stream().map(JsonElement::getAsString).toList();
