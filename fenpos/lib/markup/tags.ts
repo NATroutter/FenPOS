@@ -44,7 +44,31 @@ export const TAGS: Record<string, Tag> = {
 	feed: { name: "feed", kind: "VOID", argument: "REQUIRED" },
 	/** A full-width horizontal rule. Required to be alone in its element. */
 	hr: { name: "hr", kind: "VOID", argument: "NONE" },
+	/** A QR code. Argument is the module size, 1-16. */
+	qr: { name: "qr", kind: "PAIRED", argument: "OPTIONAL" },
+	/** A linear barcode. Argument is the symbology. */
+	barcode: { name: "barcode", kind: "PAIRED", argument: "REQUIRED" },
+	/** A PDF417 symbol. Argument is the error-correction level, 0-8. */
+	pdf417: { name: "pdf417", kind: "PAIRED", argument: "OPTIONAL" },
+	/** A cash drawer pulse. Argument is the pin, 2 or 5. */
+	drawer: { name: "drawer", kind: "VOID", argument: "OPTIONAL" },
 };
+
+/**
+ * Whether a tag encloses data to be encoded as a symbol rather than text to be printed.
+ *
+ * The three block tags are paired like a styling tag but behave nothing like one: what they
+ * enclose is the payload of a symbology, so it is captured verbatim into a directive instead of
+ * becoming styled spans. Naming the set here keeps the parser's several checks on it in step.
+ *
+ * `<drawer>` is not one: it encloses nothing and prints nothing.
+ *
+ * @param name a tag name, as written in markup
+ * @returns true when the tag's content is symbol data
+ */
+export function isBlockTag(name: string): boolean {
+	return name === "qr" || name === "barcode" || name === "pdf417";
+}
 
 /**
  * Resolves a tag by the name written in markup, ignoring case.

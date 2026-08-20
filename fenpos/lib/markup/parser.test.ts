@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
-import type { Line } from "@/lib/markup/model";
+import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
 
 /**
@@ -352,5 +353,168 @@ describe("wrap tag scope", () => {
 
 	it("reports the column of the offending tag", () => {
 		expect(scopeError("Total: <nowrap>14.80</nowrap>").column).toBe(8);
+	});
+});
+
+/**
+ * Block tags: the symbologies and the drawer pulse.
+ *
+ * These have no counterpart in `MarkupParserTest.java` — the agent's parser was frozen before
+ * they existed, and the server is now the only side that parses markup. The invariant these
+ * tests exist to protect is that a block's content reaches the directive and never the spans:
+ * the compiler's line budget counts a block as `heightLines` of paper rather than as text, and
+ * it can only do that if `isDirectiveOnly` still holds for a line carrying one.
+ */
+describe("block tags", () => {
+	/** Parses and returns the error, failing the test if the parse succeeded. */
+	const blockError = (source: string): MarkupError => {
+		try {
+			parseMarkup(source);
+		} catch (thrown) {
+			if (thrown instanceof MarkupError) {
+				return thrown;
+			}
+			throw thrown;
+		}
+		throw new Error(`expected '${source}' to be rejected`);
+	};
+
+	it("parses a QR code with its default size", () => {
+		const line = parseMarkup("<qr>https://example.com/o/1</qr>");
+
+		expect(line.directives).toEqual([
+			expect.objectContaining({ kind: "QR", content: "https://example.com/o/1", size: 6 }),
+		]);
+	});
+
+	it("keeps a QR code out of the spans, so the line stays directive-only", () => {
+		const line = parseMarkup("<qr>https://example.com/o/1</qr>");
+
+		expect(line.spans).toHaveLength(0);
+		expect(isDirectiveOnly(line)).toBe(true);
+	});
+
+	it("measures a QR code with the same geometry the preview draws", () => {
+		const line = parseMarkup("<qr=6>https://example.com/o/1</qr>");
+		const expected = symbolGeometry({ kind: "QR", content: "https://example.com/o/1", size: 6 });
+
+		expect(line.directives[0]).toMatchObject({ heightLines: expected.heightLines });
+	});
+
+	it("takes the module size from the argument", () => {
+		const line = parseMarkup("<qr=8>https://example.com/o/1</qr>");
+
+		expect(line.directives[0]).toMatchObject({ kind: "QR", size: 8 });
+	});
+
+	it("rejects a module size outside 1-16", () => {
+		expect(() => parseMarkup("<qr=99>x</qr>")).toThrow(/1.*16/);
+	});
+
+	it("keeps characters that would otherwise be markup", () => {
+		const line = parseMarkup("<qr>https://example.com/o/1?a=1&amp;b=2</qr>");
+
+		expect(line.directives[0]).toMatchObject({ content: "https://example.com/o/1?a=1&b=2" });
+	});
+
+	it("rejects a control character inside a block, same as in text", () => {
+		expect(blockError(`<qr>a${String.fromCharCode(0x1b)}b</qr>`).code).toBe(MARKUP_ERRORS.controlCharacter);
+	});
+
+	it("refuses markup inside a block, whose content is literal data", () => {
+		expect(blockError("<qr><bold>x</bold></qr>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("parses a barcode with its symbology", () => {
+		const line = parseMarkup("<barcode=EAN13>1234567890128</barcode>");
+
+		expect(line.directives[0]).toMatchObject({
+			kind: "BARCODE",
+			system: "EAN13",
+			content: "1234567890128",
+		});
+	});
+
+	it("requires a symbology on a barcode", () => {
+		expect(blockError("<barcode>123</barcode>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("rejects an unknown symbology", () => {
+		expect(blockError("<barcode=NOPE>123</barcode>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("rejects content the symbology cannot encode, at the right column", () => {
+		expect(() => parseMarkup("<barcode=EAN13>123</barcode>")).toThrow(/13/);
+		expect(blockError("<align=center><barcode=EAN13>123</barcode></align>").column).toBe(15);
+	});
+
+	/**
+	 * A check digit is arithmetic, not format, so `validateSymbolContent` deliberately does not
+	 * test it and the encoder is the one that refuses. That refusal still has to reach the caller
+	 * as a 400 naming the column rather than as an unhandled fault.
+	 */
+	it("rejects content the encoder refuses, as a markup error rather than a crash", () => {
+		const thrown = blockError("<barcode=EAN13>1234567890123</barcode>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(thrown.column).toBe(1);
+	});
+
+	it("parses a PDF417 symbol with its default error level", () => {
+		const line = parseMarkup("<pdf417>ORDER-1</pdf417>");
+
+		expect(line.directives[0]).toMatchObject({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 });
+	});
+
+	it("takes the PDF417 error level from the argument", () => {
+		expect(parseMarkup("<pdf417=4>ORDER-1</pdf417>").directives[0]).toMatchObject({ errorLevel: 4 });
+	});
+
+	it("rejects a PDF417 error level outside 0-8", () => {
+		expect(blockError("<pdf417=9>x</pdf417>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("parses a drawer pulse with its default pin", () => {
+		const line = parseMarkup("<drawer>");
+
+		expect(line.directives).toEqual([{ kind: "DRAWER", pin: 2 }]);
+	});
+
+	it("parses the second drawer pin", () => {
+		expect(parseMarkup("<drawer=5>").directives[0]).toEqual({ kind: "DRAWER", pin: 5 });
+	});
+
+	it("rejects a drawer pin that is neither 2 nor 5", () => {
+		expect(blockError("<drawer=3>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("refuses a block sharing its element with text", () => {
+		expect(() => parseMarkup("Order <qr>x</qr>")).toThrow(/alone/);
+	});
+
+	it("reports the block's own column when it shares its element", () => {
+		const thrown = blockError("Order <qr>x</qr>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidBlockScope);
+		expect(thrown.column).toBe(7);
+	});
+
+	it("refuses two blocks in one element", () => {
+		expect(blockError("<qr>a</qr><qr>b</qr>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("allows a drawer pulse beside text, since it prints nothing", () => {
+		expect(() => parseMarkup("Thanks<drawer>")).not.toThrow();
+	});
+
+	it("allows a drawer pulse beside a block, since it prints nothing", () => {
+		expect(() => parseMarkup("<qr>x</qr><drawer>")).not.toThrow();
+	});
+
+	it("permits a block inside an alignment, which owns the whole line", () => {
+		const line = parseMarkup("<align=center><qr>x</qr></align>");
+
+		expect(line.align).toBe("CENTER");
+		expect(line.directives[0]).toMatchObject({ kind: "QR" });
 	});
 });

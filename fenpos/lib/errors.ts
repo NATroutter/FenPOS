@@ -34,6 +34,7 @@ export const API_ERROR_STATUS = {
 	invalid_align_scope: 400,
 	invalid_wrap_scope: 400,
 	invalid_rule_scope: 400,
+	invalid_block_scope: 400,
 	unsupported_character: 400,
 	too_many_output_lines: 400,
 	invalid_linefeed: 400,

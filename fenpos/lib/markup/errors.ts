@@ -22,6 +22,14 @@ export const MARKUP_ERRORS = {
 	invalidWrapScope: "invalid_wrap_scope",
 	/** A rule tag sharing an element with other content. */
 	invalidRuleScope: "invalid_rule_scope",
+	/**
+	 * A block tag sharing an element with other content, or containing markup rather than data.
+	 *
+	 * The one code here with no counterpart in `MarkupError.java`, deliberately: the agent's
+	 * parser was frozen before block tags existed and the server is now the only side that parses
+	 * markup, so the agent can never raise this and mirroring it there would be dead code.
+	 */
+	invalidBlockScope: "invalid_block_scope",
 	/** A character that would be interpreted by the printer as a command. */
 	controlCharacter: "control_character",
 } as const;

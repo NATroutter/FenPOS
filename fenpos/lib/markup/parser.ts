@@ -1,7 +1,8 @@
-import { Align, Font } from "@/lib/domain/enums";
+import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
+import { type SymbolGeometry, type SymbolSpec, symbolGeometry, validateSymbolContent } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
-import { TAGS, type Tag, tagByName } from "@/lib/markup/tags";
+import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
 
 /**
  * Turns one `data` element into a line of styled spans and directives.
@@ -18,6 +19,10 @@ import { TAGS, type Tag, tagByName } from "@/lib/markup/tags";
  * Ported from `MarkupParser.java`, whose tests are the specification. Both sides had to exist at
  * once during the move: the Java copy is what the agent used to run, this is what the server runs
  * now, and the translated tests are what proves they agree.
+ *
+ * The block tags — `<qr>`, `<barcode>`, `<pdf417>` and `<drawer>` — are the exception, and have
+ * no Java counterpart. They were added after the server became the only side that parses markup,
+ * so the agent receives them already compiled and never sees the syntax.
  */
 
 /** Highest permitted character multiplier, imposed by ESC/POS `GS !`. */
@@ -26,11 +31,36 @@ const MAX_SIZE_MULTIPLIER = 8;
 /** Highest permitted feed distance, imposed by ESC/POS `ESC d`. */
 const MAX_FEED_LINES = 255;
 
+/** Dots per QR module when `<qr>` carries no argument. Legible on 58mm paper without dominating it. */
+const DEFAULT_QR_MODULE_SIZE = 6;
+
+/** Largest QR module size, imposed by ESC/POS `GS ( k` function 167. */
+const MAX_QR_MODULE_SIZE = 16;
+
+/** PDF417 error-correction level when `<pdf417>` carries no argument. */
+const DEFAULT_PDF417_ERROR_LEVEL = 1;
+
+/** Highest PDF417 error-correction level, imposed by ESC/POS `GS ( k` function 069. */
+const MAX_PDF417_ERROR_LEVEL = 8;
+
 /** A paired tag currently open, remembering the style to restore when it closes. */
 interface OpenTag {
 	tag: Tag;
 	column: number;
 	styleBefore: SpanStyle;
+}
+
+/**
+ * The block tag currently open, and the symbol being built inside it.
+ *
+ * `spec.content` accumulates the block's text as the scanner passes over it, which is what keeps
+ * that text out of `spans`: a line carrying a symbol has to stay directive-only, because the
+ * compiler charges it `heightLines` of paper rather than measuring it as text.
+ */
+interface OpenBlock {
+	tag: Tag;
+	column: number;
+	spec: SymbolSpec;
 }
 
 /**
@@ -80,8 +110,22 @@ class Parser {
 	 */
 	private closedOwner: { name: string; code: MarkupErrorCode } | null = null;
 
-	/** Column of the rule tag, or 0 if none, used to report a scope violation. */
-	private ruleColumn = 0;
+	/**
+	 * The block tag currently open, or null when the scanner is reading ordinary text.
+	 *
+	 * Its presence is what diverts characters away from `pending`, so it is checked by every
+	 * path that would otherwise produce a span.
+	 */
+	private block: OpenBlock | null = null;
+
+	/**
+	 * The first directive that must occupy its printed line alone, used to report a violation.
+	 *
+	 * The first rather than the last, matching this parser's habit of naming the earliest problem
+	 * in the element. The code travels with it because `<hr>` and the symbols report different
+	 * ones, both of which are frozen parts of the API contract.
+	 */
+	private soleOccupant: { name: string; column: number; code: MarkupErrorCode } | null = null;
 
 	/** Source column where the text currently accumulating in `pending` began. */
 	private pendingColumn = 1;
@@ -116,7 +160,7 @@ class Parser {
 			);
 		}
 
-		this.verifyRuleScope();
+		this.verifyBlockScope();
 
 		return { align: this.align, wrap: this.wrap, spans: this.spans, directives: this.directives };
 	}
@@ -135,6 +179,11 @@ class Parser {
 			);
 		}
 		this.requireInsideLineScope(this.index + 1);
+		if (this.block) {
+			this.block.spec.content += current;
+			this.index++;
+			return;
+		}
 		this.beginPendingAt(this.index + 1);
 		this.pending += current;
 		this.index++;
@@ -165,11 +214,20 @@ class Parser {
 	 * lets a column be reported exactly: an entity consumes more source characters than it
 	 * produces, so a span spanning one could not be measured by simple arithmetic.
 	 *
+	 * Inside a block the decoded character joins the symbol's content instead. A URL carrying a
+	 * query string is the ordinary case — `&amp;` is the only way to write its separator — so the
+	 * entity has to survive into the encoded payload rather than into a span.
+	 *
 	 * @param decoded the character the entity stands for
 	 * @param sourceLength how many source characters the entity occupies
 	 */
 	private emitEntity(decoded: string, sourceLength: number): void {
 		this.requireInsideLineScope(this.index + 1);
+		if (this.block) {
+			this.block.spec.content += decoded;
+			this.index += sourceLength;
+			return;
+		}
 		this.flushPending();
 		this.spans.push({ text: decoded, style: this.style, sourceColumn: this.index + 1 });
 		this.index += sourceLength;
@@ -231,6 +289,10 @@ class Parser {
 			);
 		}
 
+		if (this.block) {
+			this.refuseInsideBlock(this.block, tag, column);
+		}
+
 		this.requireArgumentPolicy(tag, argument, column);
 
 		if (tag.kind === "VOID") {
@@ -250,6 +312,11 @@ class Parser {
 			return;
 		}
 
+		if (isBlockTag(tag.name)) {
+			this.openBlock(tag, argument, column);
+			return;
+		}
+
 		this.requireInsideLineScope(column);
 		this.open.push({ tag, column, styleBefore: this.style });
 		this.style = this.applyStyle(tag, argument, column);
@@ -259,6 +326,10 @@ class Parser {
 		const tag = tagByName(name);
 		if (!tag) {
 			throw new MarkupError(MARKUP_ERRORS.unknownTag, column, name, `Unknown tag '${name}'`);
+		}
+
+		if (this.block && this.block.tag !== tag) {
+			this.refuseInsideBlock(this.block, tag, column);
 		}
 
 		if (tag.kind === "VOID") {
@@ -295,6 +366,10 @@ class Parser {
 
 		this.open.pop();
 		this.style = current.styleBefore;
+
+		if (this.block) {
+			this.closeBlock(this.block);
+		}
 	}
 
 	/**
@@ -448,6 +523,119 @@ class Parser {
 	}
 
 	// -----------------------------------------------------------------------
+	// Blocks
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Opens `<qr>`, `<barcode>` or `<pdf417>`.
+	 *
+	 * Pushed onto the same tag stack as any other paired tag, so an unclosed block is reported by
+	 * the same check that catches an unclosed `<bold>`. What differs is the parallel {@link block}
+	 * field: while it is set the scanner writes into the symbol's content instead of into a span.
+	 */
+	private openBlock(tag: Tag, argument: string | null, column: number): void {
+		this.requireInsideLineScope(column);
+		this.open.push({ tag, column, styleBefore: this.style });
+		this.block = { tag, column, spec: this.emptySymbol(tag, argument, column) };
+	}
+
+	/**
+	 * Builds the symbol a block will encode, with its content still to be read.
+	 *
+	 * The argument is resolved when the block opens rather than when it closes, so a bad one is
+	 * refused at the position it was written and before the rest of the element has been scanned.
+	 *
+	 * @throws MarkupError if the argument is not a size, error level or symbology this tag accepts
+	 */
+	private emptySymbol(tag: Tag, argument: string | null, column: number): SymbolSpec {
+		switch (tag.name) {
+			case "qr":
+				return {
+					kind: "QR",
+					content: "",
+					size:
+						argument === null ? DEFAULT_QR_MODULE_SIZE : this.requireInt(argument, 1, MAX_QR_MODULE_SIZE, tag, column),
+				};
+			case "pdf417":
+				return {
+					kind: "PDF417",
+					content: "",
+					errorLevel:
+						argument === null
+							? DEFAULT_PDF417_ERROR_LEVEL
+							: this.requireInt(argument, 0, MAX_PDF417_ERROR_LEVEL, tag, column),
+				};
+			case "barcode": {
+				const system = (argument ?? "").toUpperCase();
+				if (!BarcodeSystem.is(system)) {
+					throw this.argumentError(tag, column, `must name a symbology: ${BarcodeSystem.values.join(", ")}`);
+				}
+				return { kind: "BARCODE", content: "", system };
+			}
+			default:
+				throw new Error(`Tag ${tag.name} is not a block`);
+		}
+	}
+
+	/**
+	 * Closes a block, turning the content it captured into a directive.
+	 *
+	 * Validation and measurement both happen here, where the whole payload is finally known, and
+	 * both report the opening tag's column: the content runs to the end of the block, so the tag
+	 * that says how it will be encoded is the more useful thing to point a caller at.
+	 *
+	 * @throws MarkupError if the symbology cannot encode this content
+	 */
+	private closeBlock(block: OpenBlock): void {
+		const refusal = validateSymbolContent(block.spec);
+		if (refusal) {
+			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, block.column, block.tag.name, refusal);
+		}
+
+		const geometry = this.measure(block);
+		this.claimLine(block.tag.name, block.column, MARKUP_ERRORS.invalidBlockScope);
+		this.directives.push(blockDirective(block.spec, geometry.heightLines));
+		this.block = null;
+	}
+
+	/**
+	 * Measures the symbol, turning an encoder refusal into a markup error.
+	 *
+	 * `validateSymbolContent` checks format only — length and alphabet — because check-digit
+	 * arithmetic belongs to the encoder that computes it. When the encoder is the one to refuse,
+	 * the caller still deserves a 400 naming the tag rather than an unhandled fault.
+	 */
+	private measure(block: OpenBlock): SymbolGeometry {
+		try {
+			return symbolGeometry(block.spec);
+		} catch (thrown) {
+			const reason = thrown instanceof Error ? thrown.message : String(thrown);
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				block.column,
+				block.tag.name,
+				`<${block.tag.name}> cannot encode this content: ${reason}`,
+			);
+		}
+	}
+
+	/**
+	 * Rejects a tag written inside an open block.
+	 *
+	 * A block encloses the payload of a symbology — a URL, an article number — not markup, so a
+	 * tag nested in one would have no effect on the printed symbol. Refusing says so, rather than
+	 * discarding it silently.
+	 */
+	private refuseInsideBlock(block: OpenBlock, tag: Tag, column: number): never {
+		throw new MarkupError(
+			MARKUP_ERRORS.invalidBlockScope,
+			column,
+			tag.name,
+			`<${block.tag.name}> encloses data rather than markup, so <${tag.name}> cannot appear inside it`,
+		);
+	}
+
+	// -----------------------------------------------------------------------
 	// Directives
 	// -----------------------------------------------------------------------
 
@@ -464,8 +652,11 @@ class Parser {
 				});
 				return;
 			case "hr":
-				this.ruleColumn = column;
+				this.claimLine("hr", column, MARKUP_ERRORS.invalidRuleScope);
 				this.directives.push({ kind: "RULE" });
+				return;
+			case "drawer":
+				this.directives.push({ kind: "DRAWER", pin: this.drawerPin(argument, column) });
 				return;
 			default:
 				throw new Error(`Tag ${tag.name} is not a directive`);
@@ -482,22 +673,43 @@ class Parser {
 		throw this.argumentError(TAGS.cut, column, "must be 'full' or 'partial'");
 	}
 
-	/**
-	 * Rejects a rule sharing its element with anything else.
-	 *
-	 * A rule expands to the full paper width, so combining it with text would overflow the line
-	 * by construction rather than by accident.
-	 */
-	private verifyRuleScope(): void {
-		const hasRule = this.directives.some((directive) => directive.kind === "RULE");
-		if (hasRule && (this.spans.length > 0 || this.directives.length > 1)) {
-			throw new MarkupError(
-				MARKUP_ERRORS.invalidRuleScope,
-				this.ruleColumn,
-				"hr",
-				"<hr> fills the paper width and must be alone in its line",
-			);
+	private drawerPin(argument: string | null, column: number): 2 | 5 {
+		if (argument === null || argument === "2") {
+			return 2;
 		}
+		if (argument === "5") {
+			return 5;
+		}
+		throw this.argumentError(TAGS.drawer, column, "must be pin 2 or 5");
+	}
+
+	/** Records a directive that must be the only thing printed on its line. */
+	private claimLine(name: string, column: number, code: MarkupErrorCode): void {
+		this.soleOccupant ??= { name, column, code };
+	}
+
+	/**
+	 * Rejects a rule or a symbol sharing its element with anything else.
+	 *
+	 * A rule expands to the full paper width and a symbol is a block of dots several lines tall,
+	 * so either combined with text would overflow its line by construction rather than by
+	 * accident. `<drawer>` is exempt because it prints nothing at all: it pulses a solenoid, so
+	 * it costs the line no paper and may legally sit beside anything.
+	 */
+	private verifyBlockScope(): void {
+		if (!this.soleOccupant) {
+			return;
+		}
+		const printing = this.directives.filter((directive) => directive.kind !== "DRAWER");
+		if (this.spans.length === 0 && printing.length === 1) {
+			return;
+		}
+		throw new MarkupError(
+			this.soleOccupant.code,
+			this.soleOccupant.column,
+			this.soleOccupant.name,
+			`<${this.soleOccupant.name}> takes a whole line and must be alone in its element`,
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -548,6 +760,28 @@ class Parser {
 function isControl(value: string): boolean {
 	const code = value.charCodeAt(0);
 	return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+}
+
+/**
+ * Turns a finished symbol into the directive that carries it.
+ *
+ * `heightLines` comes from {@link symbolGeometry} rather than from anything computed here, so
+ * the paper the compiler's budget charges for a symbol and the height the preview draws it at
+ * are the same number by construction.
+ *
+ * @param spec the symbol, with its content complete
+ * @param heightLines the symbol's measured height in printed lines
+ * @returns the directive to append to the line
+ */
+function blockDirective(spec: SymbolSpec, heightLines: number): Directive {
+	switch (spec.kind) {
+		case "QR":
+			return { kind: "QR", content: spec.content, size: spec.size, heightLines };
+		case "BARCODE":
+			return { kind: "BARCODE", system: spec.system, content: spec.content, heightLines };
+		case "PDF417":
+			return { kind: "PDF417", content: spec.content, errorLevel: spec.errorLevel, heightLines };
+	}
 }
 
 /**

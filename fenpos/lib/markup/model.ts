@@ -1,4 +1,4 @@
-import type { Align, Font } from "@/lib/domain/enums";
+import type { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
 
 /**
  * The render model: one element of a request's `data` array, parsed.
@@ -49,12 +49,34 @@ export interface Span {
 	sourceColumn: number;
 }
 
-/** A printer action that is not text. Directives occupy no columns and are invisible to wrapping. */
+/**
+ * A printer action that is not text.
+ *
+ * Directives occupy no columns and are invisible to wrapping, but most of them still consume
+ * paper — a feed advances it, a rule prints across it, a symbol is a block of dots several lines
+ * tall — so the line budget has to charge for them. A symbol's cost is not derivable from its
+ * content, so it carries the measured `heightLines`; a cut and a drawer pulse carry no height at
+ * all, because they genuinely move no paper.
+ */
 export type Directive =
 	| { kind: "CUT"; mode: "FULL" | "PARTIAL" }
 	| { kind: "FEED"; lines: number }
 	/** A full-width rule, expanded to characters at compile time once the width is known. */
-	| { kind: "RULE" };
+	| { kind: "RULE" }
+	/** A QR code. `size` is the module size in dots, 1-16. */
+	| { kind: "QR"; content: string; size: number; heightLines: number }
+	/** A linear barcode in one of the printer's supported symbologies. */
+	| { kind: "BARCODE"; system: BarcodeSystem; content: string; heightLines: number }
+	/** A PDF417 stacked symbol. `errorLevel` is its error-correction level, 0-8. */
+	| { kind: "PDF417"; content: string; errorLevel: number; heightLines: number }
+	/**
+	 * A cash drawer kick on pin 2 or 5.
+	 *
+	 * No `heightLines`, and not merely zero: the pulse is an electrical signal to a connected
+	 * drawer, so unlike every other directive here it never touches the paper at all. That is
+	 * also why it is the one directive allowed to share a line with text.
+	 */
+	| { kind: "DRAWER"; pin: 2 | 5 };
 
 /** One parsed element. Alignment is a line property because ESC/POS justifies whole lines. */
 export interface Line {
