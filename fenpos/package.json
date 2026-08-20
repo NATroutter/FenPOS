@@ -12,6 +12,7 @@
 		"typecheck": "next typegen && tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
+		"agent:bundle-logo": "tsx scripts/bundle-logo-rasters.ts",
 		"db:generate": "prisma generate",
 		"db:migrate": "prisma migrate dev",
 		"db:deploy": "prisma migrate deploy",

@@ -326,6 +326,7 @@ mvn package
 | `pnpm admin:set-password "…"` | Sets the password directly against the database. This is the recovery path for a lost password, not setup — first boot generates one. |
 | `pnpm admin:reset-password` | Drops the credential and every session, so the next start generates a fresh password. Leaves agents, devices, keys and history alone. Useful for re-testing the first-run flow. |
 | `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it. |
+| `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone; run this only after changing the logo or the widths, and commit what it produces. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 
 If a page in `pnpm dev` renders but never becomes interactive (dead buttons, live values stuck
