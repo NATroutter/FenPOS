@@ -286,9 +286,41 @@ function requireOutputWithinLimit(lines: Line[], limits: CompileLimits): void {
 	}
 }
 
-/** Counts lines that advance the paper; directive-only lines do not. */
+/**
+ * Counts lines that advance the paper.
+ *
+ * Most directive-only lines advance nothing — see {@link isDirectiveOnly} — but two kinds of
+ * directive are exceptions. A `RULE` has no spans of its own, yet `toWireLine` expands it into a
+ * full line of dashes that really prints, so it costs one line here even though it looks empty at
+ * this stage. A `QR`, `BARCODE` or `PDF417` costs its measured `heightLines` instead of the usual
+ * one, because a symbol is a block of dots several lines tall rather than a single printed line.
+ * That height is never recomputed here — it travels on the directive from {@link symbolGeometry},
+ * which is also what the paper preview draws, so the two cannot disagree. `CUT`, `FEED` and
+ * `DRAWER` still cost nothing: a cut and a feed act on the printer rather than laying dots on the
+ * paper as text, and a drawer pulse is electrical and never touches the paper at all.
+ */
 export function countTextLines(lines: Line[]): number {
-	return lines.filter((line) => !isDirectiveOnly(line)).length;
+	return lines.reduce((total, line) => total + lineCost(line), 0);
+}
+
+/** The paper cost of one line, in whole printed lines. */
+function lineCost(line: Line): number {
+	let blockHeight = 0;
+	let hasRule = false;
+	for (const directive of line.directives) {
+		if (directive.kind === "QR" || directive.kind === "BARCODE" || directive.kind === "PDF417") {
+			blockHeight += directive.heightLines;
+		} else if (directive.kind === "RULE") {
+			hasRule = true;
+		}
+	}
+	if (blockHeight > 0) {
+		return blockHeight;
+	}
+	if (hasRule) {
+		return 1;
+	}
+	return isDirectiveOnly(line) ? 0 : 1;
 }
 
 /**
@@ -297,6 +329,12 @@ export function countTextLines(lines: Line[]): number {
  * The rule is expanded here rather than on the agent because only the server knows the device's
  * column count at compile time. What crosses the link is therefore always text, and the agent
  * never has to know what a rule is.
+ *
+ * `QR`, `BARCODE`, `PDF417` and `DRAWER` directives cross unchanged, unlike `RULE`: the agent's
+ * ESC/POS library draws a symbol itself and computes its own geometry when it does, so this only
+ * has to carry the content across. `heightLines` does not travel with them — it is a compile-time
+ * budgeting value with no wire field, kept off the wire so the model and wire types stay the
+ * distinct shapes {@link WireDirective}'s module documents.
  */
 function toWireLine(line: Line, columns: number): WireLine {
 	const rule = line.directives.find((directive) => directive.kind === "RULE");
@@ -329,6 +367,14 @@ function toWireLine(line: Line, columns: number): WireLine {
 			directives.push({ type: "CUT", mode: directive.mode });
 		} else if (directive.kind === "FEED") {
 			directives.push({ type: "FEED", lines: directive.lines });
+		} else if (directive.kind === "QR") {
+			directives.push({ type: "QR", content: directive.content, size: directive.size });
+		} else if (directive.kind === "BARCODE") {
+			directives.push({ type: "BARCODE", system: directive.system, content: directive.content });
+		} else if (directive.kind === "PDF417") {
+			directives.push({ type: "PDF417", content: directive.content, errorLevel: directive.errorLevel });
+		} else if (directive.kind === "DRAWER") {
+			directives.push({ type: "DRAWER", pin: directive.pin });
 		}
 	}
 

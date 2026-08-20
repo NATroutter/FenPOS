@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema } from "@/lib/link/protocol";
-import { type CompileLimits, type CompileSettings, compile, countTextLines, readRequest } from "@/lib/markup/compiler";
+import { symbolGeometry } from "@/lib/markup/blocks";
+import {
+	type CompileLimits,
+	type CompileSettings,
+	compile,
+	countOutputLines,
+	countTextLines,
+	readRequest,
+} from "@/lib/markup/compiler";
 
 /**
  * Behavioural tests for the compile pipeline.
@@ -267,5 +275,93 @@ describe("compile pipeline", () => {
 		it("still accepts data and linefeed", () => {
 			expect(() => run({ data: ["x"], linefeed: "CRLF" })).not.toThrow();
 		});
+	});
+});
+
+/**
+ * Coverage for the line budget's treatment of blocks and rules.
+ *
+ * The device fixture is identical to the one in "compile pipeline" above — ten columns, CP858 —
+ * so a request accepted or measured there is accepted and measured the same way here.
+ */
+describe("block line budget", () => {
+	const SETTINGS: CompileSettings = {
+		columns: 10,
+		codepage: "CP858",
+		onUnsupported: "REJECT",
+		defaultWrap: true,
+		defaultLinefeed: "LF",
+	};
+
+	it("charges a QR code its printed height, not one line", () => {
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+		const withQr = countOutputLines({ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF" }, SETTINGS);
+		expect(withQr - plain).toBeGreaterThan(1);
+	});
+
+	it("charges a drawer pulse nothing, because it prints nothing", () => {
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+		const withDrawer = countOutputLines({ data: ["Hello", "<drawer>"], linefeed: "LF" }, SETTINGS);
+		expect(withDrawer).toBe(plain);
+	});
+
+	it("charges a barcode and a PDF417 symbol exactly their measured height", () => {
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+
+		const barcodeHeight = symbolGeometry({
+			kind: "BARCODE",
+			system: "EAN13",
+			content: "1234567890128",
+		}).heightLines;
+		const withBarcode = countOutputLines(
+			{ data: ["Hello", "<barcode=EAN13>1234567890128</barcode>"], linefeed: "LF" },
+			SETTINGS,
+		);
+		expect(withBarcode - plain).toBe(barcodeHeight);
+
+		const pdf417Height = symbolGeometry({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 }).heightLines;
+		const withPdf417 = countOutputLines({ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF" }, SETTINGS);
+		expect(withPdf417 - plain).toBe(pdf417Height);
+	});
+
+	// A pre-existing bug: `<hr>` produces a RULE directive and no spans, so `isDirectiveOnly`
+	// saw it as empty and charged it nothing, even though `toWireLine` expands it to a full line
+	// of dashes that really prints. Fixed alongside the block accounting this describe block
+	// exists to add, because leaving a known undercount inside the function being rewritten here
+	// is worse than the small behaviour change of charging a rule what it actually costs.
+	it("charges a rule one line, since it prints as a full line of dashes", () => {
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+		const withRule = countOutputLines({ data: ["Hello", "<hr>"], linefeed: "LF" }, SETTINGS);
+		expect(withRule - plain).toBe(1);
+	});
+
+	it("charges a line carrying both text and a drawer pulse exactly one line", () => {
+		const withText = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
+		const withTextAndDrawer = countOutputLines({ data: ["Hello<drawer>"], linefeed: "LF" }, SETTINGS);
+		expect(withTextAndDrawer).toBe(withText);
+	});
+
+	it("carries block directives to the wire unchanged, unlike a rule", () => {
+		const limits: CompileLimits = { maxLines: 10, maxLineChars: 60, maxTotalChars: 400, maxOutputLines: 30 };
+		const request = readRequest(
+			{
+				data: [
+					"<qr=8>https://example.com/o/1</qr>",
+					"<barcode=EAN13>1234567890128</barcode>",
+					"<pdf417=4>ORDER-1</pdf417>",
+					"<drawer=5>",
+				],
+				linefeed: "LF",
+			},
+			limits,
+			SETTINGS,
+		);
+		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
+
+		expect(job.lines[0].directives).toEqual([{ type: "QR", content: "https://example.com/o/1", size: 8 }]);
+		expect(job.lines[1].directives).toEqual([{ type: "BARCODE", system: "EAN13", content: "1234567890128" }]);
+		expect(job.lines[2].directives).toEqual([{ type: "PDF417", content: "ORDER-1", errorLevel: 4 }]);
+		expect(job.lines[3].directives).toEqual([{ type: "DRAWER", pin: 5 }]);
+		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 	});
 });
