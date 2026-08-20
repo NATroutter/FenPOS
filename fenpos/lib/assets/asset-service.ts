@@ -51,6 +51,23 @@ import type { ImageSource } from "@/lib/markup/images";
 export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
 
 /**
+ * The one asset name this module refuses to store anything under.
+ *
+ * The agent bundles its own logo for the device test page — see `BundledImages.NAME` in
+ * `agent/src/main/java/fi/natroutter/fenpos/print/BundledImages.java` — under this exact name, and
+ * a bundled image always wins over a synced one of the same name (`PrintImages`, on the agent side).
+ * `"fenpos"` is a legal slug by {@link nameSchema}, so nothing about its shape stops an operator
+ * from choosing it too. Without this guard, an asset created or imported under this name would be
+ * shadowed by the bundled logo and would silently never print — no error, just the wrong image on
+ * every device that has this logo bundled for its paper width. Refusing the name at creation is
+ * what turns that into an error an operator can act on instead.
+ *
+ * Deliberately not part of {@link nameSchema}: that schema also governs agent and device names,
+ * which have nothing to do with the bundled logo and should not be told `"fenpos"` is off limits.
+ */
+export const RESERVED_ASSET_NAME = "fenpos";
+
+/**
  * The largest image this system will decode, in pixels on either side.
  *
  * A byte cap bounds nothing about memory here, because PNG is compressed and a uniform image
@@ -843,7 +860,7 @@ function jpegSize(bytes: Buffer): DeclaredImage | null {
  *
  * @param rawName the name as supplied
  * @returns the name, trimmed
- * @throws ApiError if it is not slug-shaped
+ * @throws ApiError if it is not slug-shaped, or is {@link RESERVED_ASSET_NAME}
  */
 function parseName(rawName: string): string {
 	const result = nameSchema.safeParse((rawName ?? "").trim());
@@ -851,6 +868,13 @@ function parseName(rawName: string): string {
 		throw new ApiError("invalid_type", result.error.issues[0]?.message ?? "That name is not valid.", {
 			field: "name",
 		});
+	}
+	if (result.data === RESERVED_ASSET_NAME) {
+		throw new ApiError(
+			"invalid_type",
+			`'${RESERVED_ASSET_NAME}' is reserved for the application's own logo and cannot be used for an asset.`,
+			{ field: "name" },
+		);
 	}
 	return result.data;
 }

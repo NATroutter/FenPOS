@@ -43,17 +43,21 @@ public final class BundledImages {
     /**
      * What markup calls the bundled logo.
      *
-     * <p>Chosen so that a collision with an operator's own asset is not unlikely but impossible.
-     * Asset names are validated against {@code NAME_PATTERN} in {@code fenpos/lib/domain/naming.ts}
-     * — {@code ^[a-z0-9][a-z0-9_-]*$} — and the slash is outside it, so no asset can ever be stored
-     * under this name and no lookup here can ever be an operator's picture. It is not a URL either:
-     * the panel's resolver tests for {@code ://}, so this reaches the asset path and is refused
-     * there by name, which is the true answer for the panel to give.
+     * <p>A plain slug, and legal by {@code NAME_PATTERN} in {@code fenpos/lib/domain/naming.ts} —
+     * {@code ^[a-z0-9][a-z0-9_-]*$} — so nothing on this side stops an operator's asset from being
+     * named the same thing. The collision that would create is instead refused server-side:
+     * {@code fenpos/lib/assets/asset-service.ts} reserves this exact name and turns away any attempt
+     * to create or import an asset called it, with a message that says why. Without that guard, an
+     * asset named this would be shadowed by the bundled logo and silently never print — no error,
+     * just the wrong image — which is the failure the server-side reservation exists to close.
+     *
+     * <p>It is not a URL either: the panel's resolver tests for {@code ://}, so this reaches the
+     * asset path and is refused there by name, which is the true answer for the panel to give.
      *
      * <p>{@code TestPage} and {@code markup-tool.tsx} both write this string; the three are meant to
      * be read together.
      */
-    public static final String NAME = "fenpos/logo";
+    public static final String NAME = "fenpos";
 
     /** Where the rasters live on the classpath. Written by {@code pnpm agent:bundle-logo}. */
     private static final String DIRECTORY = "/bundled/";

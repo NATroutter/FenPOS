@@ -16,14 +16,16 @@ import java.util.Optional;
  * then fails to resolve — a diagnostic that refuses to print, for a reason having nothing to do
  * with the printer.
  *
- * <p><b>Precedence: bundled first, synced second.</b> The two sets cannot actually overlap —
- * {@link BundledImages#NAME} is not a name an asset can be stored under, which
- * {@code BundledImagesTest} pins against the server's own pattern — so the order decides nothing
- * today. It is stated anyway, and in this direction, because the failure it forecloses is the
- * unpleasant one: something arriving over the link under the reserved name and silently replacing
- * the picture on the test page. The reverse ordering has no such argument for it. What the order
- * does <i>not</i> do is let the bundled logo stand in front of an operator's asset — it answers for
- * one name and refuses every other, so any other name falls straight through to the synced set.
+ * <p><b>Precedence: bundled first, synced second.</b> {@link BundledImages#NAME} is a legal asset
+ * slug, so nothing on this side makes the two sets structurally disjoint the way an illegal name
+ * once did. What keeps them from actually overlapping is server-side: {@code asset-service.ts}
+ * reserves the name and refuses to create or import an asset under it, so nothing legitimate ever
+ * arrives over the link under it. This ordering is the belt to that server's braces — the failure
+ * it forecloses is something arriving over the link under the reserved name regardless, and
+ * silently replacing the picture on the test page. The reverse ordering has no such argument for
+ * it. What the order does <i>not</i> do is let the bundled logo stand in front of an operator's
+ * asset — it answers for one name and refuses every other, so any other name falls straight
+ * through to the synced set.
  *
  * @see BundledImages
  * @see SyncedImages

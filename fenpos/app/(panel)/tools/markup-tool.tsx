@@ -118,8 +118,9 @@ const CODEPAGE_SAMPLE = "AaBb 123 .,:;!? #%&*()[] +-=/ ÄÖÜäöü ÉÑÇ éñ�
  * The application's own logo, which ships *inside the agent* — dithered at each bundled paper
  * width by `pnpm agent:bundle-logo` and read from the jar by `BundledImages.java`. It is
  * deliberately not an asset: the Assets tab holds the operator's content, and a diagnostic that
- * breaks when someone tidies their library is a bad diagnostic. The slash puts it outside
- * `NAME_PATTERN`, so no asset can ever be stored under this name.
+ * breaks when someone tidies their library is a bad diagnostic. `"fenpos"` is a legal asset slug,
+ * so what actually keeps an operator's own asset from colliding with it is `asset-service.ts`
+ * refusing to let anything be created or imported under this exact name.
  *
  * **This is the one line of the test page this editor cannot print.** Nothing here can reach the
  * agent's jar, so previewing or printing this example reports `unknown_asset` for the logo — the
@@ -128,7 +129,7 @@ const CODEPAGE_SAMPLE = "AaBb 123 .,:;!? #%&*()[] +-=/ ÄÖÜäöü ÉÑÇ éñ�
  * element for element, against the page the agent prints, and an example missing a line the agent
  * prints is the failure that matters more.
  */
-const BUNDLED_LOGO = "fenpos/logo";
+const BUNDLED_LOGO = "fenpos";
 
 /**
  * A ruler marking every tenth column, so a wrong `columns` setting is visible rather than counted.

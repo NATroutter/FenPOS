@@ -15,10 +15,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -29,6 +27,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * accepted, something has to resample dots that are already black and white, which is exactly what
  * the encoding design refuses. The second is that the reserved name answers for nothing else, so a
  * bundled image can never stand in front of an operator's own asset.
+ * <p>
+ * {@link BundledImages#NAME} is a legal asset slug — {@code "fenpos"} matches
+ * {@code NAME_PATTERN} in {@code fenpos/lib/domain/naming.ts} just as any operator-chosen name
+ * would. Nothing on this side of the link can prove a collision is unreachable any more; that
+ * guarantee now lives server-side, where {@code fenpos/lib/assets/asset-service.ts} refuses to
+ * create or import an asset called {@code "fenpos"} and is exercised by
+ * {@code asset-service.test.ts}.
  */
 class BundledImagesTest {
 
@@ -91,21 +96,6 @@ class BundledImagesTest {
         assertTrue(images.resolve("logo", 100).isEmpty());
         assertTrue(images.resolve("", 100).isEmpty());
         assertTrue(images.resolve(null, 100).isEmpty());
-    }
-
-    /**
-     * The reserved name is one no asset can ever be called.
-     * <p>
-     * Mirrors {@code NAME_PATTERN} in {@code fenpos/lib/domain/naming.ts}, which every asset name
-     * is validated against on the server. A name that fails it cannot be stored, so the collision
-     * between a bundled image and a user's own is not unlikely — it is unreachable. If the reserved
-     * name is ever changed to something slug-shaped, this fails and the precedence rule in
-     * {@link PrintImages} becomes load-bearing instead of belt-and-braces.
-     */
-    @Test
-    void reservesANameNoAssetCanHave() {
-        assertFalse(Pattern.matches("[a-z0-9][a-z0-9_-]*", BundledImages.NAME),
-                "'" + BundledImages.NAME + "' is a legal asset name, so a user could collide with it");
     }
 
     private static Device device(int columns) {

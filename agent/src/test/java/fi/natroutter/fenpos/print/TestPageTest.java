@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TestPageTest {
 
     /** The logo line, exactly as the page writes it. */
-    private static final String LOGO_LINE = "<align=center><image>fenpos/logo</image></align>";
+    private static final String LOGO_LINE = "<align=center><image>fenpos</image></align>";
 
     @Test
     void compilesOnADevice() throws Exception {

@@ -61,10 +61,11 @@ class PrintImagesTest {
     /**
      * A synced raster under the reserved name does not displace the bundled one.
      * <p>
-     * Unreachable in practice — the server refuses to store an asset by that name at all, which
-     * {@code BundledImagesTest.reservesANameNoAssetCanHave} pins — so this is the second lock
-     * rather than the first. It states the precedence rule as behaviour: the test page prints the
-     * logo this agent was built with, whatever arrives over the link.
+     * Unreachable in practice — {@code fenpos/lib/assets/asset-service.ts} refuses to create or
+     * import an asset called {@link BundledImages#NAME}, so nothing legitimate ever arrives over
+     * the link under it — so this is the second lock rather than the first. It states the
+     * precedence rule as behaviour: the test page prints the logo this agent was built with,
+     * whatever arrives over the link.
      */
     @Test
     void prefersTheBundledLogoOverAnythingSyncedUnderItsName() {

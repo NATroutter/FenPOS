@@ -56,6 +56,7 @@ const {
 	MAX_ASSET_BYTES,
 	MAX_IMAGE_DIMENSION,
 	MAX_PAPER_DOTS,
+	RESERVED_ASSET_NAME,
 	createAsset,
 	deleteAsset,
 	forgetRasters,
@@ -212,6 +213,21 @@ describe("createAsset", () => {
 
 	it("refuses a name that is not a slug", async () => {
 		expect((await refusal(() => createAsset("Not A Slug", PNG))).code).toBe("invalid_type");
+	});
+
+	/**
+	 * The agent's bundled logo prints under this exact name (`BundledImages.NAME`) and a bundled
+	 * image always wins over a synced one of the same name. `RESERVED_ASSET_NAME` is a legal slug,
+	 * so nothing about its shape would otherwise stop this from being created — and if it were, the
+	 * asset would be shadowed by the bundled logo and would silently never print. Refusing it here
+	 * is what turns that into a message an operator can act on instead of a diagnostic that quietly
+	 * lies.
+	 */
+	it("refuses the name reserved for the bundled logo", async () => {
+		const refused = await refusal(() => createAsset(RESERVED_ASSET_NAME, PNG));
+
+		expect(refused.code).toBe("invalid_type");
+		expect(refused.message).toContain(RESERVED_ASSET_NAME);
 	});
 
 	it("refuses bytes that will not decode", async () => {
@@ -409,6 +425,13 @@ describe("importAssetFromUrl", () => {
 	it("refuses a name that is not a slug without fetching anything", async () => {
 		await refusal(() => importAssetFromUrl("Not A Slug", URL));
 
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+
+	it("refuses the name reserved for the bundled logo without fetching anything", async () => {
+		const refused = await refusal(() => importAssetFromUrl(RESERVED_ASSET_NAME, URL));
+
+		expect(refused.code).toBe("invalid_type");
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
