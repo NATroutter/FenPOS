@@ -122,12 +122,17 @@ const CODEPAGE_SAMPLE = "AaBb 123 .,:;!? #%&*()[] +-=/ ÄÖÜäöü ÉÑÇ éñ�
  * so what actually keeps an operator's own asset from colliding with it is `asset-service.ts`
  * refusing to let anything be created or imported under this exact name.
  *
- * **This is the one line of the test page this editor cannot print.** Nothing here can reach the
- * agent's jar, so previewing or printing this example reports `unknown_asset` for the logo — the
- * true answer for the server to give, since the server really does not hold that picture. Delete
- * the line to run the rest. It stays in the example because the example exists to be compared,
- * element for element, against the page the agent prints, and an example missing a line the agent
- * prints is the failure that matters more.
+ * **The panel resolves the same name from its own copy of the logo**, `public/fenpos-logo.png`,
+ * through the same `ditherToRaster` that produced the agent's rasters — see
+ * `lib/assets/bundled-logo.ts`, and `bundled-logo.test.ts` for the check that the two are the same
+ * dots. So this previews and prints rather than reporting `unknown_asset`, which is what the
+ * example needs: it exists to be held against the page the agent prints, and it could not be until
+ * it rendered.
+ *
+ * **Only at a bundled width.** The agent matches a width exactly and never scales, so on a printer
+ * whose full width is not 384, 504 or 576 dots this line is `unbundled_logo_width` — a refusal
+ * naming the widths, rather than a preview of something no printer here could produce. Delete the
+ * line to run the rest of the page on such a device.
  */
 const BUNDLED_LOGO = "fenpos";
 
@@ -161,8 +166,8 @@ function ruler(columns: number): string {
  * this preview against what the agent actually prints is the whole point of having it here. Two
  * differences are deliberate and are the only two: {@link CODEPAGE_SAMPLE}, which the agent filters
  * against the device's charset and this cannot, and {@link BUNDLED_LOGO}, which the agent omits on a
- * paper width it holds no raster for and which nothing here can resolve at all. Both are documented
- * where they are written.
+ * paper width it holds no raster for while this refuses the line instead. Both are documented where
+ * they are written.
  */
 const EXAMPLES: Example[] = [
 	{

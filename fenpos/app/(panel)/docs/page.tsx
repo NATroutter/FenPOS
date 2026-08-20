@@ -303,6 +303,14 @@ export default async function DocsPage() {
 								</P>
 
 								<P>
+									One name is not an asset at all. <Mono>fenpos</Mono> is the application&apos;s own logo, which ships
+									with the software rather than being stored here — so it cannot be uploaded under that name, and it
+									cannot be deleted out from under the device test page. It is bundled at 384, 504 and 576 dots, which
+									is the full width of a 32, 42 or 48 column printer; asking for it at any other width is{" "}
+									<Status>400</Status> <Mono>unbundled_logo_width</Mono>, because the logo is never rescaled.
+								</P>
+
+								<P>
 									<Mono>&lt;drawer&gt;</Mono> is the exception. It pulses a solenoid rather than laying down dots, so it
 									costs the paper nothing and may sit beside text — the line that prints the total can open the till.
 								</P>

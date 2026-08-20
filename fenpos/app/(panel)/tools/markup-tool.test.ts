@@ -1,5 +1,16 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { bundledLogoRaster } from "@/lib/assets/bundled-logo";
+import { rasterToPngDataUrl } from "@/lib/assets/preview";
+import { prisma } from "@/lib/db";
+
+// The session guard redirects, and a redirect is not what this file is about. Everything
+// downstream of it is the real pipeline against the real database.
+vi.mock("@/lib/auth/require-session", () => ({
+	requireSession: async () => {},
+}));
+
+const { preview } = await import("@/app/(panel)/tools/actions");
 
 /**
  * The one invariant the "Device test page" example carries: it must say what `TestPage.java` says.
@@ -62,6 +73,67 @@ function javaConstant(source: string, name: string): string {
 	return (match as RegExpMatchArray)[1];
 }
 
+/** The value of a `const … = "…"` in this package's TypeScript. */
+function tsConstant(name: string): string {
+	const match = MARKUP_TOOL.match(new RegExp(`const ${name} = "([^"]*)"`));
+	expect(match, `${name} is not a plain string constant any more`).not.toBeNull();
+	return (match as RegExpMatchArray)[1];
+}
+
+/**
+ * `ruler`, copied from the module because it is private to it.
+ *
+ * A copy is acceptable here for the same reason the text comparisons above are: what this file
+ * checks is the example, and the ruler is one of the parts `TestPage.java` and this both *compute*
+ * rather than quote — already outside the comparison by construction, and covered on the Java side
+ * by `TestPageTest`.
+ */
+function ruler(columns: number): string {
+	let out = "";
+	for (let column = 1; column <= columns; column++) {
+		out += column % 10 === 0 ? String(Math.floor(column / 10) % 10) : column % 5 === 0 ? "+" : ".";
+	}
+	return out;
+}
+
+/**
+ * The example's elements, read out of the module's source and evaluated for a device.
+ *
+ * The module is a client component and importing it into a Node test would drag in the editor; the
+ * elements themselves are one string literal or template per line, so they can be read directly.
+ * Anything this cannot evaluate is thrown on rather than skipped — an element quietly dropped here
+ * would be an element the preview below never exercises.
+ *
+ * @param device the values the example interpolates
+ * @returns one element per line, exactly as the Examples menu would insert them
+ */
+function exampleElements(device: { deviceName: string; columns: number; codepage: string }): string[] {
+	const open = EXAMPLE.indexOf("[");
+	const close = EXAMPLE.indexOf('].join("\\n")');
+	expect(open, "the example is not an array literal any more").toBeGreaterThan(-1);
+	expect(close).toBeGreaterThan(open);
+
+	return EXAMPLE.slice(open + 1, close)
+		.split("\n")
+		.map((line) => line.trim().replace(/,$/, ""))
+		.filter((line) => line.length > 0)
+		.map((entry) => {
+			if (entry === "ruler(device.columns)") {
+				return ruler(device.columns);
+			}
+			if (entry === "CODEPAGE_SAMPLE") {
+				return tsConstant("CODEPAGE_SAMPLE");
+			}
+			const quoted = /^(["`])([\s\S]*)\1$/.exec(entry);
+			expect(quoted, `the example writes an element this test cannot evaluate: ${entry}`).not.toBeNull();
+			return (quoted as RegExpExecArray)[2]
+				.replaceAll("${device.deviceName}", device.deviceName)
+				.replaceAll("${device.columns}", String(device.columns))
+				.replaceAll("${device.codepage}", device.codepage)
+				.replaceAll("${BUNDLED_LOGO}", tsConstant("BUNDLED_LOGO"));
+		});
+}
+
 describe("the Device test page example", () => {
 	it("writes every line TestPage.java writes", () => {
 		const literals = elementLiterals();
@@ -80,6 +152,43 @@ describe("the Device test page example", () => {
 		for (const name of ["QR_CONTENT", "BARCODE_CONTENT", "PDF417_CONTENT"]) {
 			expect(EXAMPLE, `${name} has drifted`).toContain(javaConstant(TEST_PAGE, name));
 		}
+	});
+
+	/**
+	 * The bug this example used to carry: loading it and pressing Preview reported
+	 * `line 23  unknown_asset  There is no image called 'fenpos'.`
+	 *
+	 * The panel could not reach the rasters bundled in the agent's jar, so the one example that
+	 * exists to be compared against real paper could not be rendered at all. It now resolves the
+	 * reserved name from `public/fenpos-logo.png` through the same ditherer, and this drives the
+	 * very server action the button calls, over the example's own elements.
+	 */
+	it("previews on a 42-column printer with the logo drawn, not reported missing", async () => {
+		const agent = await prisma.agent.create({ data: { name: `example-${process.pid}` } });
+		const device = await prisma.device.create({
+			data: { agentId: agent.id, name: "example-counter", port: "COM9", columns: 42 },
+		});
+
+		const elements = exampleElements({
+			deviceName: device.name,
+			columns: device.columns,
+			codepage: device.codepage,
+		});
+		// The element the failure named. Stated rather than searched for, so that the example
+		// growing a line above it is something this notices instead of quietly following.
+		expect(elements[22]).toBe("<align=center><image>fenpos</image></align>");
+
+		const result = await preview(device.id, elements.join("\n"));
+
+		expect(result.errors).toEqual([]);
+		const images = (result.lines ?? []).flatMap((line) => line.blocks).filter((block) => block.kind === "IMAGE");
+		expect(images).toHaveLength(1);
+		expect(images[0].ref).toBe("fenpos");
+		// The dots drawn are the dots the agent has bundled for 42 columns, which is what makes the
+		// preview worth holding against the paper. `bundled-logo.test.ts` is what pins those to the
+		// committed `.raster`; this checks the preview shows them rather than a rescale.
+		expect(images[0].png).toBe(await rasterToPngDataUrl(await bundledLogoRaster(504)));
+		expect(images[0].widthFraction).toBe(1);
 	});
 
 	it("names the image the agent bundles", () => {
