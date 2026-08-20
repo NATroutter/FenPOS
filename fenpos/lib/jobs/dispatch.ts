@@ -103,7 +103,10 @@ export async function submitJob(
 	// element at fault — rather than a job already recorded and sent. Still before the row
 	// exists, like every other content problem, and last among the checks that can refuse without
 	// one, so neither an oversized body nor a disconnected agent costs a fetch.
-	const settings: CompileSettings = { ...deviceSettings, images: await resolveImages(request.data) };
+	const settings: CompileSettings = {
+		...deviceSettings,
+		images: await resolveImages(request.data, deviceSettings.columns),
+	};
 
 	const job = await prisma.job.create({
 		data: {

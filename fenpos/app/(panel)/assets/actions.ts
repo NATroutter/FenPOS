@@ -5,6 +5,7 @@ import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { createAsset, deleteAsset, importAssetFromUrl, requireWithinByteCap } from "@/lib/assets/asset-service";
 import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
+import { pushConfigToEveryAgent } from "@/lib/link/agent-connection";
 import { logger } from "@/lib/logger";
 
 /**
@@ -31,6 +32,10 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 
 	try {
 		await work();
+		// Every action here changes the image library, and every connected agent holds a copy of it
+		// dithered for its own paper. Pushed now rather than left to the next reconnect, so a logo
+		// uploaded during service is on the printers before the next receipt asks for it.
+		await pushConfigToEveryAgent();
 		revalidatePath("/assets");
 		return { error: null };
 	} catch (error) {

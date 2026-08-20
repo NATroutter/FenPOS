@@ -1,6 +1,7 @@
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as WireSpan } from "@/lib/link/protocol";
+import { dotWidth } from "@/lib/markup/blocks";
 import { validateCharset } from "@/lib/markup/charset";
 import { MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
@@ -197,7 +198,7 @@ export function compile(
 		jobId,
 		device: deviceName,
 		linefeed: request.linefeed,
-		lines: lines.map((line) => toWireLine(line, settings.columns)),
+		lines: lines.map((line) => toWireLine(line, settings)),
 	};
 }
 
@@ -415,13 +416,10 @@ function resolved(ref: string, settings: CompileSettings): ImageSource {
  * budgeting value with no wire field, kept off the wire so the model and wire types stay the
  * distinct shapes {@link WireDirective}'s module documents.
  *
- * `IMAGE` is the one directive that does not cross at all yet, because {@link WireDirective} has
- * nowhere to put it: an image reaches an agent by a different route from its reference — a stored
- * asset's raster travels once with the device configuration, while a URL image's bytes have to ride
- * inside the job — and neither route exists on the wire so far. Until it does, an image is parsed,
- * resolved and charged its paper here but the agent is never told about it, so it prints nothing.
+ * `IMAGE` crosses by one of two routes, and which one is settled here — see {@link toWireImage}.
  */
-function toWireLine(line: Line, columns: number): WireLine {
+function toWireLine(line: Line, settings: CompileSettings): WireLine {
+	const columns = settings.columns;
 	const rule = line.directives.find((directive) => directive.kind === "RULE");
 
 	const spans: WireSpan[] = rule
@@ -460,8 +458,58 @@ function toWireLine(line: Line, columns: number): WireLine {
 			directives.push({ type: "PDF417", content: directive.content, errorLevel: directive.errorLevel });
 		} else if (directive.kind === "DRAWER") {
 			directives.push({ type: "DRAWER", pin: directive.pin });
+		} else if (directive.kind === "IMAGE") {
+			directives.push(toWireImage(directive.ref, directive.widthPercent, settings));
 		}
 	}
 
 	return { align: line.align, spans, directives };
+}
+
+/**
+ * Chooses how an image's dots reach the agent, and says so on the wire.
+ *
+ * **Naming beats sending.** A stored asset was dithered once, at each of the agent's paper widths,
+ * and pushed with its configuration; a job printing it at that width need only say which one, so
+ * the dots cross the link once per change rather than once per receipt. Everything else carries its
+ * dots: a URL, because nothing could have pre-synced them, and a stored asset at some other printed
+ * width, because the alternative — shrinking a raster on the agent — resamples dots that have
+ * already been reduced to black and white and turns a logo into mud.
+ *
+ * The pre-pass is what makes those two cases one rule here: it produced a raster for exactly the
+ * widths that must travel, so their presence is the answer. The paper width is checked as well, and
+ * is the reason this can throw. A reference for a width the agent was never synced at would compile
+ * cleanly and then fail behind a printer, which is the class of failure this pipeline exists to
+ * prevent, so a pre-pass that produced the wrong set fails here instead.
+ *
+ * @param ref the reference as written between the tags
+ * @param widthPercent the tag's argument: the share of the paper's width to print at
+ * @param settings the compile settings, carrying the paper width and what the pre-pass resolved
+ * @returns the directive to send
+ * @throws Error if the dots for this width were neither synced nor resolved, which is a server bug
+ */
+function toWireImage(ref: string, widthPercent: number, settings: CompileSettings): WireDirective {
+	const source = resolved(ref, settings);
+	const { widthDots } = imageGeometry(source, widthPercent, settings.columns);
+
+	const raster = source.inline?.get(widthDots);
+	if (raster) {
+		return {
+			type: "IMAGE",
+			source: {
+				kind: "INLINE",
+				widthDots: raster.widthDots,
+				heightDots: raster.heightDots,
+				data: raster.packed.toString("base64"),
+			},
+		};
+	}
+
+	if (widthDots !== dotWidth(settings.columns)) {
+		throw new Error(
+			`The image '${ref}' prints ${widthDots} dots wide, a width no raster was synced or resolved for; resolveImages must run first`,
+		);
+	}
+
+	return { type: "IMAGE", source: { kind: "REF", ref, widthDots } };
 }

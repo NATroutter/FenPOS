@@ -1,12 +1,15 @@
 import "server-only";
-import { remoteImageSize, storedImageSize } from "@/lib/assets/asset-service";
+import { rasterFor, remoteImage, storedImageSize } from "@/lib/assets/asset-service";
+import { ditherToRaster, type ImageRaster } from "@/lib/assets/dither";
 import { ApiError } from "@/lib/errors";
-import type { ImageSource, ResolvedImages } from "@/lib/markup/images";
+import { MAX_FRAME_BYTES } from "@/lib/link/protocol";
+import { dotWidth } from "@/lib/markup/blocks";
+import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { parseMarkup } from "@/lib/markup/parser";
 
 /**
  * The pre-pass that turns every `<image>` reference in a request into a size the compiler can
- * charge for.
+ * charge for, and into the dots that have to travel with the job.
  *
  * **This exists because measuring an image is asynchronous and compiling is not.** A stored asset's
  * dimensions are a database row and a URL image's are an HTTP response, while `parseMarkup` takes a
@@ -14,6 +17,12 @@ import { parseMarkup } from "@/lib/markup/parser";
  * `await` through every caller of a pipeline that is otherwise a pure function of its input, for
  * the sake of one directive. So the waiting is done here, once, before the compile starts, and the
  * answers reach it through `CompileSettings.images`.
+ *
+ * Dithering is here for exactly the same reason and is the second thing this pre-pass owns. A stored
+ * asset printed at the paper's own width needs none: its dots reached the agent with the device
+ * configuration, and the job names them. Everything else — a URL, or a stored asset at some other
+ * printed width — has its raster produced here, because `ditherToRaster` is asynchronous too and the
+ * compiler that must emit those dots is not.
  *
  * Run it **before** compiling and after the request's own limits have been checked, so an oversized
  * body is refused without this server fetching anything on its behalf.
@@ -85,28 +94,55 @@ export const RESOLVE_WINDOW = 6;
 export const MAX_REMOTE_IMAGES = 12;
 
 /**
+ * How many base64 characters of image dots one request may put inside its job.
+ *
+ * **A bound on the frame, not on the picture.** A job is one WebSocket message and is refused whole
+ * above {@link MAX_FRAME_BYTES}, so dots that ride inside it spend from an allowance the receipt's
+ * text also draws on. Without this, a receipt naming a few tall images compiles cleanly, is recorded
+ * as a job, and then cannot be sent — a 500 for something that was a property of the request all
+ * along, and a job left claiming to be queued.
+ *
+ * Three quarters of the frame, leaving 64 KB for the text and structure around them: four times the
+ * default `maxTotalChars`, and comfortably more than any receipt that also carries this many dots.
+ * It sits above `IMAGE_LIMITS.maxRasterChars`, the wire's cap on any single raster, on purpose: one
+ * image may spend two thirds of the allowance and several must share it, and the whole is wide
+ * enough that the documented ceiling of {@link MAX_REMOTE_IMAGES} distinct URL logos still prints
+ * rather than being refused by an allowance narrower than the limit beside it.
+ *
+ * **Stored images at the paper's own width cost nothing here.** Their dots are already on the agent,
+ * so a receipt built the way this system asks — a stored logo, printed full width — never meets this
+ * limit however many times it repeats.
+ */
+export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
+
+/**
  * Resolves every image a request refers to.
  *
  * @param data the request's elements, exactly as the caller wrote them
- * @returns each reference in them, mapped to the image's own pixel dimensions
- * @throws ApiError if the request names more than {@link MAX_REMOTE_IMAGES} URLs, if a reference
- *         names no stored image, or if a URL cannot be fetched or read as one; for the last two the
- *         element it was written on travels in `details.line`
+ * @param columns the target device's width in printer columns, which decides both the paper width
+ *        a stored raster was synced at and the dot widths the tags ask for
+ * @returns each reference in them, mapped to the image's own pixel dimensions and to any dots that
+ *          must travel inside the job
+ * @throws ApiError if the request names more than {@link MAX_REMOTE_IMAGES} URLs, if its images
+ *         come to more than {@link MAX_INLINE_IMAGE_CHARS}, if a reference names no stored image,
+ *         or if a URL cannot be fetched or read as one; for the last two the element it was written
+ *         on travels in `details.line`
  */
-export async function resolveImages(data: readonly string[]): Promise<ResolvedImages> {
-	const queue = [...collect(data)];
+export async function resolveImages(data: readonly string[], columns: number): Promise<ResolvedImages> {
+	const queue = [...collect(data, columns)];
 	requireWithinRemoteLimit(queue);
 
 	const sized = new Map<string, ImageSource>();
+	const budget = { spent: 0 };
 
 	// A fixed set of workers sharing one queue, rather than one promise per reference: that is what
 	// makes {@link RESOLVE_WINDOW} the number in flight rather than merely the number started.
 	let refused = false;
 	const workers = Array.from({ length: Math.min(RESOLVE_WINDOW, queue.length) }, async () => {
 		for (let entry = queue.shift(); entry !== undefined && !refused; entry = queue.shift()) {
-			const [reference, line] = entry;
+			const [reference, use] = entry;
 			try {
-				sized.set(reference, await sizeOf(reference, line));
+				sized.set(reference, await resolveOne(reference, use, columns, budget));
 			} catch (thrown) {
 				// The whole request is going to be refused for this, so the rest of the receipt is
 				// work nobody will read. Stopping matters most for the case that matters most: a
@@ -137,6 +173,21 @@ export async function resolveImages(data: readonly string[]): Promise<ResolvedIm
 const IMAGE_OPENING = /<image[=>]/i;
 
 /**
+ * How one request uses one image.
+ *
+ * The widths are what makes this more than a line number. A raster is dithered for one printed
+ * width, so a receipt writing `<image>logo</image>` and `<image=50>logo</image>` needs two — while
+ * still needing only one lookup or one fetch, because an image's own dimensions do not depend on how
+ * wide it is printed. Held as a set so a logo repeated on every copy of a receipt is dithered once.
+ */
+interface ImageUse {
+	/** The 1-based element the reference first appeared on, for naming it in a refusal. */
+	line: number;
+	/** Every distinct printed width, in dots, this request asks for. */
+	widths: Set<number>;
+}
+
+/**
  * Finds every distinct image reference in a request, and where it was first written.
  *
  * Parses with the same parser the compile will use, so the references found here are exactly the
@@ -152,10 +203,11 @@ const IMAGE_OPENING = /<image[=>]/i;
  * had charged for.
  *
  * @param data the request's elements
- * @returns each reference, mapped to the 1-based element it first appeared on
+ * @param columns the target device's width in printer columns
+ * @returns each reference, mapped to how the request uses it
  */
-function collect(data: readonly string[]): Map<string, number> {
-	const references = new Map<string, number>();
+function collect(data: readonly string[], columns: number): Map<string, ImageUse> {
+	const references = new Map<string, ImageUse>();
 
 	for (let index = 0; index < data.length; index++) {
 		if (!IMAGE_OPENING.test(data[index])) {
@@ -170,9 +222,15 @@ function collect(data: readonly string[]): Map<string, number> {
 		}
 
 		for (const directive of directives) {
-			if (directive.kind === "IMAGE" && !references.has(directive.ref)) {
-				references.set(directive.ref, index + 1);
+			if (directive.kind !== "IMAGE") {
+				continue;
 			}
+			let use = references.get(directive.ref);
+			if (!use) {
+				use = { line: index + 1, widths: new Set() };
+				references.set(directive.ref, use);
+			}
+			use.widths.add(printedWidthDots(directive.widthPercent, columns));
 		}
 	}
 
@@ -210,7 +268,7 @@ function isRemote(reference: string): boolean {
  * @param references every reference the request names, deduplicated
  * @throws ApiError if too many of them are URLs
  */
-function requireWithinRemoteLimit(references: readonly (readonly [string, number])[]): void {
+function requireWithinRemoteLimit(references: readonly (readonly [string, ImageUse])[]): void {
 	const remote = references.filter(([reference]) => isRemote(reference)).length;
 	if (remote > MAX_REMOTE_IMAGES) {
 		throw new ApiError(
@@ -225,16 +283,123 @@ function requireWithinRemoteLimit(references: readonly (readonly [string, number
  * Resolves one reference, whichever kind it is.
  *
  * @param reference the text between the tags
- * @param line the element it was written on
- * @returns the image's own pixel dimensions
+ * @param use the element it was written on and the widths the request prints it at
+ * @param columns the target device's width in printer columns
+ * @returns the image's own pixel dimensions, and any dots that must travel inside the job
  * @throws ApiError carrying the element, so a caller can find the tag that failed
  */
-async function sizeOf(reference: string, line: number): Promise<ImageSource> {
+async function resolveOne(
+	reference: string,
+	use: ImageUse,
+	columns: number,
+	budget: InlineBudget,
+): Promise<ImageSource> {
 	try {
-		return isRemote(reference) ? await remoteImageSize(reference) : await storedImageSize(reference);
+		return isRemote(reference)
+			? await resolveRemote(reference, use.widths, budget)
+			: await resolveStored(reference, use.widths, columns, budget);
 	} catch (thrown) {
-		throw onLine(thrown, line);
+		throw onLine(thrown, use.line);
 	}
+}
+
+/**
+ * What one request has spent of {@link MAX_INLINE_IMAGE_CHARS} so far.
+ *
+ * Mutable and shared across the workers, which is safe because they interleave rather than run in
+ * parallel — one thread, so no two of them are ever between reading and writing this at once.
+ */
+interface InlineBudget {
+	spent: number;
+}
+
+/**
+ * Charges a raster against the request's allowance, refusing it if the job could not carry it.
+ *
+ * Charged as it is produced rather than totted up at the end, so a receipt asking for far too much
+ * stops at the first image past the line instead of dithering the rest of them first.
+ *
+ * @param reference the image, for the message
+ * @param raster the dots just produced
+ * @param budget what the request has spent so far, updated in place
+ * @throws ApiError when this raster takes the request past its allowance
+ */
+function charge(reference: string, raster: ImageRaster, budget: InlineBudget): void {
+	budget.spent += Math.ceil(raster.packed.length / 3) * 4;
+	if (budget.spent > MAX_INLINE_IMAGE_CHARS) {
+		throw new ApiError(
+			"image_too_large",
+			`The images this receipt has to send come to more than a job can carry. '${reference}' is ${raster.widthDots}x${raster.heightDots} dots; print it smaller, or store it on the Assets tab and print it at the paper's full width so its dots travel with the printer's configuration instead.`,
+			{ limit: MAX_INLINE_IMAGE_CHARS, spent: budget.spent },
+		);
+	}
+}
+
+/**
+ * Resolves a URL image, whose dots can never have been pre-synced.
+ *
+ * One fetch answers both questions. The bytes measure the image and then dither it at every width
+ * the receipt prints it at, and are dropped as soon as that is done — an earlier version measured
+ * from one fetch and left the pixels to a second, so printing a URL image went to the same host
+ * twice.
+ *
+ * @param url the URL, exactly as it was written between the tags
+ * @param widths every printed width, in dots, this request needs
+ * @param budget what the request has spent of its inline allowance
+ * @returns the image's own dimensions and a raster per width
+ * @throws ApiError if the fetch is refused, the bytes are not an image this pipeline prints, or the
+ *         dots take the request past {@link MAX_INLINE_IMAGE_CHARS}
+ */
+async function resolveRemote(url: string, widths: ReadonlySet<number>, budget: InlineBudget): Promise<ImageSource> {
+	const fetched = await remoteImage(url);
+
+	const inline = new Map<number, ImageRaster>();
+	for (const width of widths) {
+		const raster = await ditherToRaster(fetched.bytes, width);
+		charge(url, raster, budget);
+		inline.set(width, raster);
+	}
+
+	return { width: fetched.width, height: fetched.height, inline };
+}
+
+/**
+ * Resolves a stored asset, dithering only the widths the agent was not already sent.
+ *
+ * **The paper width is free and every other width is not.** A stored asset is dithered once per
+ * paper width and pushed with the device configuration, so the common case — a logo at the full
+ * width of the paper — needs nothing here beyond two integer columns. A tag asking for some other
+ * width has no synced raster to name, and the alternative of shrinking one on the agent would
+ * resample dots already reduced to black and white, so those dots are dithered here and ride in the
+ * job like a URL's. That is the honest price of `<image=50>`, and it is paid on the print path.
+ *
+ * @param name the asset's name, as written between the tags
+ * @param widths every printed width, in dots, this request needs
+ * @param columns the device's width in printer columns, which fixes the width that was synced
+ * @param budget what the request has spent of its inline allowance
+ * @returns the image's stored dimensions and a raster for each width that must travel
+ * @throws ApiError if no image of that name is stored, or the dots it needs take the request past
+ *         {@link MAX_INLINE_IMAGE_CHARS}
+ */
+async function resolveStored(
+	name: string,
+	widths: ReadonlySet<number>,
+	columns: number,
+	budget: InlineBudget,
+): Promise<ImageSource> {
+	const stored = await storedImageSize(name);
+	const synced = dotWidth(columns);
+
+	const inline = new Map<number, ImageRaster>();
+	for (const width of widths) {
+		if (width !== synced) {
+			const raster = await rasterFor(name, width);
+			charge(name, raster, budget);
+			inline.set(width, raster);
+		}
+	}
+
+	return { width: stored.width, height: stored.height, inline };
 }
 
 /**

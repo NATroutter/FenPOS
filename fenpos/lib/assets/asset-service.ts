@@ -28,7 +28,7 @@ import type { ImageSource } from "@/lib/markup/images";
  * behind a printer where nobody can act on it.
  *
  * Two entry points put bytes into this table — an upload and a URL import — and both go through
- * {@link store}. A third reads bytes without storing them at all: {@link remoteImageSize} measures
+ * {@link store}. A third reads bytes without storing them at all: {@link remoteImage} measures
  * the live URL an `<image>` tag can name. All three go through {@link measured}, so a bound added
  * here cannot be walked around by choosing another door.
  */
@@ -273,6 +273,14 @@ export async function storedImageSize(name: string): Promise<ImageSource> {
 	return { width: row.width, height: row.height };
 }
 
+/** A URL image as it was fetched: what it turned out to be, and the bytes it was measured from. */
+export interface RemoteImage {
+	width: number;
+	height: number;
+	/** The file exactly as fetched, so a caller that must also dither it need not fetch again. */
+	bytes: Buffer;
+}
+
 /**
  * Fetches an image named by a URL and reads its dimensions, without storing it.
  *
@@ -281,19 +289,20 @@ export async function storedImageSize(name: string): Promise<ImageSource> {
  * passes. A URL image is the only image here that no signed-in operator chose, so it must not be
  * the one that reaches a decoder unmeasured.
  *
- * The bytes are then dropped, which is a trade rather than an oversight: only the size is wanted
- * while compiling, and keeping two megabytes per referenced URL alive for the length of a compile
- * costs every job something no job currently reads. Anything that needs the pixels — printing a URL
- * image, or drawing one in the preview — fetches again, and the honest price of that is a second
- * round trip to the same host.
+ * **The bytes are handed back rather than dropped.** A URL image needs measuring *and* dithering
+ * before its job can be compiled, and an earlier version of this returned only the size — so a print
+ * fetched the same URL twice, once to measure and once for the pixels. The caller holds these for as
+ * long as it takes to dither and no longer, which keeps the buffers in flight bounded by the
+ * pre-pass's own resolve window rather than by how many URLs a receipt names.
  *
  * @param url the URL, exactly as it was written between the tags
- * @returns the image's size in pixels
+ * @returns the image's size in pixels and the bytes it was read from
  * @throws ApiError if the fetch is refused, or the bytes are not an image this pipeline prints
  */
-export async function remoteImageSize(url: string): Promise<ImageSource> {
-	const decoded = await measured(await fetchRemoteImage(url));
-	return { width: decoded.width, height: decoded.height };
+export async function remoteImage(url: string): Promise<RemoteImage> {
+	const bytes = await fetchRemoteImage(url);
+	const decoded = await measured(bytes);
+	return { width: decoded.width, height: decoded.height, bytes };
 }
 
 /**

@@ -410,3 +410,81 @@ describe("block line budget", () => {
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 	});
 });
+
+/**
+ * How an image leaves the compiler, which is by one of two routes.
+ *
+ * A stored asset's dots reached the agent with its configuration, so the job names them. Anything
+ * else — a URL, or a stored asset at a width nobody synced — has its dots put in the job. The
+ * pre-pass decides which by whether it produced a raster; this is where that decision is read.
+ */
+describe("images on the wire", () => {
+	/** A raster of the stated size, all paper, as the pre-pass would hand one over. */
+	const raster = (widthDots: number, heightDots: number) => ({
+		widthDots,
+		heightDots,
+		packed: Buffer.alloc(Math.ceil(widthDots / 8) * heightDots),
+	});
+
+	// Ten columns is 120 dots, which is the width the agent's rasters were synced at.
+	const SETTINGS: CompileSettings = {
+		columns: 10,
+		codepage: "CP858",
+		onUnsupported: "REJECT",
+		defaultWrap: true,
+		defaultLinefeed: "LF",
+		images: new Map([
+			// Stored: full width needs nothing in the job, half width does.
+			["logo", { width: 120, height: 240, inline: new Map([[60, raster(60, 120)]]) }],
+			// Stored, and nobody produced the half-width dots it would need.
+			["stamp", { width: 120, height: 120, inline: new Map() }],
+			// A URL, whose dots can never be pre-synced.
+			["https://x.test/l.png", { width: 240, height: 120, inline: new Map([[120, raster(120, 60)]]) }],
+		]),
+	};
+
+	const limits: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 40 };
+
+	const directivesFor = (element: string) => {
+		const request = readRequest({ data: [element], linefeed: "LF" }, limits, SETTINGS);
+		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
+		expect(compiledJobSchema.safeParse(job).success).toBe(true);
+		return job.lines[0].directives;
+	};
+
+	it("names a stored image at the paper's width, rather than sending its dots again", () => {
+		expect(directivesFor("<image>logo</image>")).toEqual([
+			{ type: "IMAGE", source: { kind: "REF", ref: "logo", widthDots: 120 } },
+		]);
+	});
+
+	it("carries a URL image's dots inside the job, because nothing could have pre-synced them", () => {
+		expect(directivesFor("<image>https://x.test/l.png</image>")).toEqual([
+			{
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 120, heightDots: 60, data: Buffer.alloc(15 * 60).toString("base64") },
+			},
+		]);
+	});
+
+	/**
+	 * Half a paper width is not a width any raster was synced at, and shrinking one that was would
+	 * resample dots already reduced to black and white. So these dots ride in the job like a URL's.
+	 */
+	it("carries a stored image's dots when its printed width is not the one that was synced", () => {
+		expect(directivesFor("<image=50>logo</image>")).toEqual([
+			{
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 60, heightDots: 120, data: Buffer.alloc(8 * 120).toString("base64") },
+			},
+		]);
+	});
+
+	/**
+	 * Naming a width the agent was never sent would produce a job that is accepted here and fails
+	 * behind the printer, which is the failure this whole pipeline exists to avoid.
+	 */
+	it("refuses to name a width nobody synced, rather than sending a reference the agent cannot resolve", () => {
+		expect(() => directivesFor("<image=50>stamp</image>")).toThrow(/stamp/);
+	});
+});

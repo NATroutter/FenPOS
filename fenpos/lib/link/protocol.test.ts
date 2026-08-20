@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	directiveSchema,
+	IMAGE_LIMITS,
 	JOB_LIMITS,
 	type Line,
 	MAX_FRAME_BYTES,
@@ -229,6 +230,7 @@ describe("serialiseServerFrame", () => {
 					maxQueueDepth: 100,
 				},
 			],
+			assets: [],
 		});
 		expect(JSON.parse(text).devices[0].codepage).toBe("CP858");
 	});
@@ -311,5 +313,124 @@ describe("block directives on the wire", () => {
 
 	it("refuses a drawer pin the hardware does not have", () => {
 		expect(() => directiveSchema.parse({ type: "DRAWER", pin: 3 })).toThrow();
+	});
+});
+
+describe("images on the wire", () => {
+	/** A raster of the right size for its rectangle, all paper. */
+	function bits(widthDots: number, heightDots: number): string {
+		return Buffer.alloc(Math.ceil(widthDots / 8) * heightDots).toString("base64");
+	}
+
+	it("accepts an image naming a raster the agent was already sent", () => {
+		expect(
+			directiveSchema.parse({ type: "IMAGE", source: { kind: "REF", ref: "logo", widthDots: 384 } }),
+		).toMatchObject({ type: "IMAGE", source: { kind: "REF", ref: "logo" } });
+	});
+
+	it("refuses a reference that is not a stored asset's name", () => {
+		expect(() =>
+			directiveSchema.parse({ type: "IMAGE", source: { kind: "REF", ref: "https://x.test/a.png", widthDots: 384 } }),
+		).toThrow();
+	});
+
+	it("accepts an image carrying its own bits", () => {
+		expect(
+			directiveSchema.parse({
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 16, heightDots: 2, data: bits(16, 2) },
+			}),
+		).toMatchObject({ source: { kind: "INLINE", heightDots: 2 } });
+	});
+
+	/**
+	 * The check that matters most on this schema. A raster whose bits do not fill its stated
+	 * rectangle leaves the printer waiting for bytes that never arrive, which needs a power cycle
+	 * rather than a failed job — so the count is checked where the frame is defined.
+	 */
+	it("refuses inline bits that do not fill the stated rectangle", () => {
+		expect(() =>
+			directiveSchema.parse({
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 16, heightDots: 2, data: bits(16, 3) },
+			}),
+		).toThrow();
+	});
+
+	it("counts a row's padding towards the rectangle", () => {
+		// Nine dots across is two bytes a row, not one and an eighth.
+		expect(() =>
+			directiveSchema.parse({
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 9, heightDots: 4, data: Buffer.alloc(5).toString("base64") },
+			}),
+		).toThrow();
+		expect(
+			directiveSchema.parse({
+				type: "IMAGE",
+				source: { kind: "INLINE", widthDots: 9, heightDots: 4, data: bits(9, 4) },
+			}),
+		).toMatchObject({ source: { kind: "INLINE" } });
+	});
+
+	it("refuses an image source of neither kind", () => {
+		expect(() => directiveSchema.parse({ type: "IMAGE", source: { kind: "SOMEDAY", ref: "logo" } })).toThrow();
+	});
+
+	/**
+	 * The closest thing to a round trip that fits in one test runner: the exact text this side
+	 * produces for four known bytes, which is the exact text `FrameCodecTest.readsTheRastersASnapshot
+	 * Carries` on the agent parses back into those bytes. The two fixtures are deliberately the same
+	 * string, so a change to the encoding on either side leaves the pair visibly disagreeing.
+	 */
+	it("encodes dots the way the agent's codec decodes them", () => {
+		const text = serialiseServerFrame({
+			type: "config.sync",
+			devices: [],
+			assets: [
+				{
+					name: "logo",
+					widthDots: 16,
+					heightDots: 2,
+					data: Buffer.from([0x80, 0x01, 0x00, 0xff]).toString("base64"),
+				},
+			],
+		});
+
+		expect(JSON.parse(text).assets[0].data).toBe("gAEA/w==");
+	});
+
+	it("carries synced rasters on a config sync", () => {
+		const text = serialiseServerFrame({
+			type: "config.sync",
+			devices: [],
+			assets: [{ name: "logo", widthDots: 16, heightDots: 2, data: bits(16, 2) }],
+		});
+		expect(JSON.parse(text).assets[0].name).toBe("logo");
+	});
+
+	it("refuses a synced raster whose bits do not fill its rectangle", () => {
+		expect(() =>
+			serialiseServerFrame({
+				type: "config.sync",
+				devices: [],
+				assets: [{ name: "logo", widthDots: 16, heightDots: 2, data: bits(16, 1) }],
+			}),
+		).toThrow();
+	});
+
+	it("refuses more synced rasters than the cap", () => {
+		expect(() =>
+			serialiseServerFrame({
+				type: "config.sync",
+				devices: [],
+				assets: Array.from({ length: IMAGE_LIMITS.maxSyncedRasters + 1 }, () => ({
+					name: "logo",
+					widthDots: 8,
+					heightDots: 1,
+					data: bits(8, 1),
+				})),
+			}),
+		).toThrow();
 	});
 });

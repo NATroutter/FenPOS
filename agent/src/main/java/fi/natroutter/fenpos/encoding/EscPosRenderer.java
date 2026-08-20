@@ -6,6 +6,11 @@ import com.github.anastaciocintra.escpos.Style;
 import com.github.anastaciocintra.escpos.barcode.BarCode;
 import com.github.anastaciocintra.escpos.barcode.PDF417;
 import com.github.anastaciocintra.escpos.barcode.QRCode;
+import com.github.anastaciocintra.escpos.image.Bitonal;
+import com.github.anastaciocintra.escpos.image.BitonalThreshold;
+import com.github.anastaciocintra.escpos.image.CoffeeImage;
+import com.github.anastaciocintra.escpos.image.EscPosImage;
+import com.github.anastaciocintra.escpos.image.RasterBitImageWrapper;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
@@ -202,6 +207,14 @@ public final class EscPosRenderer {
                 }
                 state.activeStyle = null;
             }
+            // Same reasoning as the symbols: the raster command emits its own justification, so
+            // whatever style was in effect no longer describes the printer.
+            case Directive.Image image -> {
+                escpos.write(
+                        new RasterBitImageWrapper().setJustification(justification(align)),
+                        new EscPosImage(new PackedRaster(image), new BitonalThreshold()));
+                state.activeStyle = null;
+            }
             // Alone among these, the pulse writes no style of its own and none of the printer's
             // state it touches is style, so the cached style still describes the printer.
             case Directive.Drawer drawer -> out.write(drawerPulse(drawer.pin()));
@@ -360,5 +373,74 @@ public final class EscPosRenderer {
     /** Style currently in effect on the printer, so unchanged styles are not re-sent. */
     private static final class RenderState {
         private byte[] activeStyle;
+    }
+
+    /**
+     * A directive's packed dots, presented as the image the library expects.
+     * <p>
+     * escpos-coffee does not take a bitmap. {@code EscPosImage} takes a {@link CoffeeImage},
+     * which it asks for pixels one coordinate at a time, and a {@link Bitonal}, which decides
+     * ink or paper for each — and only then does {@code image2EscPosRaster} pack the result,
+     * most significant bit first, one whole byte boundary per row. That is the same layout the
+     * server already dithered to, so this class exists to hand the bits straight back: each dot
+     * is reported as opaque black or opaque white and {@link BitonalThreshold} turns it into the
+     * bit it started as. Nothing is re-thresholded and no bit is reordered.
+     * <p>
+     * The alternative was decoding into a {@code BufferedImage}, which would allocate four bytes
+     * per dot to carry one and drag {@code java.awt} onto the print path for no gain.
+     * <p>
+     * {@link #getSubimage} is implemented because the interface requires it — the library's
+     * column-format wrapper slices an image into bands — but the raster wrapper this renderer
+     * uses never calls it. It is a view rather than a copy, which is what the interface
+     * documents.
+     */
+    private static final class PackedRaster implements CoffeeImage {
+
+        /** Opaque black and opaque white, the two colours a dithered raster has. */
+        private static final int INK = 0xFF000000;
+        private static final int PAPER = 0xFFFFFFFF;
+
+        private final byte[] packed;
+        /** Bytes per row of the *whole* raster, which a subimage still indexes by. */
+        private final int stride;
+        private final int originX;
+        private final int originY;
+        private final int width;
+        private final int height;
+
+        private PackedRaster(Directive.Image image) {
+            this(image.packed(), (image.widthDots() + 7) / 8, 0, 0, image.widthDots(), image.heightDots());
+        }
+
+        private PackedRaster(byte[] packed, int stride, int originX, int originY, int width, int height) {
+            this.packed = packed;
+            this.stride = stride;
+            this.originX = originX;
+            this.originY = originY;
+            this.width = width;
+            this.height = height;
+        }
+
+        @Override
+        public int getWidth() {
+            return width;
+        }
+
+        @Override
+        public int getHeight() {
+            return height;
+        }
+
+        @Override
+        public CoffeeImage getSubimage(int x, int y, int w, int h) {
+            return new PackedRaster(packed, stride, originX + x, originY + y, w, h);
+        }
+
+        @Override
+        public int getRGB(int x, int y) {
+            int dot = originX + x;
+            int bit = packed[(originY + y) * stride + (dot >> 3)] >> (7 - (dot & 7)) & 1;
+            return bit == 1 ? INK : PAPER;
+        }
     }
 }

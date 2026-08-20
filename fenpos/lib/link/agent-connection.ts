@@ -2,6 +2,7 @@ import "server-only";
 import type { WebSocket } from "ws";
 import { prisma } from "@/lib/db";
 import { publish } from "@/lib/events/bus";
+import { rastersFor } from "@/lib/link/asset-sync";
 import { clearAgentStatus, recordStatus } from "@/lib/link/device-status";
 import {
 	type DeviceConfig,
@@ -14,7 +15,7 @@ import {
 	type ServerFrame,
 	serialiseServerFrame,
 } from "@/lib/link/protocol";
-import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLink } from "@/lib/link/registry";
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
@@ -419,10 +420,14 @@ async function markOffline(agentId: string): Promise<void> {
 }
 
 /**
- * Sends the agent its authoritative device set.
+ * Sends the agent its authoritative device set, and the images its receipts may draw on.
  *
  * A whole snapshot rather than a delta, so a agent that missed changes while disconnected
  * converges without either side tracking what the other has seen.
+ *
+ * The stored images travel here rather than in each job that prints them: they change rarely and an
+ * agent must hold them before a job arrives, which is the same argument that puts the device set
+ * here. See `asset-sync.ts` for which rasters an agent needs and how many of them fit.
  *
  * @param link the connection to send on
  * @param agentId the agent whose devices to send
@@ -467,8 +472,37 @@ export async function pushDeviceConfig(link: AgentLink, agentId: string): Promis
 			}
 		}
 
-		link.send({ type: "config.sync", devices });
+		// After the devices are settled, because which rasters an agent needs follows from the paper
+		// widths of the devices it actually has — and a device whose stored configuration would not
+		// parse is not one of them.
+		link.send({ type: "config.sync", devices, assets: await rastersFor(devices, agentId) });
 	} catch (error) {
 		logger.error("Could not push device configuration", error, { agentId });
 	}
+}
+
+/**
+ * Sends every connected agent a fresh snapshot.
+ *
+ * What the stored images need that the device set does not: a device belongs to one agent, so
+ * changing it concerns one connection, while the image library is shared by all of them. An upload
+ * that only reached agents which happened to reconnect afterwards would leave the same receipt
+ * printing a logo in one shop and failing for want of it in another.
+ *
+ * Sent as a whole configuration rather than as an images-only frame, because there is no such frame
+ * and adding one would mean a second thing for both sides to keep in step for no gain: the snapshot
+ * is idempotent, so re-sending the devices alongside changes nothing an agent does.
+ *
+ * Failures are logged rather than raised. The change is already stored, agents converge on their
+ * next connection, and telling an operator their upload failed would be untrue.
+ */
+export async function pushConfigToEveryAgent(): Promise<void> {
+	await Promise.all(
+		connectedAgentIds().map(async (agentId) => {
+			const link = getLink(agentId);
+			if (link) {
+				await pushDeviceConfig(link, agentId);
+			}
+		}),
+	);
 }

@@ -46,6 +46,15 @@ export const API_ERROR_STATUS = {
 	 * number bounds.
 	 */
 	too_many_remote_images: 400,
+	/**
+	 * A receipt whose images come to more dots than one job can carry.
+	 *
+	 * Only dots that must travel inside the job are counted — a URL image, or a stored one printed
+	 * at a width the agent was not synced at. A stored image at the paper's own width costs nothing
+	 * against this, because its dots reached the agent with the printer's configuration. See
+	 * `MAX_INLINE_IMAGE_CHARS` in `lib/markup/resolve-images.ts`.
+	 */
+	image_too_large: 400,
 	invalid_linefeed: 400,
 	unknown_field: 400,
 

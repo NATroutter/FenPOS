@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { Jimp, JimpMime } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
@@ -33,6 +34,19 @@ const { createAsset } = await import("@/lib/assets/asset-service");
 const { MAX_REMOTE_IMAGES, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
 
 /**
+ * The device these resolves are for: 42 columns, which is 504 dots of paper.
+ *
+ * The width matters because it is what a stored asset's synced raster was dithered at, and so what
+ * decides whether a tag needs dots of its own. Named here so the cases below can say 504 and 252 and
+ * be read against it.
+ */
+const COLUMNS = 42;
+const PAPER_DOTS = 504;
+
+/** Resolves for {@link COLUMNS}, which is what almost every case here wants. */
+const resolve = (data: string[]) => resolveImages(data, COLUMNS);
+
+/**
  * A receipt naming `count` distinct URLs, one per element.
  *
  * @param count how many distinct remote images to name
@@ -44,6 +58,20 @@ function remoteImages(count: number): string[] {
 
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
+
+/**
+ * A plain grey PNG of a given size.
+ *
+ * Grey rather than white so the dither leaves a mixture of set and clear bits, and so nothing here
+ * passes by accident on an all-zero buffer.
+ *
+ * @param width pixels across
+ * @param height pixels down
+ * @returns the encoded PNG
+ */
+async function solidPng(width: number, height: number): Promise<Buffer> {
+	return Buffer.from(await new Jimp({ width, height, color: 0x808080ff }).getBuffer(JimpMime.png));
+}
 
 /**
  * Builds a PNG that claims a size in its header and has no image behind it.
@@ -77,7 +105,7 @@ function headerClaiming(width: number, height: number): Buffer {
  */
 async function refusal(data: string[]): Promise<ApiError> {
 	try {
-		await resolveImages(data);
+		await resolve(data);
 	} catch (thrown) {
 		expect(thrown).toBeInstanceOf(ApiError);
 		return thrown as ApiError;
@@ -94,28 +122,25 @@ describe("resolveImages", () => {
 	it("resolves a stored asset to the dimensions it was stored with", async () => {
 		await createAsset("logo", PNG);
 
-		const images = await resolveImages(["<image>logo</image>"]);
+		const images = await resolve(["<image>logo</image>"]);
 
-		expect(images.get("logo")).toEqual({ width: 128, height: 40 });
+		expect(images.get("logo")).toMatchObject({ width: 128, height: 40 });
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
 	it("resolves a URL through the guarded fetch, keeping its query string", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages(["<image=50>https://x.test/l.png?v=2</image>"]);
+		const images = await resolve(["<image=50>https://x.test/l.png?v=2</image>"]);
 
 		expect(fetchRemoteImage).toHaveBeenCalledWith("https://x.test/l.png?v=2");
-		expect(images.get("https://x.test/l.png?v=2")).toEqual({ width: 128, height: 40 });
+		expect(images.get("https://x.test/l.png?v=2")).toMatchObject({ width: 128, height: 40 });
 	});
 
 	it("looks a reference up once however many times a receipt writes it", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages([
-			"<image>https://x.test/l.png</image>",
-			"<image=50>https://x.test/l.png</image>",
-		]);
+		const images = await resolve(["<image>https://x.test/l.png</image>", "<image=50>https://x.test/l.png</image>"]);
 
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
 		expect(images.size).toBe(1);
@@ -144,7 +169,7 @@ describe("resolveImages", () => {
 			return PNG;
 		});
 
-		const images = await resolveImages(remoteImages(MAX_REMOTE_IMAGES));
+		const images = await resolve(remoteImages(MAX_REMOTE_IMAGES));
 
 		expect(images.size).toBe(MAX_REMOTE_IMAGES);
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(MAX_REMOTE_IMAGES);
@@ -171,7 +196,7 @@ describe("resolveImages", () => {
 	it("resolves a receipt naming as many remote images as it may", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages(remoteImages(MAX_REMOTE_IMAGES));
+		const images = await resolve(remoteImages(MAX_REMOTE_IMAGES));
 
 		expect(images.size).toBe(MAX_REMOTE_IMAGES);
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(MAX_REMOTE_IMAGES);
@@ -192,7 +217,7 @@ describe("resolveImages", () => {
 	it("counts distinct references, so one URL on every copy of a receipt is one image", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages(
+		const images = await resolve(
 			Array.from({ length: MAX_REMOTE_IMAGES + 5 }, () => "<image>https://x.test/l.png</image>"),
 		);
 
@@ -212,7 +237,7 @@ describe("resolveImages", () => {
 			await createAsset(name, PNG);
 		}
 
-		const images = await resolveImages(names.map((name) => `<image>${name}</image>`));
+		const images = await resolve(names.map((name) => `<image>${name}</image>`));
 
 		expect(images.size).toBe(MAX_REMOTE_IMAGES + 1);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
@@ -262,9 +287,9 @@ describe("resolveImages", () => {
 	it("fetches nothing for markup that does not parse, which the compile will refuse anyway", async () => {
 		await createAsset("logo", PNG);
 
-		const images = await resolveImages(["<bold>unclosed", "<image>logo</image>"]);
+		const images = await resolve(["<bold>unclosed", "<image>logo</image>"]);
 
-		expect(images.get("logo")).toEqual({ width: 128, height: 40 });
+		expect(images.get("logo")).toMatchObject({ width: 128, height: 40 });
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
@@ -276,16 +301,113 @@ describe("resolveImages", () => {
 	it("resolves a tag written in capitals, which the parser accepts", async () => {
 		await createAsset("logo", PNG);
 
-		expect((await resolveImages(["<ALIGN=CENTER><IMAGE=50>logo</IMAGE></ALIGN>"])).get("logo")).toEqual({
+		expect((await resolve(["<ALIGN=CENTER><IMAGE=50>logo</IMAGE></ALIGN>"])).get("logo")).toMatchObject({
 			width: 128,
 			height: 40,
 		});
 	});
 
 	it("resolves nothing at all for a receipt with no images", async () => {
-		const images = await resolveImages(["Kahvi 2.50", "<qr>https://x.test/o/1</qr>"]);
+		const images = await resolve(["Kahvi 2.50", "<qr>https://x.test/o/1</qr>"]);
 
 		expect(images.size).toBe(0);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The dots, as distinct from the dimensions.
+ *
+ * An agent already holds a raster for every stored asset at each of its paper widths, so the common
+ * case costs nothing here. Everything else has to be dithered before the compile, because the
+ * compile is synchronous and dithering is not — which makes this the only place it can happen.
+ */
+describe("dots that have to travel with the job", () => {
+	it("leaves a stored image at the paper's width to the raster the agent was already sent", async () => {
+		await createAsset("logo", PNG);
+
+		const images = await resolve(["<image>logo</image>"]);
+
+		expect(images.get("logo")?.inline?.size).toBe(0);
+	});
+
+	/**
+	 * Half the paper is not a width anything synced, and shrinking a raster on the agent would
+	 * resample dots already reduced to black and white. So these are dithered here instead.
+	 */
+	it("dithers a stored image at a width nobody synced", async () => {
+		await createAsset("logo", PNG);
+
+		const images = await resolve(["<image=50>logo</image>"]);
+
+		expect(images.get("logo")?.inline?.get(PAPER_DOTS / 2)?.widthDots).toBe(PAPER_DOTS / 2);
+	});
+
+	/**
+	 * The measurement and the dots come out of the same fetch. Before this they did not: the size
+	 * was read and the bytes dropped, so printing a URL image went to the host once to measure it and
+	 * again for its pixels.
+	 */
+	it("dithers a URL image from the bytes it already fetched, rather than fetching twice", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const images = await resolve(["<image>https://x.test/l.png</image>"]);
+
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
+		expect(images.get("https://x.test/l.png")?.inline?.get(PAPER_DOTS)?.widthDots).toBe(PAPER_DOTS);
+	});
+
+	it("dithers a URL image once per distinct width the receipt prints it at", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const images = await resolve([
+			"<image>https://x.test/l.png</image>",
+			"<image=50>https://x.test/l.png</image>",
+			"<image=50>https://x.test/l.png</image>",
+		]);
+
+		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
+		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])].sort((a, b) => a - b)).toEqual([
+			PAPER_DOTS / 2,
+			PAPER_DOTS,
+		]);
+	});
+
+	/**
+	 * The bound that keeps a compiled job sendable. A job is one WebSocket message with a hard byte
+	 * cap, so a receipt whose dots exceed what the frame can hold has to be refused as a request —
+	 * with the tag named — rather than accepted, recorded, and then found unsendable.
+	 *
+	 * Two tall images, either of which fits alone. Asserted that way on purpose: a per-image check
+	 * would pass both, and the frame would still be one nothing could send.
+	 */
+	it("refuses a receipt whose images together exceed what one job can carry", async () => {
+		fetchRemoteImage.mockResolvedValue(await solidPng(504, 1400));
+
+		const thrown = await refusal(["<image>https://x.test/one.png</image>", "<image>https://x.test/two.png</image>"]);
+
+		expect(thrown.code).toBe("image_too_large");
+		expect(thrown.details.line).toBe(2);
+	});
+
+	it("charges nothing against that budget for a stored image at the paper's width", async () => {
+		await createAsset("logo", await solidPng(504, 900));
+
+		const images = await resolve(Array.from({ length: 20 }, () => "<image>logo</image>"));
+
+		expect(images.get("logo")?.inline?.size).toBe(0);
+	});
+
+	/**
+	 * The width a raster is keyed by is the printed width in dots, so it follows the device rather
+	 * than the tag. The same receipt on narrower paper needs a different raster, and asking for the
+	 * one it does not need would be a silently wrong picture.
+	 */
+	it("keys a raster by the printed width, which follows the device's paper", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const images = await resolveImages(["<image>https://x.test/l.png</image>"], 32);
+
+		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])]).toEqual([384]);
 	});
 });

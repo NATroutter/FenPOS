@@ -139,18 +139,26 @@ public final class Frames {
     }
 
     /**
-     * The authoritative device set for this agent.
+     * The authoritative device set for this agent, and the images its receipts may draw on.
      *
      * <p>Always a whole snapshot, never a delta. That makes it idempotent, so an agent that
      * missed changes while disconnected converges on reconnect without either side tracking
      * what the other has seen.
      *
+     * <p>The images travel here rather than inside each job that prints one. They change rarely
+     * and the agent must hold them before a job arrives, which is the same argument that puts
+     * the device set here — and a logo repeated on every receipt of the day then crosses the
+     * link once. The cost of the snapshot being whole is that they are re-sent on every
+     * reconnect rather than only when they change.
+     *
      * @param devices every device configured behind this agent
+     * @param assets  one raster per stored image per distinct paper width behind this agent
      */
-    public record ConfigSync(List<DeviceConfig> devices) implements ServerFrame {
+    public record ConfigSync(List<DeviceConfig> devices, List<AssetRaster> assets) implements ServerFrame {
 
         public ConfigSync {
             devices = List.copyOf(devices);
+            assets = List.copyOf(assets);
         }
 
         @Override
@@ -394,6 +402,37 @@ public final class Frames {
     }
 
     /**
+     * One stored image, already reduced to dots for one paper width.
+     *
+     * <p><strong>The server owns dithering.</strong> A thermal head has one ink and no greys, so
+     * deciding which dots burn is real work with real choices in it, and doing it on the server
+     * means the panel's preview and the paper agree — speckle for speckle — because one piece of
+     * code made both. It also means this agent needs no image decoder, which is most of why it
+     * fits on a Raspberry Pi.
+     *
+     * <p>Keyed by name and width because that pair is what a job names. An install with an 80mm
+     * and a 58mm printer behind one agent receives two entries per image: shrinking a raster
+     * already reduced to black and white resamples the dither's own noise, so there is no single
+     * width that would have been the right one to send.
+     *
+     * <p>{@code packed} is one bit per dot, most significant bit first, each row padded to a
+     * whole byte, a set bit meaning ink — the layout ESC/POS {@code GS v 0} takes verbatim. The
+     * array is copied on the way in; callers must treat what the accessor returns as read-only,
+     * since a record cannot defend it further without copying on every print.
+     *
+     * @param name       the image's name, as markup refers to it
+     * @param widthDots  the raster's width in printer dots
+     * @param heightDots the raster's height in printer dots
+     * @param packed     the dots
+     */
+    public record AssetRaster(String name, int widthDots, int heightDots, byte[] packed) {
+
+        public AssetRaster {
+            packed = packed.clone();
+        }
+    }
+
+    /**
      * A job compiled to the intermediate representation the agent renders.
      *
      * <p>Markup parsing, limit enforcement, wrapping and codepage validation all happened on
@@ -468,11 +507,14 @@ public final class Frames {
      * <p>None of the symbols carry a printed height. Height is the server's concern: it
      * measures the symbol to charge the job's line budget and to draw the preview. The agent's
      * library computes its own geometry when it draws, so a height on the wire would be a
-     * second opinion nothing reads.
+     * second opinion nothing reads. An image is the exception and is not a counter-example: the
+     * height on {@link InlineImage} is not a measurement but part of the picture, because a
+     * rectangle of bits cannot be read back into rows without it.
      */
     public sealed interface WireDirective
             permits WireDirective.Cut, WireDirective.Feed, WireDirective.Qr,
-                    WireDirective.Barcode, WireDirective.Pdf417, WireDirective.Drawer {
+                    WireDirective.Barcode, WireDirective.Pdf417, WireDirective.Drawer,
+                    WireDirective.StoredImage, WireDirective.InlineImage {
 
         /**
          * Cuts the paper.
@@ -526,6 +568,47 @@ public final class Frames {
          * @param pin the drawer connector pin to pulse, 2 or 5
          */
         record Drawer(int pin) implements WireDirective {
+        }
+
+        /**
+         * An image whose dots this agent already holds.
+         *
+         * <p>One of the two shapes the {@code IMAGE} wire directive takes, and the one the
+         * design prefers. A stored image was dithered on the server for each of this agent's
+         * paper widths and arrived with {@link ConfigSync}, so a job need only say which one —
+         * the dots cross the link once per change instead of once per receipt.
+         *
+         * <p>The width is in dots rather than the percentage the markup was written with. The
+         * server did that arithmetic when it chose which raster to sync, so repeating it here
+         * would be a second opinion that could round differently and miss.
+         *
+         * @param name      the image's name, matching one the configuration carried
+         * @param widthDots the printed width, which with the name identifies the raster
+         */
+        record StoredImage(String name, int widthDots) implements WireDirective {
+        }
+
+        /**
+         * An image carrying its own dots.
+         *
+         * <p>The other shape, and the more expensive one. A {@code <image>} naming a URL cannot
+         * be pre-synced — nothing knows the address until someone writes it into a receipt — and
+         * neither can a stored image printed at a width nobody dithered for, since shrinking a
+         * raster here would resample dots already reduced to black and white. Both therefore
+         * arrive in the job, base64 on the wire, on every print.
+         *
+         * <p>{@code packed} follows {@link AssetRaster}: one bit per dot, most significant bit
+         * first, rows padded to a whole byte, a set bit meaning ink.
+         *
+         * @param widthDots  the raster's width in printer dots
+         * @param heightDots the raster's height in printer dots
+         * @param packed     the dots
+         */
+        record InlineImage(int widthDots, int heightDots, byte[] packed) implements WireDirective {
+
+            public InlineImage {
+                packed = packed.clone();
+            }
         }
     }
 }

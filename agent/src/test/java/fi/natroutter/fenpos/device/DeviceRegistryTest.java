@@ -111,6 +111,62 @@ class DeviceRegistryTest {
         assertEquals(0, registry.size());
     }
 
+    // -------------------------------------------------------------------------
+    // Synced images
+    //
+    // Held here so a logo crosses the link once per configuration change rather than once per
+    // receipt, and keyed by width because a raster dithered for one paper width is not a picture
+    // on another.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void holdsARasterUnderItsNameAndWidth() {
+        DeviceRegistry registry = new DeviceRegistry();
+
+        registry.applyRasters(List.of(raster("logo", 384), raster("logo", 504)));
+
+        assertEquals(384, registry.raster("logo", 384).orElseThrow().widthDots());
+        assertEquals(504, registry.raster("logo", 504).orElseThrow().widthDots());
+    }
+
+    /** A width nobody synced is a miss rather than something to resize, which would be mud. */
+    @Test
+    void hasNoRasterForAWidthItWasNotSent() {
+        DeviceRegistry registry = new DeviceRegistry();
+        registry.applyRasters(List.of(raster("logo", 384)));
+
+        assertTrue(registry.raster("logo", 252).isEmpty());
+        assertTrue(registry.raster("stamp", 384).isEmpty());
+    }
+
+    @Test
+    void replacesTheWholeImageSetRatherThanMergingIntoIt() {
+        DeviceRegistry registry = new DeviceRegistry();
+        registry.applyRasters(List.of(raster("logo", 384), raster("stamp", 384)));
+
+        registry.applyRasters(List.of(raster("logo", 384)));
+
+        assertEquals(1, registry.rasterCount());
+        assertTrue(registry.raster("stamp", 384).isEmpty());
+    }
+
+    /** Unpairing releases the printers; the pictures they were going to print go with them. */
+    @Test
+    void clearingLeavesNoImagesEither() {
+        DeviceRegistry registry = new DeviceRegistry();
+        registry.applyRasters(List.of(raster("logo", 384)));
+
+        registry.clear();
+
+        assertEquals(0, registry.rasterCount());
+        assertTrue(registry.raster("logo", 384).isEmpty());
+    }
+
+    /** One raster of the given width, one dot tall: enough to be found, small enough to read. */
+    private static Frames.AssetRaster raster(String name, int widthDots) {
+        return new Frames.AssetRaster(name, widthDots, 1, new byte[(widthDots + 7) / 8]);
+    }
+
     @Test
     void rejectsAMissingSnapshotRatherThanEmptyingItself() {
         DeviceRegistry registry = new DeviceRegistry();

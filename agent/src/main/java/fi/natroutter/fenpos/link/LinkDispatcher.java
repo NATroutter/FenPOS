@@ -138,7 +138,18 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         logger.info("Server welcomed this agent as '" + welcome.agentName() + "'");
     }
 
+    /**
+     * Adopts a configuration snapshot.
+     *
+     * <p>The images are taken first, so that a device this agent is about to start printing on
+     * cannot be handed a job for a raster the registry has not adopted yet. Both are wholesale
+     * replacements — the frame is a snapshot rather than a delta — and the rasters go straight to
+     * the registry rather than through {@code applyConfig}, because nothing else has to react to
+     * them: adopting devices reopens ports and rebuilds queues, while adopting images is a map
+     * swap.
+     */
     private void onConfigSync(Frames.ConfigSync sync) {
+        devices.applyRasters(sync.assets());
         applyConfig.accept(sync.devices());
         reportStatus();
     }
@@ -162,7 +173,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
 
         CompiledJob compiled;
         try {
-            compiled = IrRenderer.render(job, device);
+            compiled = IrRenderer.render(job, device, devices);
         } catch (ProtocolException e) {
             log.warn("Refused job " + job.jobId() + ": " + e.getMessage(), job.device());
             report(job.jobId(), JobState.FAILED, null, null, UNRENDERABLE, e.getMessage());

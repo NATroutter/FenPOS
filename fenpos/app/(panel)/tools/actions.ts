@@ -160,7 +160,7 @@ export async function preview(
 		// server fault, and the preview keeps its measurements.
 		let settings: CompileSettings;
 		try {
-			settings = { ...deviceSettings, images: await resolveImages(request.data) };
+			settings = { ...deviceSettings, images: await resolveImages(request.data, deviceSettings.columns) };
 		} catch (error) {
 			return { ...measured, errors: [asPreviewError(error)] };
 		}

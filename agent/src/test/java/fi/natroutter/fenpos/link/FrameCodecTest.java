@@ -15,6 +15,7 @@ import fi.natroutter.fenpos.link.Frames.Welcome;
 import fi.natroutter.fenpos.link.Frames.WireDirective;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -93,7 +94,7 @@ class FrameCodecTest {
 
     @Test
     void readsAnEmptyConfigSnapshot() throws Exception {
-        var frame = codec.read("{\"type\":\"config.sync\",\"devices\":[]}");
+        var frame = codec.read("{\"type\":\"config.sync\",\"devices\":[],\"assets\":[]}");
 
         assertEquals(0, assertInstanceOf(ConfigSync.class, frame).devices().size());
     }
@@ -104,7 +105,7 @@ class FrameCodecTest {
                 {"type":"config.sync","devices":[{"name":"kitchen","port":"COM3","baudRate":9600,
                  "dataBits":8,"stopBits":1,"parity":"NONE","flowControl":"NONE","writeTimeoutMs":5000,
                  "autoConnect":true,"autoReconnect":true,"reconnectDelaySeconds":5,"columns":42,
-                 "codepage":"CP858","paused":false,"maxQueueDepth":100}]}""");
+                 "codepage":"CP858","paused":false,"maxQueueDepth":100}],"assets":[]}""");
 
         var device = assertInstanceOf(ConfigSync.class, frame).devices().getFirst();
         assertEquals("kitchen", device.name());
@@ -188,6 +189,131 @@ class FrameCodecTest {
             assertEquals(pin, assertInstanceOf(
                     WireDirective.Drawer.class, FrameCodec.readDirective(json)).pin());
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Reading: images
+    //
+    // A 16x2 raster is four bytes — 0x80 0x01 0x00 0xFF — which is "gAEA/w==" in base64. Small
+    // enough to read by eye, asymmetric enough that a reordering would show.
+    // -----------------------------------------------------------------
+
+    private static final String DOTS = "gAEA/w==";
+
+    @Test
+    void decodesAnImageNamingASyncedRaster() throws Exception {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"REF\",\"ref\":\"logo\",\"widthDots\":384}}")
+                .getAsJsonObject();
+
+        WireDirective.StoredImage stored =
+                assertInstanceOf(WireDirective.StoredImage.class, FrameCodec.readDirective(json));
+
+        assertEquals("logo", stored.name());
+        assertEquals(384, stored.widthDots());
+    }
+
+    @Test
+    void decodesAnImageCarryingItsOwnDots() throws Exception {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"INLINE\",\"widthDots\":16,\"heightDots\":2,"
+                        + "\"data\":\"" + DOTS + "\"}}").getAsJsonObject();
+
+        WireDirective.InlineImage inline =
+                assertInstanceOf(WireDirective.InlineImage.class, FrameCodec.readDirective(json));
+
+        assertEquals(16, inline.widthDots());
+        assertArrayEquals(new byte[]{(byte) 0x80, 0x01, 0x00, (byte) 0xFF}, inline.packed());
+    }
+
+    /**
+     * The check this codec exists for. {@code GS v 0} declares how many bytes follow and the
+     * printer reads exactly that many, so a raster short of its declared rectangle does not print
+     * a short image — the printer swallows the rest of the job looking for dots, and comes back
+     * only after a power cycle.
+     */
+    @Test
+    void refusesInlineDotsThatDoNotFillTheStatedRectangle() {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"INLINE\",\"widthDots\":16,\"heightDots\":3,"
+                        + "\"data\":\"" + DOTS + "\"}}").getAsJsonObject();
+
+        ProtocolException thrown = assertThrows(ProtocolException.class, () -> FrameCodec.readDirective(json));
+        assertTrue(thrown.getMessage().contains("16x3"), thrown.getMessage());
+    }
+
+    /** A row is padded to a whole byte, so nine dots across is two bytes and not one and an eighth. */
+    @Test
+    void countsARowsPaddingWhenCheckingTheRectangle() throws Exception {
+        String twoRowsOfNine = "gACAAA=="; // 0x80 0x00 0x80 0x00
+
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"INLINE\",\"widthDots\":9,\"heightDots\":2,"
+                        + "\"data\":\"" + twoRowsOfNine + "\"}}").getAsJsonObject();
+
+        assertEquals(9, assertInstanceOf(
+                WireDirective.InlineImage.class, FrameCodec.readDirective(json)).widthDots());
+    }
+
+    @Test
+    void refusesDotsThatAreNotBase64() {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"INLINE\",\"widthDots\":16,\"heightDots\":2,"
+                        + "\"data\":\"not base64 at all\"}}").getAsJsonObject();
+
+        assertThrows(ProtocolException.class, () -> FrameCodec.readDirective(json));
+    }
+
+    /**
+     * A name that fails to resolve is quoted back in the job's failure message, and the server caps
+     * that message at 512 characters — so an unbounded name would make the update reporting the
+     * failure a frame the server rejects, losing the report along with the job.
+     */
+    @Test
+    void refusesAnImageNameLongerThanANameCanBe() {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"REF\",\"ref\":\"" + "x".repeat(65)
+                        + "\",\"widthDots\":384}}").getAsJsonObject();
+
+        assertThrows(ProtocolException.class, () -> FrameCodec.readDirective(json));
+    }
+
+    @Test
+    void refusesAnImageSourceOfNeitherKind() {
+        JsonObject json = JsonParser.parseString(
+                "{\"type\":\"IMAGE\",\"source\":{\"kind\":\"SOMEDAY\",\"ref\":\"logo\"}}").getAsJsonObject();
+
+        assertThrows(ProtocolException.class, () -> FrameCodec.readDirective(json));
+    }
+
+    @Test
+    void readsTheRastersASnapshotCarries() throws Exception {
+        var frame = codec.read("""
+                {"type":"config.sync","devices":[],"assets":[
+                 {"name":"logo","widthDots":16,"heightDots":2,"data":"%s"}]}""".formatted(DOTS));
+
+        var raster = assertInstanceOf(ConfigSync.class, frame).assets().getFirst();
+        assertEquals("logo", raster.name());
+        assertEquals(2, raster.heightDots());
+        assertArrayEquals(new byte[]{(byte) 0x80, 0x01, 0x00, (byte) 0xFF}, raster.packed());
+    }
+
+    @Test
+    void refusesASyncedRasterThatDoesNotFillItsRectangle() {
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"config.sync","devices":[],"assets":[
+                 {"name":"logo","widthDots":16,"heightDots":9,"data":"%s"}]}""".formatted(DOTS)));
+    }
+
+    /**
+     * A snapshot with no {@code assets} field is a server this agent cannot serve: it would mean
+     * every stored image silently missing from every receipt. Refused rather than defaulted to
+     * none, which is the same stance every other field on this frame takes.
+     */
+    @Test
+    void refusesASnapshotThatCarriesNoAssetsFieldAtAll() {
+        assertThrows(ProtocolException.class,
+                () -> codec.read("{\"type\":\"config.sync\",\"devices\":[]}"));
     }
 
     @Test
@@ -327,7 +453,7 @@ class FrameCodecTest {
                 {"type":"config.sync","devices":[{"name":"k","port":"COM3","baudRate":9600,
                  "dataBits":8,"stopBits":1,"parity":"NONE","flowControl":"NONE","writeTimeoutMs":5000,
                  "autoConnect":true,"autoReconnect":true,"reconnectDelaySeconds":5,"columns":42,
-                 "codepage":"CP999","paused":false,"maxQueueDepth":100}]}"""));
+                 "codepage":"CP999","paused":false,"maxQueueDepth":100}],"assets":[]}"""));
     }
 
     @Test

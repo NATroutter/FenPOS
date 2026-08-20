@@ -65,6 +65,32 @@ export const JOB_LIMITS = {
 	maxDirectivesPerLine: 8,
 } as const;
 
+/**
+ * Bounds on the image data this protocol carries.
+ *
+ * Every one of these sits *inside* {@link MAX_FRAME_BYTES}, which remains the bound that actually
+ * decides: a frame is measured and refused before it is parsed, so no product of the counts below
+ * can be allocated. They exist to refuse a single implausible value early and with a message that
+ * names it, the same way `MAX_RAW_CHARS` does on the agent.
+ */
+export const IMAGE_LIMITS = {
+	/**
+	 * Base64 characters in one raster, whether synced or carried in a job.
+	 *
+	 * 128 KB encodes 96 KB of dots, which on the widest common paper is a picture about 1500 dots
+	 * tall — some sixty lines of paper, and far more than any logo. It is also what one job may
+	 * spend on images in total; see `MAX_INLINE_IMAGE_CHARS` in `lib/markup/resolve-images.ts`,
+	 * which is what stops several smaller images adding up to a frame nothing will send.
+	 */
+	maxRasterChars: 128 * 1024,
+	/** Rasters one `config.sync` may carry: one per asset per distinct paper width behind an agent. */
+	maxSyncedRasters: 32,
+	/** Printed width of a raster, in dots. Well beyond the ~576 of the widest common paper. */
+	maxWidthDots: 4096,
+	/** Printed height of a raster, in dots — what `GS v 0` encodes in its two vertical bytes. */
+	maxHeightDots: 65_535,
+} as const;
+
 /** Identifier shapes, bounded so an oversized value cannot be stored or logged. */
 const idSchema = z.string().min(1).max(64);
 const deviceNameSchema = z
@@ -74,6 +100,15 @@ const deviceNameSchema = z
 	// Names appear in API paths and in log lines. Restricting them here means no consumer
 	// has to escape them, which is a smaller surface than remembering to escape everywhere.
 	.regex(/^[a-z0-9][a-z0-9_-]*$/, "must be lowercase alphanumeric with dashes or underscores");
+
+/**
+ * An asset's name, which follows the device rule and for the same reason.
+ *
+ * Aliased rather than restated so the two cannot drift: an asset name is written into markup, into
+ * log lines and into this protocol, and one slug rule for every name in the system is what keeps
+ * escaping out of every consumer.
+ */
+const assetNameSchema = deviceNameSchema;
 
 // ---------------------------------------------------------------------------
 // Compiled job representation
@@ -97,6 +132,77 @@ export const spanSchema = z.object({
 	font: Font.schema,
 });
 
+/**
+ * The shape of a dithered raster wherever one crosses this link.
+ *
+ * **The server owns dithering.** A thermal head has one ink and no greys, and deciding each dot is
+ * work that has to happen once, against a known paper width, by the same code the panel's preview
+ * draws with — otherwise what is on screen and what comes off the paper disagree. So an agent never
+ * receives an image; it receives dots.
+ *
+ * `data` is one bit per dot, most significant bit first, each row padded to a whole byte, a set bit
+ * being ink. That is exactly the layout an ESC/POS `GS v 0` raster takes, and exactly what
+ * `ditherToRaster` in `lib/assets/dither.ts` produces, so nothing between the two reorders a bit.
+ */
+const rasterFields = {
+	widthDots: z.number().int().min(1).max(IMAGE_LIMITS.maxWidthDots),
+	heightDots: z.number().int().min(1).max(IMAGE_LIMITS.maxHeightDots),
+	/** The dots, base64 encoded. */
+	data: z.string().min(1).max(IMAGE_LIMITS.maxRasterChars),
+};
+
+/** How many bytes a raster of this size occupies: whole bytes per row, one row per dot of height. */
+export function rasterBytes(widthDots: number, heightDots: number): number {
+	return Math.ceil(widthDots / 8) * heightDots;
+}
+
+/**
+ * Whether a raster's bits fill the rectangle it claims.
+ *
+ * The one check on this schema that is worth more than a type. A raster shorter than its declared
+ * height leaves the printer waiting for bytes that never arrive — it stops mid-image and needs a
+ * power cycle, not a failed job — so the two are compared wherever a raster is described, on the way
+ * out as well as on the way in.
+ *
+ * Measured on the decoded bytes rather than on the base64 text, because base64 encodes four, five
+ * and six bytes to the same eight characters: a length check on the text would admit a raster two
+ * rows short. Re-encoding is what makes the decode trustworthy — `Buffer.from` silently skips
+ * characters it does not recognise, so text that does not come back unchanged was not base64.
+ */
+const fillsItsRectangle = (raster: { widthDots: number; heightDots: number; data: string }) => {
+	const decoded = Buffer.from(raster.data, "base64");
+	return (
+		decoded.length === rasterBytes(raster.widthDots, raster.heightDots) && decoded.toString("base64") === raster.data
+	);
+};
+
+const RECTANGLE_MESSAGE = "raster data must be base64 of one bit per dot, rows padded to a whole byte";
+
+/**
+ * Where an image's dots come from, and the one asymmetry in this protocol.
+ *
+ * **A stored asset's dots are already on the agent.** They travel with `config.sync` — one raster
+ * per asset per distinct paper width behind that agent — so they cross the link once per change
+ * rather than once per receipt, and a job only has to name one. That is why stored assets are the
+ * documented default for `<image>`.
+ *
+ * **A URL image's dots cannot be pre-synced**, because nothing knows the URL until someone writes
+ * it into a receipt. They therefore ride inside the job, base64, every time it prints. A logo is a
+ * few kilobytes, which is affordable per job and is strictly worse than the stored path: it is the
+ * concrete cost of the live-URL option, alongside the fetch the compile already waits on.
+ *
+ * A reference carries `widthDots` rather than the tag's percentage. The agent then looks a raster up
+ * by exactly the number the server dithered it at, instead of repeating the percentage arithmetic
+ * and having to agree about rounding — the same reason `<hr>` is expanded to characters server-side.
+ * A width the server did not sync is never referenced: the compiler sends those dots inline, because
+ * resizing a raster that has already been reduced to black and white resamples the dither's own
+ * noise and turns a logo into mud.
+ */
+const imageSourceSchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("REF"), ref: assetNameSchema, widthDots: rasterFields.widthDots }),
+	z.object({ kind: z.literal("INLINE"), ...rasterFields }).refine(fillsItsRectangle, RECTANGLE_MESSAGE),
+]);
+
 /** A printer action that is not text. */
 export const directiveSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("CUT"), mode: z.enum(["FULL", "PARTIAL"]) }),
@@ -105,6 +211,7 @@ export const directiveSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("BARCODE"), system: BarcodeSystem.schema, content: z.string().min(1) }),
 	z.object({ type: z.literal("PDF417"), content: z.string().min(1), errorLevel: z.number().int().min(0).max(8) }),
 	z.object({ type: z.literal("DRAWER"), pin: z.union([z.literal(2), z.literal(5)]) }),
+	z.object({ type: z.literal("IMAGE"), source: imageSourceSchema }),
 ]);
 
 /**
@@ -163,6 +270,19 @@ export const deviceConfigSchema = z.object({
 
 export type DeviceConfig = z.infer<typeof deviceConfigSchema>;
 
+/**
+ * One stored image, dithered for one of an agent's paper widths.
+ *
+ * Keyed by name and width because that pair is what a job names. An agent with an 80mm and a 58mm
+ * printer behind it receives two entries for the same asset, since a raster dithered for one is not
+ * a picture on the other — see `lib/assets/dither.ts`.
+ */
+export const assetRasterSchema = z
+	.object({ name: assetNameSchema, ...rasterFields })
+	.refine(fillsItsRectangle, RECTANGLE_MESSAGE);
+
+export type AssetRaster = z.infer<typeof assetRasterSchema>;
+
 // ---------------------------------------------------------------------------
 // Frames
 // ---------------------------------------------------------------------------
@@ -198,10 +318,18 @@ export const welcomeSchema = z.object({
  * Sent whole rather than as a delta. A full snapshot is idempotent, so a agent that missed an
  * update while disconnected converges on reconnect without either side tracking what the
  * other has seen.
+ *
+ * It carries the stored images too, because they are configuration by the same argument: an agent
+ * needs them before any job arrives, they change rarely, and a whole snapshot converges without
+ * either side remembering what the other holds. The cost of that idempotence is that the dots are
+ * re-sent on every reconnect rather than only when they change — a few kilobytes per asset per
+ * paper width, paid once at connect instead of once per receipt, which is the same trade this frame
+ * already makes for the device set.
  */
 export const configSyncSchema = z.object({
 	type: z.literal("config.sync"),
 	devices: z.array(deviceConfigSchema).max(256),
+	assets: z.array(assetRasterSchema).max(IMAGE_LIMITS.maxSyncedRasters),
 });
 
 /** Server to agent: print this. */

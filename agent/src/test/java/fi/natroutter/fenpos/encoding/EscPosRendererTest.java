@@ -10,6 +10,7 @@ import fi.natroutter.fenpos.markup.model.Line;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -208,6 +209,98 @@ class EscPosRendererTest {
 
         assertEquals(1, count(output, BOLD_ON),
                 "a pulse changes no style, so the preamble should not be re-sent");
+    }
+
+    // -------------------------------------------------------------------------
+    // Images
+    //
+    // The dots are decided on the server and this renderer must not touch them. escpos-coffee
+    // does not take a bitmap: it asks a CoffeeImage for pixels and a Bitonal for ink-or-paper,
+    // then packs the answers most significant bit first with each row padded to a whole byte.
+    // These tests are what pins that the packing it produces is the packing that arrived — a bit
+    // order that came out reversed would print a plausible-looking mirrored logo.
+    // -------------------------------------------------------------------------
+
+    /**
+     * A 16x2 raster, two bytes a row and deliberately asymmetric.
+     * <p>
+     * {@code 0x80} is the leftmost dot of the top row and {@code 0x01} the rightmost dot of that
+     * row's first byte. Reversing the bit order within a byte, or swapping the rows, gives a
+     * different sequence — which is the whole point of choosing these values.
+     */
+    private static final byte[] ASYMMETRIC_DOTS = {(byte) 0x80, 0x01, 0x00, (byte) 0xFF};
+
+    @Test
+    void emitsTheRasterCommandWithTheDotsExactlyAsTheyArrived() throws Exception {
+        byte[] output = EscPosRenderer.render(
+                List.of(directiveLine(Align.LEFT, new Directive.Image(16, 2, ASYMMETRIC_DOTS))),
+                Codepage.CP858, Linefeed.LF, 42);
+
+        // GS v 0 m, then the width in bytes and the height in dots, each little-endian.
+        assertTrue(contains(output, new byte[]{0x1D, 'v', '0', 0x00, 0x02, 0x00, 0x02, 0x00,
+                (byte) 0x80, 0x01, 0x00, (byte) 0xFF}),
+                "the raster command must carry the packed dots unchanged");
+    }
+
+    /**
+     * A row is a whole number of bytes even when the dots do not fill it. Nine dots across is two
+     * bytes with seven bits of paper on the end, and the command counts bytes — so a renderer that
+     * packed rows tightly would declare the same width and hand the printer a picture sheared one
+     * dot further left on every row.
+     */
+    @Test
+    void countsARowsPaddingAsPartOfTheRaster() throws Exception {
+        // Nine dots wide, three rows: 0x80,0x00 is one dot at the left of each row.
+        byte[] dots = {(byte) 0x80, 0x00, (byte) 0x80, 0x00, (byte) 0x80, 0x00};
+
+        byte[] output = EscPosRenderer.render(
+                List.of(directiveLine(Align.LEFT, new Directive.Image(9, 3, dots))),
+                Codepage.CP858, Linefeed.LF, 42);
+
+        assertTrue(contains(output, new byte[]{0x1D, 'v', '0', 0x00, 0x02, 0x00, 0x03, 0x00,
+                (byte) 0x80, 0x00, (byte) 0x80, 0x00, (byte) 0x80, 0x00}),
+                "two bytes a row, three rows, padding included");
+    }
+
+    /** A raster taller than one byte's worth of height is still one command, not a stack of bands. */
+    @Test
+    void emitsOneCommandForATallRaster() throws Exception {
+        byte[] dots = new byte[300];
+        Arrays.fill(dots, (byte) 0xA5);
+
+        byte[] output = EscPosRenderer.render(
+                List.of(directiveLine(Align.LEFT, new Directive.Image(8, 300, dots))),
+                Codepage.CP858, Linefeed.LF, 42);
+
+        assertEquals(1, count(output, new byte[]{0x1D, 'v', '0'}));
+        // 300 dots of height is 0x012C, low byte first.
+        assertTrue(contains(output, new byte[]{0x1D, 'v', '0', 0x00, 0x01, 0x00, 0x2C, 0x01}));
+    }
+
+    @Test
+    void takesAnImagesJustificationFromItsLine() throws Exception {
+        byte[] output = EscPosRenderer.render(
+                List.of(directiveLine(Align.CENTER, new Directive.Image(16, 2, ASYMMETRIC_DOTS))),
+                Codepage.CP858, Linefeed.LF, 42);
+
+        assertTrue(contains(output, CENTRE_JUSTIFY));
+    }
+
+    /**
+     * The raster command writes its own justification, exactly as a symbol does, so the cached
+     * style no longer describes the printer and text after an image must have its style restated.
+     */
+    @Test
+    void restatesStyleAfterAnImageBecauseTheRasterWritesItsOwnPreamble() throws Exception {
+        List<Line> lines = List.of(
+                MarkupParser.parse("<bold>a</bold>"),
+                directiveLine(Align.LEFT, new Directive.Image(16, 2, ASYMMETRIC_DOTS)),
+                MarkupParser.parse("<bold>b</bold>"));
+
+        byte[] output = EscPosRenderer.render(lines, Codepage.CP858, Linefeed.LF, 42);
+
+        assertEquals(2, count(output, BOLD_ON),
+                "bold must be re-sent after the raster wrote its own preamble");
     }
 
     /**

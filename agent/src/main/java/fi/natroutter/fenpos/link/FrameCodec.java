@@ -15,6 +15,7 @@ import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.enums.Parity;
 import fi.natroutter.fenpos.link.Frames.AgentFrame;
+import fi.natroutter.fenpos.link.Frames.AssetRaster;
 import fi.natroutter.fenpos.link.Frames.CompiledJob;
 import fi.natroutter.fenpos.link.Frames.ConfigSync;
 import fi.natroutter.fenpos.link.Frames.DeviceCommand;
@@ -31,6 +32,7 @@ import fi.natroutter.fenpos.link.Frames.WireSpan;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -73,6 +75,28 @@ public final class FrameCodec {
 
     /** Longest base64 payload accepted for a raw write. Mirrors the server's own cap. */
     private static final int MAX_RAW_CHARS = 16_384;
+
+    /** Rasters one configuration snapshot may carry. Mirrors IMAGE_LIMITS on the server. */
+    private static final int MAX_SYNCED_RASTERS = 32;
+
+    /** Longest base64 payload accepted for one raster, synced or carried in a job. */
+    private static final int MAX_RASTER_CHARS = 128 * 1024;
+
+    /** Widest raster accepted, in dots — far beyond the ~576 of the widest common paper. */
+    private static final int MAX_RASTER_WIDTH_DOTS = 4096;
+
+    /** Tallest raster accepted, in dots: what {@code GS v 0} encodes in its two vertical bytes. */
+    private static final int MAX_RASTER_HEIGHT_DOTS = 65_535;
+
+    /**
+     * Longest image name accepted. Mirrors the server's own name limit.
+     *
+     * <p>Bounded because a name that fails to resolve is quoted back in the job's failure message,
+     * and the server caps {@code errorMessage} at 512 characters — so an unbounded name would make
+     * the update reporting the failure a frame the server rejects, losing the report along with the
+     * job.
+     */
+    private static final int MAX_ASSET_NAME_CHARS = 64;
 
     /** Serialises outgoing frames. Nulls are omitted so optional fields are simply absent. */
     private final Gson gson = new GsonBuilder().create();
@@ -184,7 +208,81 @@ public final class FrameCodec {
                     requireBoundedInt(device, "maxQueueDepth", 1, 10_000)));
         }
 
-        return new ConfigSync(devices);
+        var assetArray = requireArray(root, "assets", MAX_SYNCED_RASTERS);
+        List<AssetRaster> assets = new ArrayList<>(assetArray.size());
+        for (JsonElement element : assetArray) {
+            JsonObject asset = asObject(element, "asset");
+            Raster raster = readRaster(asset);
+            assets.add(new AssetRaster(
+                    requireName(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
+        }
+
+        return new ConfigSync(devices, assets);
+    }
+
+    /**
+     * Reads a raster: its rectangle, and the bits that fill it.
+     *
+     * <p>The size check is the one that matters. ESC/POS {@code GS v 0} declares how many bytes
+     * follow and the printer then reads exactly that many, so a raster whose bits fall short of
+     * its declared rectangle does not print a short image — the printer waits for bytes that never
+     * arrive and consumes the rest of the job as image data, which ends in a power cycle rather
+     * than a failed job. Checking the count here is what keeps that impossible, and it is why this
+     * is worth doing at the boundary rather than trusting the server to have got it right.
+     *
+     * <p>The encoded length is capped before the array is decoded, so an oversized payload is
+     * refused without allocating what it was asking for — the same order {@code readRawWrite} uses.
+     *
+     * @param raster the object carrying {@code widthDots}, {@code heightDots} and {@code data}
+     * @return the rectangle and its bits
+     * @throws ProtocolException when a field is missing, out of range, not base64, or the bits do
+     *         not fill the rectangle
+     */
+    private static Raster readRaster(JsonObject raster) throws ProtocolException {
+        int widthDots = requireBoundedInt(raster, "widthDots", 1, MAX_RASTER_WIDTH_DOTS);
+        int heightDots = requireBoundedInt(raster, "heightDots", 1, MAX_RASTER_HEIGHT_DOTS);
+
+        String data = requireString(raster, "data");
+        if (data.length() > MAX_RASTER_CHARS) {
+            throw new ProtocolException("raster of " + data.length()
+                    + " encoded characters exceeds the " + MAX_RASTER_CHARS + " limit");
+        }
+
+        byte[] packed;
+        try {
+            packed = Base64.getDecoder().decode(data);
+        } catch (IllegalArgumentException e) {
+            throw new ProtocolException("field 'data' was not valid base64", e);
+        }
+
+        int expected = ((widthDots + 7) / 8) * heightDots;
+        if (packed.length != expected) {
+            throw new ProtocolException("a " + widthDots + "x" + heightDots + " raster is " + expected
+                    + " bytes of one bit per dot, but " + packed.length + " arrived");
+        }
+
+        return new Raster(widthDots, heightDots, packed);
+    }
+
+    /** A raster as {@link #readRaster} read it, before it is put into the frame it belongs to. */
+    private record Raster(int widthDots, int heightDots, byte[] packed) {
+    }
+
+    /**
+     * Reads an image's name, refusing one longer than a name can be.
+     *
+     * @param parent the object carrying the field
+     * @param field  which field to read
+     * @return the name
+     * @throws ProtocolException when it is missing, empty, or beyond {@link #MAX_ASSET_NAME_CHARS}
+     */
+    private static String requireName(JsonObject parent, String field) throws ProtocolException {
+        String name = requireString(parent, field);
+        if (name.isEmpty() || name.length() > MAX_ASSET_NAME_CHARS) {
+            throw new ProtocolException("field '" + field + "' must be 1.." + MAX_ASSET_NAME_CHARS
+                    + " characters, got " + name.length());
+        }
+        return name;
     }
 
     private CompiledJob readCompiledJob(JsonObject job) throws ProtocolException {
@@ -262,7 +360,36 @@ public final class FrameCodec {
                     requireAsciiContent(directive),
                     requireBoundedInt(directive, "errorLevel", 0, 8));
             case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
+            case "IMAGE" -> readImage(requireObject(directive, "source"));
             default -> throw new ProtocolException("unknown directive type '" + type + "'");
+        };
+    }
+
+    /**
+     * Reads an image, which arrives as one of two shapes.
+     *
+     * <p>Whether the dots are already here or come with the job is a property of the image rather
+     * than of the tag: a stored image at one of this agent's paper widths was synced, and a URL or
+     * an unusual width could not have been. The server has already decided, so this only has to
+     * read what it decided — the two shapes are distinct records, so nothing downstream can meet a
+     * reference and a raster in the same object and have to guess which is real.
+     *
+     * @param source the {@code source} object of an {@code IMAGE} directive
+     * @return the directive
+     * @throws ProtocolException when the kind is unknown or a field is missing or out of range
+     */
+    private static WireDirective readImage(JsonObject source) throws ProtocolException {
+        String kind = requireString(source, "kind");
+
+        return switch (kind) {
+            case "REF" -> new WireDirective.StoredImage(
+                    requireName(source, "ref"),
+                    requireBoundedInt(source, "widthDots", 1, MAX_RASTER_WIDTH_DOTS));
+            case "INLINE" -> {
+                Raster raster = readRaster(source);
+                yield new WireDirective.InlineImage(raster.widthDots(), raster.heightDots(), raster.packed());
+            }
+            default -> throw new ProtocolException("unknown image source '" + kind + "'");
         };
     }
 

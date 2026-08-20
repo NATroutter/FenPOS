@@ -11,10 +11,11 @@ import fi.natroutter.fenpos.enums.BarcodeSystem;
  * <p>
  * Not every kind has a source in every pipeline, and that asymmetry is deliberate. {@link Rule}
  * arrives only from markup the agent parses itself, because a job compiled by the server has
- * already had its rule expanded to characters. The symbols and the drawer pulse arrive only from
- * the server, because measuring a symbol to charge it against a job's line budget needs an
- * encoder, and the design keeps exactly one of those — on the server, so the budget, the preview
- * and the paper cannot disagree.
+ * already had its rule expanded to characters. The symbols, the drawer pulse and {@link Image}
+ * arrive only from the server, because measuring a symbol to charge it against a job's line budget
+ * needs an encoder — and turning a picture into dots needs a dithering engine — and the design
+ * keeps exactly one of each, on the server, so the budget, the preview and the paper cannot
+ * disagree.
  */
 public sealed interface Directive {
 
@@ -99,6 +100,48 @@ public sealed interface Directive {
             if (pin != 2 && pin != 5) {
                 throw new IllegalArgumentException("drawer pin must be 2 or 5, got " + pin);
             }
+        }
+    }
+
+    /**
+     * A picture, already reduced to dots.
+     *
+     * <p>Unlike every other kind here this carries its own geometry, because there is nothing to
+     * derive it from: a rectangle of bits cannot be read back into rows without knowing how wide
+     * it is. The dots themselves were decided on the server — the design keeps one dithering
+     * engine, so that the panel's preview and the paper agree speckle for speckle, and so that
+     * this agent needs no image decoder.
+     *
+     * <p>{@code packed} is one bit per dot, most significant bit first, each row padded to a whole
+     * byte, a set bit meaning ink. That is the layout ESC/POS {@code GS v 0} takes, so the bytes
+     * pass through the renderer unrearranged.
+     *
+     * <p>Arrives only from the link. The markup this agent parses for its own console has no
+     * image tag and deliberately never will: measuring one needs the image's dimensions, which
+     * live in a database row or behind an HTTP request that nothing on this side can reach.
+     *
+     * @param widthDots  width in printer dots
+     * @param heightDots height in printer dots
+     * @param packed     the dots
+     */
+    record Image(int widthDots, int heightDots, byte[] packed) implements Directive {
+        public Image {
+            if (widthDots < 1 || heightDots < 1) {
+                throw new IllegalArgumentException(
+                        "an image must have dots, not " + widthDots + "x" + heightDots);
+            }
+            if (packed == null) {
+                throw new IllegalArgumentException("image dots must not be null");
+            }
+            int expected = ((widthDots + 7) / 8) * heightDots;
+            if (packed.length != expected) {
+                // Not a formality. The printer reads exactly as many bytes as the command
+                // declares, so a short raster leaves it consuming the rest of the job as image
+                // data and needing a power cycle.
+                throw new IllegalArgumentException("a " + widthDots + "x" + heightDots
+                        + " image is " + expected + " bytes of dots, got " + packed.length);
+            }
+            packed = packed.clone();
         }
     }
 

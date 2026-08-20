@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.link;
 
 import fi.natroutter.fenpos.device.Device;
+import fi.natroutter.fenpos.device.DeviceRegistry;
 import fi.natroutter.fenpos.encoding.SymbolEncodingException;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
@@ -33,7 +34,7 @@ class IrRendererTest {
 
     @Test
     void rendersTextIntoThePayload() throws Exception {
-        CompiledJob rendered = IrRenderer.render(job(line(span("Kahvi 2.50"))), device());
+        CompiledJob rendered = IrRenderer.render(job(line(span("Kahvi 2.50"))), device(), registry);
 
         assertTrue(new String(rendered.payload(), StandardCharsets.ISO_8859_1).contains("Kahvi 2.50"));
         assertEquals(1, rendered.lines());
@@ -43,7 +44,7 @@ class IrRendererTest {
     void countsOnlyLinesThatAdvanceThePaper() throws Exception {
         CompiledJob rendered = IrRenderer.render(
                 job(line(span("one")), line(span("two")), directiveLine(cut(CutMode.FULL))),
-                device());
+                device(), registry);
 
         // A directive-only line emits its command without feeding paper, so it is not a
         // printed line and must not be counted as one against the job's reported total.
@@ -52,7 +53,7 @@ class IrRendererTest {
 
     @Test
     void rendersAJobThatIsOnlyDirectives() throws Exception {
-        CompiledJob rendered = IrRenderer.render(job(directiveLine(cut(CutMode.FULL))), device());
+        CompiledJob rendered = IrRenderer.render(job(directiveLine(cut(CutMode.FULL))), device(), registry);
 
         assertEquals(0, rendered.lines());
         assertTrue(rendered.bytes() > 0);
@@ -60,19 +61,19 @@ class IrRendererTest {
 
     @Test
     void acceptsBothCutModes() throws Exception {
-        assertTrue(IrRenderer.render(job(directiveLine(cut(CutMode.FULL))), device()).bytes() > 0);
-        assertTrue(IrRenderer.render(job(directiveLine(cut(CutMode.PARTIAL))), device()).bytes() > 0);
+        assertTrue(IrRenderer.render(job(directiveLine(cut(CutMode.FULL))), device(), registry).bytes() > 0);
+        assertTrue(IrRenderer.render(job(directiveLine(cut(CutMode.PARTIAL))), device(), registry).bytes() > 0);
     }
 
     @Test
     void acceptsAFeed() throws Exception {
-        assertTrue(IrRenderer.render(job(directiveLine(feed(3))), device()).bytes() > 0);
+        assertTrue(IrRenderer.render(job(directiveLine(feed(3))), device(), registry).bytes() > 0);
     }
 
     @Test
     void rendersAQrCode() throws Exception {
         CompiledJob rendered = IrRenderer.render(
-                job(directiveLine(new Frames.WireDirective.Qr("https://fenpos.test", 6))), device());
+                job(directiveLine(new Frames.WireDirective.Qr("https://fenpos.test", 6))), device(), registry);
 
         // GS ( k, the two-dimensional symbol command, with the content stored verbatim.
         assertTrue(contains(rendered.payload(), new byte[]{0x1D, '(', 'k'}));
@@ -90,7 +91,7 @@ class IrRendererTest {
     void sendsTheQrModuleSizeItWasGiven() throws Exception {
         for (int size : new int[] {1, 6, 16}) {
             CompiledJob rendered = IrRenderer.render(
-                    job(directiveLine(new Frames.WireDirective.Qr("x", size))), device());
+                    job(directiveLine(new Frames.WireDirective.Qr("x", size))), device(), registry);
 
             assertTrue(contains(rendered.payload(),
                             new byte[]{0x1D, '(', 'k', 0x03, 0x00, 49, 67, (byte) size}),
@@ -108,7 +109,7 @@ class IrRendererTest {
     void sendsThePdf417ErrorLevelItWasGiven() throws Exception {
         for (int level = 0; level <= 8; level++) {
             CompiledJob rendered = IrRenderer.render(
-                    job(directiveLine(new Frames.WireDirective.Pdf417("x", level))), device());
+                    job(directiveLine(new Frames.WireDirective.Pdf417("x", level))), device(), registry);
 
             assertTrue(contains(rendered.payload(),
                             new byte[]{0x1D, '(', 'k', 0x04, 0x00, 48, 69, 48, (byte) (48 + level)}),
@@ -120,7 +121,7 @@ class IrRendererTest {
     void rendersALinearBarcode() throws Exception {
         CompiledJob rendered = IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.EAN13, "4006381333931"))), device());
+                        BarcodeSystem.EAN13, "4006381333931"))), device(), registry);
 
         // GS k 2: print barcode, function A, JAN/EAN-13.
         assertTrue(contains(rendered.payload(), new byte[]{0x1D, 'k', 0x02}));
@@ -133,7 +134,7 @@ class IrRendererTest {
         // the data. Content that arrives without one would otherwise be refused by the encoder.
         CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.CODE128, "ORDER-42"))), device()));
+                        BarcodeSystem.CODE128, "ORDER-42"))), device(), registry));
 
         assertEquals("{BORDER-42", code128Data(rendered));
     }
@@ -147,7 +148,7 @@ class IrRendererTest {
     void doublesABraceInsideCode128Content() {
         CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.CODE128, "A{B"))), device()));
+                        BarcodeSystem.CODE128, "A{B"))), device(), registry));
 
         assertEquals("{BA{{B", code128Data(rendered));
     }
@@ -161,7 +162,7 @@ class IrRendererTest {
     void treatsContentThatLooksLikeACodeSetAsLiteralData() {
         CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.CODE128, "{Barcode"))), device()));
+                        BarcodeSystem.CODE128, "{Barcode"))), device(), registry));
 
         assertEquals("{B{{Barcode", code128Data(rendered));
     }
@@ -171,7 +172,7 @@ class IrRendererTest {
     void escapesABraceThatNamesNoCodeSet() {
         CompiledJob rendered = assertDoesNotThrow(() -> IrRenderer.render(
                 job(directiveLine(new Frames.WireDirective.Barcode(
-                        BarcodeSystem.CODE128, "{X"))), device()));
+                        BarcodeSystem.CODE128, "{X"))), device(), registry));
 
         assertEquals("{B{{X", code128Data(rendered));
     }
@@ -179,7 +180,7 @@ class IrRendererTest {
     @Test
     void rendersPdf417() throws Exception {
         CompiledJob rendered = IrRenderer.render(
-                job(directiveLine(new Frames.WireDirective.Pdf417("ORDER-42", 3))), device());
+                job(directiveLine(new Frames.WireDirective.Pdf417("ORDER-42", 3))), device(), registry);
 
         assertTrue(new String(rendered.payload(), StandardCharsets.ISO_8859_1).contains("ORDER-42"));
     }
@@ -189,17 +190,17 @@ class IrRendererTest {
         // ESC p m t1 t2, matching the sequences the panel's raw-byte tool catalogues, so an
         // operator can fire the drawer from either place and compare what went down the wire.
         assertTrue(contains(
-                IrRenderer.render(job(directiveLine(new Frames.WireDirective.Drawer(2))), device()).payload(),
+                IrRenderer.render(job(directiveLine(new Frames.WireDirective.Drawer(2))), device(), registry).payload(),
                 new byte[]{0x1B, 0x70, 0x00, 0x19, (byte) 0xFA}));
         assertTrue(contains(
-                IrRenderer.render(job(directiveLine(new Frames.WireDirective.Drawer(5))), device()).payload(),
+                IrRenderer.render(job(directiveLine(new Frames.WireDirective.Drawer(5))), device(), registry).payload(),
                 new byte[]{0x1B, 0x70, 0x01, 0x19, (byte) 0xFA}));
     }
 
     @Test
     void chargesADrawerPulseNoLinesBecauseItPrintsNothing() throws Exception {
         CompiledJob rendered = IrRenderer.render(
-                job(line(span("Thanks")), directiveLine(new Frames.WireDirective.Drawer(2))), device());
+                job(line(span("Thanks")), directiveLine(new Frames.WireDirective.Drawer(2))), device(), registry);
 
         assertEquals(1, rendered.lines());
     }
@@ -207,7 +208,7 @@ class IrRendererTest {
     @Test
     void refusesAFeedBeyondWhatAPrinterAccepts() {
         assertThrows(ProtocolException.class, () ->
-                IrRenderer.render(job(directiveLine(feed(999))), device()));
+                IrRenderer.render(job(directiveLine(feed(999))), device(), registry));
     }
 
     @Test
@@ -218,7 +219,7 @@ class IrRendererTest {
         ProtocolException thrown = assertThrows(ProtocolException.class, () ->
                 IrRenderer.render(
                         job(directiveLine(new Frames.WireDirective.Barcode(BarcodeSystem.ITF, "12345"))),
-                        device()));
+                        device(), registry));
 
         assertTrue(thrown.getMessage() != null && !thrown.getMessage().isBlank(),
                 "the encoder's own words are all the operator has to go on");
@@ -230,14 +231,108 @@ class IrRendererTest {
     @Test
     void rendersAnEmptyJobWithoutFailing() throws Exception {
         CompiledJob rendered = IrRenderer.render(
-                new Frames.CompiledJob("j1", "kitchen", Linefeed.LF, List.of()), device());
+                new Frames.CompiledJob("j1", "kitchen", Linefeed.LF, List.of()), device(), registry);
 
         assertEquals(0, rendered.lines());
     }
 
     // -------------------------------------------------------------------------
+    // Images
+    //
+    // Two shapes, one rendered result. A stored image names dots that arrived with the
+    // configuration; anything else brings its own.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void printsTheDotsSyncedForAStoredImage() throws Exception {
+        CompiledJob rendered = IrRenderer.render(
+                job(directiveLine(new Frames.WireDirective.StoredImage("logo", 16))), device(), registry);
+
+        // GS v 0 m xL xH yL yH, then the dots as they were synced.
+        assertTrue(contains(rendered.payload(),
+                new byte[]{0x1D, 'v', '0', 0x00, 0x02, 0x00, 0x02, 0x00,
+                        (byte) 0x80, 0x01, 0x00, (byte) 0xFF}));
+    }
+
+    @Test
+    void printsTheDotsAJobCarriesForItself() throws Exception {
+        CompiledJob rendered = IrRenderer.render(
+                job(directiveLine(new Frames.WireDirective.InlineImage(16, 2, LOGO_DOTS))),
+                device(),
+                new DeviceRegistry());
+
+        assertTrue(contains(rendered.payload(),
+                new byte[]{0x1D, 'v', '0', 0x00, 0x02, 0x00, 0x02, 0x00,
+                        (byte) 0x80, 0x01, 0x00, (byte) 0xFF}));
+    }
+
+    /**
+     * An image is a block of dots rather than a printed line, and the raster command feeds the
+     * paper itself, so a line carrying only one must not also be counted as text.
+     */
+    @Test
+    void chargesAnImageNoTextLines() throws Exception {
+        CompiledJob rendered = IrRenderer.render(
+                job(line(span("Thanks")), directiveLine(new Frames.WireDirective.StoredImage("logo", 16))),
+                device(),
+                registry);
+
+        assertEquals(1, rendered.lines());
+    }
+
+    /**
+     * The gap this closes: an image uploaded while a job was in flight, or one the server had to
+     * leave out of a full configuration frame. Failing the job by name is worth far more than
+     * printing a receipt with a blank space where the logo was, which nobody notices until a
+     * customer is holding it.
+     */
+    @Test
+    void refusesAStoredImageThisAgentWasNeverSent() {
+        ProtocolException thrown = assertThrows(ProtocolException.class, () ->
+                IrRenderer.render(
+                        job(directiveLine(new Frames.WireDirective.StoredImage("stamp", 16))),
+                        device(),
+                        registry));
+
+        assertTrue(thrown.getMessage().contains("stamp"), thrown.getMessage());
+    }
+
+    /**
+     * A raster is dithered for one printed width and is not a picture at another, so the width is
+     * half of the key. Asking for a width that was not synced is a miss, not a resize.
+     */
+    @Test
+    void refusesAStoredImageAtAWidthThatWasNotSynced() {
+        ProtocolException thrown = assertThrows(ProtocolException.class, () ->
+                IrRenderer.render(
+                        job(directiveLine(new Frames.WireDirective.StoredImage("logo", 24))),
+                        device(),
+                        registry));
+
+        assertTrue(thrown.getMessage().contains("24"), thrown.getMessage());
+    }
+
+    // -------------------------------------------------------------------------
     // Fixtures
     // -------------------------------------------------------------------------
+
+    /**
+     * A 16x2 raster with a bit in each corner of interest.
+     * <p>
+     * Two bytes a row, and deliberately asymmetric: {@code 0x80} is the leftmost dot of the top
+     * row and {@code 0x01} the rightmost of that row's first byte, so a payload that emerged
+     * mirrored or with its rows reordered cannot match.
+     */
+    private static final byte[] LOGO_DOTS = {(byte) 0x80, 0x01, 0x00, (byte) 0xFF};
+
+    /** This agent as a {@code config.sync} carrying one image would have left it. */
+    private final DeviceRegistry registry = syncedWith(new Frames.AssetRaster("logo", 16, 2, LOGO_DOTS));
+
+    private static DeviceRegistry syncedWith(Frames.AssetRaster... rasters) {
+        DeviceRegistry registry = new DeviceRegistry();
+        registry.applyRasters(List.of(rasters));
+        return registry;
+    }
 
     private static Frames.CompiledJob job(Frames.WireLine... lines) {
         return new Frames.CompiledJob("j1", "kitchen", Linefeed.LF, List.of(lines));

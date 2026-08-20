@@ -13,7 +13,7 @@ import java.util.Set;
 
 /**
  * The device set the server last pushed, and the agent's only answer to "what printers are
- * there".
+ * there" — along with the images those printers may be asked to draw.
  * <p>
  * Replaces the resolved YAML configuration this agent used to boot from. The difference that
  * matters is timing: the old configuration existed before anything else was constructed and
@@ -34,6 +34,20 @@ public class DeviceRegistry {
     private volatile Map<String, Device> devices = Map.of();
 
     /**
+     * The images the server dithered for this agent, keyed by name and printed width.
+     *
+     * <p>Held here rather than fetched per job, which is the whole reason they travel with the
+     * configuration: a logo repeated on every receipt of the day is transferred once. Keyed by
+     * width as well as name because a raster is dithered for one paper width and is not a
+     * picture on another, so an agent with an 80mm and a 58mm printer holds two of each.
+     *
+     * <p>Replaced wholesale alongside the device set, for the same reason and with the same
+     * threading: {@code config.sync} is a snapshot, so adopting one cannot leave a stale raster
+     * behind, and a reader on the print thread sees either the old map or the new one.
+     */
+    private volatile Map<String, Frames.AssetRaster> rasters = Map.of();
+
+    /**
      * Replaces the whole device set.
      *
      * @param wire the devices as the server described them, in the order it sent them
@@ -48,9 +62,53 @@ public class DeviceRegistry {
         devices = Collections.unmodifiableMap(replacement);
     }
 
-    /** Empties the device set, as when the agent is unpaired. */
+    /**
+     * Replaces the whole set of synced images.
+     *
+     * <p>Separate from {@link #apply} because the two have different consequences: adopting
+     * devices reopens serial ports and rebuilds print queues, while adopting rasters is a map
+     * swap. Both are driven by the same frame and neither is a delta.
+     *
+     * <p>A later entry for a name and width wins over an earlier one. The server sends each pair
+     * once, so this only decides what a malformed snapshot does, and taking the last is
+     * consistent with reading the frame in order.
+     *
+     * @param wire every raster the server sent, in the order it sent them
+     */
+    public void applyRasters(List<Frames.AssetRaster> wire) {
+        Objects.requireNonNull(wire, "wire");
+        Map<String, Frames.AssetRaster> replacement = new LinkedHashMap<>();
+        for (Frames.AssetRaster raster : wire) {
+            replacement.put(key(raster.name(), raster.widthDots()), raster);
+        }
+        rasters = Collections.unmodifiableMap(replacement);
+    }
+
+    /**
+     * Looks up a synced image.
+     *
+     * @param name      the image's name, as the job referred to it
+     * @param widthDots the printed width the job asked for
+     * @return the raster, or empty when this agent was not sent one for that name and width
+     */
+    public Optional<Frames.AssetRaster> raster(String name, int widthDots) {
+        return name == null ? Optional.empty() : Optional.ofNullable(rasters.get(key(name, widthDots)));
+    }
+
+    /** Returns how many synced images this agent holds, counting each width separately. */
+    public int rasterCount() {
+        return rasters.size();
+    }
+
+    /** Empties the device set and the images with it, as when the agent is unpaired. */
     public void clear() {
         devices = Map.of();
+        rasters = Map.of();
+    }
+
+    /** The key a raster is held under: a name is a slug, so it cannot contain the separator. */
+    private static String key(String name, int widthDots) {
+        return name + "@" + widthDots;
     }
 
     /**
