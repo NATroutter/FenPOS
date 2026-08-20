@@ -3,7 +3,7 @@ import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
-import { serialiseServerFrame } from "@/lib/link/protocol";
+import { FrameTooLargeError, JOB_LIMITS, serialiseServerFrame } from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
 
 /**
@@ -117,5 +117,39 @@ describe("submitJob", () => {
 
 		const [job] = await prisma.job.findMany();
 		expect(job).toMatchObject({ status: "FAILED", errorCode: "job_too_large" });
+	});
+
+	/**
+	 * The same outcome for a throw nobody enumerated, which is the actual fix.
+	 *
+	 * `JOB_LIMITS.maxLines` is 1000 and `maxOutputLines` is operator-configurable to 10,000, so a
+	 * receipt between the two passes every content check, is recorded as a job, and is then refused
+	 * by the wire schema — a `ZodError`, not a `FrameTooLargeError`. The handler used to settle only
+	 * the second and rethrow everything else past itself, so the caller got a 500 and the job sat
+	 * `QUEUED` forever. It is the same shape as the oversized inline raster the resolver now refuses
+	 * up front; enumerating error types was the mistake in both.
+	 *
+	 * Asserted on the row rather than on the thrown error, because it is the row that was wrong.
+	 */
+	it("settles a job the wire refuses for a reason nobody enumerated", async () => {
+		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
+
+		// Past the wire's 1000-line cap, inside this device's 10,000-line one, and small enough that
+		// the frame guard is not what refuses it.
+		const data = Array.from({ length: JOB_LIMITS.maxLines + 100 }, () => "x");
+
+		const thrown = await submitJob(deviceId, { data }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(thrown).not.toBeNull();
+		expect(thrown).not.toBeInstanceOf(FrameTooLargeError);
+		expect(sent).toHaveLength(0);
+
+		const [job] = await prisma.job.findMany();
+		expect(job.status, "a job the wire refused must not be left QUEUED").toBe("FAILED");
+		expect(job.errorCode).toBe("job_undeliverable");
+		expect(job.errorMessage?.length ?? 0).toBeLessThanOrEqual(512);
 	});
 });

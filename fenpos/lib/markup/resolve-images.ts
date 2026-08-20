@@ -2,7 +2,7 @@ import "server-only";
 import { rasterFor, remoteImage, storedImageSize } from "@/lib/assets/asset-service";
 import { ditherToRaster, type ImageRaster } from "@/lib/assets/dither";
 import { ApiError } from "@/lib/errors";
-import { MAX_FRAME_BYTES } from "@/lib/link/protocol";
+import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { parseMarkup } from "@/lib/markup/parser";
@@ -319,13 +319,32 @@ interface InlineBudget {
  * Charged as it is produced rather than totted up at the end, so a receipt asking for far too much
  * stops at the first image past the line instead of dithering the rest of them first.
  *
+ * **Two limits, and both have to be checked here.** The request budget below is one of them; the
+ * other is `IMAGE_LIMITS.maxRasterChars`, which bounds any *single* raster and which
+ * `imageSourceSchema` and the agent's `FrameCodec.readRaster` both enforce. This function used to
+ * check only the first, and the gap between them is real: a 576x1500 inline raster is inside the
+ * 192 KB request allowance and past the 128 KB per-raster cap, so it compiled, was recorded as a
+ * job, and then failed serialisation with a `ZodError` — which `dispatch` did not recognise, so the
+ * caller got a 500 and the job sat QUEUED forever. The sync path already checked each raster
+ * against `assetRasterSchema` before adding it; the job path did not.
+ *
  * @param reference the image, for the message
  * @param raster the dots just produced
  * @param budget what the request has spent so far, updated in place
- * @throws ApiError when this raster takes the request past its allowance
+ * @throws ApiError when this raster is larger than the wire will carry, or takes the request past
+ *         its allowance
  */
 function charge(reference: string, raster: ImageRaster, budget: InlineBudget): void {
-	budget.spent += Math.ceil(raster.packed.length / 3) * 4;
+	const chars = Math.ceil(raster.packed.length / 3) * 4;
+	if (chars > IMAGE_LIMITS.maxRasterChars) {
+		throw new ApiError(
+			"image_too_large",
+			`'${reference}' is ${raster.widthDots}x${raster.heightDots} dots, more than a single image may carry in a job. Print it smaller, or store it on the Assets tab and print it at the paper's full width so its dots travel with the printer's configuration instead.`,
+			{ limit: IMAGE_LIMITS.maxRasterChars, chars },
+		);
+	}
+
+	budget.spent += chars;
 	if (budget.spent > MAX_INLINE_IMAGE_CHARS) {
 		throw new ApiError(
 			"image_too_large",

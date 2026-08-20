@@ -3,6 +3,7 @@ import { Jimp, JimpMime } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
+import { IMAGE_LIMITS } from "@/lib/link/protocol";
 
 /**
  * Tests for the pre-pass that gives the compiler an image's dimensions.
@@ -388,6 +389,39 @@ describe("dots that have to travel with the job", () => {
 
 		expect(thrown.code).toBe("image_too_large");
 		expect(thrown.details.line).toBe(2);
+	});
+
+	/**
+	 * The *other* image limit, which this budget does not imply.
+	 *
+	 * There are two, and only one was checked here. `MAX_INLINE_IMAGE_CHARS` bounds what a whole
+	 * request may spend; `IMAGE_LIMITS.maxRasterChars` bounds any single raster, and both
+	 * `imageSourceSchema` and the agent's `FrameCodec.readRaster` enforce it. The image below sits in
+	 * the gap: 504x1600 dots is about 134 KB of base64, past the 128 KB per-raster cap and inside the
+	 * 192 KB request allowance. It used to compile, be recorded as a job, and then fail serialisation
+	 * with a `ZodError` — a 500 for the caller and a job stuck at `QUEUED`.
+	 *
+	 * Both bounds are asserted, because a check that had simply been tightened to the per-raster cap
+	 * would pass the first of these and break the second: two images of 100 KB each are lawful
+	 * individually and unlawful together.
+	 */
+	it("refuses a single raster larger than the wire will carry, even inside the request budget", async () => {
+		fetchRemoteImage.mockResolvedValue(await solidPng(504, 1600));
+
+		const thrown = await refusal(["<image>https://x.test/tall.png</image>"]);
+
+		expect(thrown.code).toBe("image_too_large");
+		expect(thrown.details.limit).toBe(IMAGE_LIMITS.maxRasterChars);
+		expect(thrown.details.line).toBe(1);
+	});
+
+	it("still allows a raster just inside the per-raster cap", async () => {
+		// The edge in the other direction: a guard that refused a lawful raster would be its own bug.
+		fetchRemoteImage.mockResolvedValue(await solidPng(504, 1400));
+
+		const images = await resolve(["<image>https://x.test/l.png</image>"]);
+
+		expect(images.get("https://x.test/l.png")?.inline?.get(PAPER_DOTS)?.heightDots).toBe(1400);
 	});
 
 	it("charges nothing against that budget for a stored image at the paper's width", async () => {

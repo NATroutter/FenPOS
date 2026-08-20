@@ -134,20 +134,35 @@ export async function submitJob(
 	try {
 		sent = link.send({ type: "job.dispatch", job: compiled });
 	} catch (error) {
-		// A frame too large to send. Caught here rather than left to escape, because the caller's
-		// alternative is a 500 for something that was a property of their request all along — and
-		// because an agent handed an oversized frame closes the link, so this is the last point at
-		// which one job's problem can be stopped from becoming every printer's.
-		if (!(error instanceof FrameTooLargeError)) {
-			throw error;
+		// **The row exists, so nothing may leave this block without settling it.** A job recorded as
+		// QUEUED that will never be sent is the most confusing state this system produces — it looks
+		// like a slow printer rather than a job that will never print — and the previous version
+		// reached it by enumerating error types: it settled a `FrameTooLargeError` and rethrew
+		// everything else past the handler. That was not hypothetical. A single inline raster
+		// between the request budget and the wire's per-raster cap threw a `ZodError` here, and a
+		// job between `JOB_LIMITS.maxLines` and an operator's `maxOutputLines` throws a different
+		// one. Both are properties of the request, both left the caller with a 500 and the job
+		// queued forever. So the job is failed for *anything* thrown, and the shape of the error
+		// only decides what the caller is told.
+		await fail(job.id, sendFailureCode(error), message(error, "Could not send."));
+		if (!(error instanceof FrameTooLargeError) && !(error instanceof ApiError)) {
+			// Not a shape anyone anticipated. The job is settled either way — that is the invariant —
+			// but this is how the next one gets a message written for a caller instead of a stack.
+			logger.error("A compiled job could not be sent", error, { jobId: job.id, agentId: device.agentId });
 		}
-		await fail(job.id, "job_too_large", error.message);
-		throw new ApiError(
-			"job_too_large",
-			`This receipt is ${error.bytes} bytes once compiled, more than the ${MAX_FRAME_BYTES} a printer can be sent in one message. Shorten it, or print its images smaller.`,
-			{ bytes: error.bytes, limit: MAX_FRAME_BYTES },
-			{ cause: error },
-		);
+
+		// An oversized frame gets a message of its own, because the caller can act on it and
+		// because an agent handed one closes the link — this is the last point at which one job's
+		// problem can be stopped from becoming every printer's.
+		if (error instanceof FrameTooLargeError) {
+			throw new ApiError(
+				"job_too_large",
+				`This receipt is ${error.bytes} bytes once compiled, more than the ${MAX_FRAME_BYTES} a printer can be sent in one message. Shorten it, or print its images smaller.`,
+				{ bytes: error.bytes, limit: MAX_FRAME_BYTES },
+				{ cause: error },
+			);
+		}
+		throw error;
 	}
 
 	if (!sent) {
@@ -194,6 +209,43 @@ async function fail(jobId: string, errorCode: string, errorMessage: string): Pro
 	}
 }
 
-function message(error: unknown): string {
-	return error instanceof Error ? error.message : "Could not compile.";
+/**
+ * The code to record against a job that could not be handed to the link.
+ *
+ * `job_undeliverable` is the catch-all rather than the absence of one, and that is the point of
+ * this function: the invariant is that every throw from `link.send` settles the row, so a shape
+ * nobody anticipated needs a code as much as the two that were.
+ *
+ * @param error whatever `link.send` threw
+ * @returns the code to store on the job row
+ */
+function sendFailureCode(error: unknown): string {
+	if (error instanceof FrameTooLargeError) {
+		return "job_too_large";
+	}
+	return error instanceof ApiError ? error.code : "job_undeliverable";
 }
+
+/**
+ * The reason to record against a failed job.
+ *
+ * Truncated, because this is now reached by throws that were never written for a person to read —
+ * a `ZodError` serialises every issue it found, and a receipt with several bad rasters produces
+ * kilobytes of it. The panel shows this string in a job's row; the whole of it is in the log line
+ * beside the stack.
+ *
+ * @param error whatever was thrown
+ * @param fallback what to say when it was not an `Error` at all
+ * @returns a reason short enough to store and show
+ */
+function message(error: unknown, fallback = "Could not compile."): string {
+	if (!(error instanceof Error)) {
+		return fallback;
+	}
+	return error.message.length > MAX_ERROR_MESSAGE_CHARS
+		? `${error.message.slice(0, MAX_ERROR_MESSAGE_CHARS - 1)}…`
+		: error.message;
+}
+
+/** How much of a failure reason is worth storing. Matches the protocol's own cap on `errorMessage`. */
+const MAX_ERROR_MESSAGE_CHARS = 512;
