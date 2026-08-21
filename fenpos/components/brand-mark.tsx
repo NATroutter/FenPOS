@@ -47,7 +47,10 @@ export function BrandMark({
 				    well would read the product name twice. */}
 				<Image src="/fenpos-logo.png" alt="" width={variant.mark} height={variant.mark} priority />
 			</div>
-			<div className="min-w-0">
+			{/* Tagged so a caller can hide the type without hiding the mark. The sidebar does exactly
+			    that when it collapses to icons: 48px of rail has no room for a wordmark, and left in
+			    place it spilled out over the page header beside it. */}
+			<div data-slot="brand-name" className="min-w-0">
 				<div className={cn("font-semibold leading-none tracking-tight", variant.name)}>FenPOS</div>
 				{caption ? (
 					<div className="mt-1 font-mono text-[11px] leading-none text-subtle-foreground">{caption}</div>

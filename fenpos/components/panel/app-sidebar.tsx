@@ -97,7 +97,17 @@ export function AppSidebar({
 		<Sidebar collapsible="icon">
 			{/* Same height as the page header beside it, so the two bottom borders read as the one
 			    line they appear to be. See HEADER_STRIP. */}
-			<SidebarHeader className={cn("justify-center border-b border-sidebar-border px-4 py-3", HEADER_STRIP)}>
+			<SidebarHeader
+				className={cn(
+					"justify-center overflow-hidden border-b border-sidebar-border px-4 py-3",
+					HEADER_STRIP,
+					// Collapsed to icons the rail is 48px wide and the lockup is 113px. Left alone the
+					// wordmark ran straight out of the sidebar and sat on top of the page title beside
+					// it. The tile alone still reads as the product at that width.
+					"group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0",
+					"group-data-[collapsible=icon]:[&_[data-slot=brand-name]]:hidden",
+				)}
+			>
 				<BrandMark size="compact" caption={`v${version}`} />
 			</SidebarHeader>
 
