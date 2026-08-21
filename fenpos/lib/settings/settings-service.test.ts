@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/errors";
 import { JOB_LIMITS } from "@/lib/link/protocol";
 
 import {
+	CATEGORIES,
 	clearSetting,
 	DEFAULT_LIMITS,
 	globalJobSettings,
@@ -30,6 +31,10 @@ describe("settings", () => {
 		const found = settings.find((setting) => setting.definition.key === key);
 		if (!found) {
 			throw new Error(`no setting ${key}`);
+		}
+		// Every key this helper is called with names an integer setting today.
+		if (typeof found.value !== "number") {
+			throw new Error(`setting ${key} is not an integer setting`);
 		}
 		return found.value;
 	};
@@ -114,6 +119,48 @@ describe("settings", () => {
 });
 
 /**
+ * Tests for the shape of a setting's definition, independent of any one setting's value.
+ *
+ * The last test here is the compatibility guarantee and must never be weakened: rows written
+ * before values became JSON hold a bare integer (`200`, not `"200"`), and `JSON.parse("200")`
+ * returns `200` — which is why this change needs no database migration.
+ */
+describe("setting definitions", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("gives every setting a category the category table names", () => {
+		const known = new Set(CATEGORIES.map((category) => category.id));
+		for (const definition of SETTINGS) {
+			expect(known).toContain(definition.category);
+		}
+	});
+
+	it("gives every category at least one setting, so the nav has no dead entries", () => {
+		for (const category of CATEGORIES) {
+			expect(SETTINGS.some((definition) => definition.category === category.id)).toBe(true);
+		}
+	});
+
+	it("types every setting that exists today as an integer", () => {
+		for (const definition of SETTINGS) {
+			expect(definition.type).toBe("integer");
+		}
+	});
+
+	it("still reads a row stored before values became JSON", async () => {
+		await prisma.setting.create({ data: { key: "limits.maxLines", value: "250" } });
+
+		const settings = await listSettings();
+		const stored = settings.find((setting) => setting.definition.key === "limits.maxLines");
+
+		expect(stored?.value).toBe(250);
+		expect(stored?.overridden).toBe(true);
+	});
+});
+
+/**
  * `limits.maxOutputLines` must never offer more than the dispatch frame will accept
  * (`JOB_LIMITS.maxLines`) — a higher setting produces jobs that compile and then fail to
  * serialise. Pinned down separately because the bound is derived rather than a literal.
@@ -125,7 +172,10 @@ describe("limits.maxOutputLines bounds", () => {
 
 	it("caps at the frame's line limit rather than restating a number", () => {
 		const definition = SETTINGS.find((setting) => setting.key === "limits.maxOutputLines");
-		expect(definition?.max).toBe(JOB_LIMITS.maxLines);
+		if (definition?.type !== "integer") {
+			throw new Error("expected limits.maxOutputLines to be an integer setting");
+		}
+		expect(definition.max).toBe(JOB_LIMITS.maxLines);
 	});
 
 	it("ignores a stored value above the cap, falling back to the default", async () => {

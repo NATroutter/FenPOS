@@ -16,17 +16,28 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
 	const settings = await listSettings();
 
-	const fields: SettingFieldData[] = settings.map((setting) => ({
-		key: setting.definition.key,
-		label: setting.definition.label,
-		description: setting.definition.description,
-		min: setting.definition.min,
-		max: setting.definition.max,
-		fallback: setting.definition.fallback,
-		unit: setting.definition.unit,
-		value: setting.value,
-		overridden: setting.overridden,
-	}));
+	// This form only knows how to render an integer setting today. Every setting currently is one
+	// (asserted by the test that walks SETTINGS in settings-service.test.ts); a later task teaches
+	// this page to render the other variants, so a non-integer definition is filtered out here
+	// rather than reaching a form field built for numbers.
+	const fields: SettingFieldData[] = settings.flatMap((setting) => {
+		if (setting.definition.type !== "integer" || typeof setting.value !== "number") {
+			return [];
+		}
+		return [
+			{
+				key: setting.definition.key,
+				label: setting.definition.label,
+				description: setting.definition.description,
+				min: setting.definition.min,
+				max: setting.definition.max,
+				fallback: setting.definition.fallback,
+				unit: setting.definition.unit,
+				value: setting.value,
+				overridden: setting.overridden,
+			},
+		];
+	});
 
 	return (
 		<div className="flex flex-col gap-5">

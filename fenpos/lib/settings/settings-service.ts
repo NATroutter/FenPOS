@@ -13,8 +13,11 @@ import type { CompileLimits } from "@/lib/markup/compiler";
  * the database at install time and then diverging silently from what the code believes. It also
  * means an upgrade that improves a default improves it for everyone who never touched it.
  *
- * Every value is an integer with a range. There is no free-text setting here, deliberately: a
- * setting nobody can state the bounds of is one nobody can validate.
+ * Every setting declares its own bounds, whatever its type — an integer's range, an enum's
+ * values, a string's length. There is no free-text setting with no stated limit, deliberately: a
+ * setting nobody can state the bounds of is one nobody can validate. Every setting today happens
+ * to be `type: "integer"`; the other variants exist so a later setting can pick the shape that
+ * fits it instead of being forced into a number.
  */
 
 /**
@@ -31,16 +34,57 @@ export const DEFAULT_LIMITS: CompileLimits = {
 	maxOutputLines: 300,
 };
 
-/** One setting, its bounds, and why it exists. */
-export interface SettingDefinition {
+/**
+ * Which part of the system a setting affects.
+ *
+ * Declared per setting rather than derived from the key prefix, because the categories deliberately
+ * span prefixes: `auth.*` and `pairing.*` are both security, and `link.*`, `events.*` and `agent.*`
+ * are all connections. Deriving from the prefix would mean either a category per prefix — a dozen
+ * nav entries — or renaming keys to suit the navigation, and a key is a stored contract.
+ */
+export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" | "security" | "connections" | "panel";
+
+/**
+ * The categories in the order the panel lists them.
+ *
+ * Only the categories with at least one setting appear here — an entry with nothing under it
+ * would be a dead spot in the nav. `general`, `logs`, `media`, `security`, `connections` and
+ * `panel` join as the settings that belong to them are added.
+ */
+export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
+	{
+		id: "limits",
+		title: "Print limits",
+		summary: "Counted on the request as received, before markup is interpreted.",
+	},
+	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
+];
+
+/** What every setting carries, whatever its type. */
+interface SettingBase {
 	key: SettingKey;
 	label: string;
 	description: string;
-	min: number;
-	max: number;
-	fallback: number;
-	unit: string;
+	category: SettingCategory;
 }
+
+/**
+ * One setting, its bounds, and why it exists.
+ *
+ * A union rather than one interface with optional fields: an integer's `min` and an enum's `values`
+ * are not the same field made optional, and a definition that could carry both is one the form has
+ * to interrogate at render time. Discriminating on `type` means each variant carries exactly the
+ * constraints that variant can be validated against, which is the module's stated principle — a
+ * setting nobody can state the bounds of is one nobody can validate.
+ */
+export type SettingDefinition =
+	| (SettingBase & { type: "integer"; min: number; max: number; fallback: number; unit: string })
+	| (SettingBase & { type: "boolean"; fallback: boolean })
+	| (SettingBase & { type: "enum"; values: readonly string[]; fallback: string })
+	| (SettingBase & { type: "string"; maxLength: number; pattern?: RegExp; fallback: string });
+
+/** The four kinds of value a setting can hold. */
+export type SettingType = SettingDefinition["type"];
 
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
 export const SETTING_KEYS = [
@@ -66,6 +110,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "limits.maxLines",
 		label: "Elements per request",
 		description: "Most entries a request's data array may hold, before markup is interpreted.",
+		category: "limits",
+		type: "integer",
 		min: 1,
 		max: 10_000,
 		fallback: DEFAULT_LIMITS.maxLines,
@@ -75,6 +121,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "limits.maxLineChars",
 		label: "Characters per element",
 		description: "Measured on the raw string, so the number a client counts matches the one enforced.",
+		category: "limits",
+		type: "integer",
 		min: 1,
 		max: 10_000,
 		fallback: DEFAULT_LIMITS.maxLineChars,
@@ -84,6 +132,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "limits.maxTotalChars",
 		label: "Characters per request",
 		description: "Across every element combined.",
+		category: "limits",
+		type: "integer",
 		min: 1,
 		max: 1_000_000,
 		fallback: DEFAULT_LIMITS.maxTotalChars,
@@ -94,6 +144,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		label: "Printed lines per job",
 		description:
 			"Applied after wrapping, which is the only place it can catch a short request that expands into a long receipt.",
+		category: "limits",
+		type: "integer",
 		min: 1,
 		// Derived, not restated. The dispatch frame refuses more than this (`protocol.ts` line 64)
 		// and so does the agent, so a higher setting produces jobs that compile and then fail to
@@ -106,6 +158,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "jobs.retentionMinutes",
 		label: "Job retention",
 		description: "How long a finished job stays readable before it is swept. Pushed to every agent.",
+		category: "jobs",
+		type: "integer",
 		min: 1,
 		max: 40_320,
 		fallback: 1440,
@@ -116,6 +170,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		label: "Job records kept",
 		description:
 			"Hard cap, evicting the oldest finished jobs first. Bounds memory on a busy agent. Pushed to every agent.",
+		category: "jobs",
+		type: "integer",
 		min: 100,
 		max: 1_000_000,
 		fallback: 10_000,
@@ -125,6 +181,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "jobs.shutdownGraceSeconds",
 		label: "Shutdown grace",
 		description: "How long an agent waits for an in-flight print before failing it. Pushed to every agent.",
+		category: "jobs",
+		type: "integer",
 		min: 1,
 		max: 300,
 		fallback: 10,
@@ -135,7 +193,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 /** A setting's current value, and whether it is stored or the built-in default. */
 export interface SettingValue {
 	definition: SettingDefinition;
-	value: number;
+	value: number | string | boolean;
 	/** False when no row exists, so the panel can say the default is in effect. */
 	overridden: boolean;
 }
@@ -150,13 +208,8 @@ export async function listSettings(): Promise<SettingValue[]> {
 	const stored = new Map(rows.map((row) => [row.key, row.value]));
 
 	return SETTINGS.map((definition) => {
-		const raw = stored.get(definition.key);
-		const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
-
-		// A stored value outside its range is ignored rather than clamped. It can only have got
-		// there by a hand edit or an older version with wider bounds, and quietly applying half
-		// of someone's intention is worse than applying none of it.
-		const usable = Number.isInteger(parsed) && parsed >= definition.min && parsed <= definition.max;
+		const parsed = parseStored(stored.get(definition.key));
+		const usable = parsed !== undefined && fits(definition, parsed);
 
 		return {
 			definition,
@@ -167,13 +220,72 @@ export async function listSettings(): Promise<SettingValue[]> {
 }
 
 /**
+ * Reads a stored value as JSON.
+ *
+ * Rows written before settings became JSON hold a bare integer — `200`, not `"200"` — which is
+ * itself valid JSON, so those rows parse here without a special case. That is what makes this
+ * change need no migration.
+ *
+ * @param raw the stored text, or undefined when nothing is stored
+ * @returns the parsed value, or undefined when nothing is stored or the text is not JSON
+ */
+function parseStored(raw: string | undefined): number | string | boolean | undefined {
+	if (raw === undefined) {
+		return undefined;
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return typeof parsed === "number" || typeof parsed === "string" || typeof parsed === "boolean" ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether a value is one this setting can hold.
+ *
+ * A stored value that does not fit is ignored rather than clamped or coerced. It can only have got
+ * there by a hand edit or an older version with different bounds, and quietly applying half of
+ * someone's intention is worse than applying none of it.
+ *
+ * @param definition the setting
+ * @param value a value parsed from storage or submitted by the form
+ * @returns whether the value matches the definition's type and constraints
+ */
+function fits(definition: SettingDefinition, value: unknown): boolean {
+	switch (definition.type) {
+		case "integer":
+			return typeof value === "number" && Number.isInteger(value) && value >= definition.min && value <= definition.max;
+		case "boolean":
+			return typeof value === "boolean";
+		case "enum":
+			return typeof value === "string" && definition.values.includes(value);
+		case "string":
+			return (
+				typeof value === "string" &&
+				value.length <= definition.maxLength &&
+				(definition.pattern === undefined || definition.pattern.test(value))
+			);
+	}
+}
+
+/**
  * Reads the limits applied to a request, honouring any stored overrides.
  *
  * @returns the limits in effect install-wide
  */
 export async function globalLimits(): Promise<CompileLimits> {
 	const settings = await listSettings();
-	const value = (key: SettingKey): number => settings.find((setting) => setting.definition.key === key)?.value ?? 0;
+	const value = (key: SettingKey): number => {
+		const found = settings.find((setting) => setting.definition.key === key)?.value;
+		// Every key this function names is declared `type: "integer"`, asserted by the test that
+		// walks SETTINGS. A non-number here is a definition that changed type without its readers
+		// being updated, which is a programming error rather than a stored value.
+		if (typeof found !== "number") {
+			throw new Error(`Setting '${key}' is not an integer setting.`);
+		}
+		return found;
+	};
 
 	return {
 		maxLines: value("limits.maxLines"),
@@ -200,7 +312,16 @@ export interface GlobalJobSettings {
  */
 export async function globalJobSettings(): Promise<GlobalJobSettings> {
 	const settings = await listSettings();
-	const value = (key: SettingKey): number => settings.find((setting) => setting.definition.key === key)?.value ?? 0;
+	const value = (key: SettingKey): number => {
+		const found = settings.find((setting) => setting.definition.key === key)?.value;
+		// Every key this function names is declared `type: "integer"`, asserted by the test that
+		// walks SETTINGS. A non-number here is a definition that changed type without its readers
+		// being updated, which is a programming error rather than a stored value.
+		if (typeof found !== "number") {
+			throw new Error(`Setting '${key}' is not an integer setting.`);
+		}
+		return found;
+	};
 
 	return {
 		retentionMinutes: value("jobs.retentionMinutes"),
@@ -220,6 +341,12 @@ export async function setSetting(key: string, value: number): Promise<void> {
 	const definition = SETTINGS.find((setting) => setting.key === key);
 	if (!definition) {
 		throw new ApiError("invalid_type", `'${key}' is not a setting.`);
+	}
+	if (definition.type !== "integer") {
+		// Every definition today is `type: "integer"`, asserted by the test that walks SETTINGS.
+		// Task 6 teaches this function to validate the other variants; until then, reaching here
+		// is a definition that changed type without this function being updated.
+		throw new Error(`Setting '${key}' is not an integer setting.`);
 	}
 	if (!Number.isInteger(value) || value < definition.min || value > definition.max) {
 		throw new ApiError(
