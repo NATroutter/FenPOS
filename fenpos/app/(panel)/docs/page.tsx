@@ -1,7 +1,19 @@
-import type { ReactNode } from "react";
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection, type Verb } from "@/app/(panel)/docs/doc-section";
+import {
+	Aside,
+	Col,
+	Fact,
+	groupByStatus,
+	Mono,
+	megabytes,
+	P,
+	Split,
+	Status,
+	seconds,
+	statusStyle,
+} from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION } from "@/lib/assets/asset-service";
 import { MAX_REMOTE_IMAGE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "@/lib/assets/fetch-remote";
@@ -544,122 +556,4 @@ export default async function DocsPage() {
 			</div>
 		</div>
 	);
-}
-
-/**
- * States a byte limit the way the refusal that enforces it states it.
- *
- * Read from the constant rather than written out, for the same reason the error table is read from
- * `API_ERROR_STATUS`: a documented limit that has to be remembered when the real one changes is a
- * limit this page will eventually be wrong about. Floored to match `requireWithinByteCap`, which is
- * what an operator is actually told when a file is refused.
- *
- * @param bytes the limit
- * @returns it in whole megabytes
- */
-function megabytes(bytes: number): string {
-	return `${Math.floor(bytes / 1024 / 1024)} MB`;
-}
-
-/**
- * States a millisecond budget in the units a person waiting for it would use.
- *
- * @param ms the budget
- * @returns it in seconds
- */
-function seconds(ms: number): string {
-	return `${ms / 1000} seconds`;
-}
-
-/**
- * Groups the error codes by the status they map to.
- *
- * Read from the error module rather than restated, so a code added there appears here without
- * anyone remembering to update the docs — the failure mode that makes documentation untrustworthy.
- */
-function groupByStatus(): [number, string[]][] {
-	const grouped = new Map<number, string[]>();
-	for (const [code, status] of Object.entries(API_ERROR_STATUS)) {
-		grouped.set(status, [...(grouped.get(status) ?? []), code]);
-	}
-	return [...grouped.entries()].sort(([a], [b]) => a - b);
-}
-
-/**
- * Colours a status by what the caller should do about it.
- *
- * The same three hues the Jobs tab uses for job state: it worked, you can fix it, the hardware
- * or the server did something. A reader who has seen one screen already knows this vocabulary.
- */
-function statusStyle(status: number): string {
-	if (status < 300) {
-		return "border-emerald-900 bg-emerald-950 text-emerald-400";
-	}
-	if (status < 500) {
-		return "border-amber-900 bg-amber-950 text-amber-400";
-	}
-	return "border-destructive/40 bg-destructive/10 text-destructive";
-}
-
-/**
- * Explanation beside the thing being explained.
- *
- * A reference laid out as one column is either unreadably wide prose or a narrow ribbon of text
- * with an empty half-page beside it. Putting the prose left and the artifact it describes — the
- * call, the tag table, the permission list — on the right spends the width on something worth
- * reading instead of on margin, and keeps the example in view while the paragraph about it is
- * being read. Stacks below `lg`, where there is only room for one column.
- */
-function Split({ children }: { children: ReactNode }) {
-	return <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:items-start">{children}</div>;
-}
-
-/** One side of a {@link Split}. */
-function Col({ children }: { children: ReactNode }) {
-	return <div className="flex min-w-0 flex-col gap-3">{children}</div>;
-}
-
-/** One of the facts every request needs, in the strip above the reference. */
-function Fact({ label, value, tint }: { label: string; value: string; tint: string }) {
-	return (
-		<div className="bg-card px-3 py-2.5">
-			<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">{label}</div>
-			<div className={`mt-1 truncate font-mono text-[12px] ${tint}`} title={value}>
-				{value}
-			</div>
-		</div>
-	);
-}
-
-/**
- * A paragraph of reference prose.
- *
- * Held to about seventy characters. The page used to set prose to the full width of a desktop
- * window, which is roughly a hundred and eighty characters a line — far past the point where the
- * eye reliably finds the start of the next one.
- */
-function P({ children }: { children: ReactNode }) {
-	return <p className="text-muted-foreground">{children}</p>;
-}
-
-/** A point about why the API behaves as it does, rather than what it does. */
-function Aside({ children }: { children: ReactNode }) {
-	return (
-		<div className="rounded-lg border border-border border-l-2 border-l-amber-500/50 bg-amber-950/10 px-3 py-2.5 text-muted-foreground">
-			{children}
-		</div>
-	);
-}
-
-function Mono({ children }: { children: ReactNode }) {
-	return (
-		<code className="rounded border border-border/60 bg-muted px-1 py-0.5 font-mono text-[11.5px] text-foreground/90">
-			{children}
-		</code>
-	);
-}
-
-/** An HTTP status referred to inside a sentence. */
-function Status({ children }: { children: ReactNode }) {
-	return <span className="font-mono text-[11.5px] font-medium text-emerald-400">{children}</span>;
 }
