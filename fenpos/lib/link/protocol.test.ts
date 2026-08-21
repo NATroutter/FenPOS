@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	configSyncSchema,
@@ -5,6 +8,7 @@ import {
 	FrameTooLargeError,
 	IMAGE_LIMITS,
 	JOB_LIMITS,
+	jobSettingsSchema,
 	type Line,
 	MAX_FRAME_BYTES,
 	PROTOCOL_VERSION,
@@ -342,6 +346,101 @@ describe("serialiseServerFrame", () => {
 				jobs: { retentionMinutes: 0, maxRecords: 10_000, shutdownGraceSeconds: 10 },
 			}),
 		).toThrow();
+	});
+});
+
+/**
+ * Guards `jobSettingsSchema` against the bounds `FrameCodec.readJobSettings` restates on the
+ * agent.
+ *
+ * The duplication is deliberate — a receiver that trusted the sender's own validation would not
+ * have validated anything — but it means the same three names and six numbers exist in two
+ * languages with nothing keeping them in sync. A bound edited on one side only produces a job
+ * settings value the server accepts and the agent silently reinterprets, or refuses outright, so
+ * the Java source is parsed and compared directly rather than trusting the two files to agree by
+ * inspection. Mirrors the approach `lib/domain/enums.test.ts` takes against the Java enums.
+ */
+const FRAME_CODEC_DIR = fileURLToPath(
+	new URL("../../../agent/src/main/java/fi/natroutter/fenpos/link/", import.meta.url),
+);
+
+interface JobSettingsBound {
+	min: number;
+	max: number;
+}
+
+/**
+ * Extracts the field names and bounds `FrameCodec.readJobSettings` restates from
+ * `jobSettingsSchema`.
+ *
+ * Scoped to the method body rather than the whole file, so a `requireBoundedInt` call anywhere
+ * else in `FrameCodec.java` cannot be mistaken for one of this method's three fields.
+ */
+function javaJobSettingsBounds(): Record<string, JobSettingsBound> {
+	const source = readFileSync(join(FRAME_CODEC_DIR, "FrameCodec.java"), "utf8")
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/\/\/.*$/gm, "");
+
+	const signature = source.search(/private static JobSettings readJobSettings\(/);
+	if (signature === -1) {
+		throw new Error("readJobSettings not found in FrameCodec.java");
+	}
+
+	const bodyStart = source.indexOf("{", signature);
+	let depth = 0;
+	let bodyEnd = -1;
+	for (let index = bodyStart; index < source.length; index++) {
+		if (source[index] === "{") depth++;
+		else if (source[index] === "}") {
+			depth--;
+			if (depth === 0) {
+				bodyEnd = index;
+				break;
+			}
+		}
+	}
+	if (bodyEnd === -1) {
+		throw new Error("readJobSettings has no closing brace");
+	}
+	const body = source.slice(bodyStart, bodyEnd);
+
+	const bounds: Record<string, JobSettingsBound> = {};
+	for (const match of body.matchAll(/requireBoundedInt\(\s*jobs,\s*"(\w+)",\s*([\d_]+),\s*([\d_]+)\s*\)/g)) {
+		const [, field, min, max] = match;
+		bounds[field] = { min: Number(min.replace(/_/g, "")), max: Number(max.replace(/_/g, "")) };
+	}
+	return bounds;
+}
+
+describe("job settings bounds match FrameCodec.readJobSettings", () => {
+	const javaBounds = javaJobSettingsBounds();
+	const tsFields = jobSettingsSchema.shape;
+
+	it("restates exactly the three fields jobSettingsSchema declares", () => {
+		expect(Object.keys(javaBounds).sort()).toEqual(Object.keys(tsFields).sort());
+	});
+
+	it.each(Object.keys(tsFields))("%s's bounds match between the schema and FrameCodec", (field) => {
+		const tsField = tsFields[field as keyof typeof tsFields];
+		const javaBound = javaBounds[field];
+
+		expect(javaBound, `FrameCodec.readJobSettings does not restate "${field}"`).toBeDefined();
+		expect(javaBound.min, `min for "${field}": schema says ${tsField.minValue}, FrameCodec says ${javaBound.min}`).toBe(
+			tsField.minValue,
+		);
+		expect(javaBound.max, `max for "${field}": schema says ${tsField.maxValue}, FrameCodec says ${javaBound.max}`).toBe(
+			tsField.maxValue,
+		);
+	});
+
+	it("parses the known method correctly, so an empty result cannot pass silently", () => {
+		// Without this, a regex that matched nothing would make the checks above vacuously pass
+		// against an equally empty set.
+		expect(javaBounds).toEqual({
+			retentionMinutes: { min: 1, max: 40_320 },
+			maxRecords: { min: 100, max: 1_000_000 },
+			shutdownGraceSeconds: { min: 1, max: 300 },
+		});
 	});
 });
 

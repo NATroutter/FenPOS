@@ -144,6 +144,34 @@ class PrintServiceTest {
         assertTrue(port.awaitWrites(5000));
     }
 
+    /**
+     * Pins down {@link PrintService#settings(JobSettings)} forwarding to the store behind it, not
+     * only updating its own field.
+     * <p>
+     * {@code settings} is private on {@link JobStore}, so this drives observable behaviour a new
+     * record cap produces instead: {@link JobStore#enforceCap()} enforces whatever cap the store
+     * was last given, on the next write. Mirrors
+     * {@link JobStoreTest#appliesANewRecordCapToJobsAlreadyHeld()} one layer up, through
+     * {@link PrintService#jobs()} rather than a directly-constructed {@link JobStore}. If the
+     * forwarding line in {@link PrintService#settings(JobSettings)} were deleted, the store would
+     * keep enforcing its original 500-record cap and this would fail.
+     */
+    @Test
+    void forwardsNewJobSettingsToTheStoreBehindIt() {
+        for (int index = 0; index < 20; index++) {
+            service.jobs().create("kitchen", compiled()).complete();
+        }
+
+        service.settings(new JobSettings(Duration.ofHours(1), 5, Duration.ofSeconds(10)));
+        service.jobs().create("kitchen", compiled());
+
+        assertEquals(5, service.jobs().all().size());
+    }
+
+    private static CompiledJob compiled() {
+        return new CompiledJob(new byte[]{1, 2, 3}, 1);
+    }
+
     private FakePrinterPort port(String name) {
         FakePrinterPort port = new FakePrinterPort(1);
         ports.put(name, port);
