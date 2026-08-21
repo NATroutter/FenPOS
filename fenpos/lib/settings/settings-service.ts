@@ -1,8 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { JOB_LIMITS } from "@/lib/link/protocol";
-import { logger } from "@/lib/logger";
+import { logger, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 
 /**
@@ -58,6 +59,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 		summary: "Counted on the request as received, before markup is interpreted.",
 	},
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
+	{ id: "logs", title: "Logs", summary: "How verbose the server's own log output is." },
 ];
 
 /** What every setting carries, whatever its type. */
@@ -133,6 +135,7 @@ export const SETTING_KEYS = [
 	"jobs.retentionMinutes",
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
+	"logs.minimumLevel",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -225,6 +228,16 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 300,
 		fallback: 10,
 		unit: "seconds",
+	},
+	{
+		key: "logs.minimumLevel",
+		label: "Minimum level",
+		description:
+			"Lines below this are dropped. DEBUG is loud enough to be worth turning off again once whatever you are chasing is found.",
+		category: "logs",
+		type: "enum",
+		values: LogLevel.values,
+		fallback: "INFO",
 	},
 ];
 
@@ -407,6 +420,7 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 	});
 
 	logger.info("Setting changed", { key, value });
+	await applyPushedSettings();
 }
 
 /**
@@ -500,4 +514,27 @@ export async function stringSetting(key: SettingKey): Promise<string> {
 export async function clearSetting(key: string): Promise<void> {
 	await prisma.setting.deleteMany({ where: { key } });
 	logger.info("Setting reset to its default", { key });
+	await applyPushedSettings();
+}
+
+/**
+ * Applies the settings that are read from synchronous code.
+ *
+ * Most settings are read where they are used, inside async server code. Some cannot be: the logger's
+ * `write` is synchronous and runs on every line, so it cannot await a database read. Modules like
+ * that hold a mutable current value and this function pushes into it — at startup, and after any
+ * change, so a saved setting takes effect without a restart.
+ *
+ * The log level is the only one today. The panel's date formatting joins it when `panel.locale`
+ * ships, for the same reason: `formatDateTime` is synchronous and called during render.
+ *
+ * Failures are logged and swallowed. A settings read that fails must not stop the server starting,
+ * and the modules involved all have a working built-in value.
+ */
+export async function applyPushedSettings(): Promise<void> {
+	try {
+		setMinimumLevel(await enumSetting<LogLevel>("logs.minimumLevel"));
+	} catch (error) {
+		logger.error("Could not apply pushed settings", error);
+	}
 }

@@ -45,8 +45,27 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	ERROR: 40,
 };
 
-/** Below this level, lines are dropped. Debug output is noise in a running install. */
-const MINIMUM_LEVEL: LogLevel = isProduction ? "INFO" : "DEBUG";
+/**
+ * Below this level, lines are dropped.
+ *
+ * Mutable, and pushed in by the settings store rather than read from it. `write` is synchronous and
+ * runs on every line, so it cannot await a database read; and `settings-service.ts` imports this
+ * module, so reading the store from here would be a cycle. The store calls `setMinimumLevel`
+ * instead — at startup and after every save.
+ *
+ * The initial value is what this module used before the setting existed, which is what a caller
+ * that never reaches startup — a unit test, an edge runtime — keeps getting.
+ */
+let minimumLevel: LogLevel = isProduction ? "INFO" : "DEBUG";
+
+/**
+ * Sets the level below which lines are dropped.
+ *
+ * @param level the lowest severity to write
+ */
+export function setMinimumLevel(level: LogLevel): void {
+	minimumLevel = level;
+}
 
 /**
  * Replaces the values of sensitive keys with a marker, recursively.
@@ -111,7 +130,7 @@ function describeError(error: unknown): Record<string, unknown> {
  * @param context structured fields; sensitive keys are redacted before writing
  */
 function write(level: LogLevel, message: string, context?: LogContext): void {
-	if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[MINIMUM_LEVEL]) {
+	if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minimumLevel]) {
 		return;
 	}
 

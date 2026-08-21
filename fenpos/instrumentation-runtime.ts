@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
 import { getHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
+import { applyPushedSettings } from "@/lib/settings/settings-service";
 
 /**
  * Startup work for the Node.js runtime.
@@ -16,6 +17,11 @@ import { logger } from "@/lib/logger";
 export async function registerRuntime(): Promise<void> {
 	await announceAdminPassword();
 	await runMaintenance();
+	// Seeds modules that hold a mutable value pushed from the store — the logger's minimum
+	// level today — with whatever is saved. Placed after the maintenance queries above so it
+	// runs once the database has already proven reachable, rather than being the first query
+	// attempted at startup.
+	await applyPushedSettings();
 	attachLink();
 }
 

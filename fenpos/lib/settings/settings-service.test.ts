@@ -1,13 +1,18 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import type { LogLevel } from "@/lib/domain/enums";
+import { isProduction } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { JOB_LIMITS } from "@/lib/link/protocol";
+import { logger, setMinimumLevel } from "@/lib/logger";
 
 import {
+	applyPushedSettings,
 	booleanSetting,
 	CATEGORIES,
 	clearSetting,
 	DEFAULT_LIMITS,
+	enumSetting,
 	globalJobSettings,
 	globalLimits,
 	integerSetting,
@@ -145,9 +150,14 @@ describe("setting definitions", () => {
 		}
 	});
 
-	it("types every setting that exists today as an integer", () => {
+	it("types every limits and jobs setting as an integer", () => {
+		// The blanket "every setting is an integer" this pinned down before Task 9 stopped being
+		// true the moment `logs.minimumLevel` (an enum) joined them — narrowed to the two
+		// categories it was actually protecting.
 		for (const definition of SETTINGS) {
-			expect(definition.type).toBe("integer");
+			if (definition.category === "limits" || definition.category === "jobs") {
+				expect(definition.type).toBe("integer");
+			}
 		}
 	});
 
@@ -212,10 +222,9 @@ describe("limits.maxOutputLines bounds", () => {
 /**
  * Exercises `setSetting`'s per-variant validation and the typed accessors, through
  * `limits.maxLines` — an existing `type: "integer"` setting. Only the integer path can be
- * exercised this way today; no boolean, enum or string setting exists yet, and a test key added
- * to `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for. Tasks 9
- * and 10 add the first enum and string settings, which is where those variants get their real
- * coverage.
+ * exercised this way today; no boolean or string setting exists yet, and a test key added to
+ * `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for. `logs.minimumLevel`
+ * (Task 9) gives the enum variant its real coverage below; Task 10 adds the first string setting.
  */
 describe("value variants", () => {
 	beforeEach(async () => {
@@ -251,5 +260,61 @@ describe("value variants", () => {
 		await setSetting("limits.maxLines", 250);
 		const row = await prisma.setting.findUnique({ where: { key: "limits.maxLines" } });
 		expect(row?.value).toBe("250");
+	});
+});
+
+/**
+ * `logs.minimumLevel` — the first enum setting, and the one that pushes into the logger.
+ *
+ * The "stored as JSON" test below is the one that actually proves the write path: for an integer,
+ * `String(250) === JSON.stringify(250)`, so the existing integer coverage cannot tell `JSON.stringify`
+ * and a `String(value)` regression apart. A string value can: `String("INFO")` is `INFO`, unquoted,
+ * while `JSON.stringify("INFO")` is `"INFO"`, with the quotes — and only the quoted form round-trips
+ * through `parseStored`'s `JSON.parse`.
+ */
+describe("logs.minimumLevel", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	afterEach(() => {
+		// applyPushedSettings mutates the logger's shared module state; restore its built-in
+		// default so a level this describe block set cannot leak into an unrelated test.
+		setMinimumLevel(isProduction ? "INFO" : "DEBUG");
+	});
+
+	it("pushes the log level into the logger when it changes", async () => {
+		await setSetting("logs.minimumLevel", "DEBUG");
+		await applyPushedSettings();
+		expect(await enumSetting<LogLevel>("logs.minimumLevel")).toBe("DEBUG");
+	});
+
+	it("refuses a level that is not a known severity", async () => {
+		await expect(setSetting("logs.minimumLevel", "TRACE")).rejects.toThrow(ApiError);
+	});
+
+	it("actually changes what the logger writes, not just what is stored", async () => {
+		// The test above confirms the value round-trips; this one confirms setSetting's own
+		// `applyPushedSettings()` call (settings-service.ts) really reaches the logger's mutable
+		// level, by observing its effect on `process.stdout.write` rather than on the store.
+		await setSetting("logs.minimumLevel", "ERROR");
+
+		const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		try {
+			logger.warn("should be dropped now that the minimum level is ERROR");
+			expect(spy).not.toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("stores the level as quoted JSON, not as bare text", async () => {
+		// The regression this guards against: a write path that reverted to `String(value)` would
+		// store `INFO` with no quotes, which is not valid JSON, so the next read would fail to
+		// parse it and the setting would silently revert to its default.
+		await setSetting("logs.minimumLevel", "INFO");
+		const row = await prisma.setting.findUnique({ where: { key: "logs.minimumLevel" } });
+		expect(row?.value).toBe(JSON.stringify("INFO"));
+		expect(row?.value).toBe('"INFO"');
 	});
 });
