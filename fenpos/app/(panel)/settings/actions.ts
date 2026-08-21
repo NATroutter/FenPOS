@@ -53,11 +53,15 @@ async function run(
 /**
  * Stores a setting.
  *
+ * `value` is `unknown` rather than a union: this is a public endpoint, so the type here would be a
+ * claim about the caller rather than a check on them. `setSetting` validates against the setting's
+ * own declared type.
+ *
  * @param key which setting
  * @param value the new value
  * @returns the state to render
  */
-export async function saveSetting(key: string, value: number): Promise<ActionState> {
+export async function saveSetting(key: string, value: unknown): Promise<ActionState> {
 	return run("save", () => setSetting(key, value));
 }
 

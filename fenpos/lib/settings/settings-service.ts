@@ -270,22 +270,39 @@ function fits(definition: SettingDefinition, value: unknown): boolean {
 }
 
 /**
+ * Narrows an already-loaded setting to the type the caller requires.
+ *
+ * Shared by the typed accessors and by {@link globalLimits}/{@link globalJobSettings}, which each
+ * narrow several settings out of one `listSettings()` call rather than fetching once per setting.
+ *
+ * @param settings every setting, as returned by `listSettings`
+ * @param key which setting
+ * @param type the variant the caller requires
+ * @returns the current value
+ * @throws Error when the setting is not of the required type
+ */
+function narrow(settings: SettingValue[], key: SettingKey, type: SettingType): number | string | boolean {
+	const found = settings.find((setting) => setting.definition.key === key);
+	if (!found) {
+		throw new Error(`'${key}' is not a setting.`);
+	}
+	if (found.definition.type !== type) {
+		throw new Error(`Setting '${key}' is ${found.definition.type}, not ${type}.`);
+	}
+	return found.value;
+}
+
+/**
  * Reads the limits applied to a request, honouring any stored overrides.
  *
  * @returns the limits in effect install-wide
  */
 export async function globalLimits(): Promise<CompileLimits> {
 	const settings = await listSettings();
-	const value = (key: SettingKey): number => {
-		const found = settings.find((setting) => setting.definition.key === key)?.value;
-		// Every key this function names is declared `type: "integer"`, asserted by the test that
-		// walks SETTINGS. A non-number here is a definition that changed type without its readers
-		// being updated, which is a programming error rather than a stored value.
-		if (typeof found !== "number") {
-			throw new Error(`Setting '${key}' is not an integer setting.`);
-		}
-		return found;
-	};
+	// Every key named below is declared `type: "integer"`, asserted by the test that walks
+	// SETTINGS. A mismatch here is a definition that changed type without its readers being
+	// updated, which is a programming error rather than a stored value.
+	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
 
 	return {
 		maxLines: value("limits.maxLines"),
@@ -312,16 +329,10 @@ export interface GlobalJobSettings {
  */
 export async function globalJobSettings(): Promise<GlobalJobSettings> {
 	const settings = await listSettings();
-	const value = (key: SettingKey): number => {
-		const found = settings.find((setting) => setting.definition.key === key)?.value;
-		// Every key this function names is declared `type: "integer"`, asserted by the test that
-		// walks SETTINGS. A non-number here is a definition that changed type without its readers
-		// being updated, which is a programming error rather than a stored value.
-		if (typeof found !== "number") {
-			throw new Error(`Setting '${key}' is not an integer setting.`);
-		}
-		return found;
-	};
+	// Every key named below is declared `type: "integer"`, asserted by the test that walks
+	// SETTINGS. A mismatch here is a definition that changed type without its readers being
+	// updated, which is a programming error rather than a stored value.
+	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
 
 	return {
 		retentionMinutes: value("jobs.retentionMinutes"),
@@ -333,35 +344,114 @@ export async function globalJobSettings(): Promise<GlobalJobSettings> {
 /**
  * Stores a setting.
  *
+ * `value` is `unknown` because the caller is a server action, which is a public POST endpoint —
+ * whatever arrives has been across the wire and is not typed by anything the browser did. The
+ * validation here is the boundary, not a convenience for the form.
+ *
  * @param key which setting
- * @param value the new value
- * @throws ApiError when the key is unknown or the value is out of range
+ * @param value the new value, validated against the setting's declared type
+ * @throws ApiError when the key is unknown or the value is not one this setting can hold
  */
-export async function setSetting(key: string, value: number): Promise<void> {
+export async function setSetting(key: string, value: unknown): Promise<void> {
 	const definition = SETTINGS.find((setting) => setting.key === key);
 	if (!definition) {
 		throw new ApiError("invalid_type", `'${key}' is not a setting.`);
 	}
-	if (definition.type !== "integer") {
-		// Every definition today is `type: "integer"`, asserted by the test that walks SETTINGS.
-		// Task 6 teaches this function to validate the other variants; until then, reaching here
-		// is a definition that changed type without this function being updated.
-		throw new Error(`Setting '${key}' is not an integer setting.`);
-	}
-	if (!Number.isInteger(value) || value < definition.min || value > definition.max) {
-		throw new ApiError(
-			"invalid_type",
-			`${definition.label} must be a whole number between ${definition.min} and ${definition.max}.`,
-		);
+	if (!fits(definition, value)) {
+		throw new ApiError("invalid_type", `${definition.label} ${expectation(definition)}.`);
 	}
 
+	const stored = JSON.stringify(value);
 	await prisma.setting.upsert({
 		where: { key },
-		update: { value: String(value) },
-		create: { key, value: String(value) },
+		update: { value: stored },
+		create: { key, value: stored },
 	});
 
 	logger.info("Setting changed", { key, value });
+}
+
+/**
+ * Says what a setting will accept, for the message shown when it did not get it.
+ *
+ * @param definition the setting
+ * @returns a phrase completing "<label> ..."
+ */
+function expectation(definition: SettingDefinition): string {
+	switch (definition.type) {
+		case "integer":
+			return `must be a whole number between ${definition.min} and ${definition.max}`;
+		case "boolean":
+			return "must be on or off";
+		case "enum":
+			return `must be one of ${definition.values.join(", ")}`;
+		case "string":
+			return `must be text of at most ${definition.maxLength} characters`;
+	}
+}
+
+/**
+ * Reads one setting, insisting it is the type the caller expects.
+ *
+ * A mismatch is a programming error — a definition whose type changed without its readers being
+ * updated — so it throws rather than returning a fallback. The alternative is a caller silently
+ * receiving a string where it expected a number.
+ *
+ * @param key which setting
+ * @param type the variant the caller requires
+ * @returns the current value
+ * @throws Error when the setting is not of the required type
+ */
+async function typedSetting(key: SettingKey, type: SettingType): Promise<number | string | boolean> {
+	return narrow(await listSettings(), key, type);
+}
+
+/**
+ * The current value of an integer setting.
+ *
+ * @param key which setting
+ * @returns the current value
+ * @throws Error when the setting is not declared `type: "integer"`
+ */
+export async function integerSetting(key: SettingKey): Promise<number> {
+	return (await typedSetting(key, "integer")) as number;
+}
+
+/**
+ * The current value of a boolean setting.
+ *
+ * @param key which setting
+ * @returns the current value
+ * @throws Error when the setting is not declared `type: "boolean"`
+ */
+export async function booleanSetting(key: SettingKey): Promise<boolean> {
+	return (await typedSetting(key, "boolean")) as boolean;
+}
+
+/**
+ * The current value of an enum setting, narrowed to the caller's own union.
+ *
+ * The narrowing to `T` is not checked here — the definition's `values` are typed as
+ * `readonly string[]`, so the caller's more specific union is taken on trust, the same way a
+ * database read is.
+ *
+ * @param key which setting
+ * @returns the current value
+ * @throws Error when the setting is not declared `type: "enum"`
+ */
+export async function enumSetting<T extends string>(key: SettingKey): Promise<T> {
+	return (await typedSetting(key, "enum")) as T;
+}
+
+/**
+ * The current value of a string setting.
+ *
+ * @param key which setting
+ * @returns the current value
+ * @throws Error when the setting is not declared `type: "string"`
+ */
+export async function stringSetting(key: SettingKey): Promise<string> {
+	return (await typedSetting(key, "string")) as string;
 }
 
 /**

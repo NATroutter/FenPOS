@@ -4,11 +4,13 @@ import { ApiError } from "@/lib/errors";
 import { JOB_LIMITS } from "@/lib/link/protocol";
 
 import {
+	booleanSetting,
 	CATEGORIES,
 	clearSetting,
 	DEFAULT_LIMITS,
 	globalJobSettings,
 	globalLimits,
+	integerSetting,
 	listSettings,
 	SETTINGS,
 	setSetting,
@@ -204,5 +206,50 @@ describe("limits.maxOutputLines bounds", () => {
 
 	it("refuses a save above the cap", async () => {
 		await expect(setSetting("limits.maxOutputLines", JOB_LIMITS.maxLines + 1)).rejects.toThrow(ApiError);
+	});
+});
+
+/**
+ * Exercises `setSetting`'s per-variant validation and the typed accessors, through
+ * `limits.maxLines` — an existing `type: "integer"` setting. Only the integer path can be
+ * exercised this way today; no boolean, enum or string setting exists yet, and a test key added
+ * to `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for. Tasks 9
+ * and 10 add the first enum and string settings, which is where those variants get their real
+ * coverage.
+ */
+describe("value variants", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("stores and reads back an integer", async () => {
+		await setSetting("limits.maxLines", 250);
+		expect(await integerSetting("limits.maxLines")).toBe(250);
+	});
+
+	it("refuses a string for an integer setting", async () => {
+		await expect(setSetting("limits.maxLines", "250")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a fractional integer", async () => {
+		await expect(setSetting("limits.maxLines", 2.5)).rejects.toThrow(ApiError);
+	});
+
+	it("refuses an out-of-range integer", async () => {
+		await expect(setSetting("limits.maxLines", 0)).rejects.toThrow(ApiError);
+	});
+
+	it("refuses an unknown key", async () => {
+		await expect(setSetting("limits.notASetting", 1)).rejects.toThrow(ApiError);
+	});
+
+	it("throws when an accessor is pointed at another variant", async () => {
+		await expect(booleanSetting("limits.maxLines")).rejects.toThrow();
+	});
+
+	it("stores an integer as JSON, not as bare text", async () => {
+		await setSetting("limits.maxLines", 250);
+		const row = await prisma.setting.findUnique({ where: { key: "limits.maxLines" } });
+		expect(row?.value).toBe("250");
 	});
 });
