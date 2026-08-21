@@ -1,12 +1,14 @@
 import type { LucideIcon } from "lucide-react";
 import {
 	BookOpen,
+	CodeXml,
 	// `Image` is also a DOM global, and one that a React file legitimately reaches for. Aliased so
 	// the name in this file can only mean the icon.
 	Image as ImageIcon,
 	KeyRound,
 	LayoutDashboard,
 	ListOrdered,
+	Plug,
 	Printer,
 	ScrollText,
 	Server,
@@ -38,6 +40,14 @@ export interface NavItem {
 	 */
 	description: string;
 	icon: LucideIcon;
+	/**
+	 * Sections nested under this one in the sidebar.
+	 *
+	 * A parent with children is a group rather than a destination: the sidebar renders it as a
+	 * collapsible trigger, and its own `href` exists so the group can tell whether the current path
+	 * is inside it — and, for `/docs`, so the redirect that path serves still has a table entry.
+	 */
+	children?: readonly NavItem[];
 }
 
 /** A labelled group of sections in the sidebar. */
@@ -137,26 +147,55 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 			{
 				href: "/docs",
 				label: "Docs",
-				title: "API documentation",
-				description: "The print API, as this install serves it.",
+				title: "Documentation",
+				description: "How to drive this install from another system, and how to write what it prints.",
 				icon: BookOpen,
+				children: [
+					{
+						href: "/docs/api",
+						label: "API",
+						title: "API documentation",
+						description: "The print API, as this install serves it.",
+						icon: Plug,
+					},
+					{
+						href: "/docs/markup",
+						label: "Markup",
+						title: "Markup language",
+						description: "What goes inside a job's data: the tags a receipt is written with, and the blocks they draw.",
+						icon: CodeXml,
+					},
+				],
 			},
 		],
 	},
 ];
 
-/** Every section, flattened. */
-export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
+/** Every section, flattened — children as well as the groups' own items. */
+export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((group) =>
+	group.items.flatMap((item) => [item, ...(item.children ?? [])]),
+);
 
 /**
  * Finds the section a path belongs to.
  *
- * Matches on the path prefix so that nested routes, such as a device detail page, still
- * resolve to the section that owns them.
+ * Matches on the path prefix so that nested routes, such as a device detail page, still resolve to
+ * the section that owns them — and takes the **longest** matching href, because with children
+ * flattened in, `/docs/api` matches both itself and its parent `/docs`. Taking the first match
+ * would put the parent's title on every child page.
  *
  * @param pathname the current route
  * @returns the owning section, or undefined for a path outside the panel
  */
 export function findNavItem(pathname: string): NavItem | undefined {
-	return NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+	let best: NavItem | undefined;
+	for (const item of NAV_ITEMS) {
+		if (pathname !== item.href && !pathname.startsWith(`${item.href}/`)) {
+			continue;
+		}
+		if (!best || item.href.length > best.href.length) {
+			best = item;
+		}
+	}
+	return best;
 }
