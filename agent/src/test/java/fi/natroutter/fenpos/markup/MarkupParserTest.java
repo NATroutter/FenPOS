@@ -785,6 +785,13 @@ class MarkupParserTest {
     }
 
     @Test
+    void refusesAFillSharingAnElementWithASymbol() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("<qr>abc</qr><fill>"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+    }
+
+    @Test
     void refusesAFillInsideABlock() {
         MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("<qr>a<fill>b</qr>"));
 
@@ -797,5 +804,19 @@ class MarkupParserTest {
                 assertThrows(MarkupException.class, () -> MarkupParser.parse("<align=right>x</align><fill>"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
+    }
+
+    /**
+     * A filled line spans the paper, so alignment around one has nothing left to move and the pair
+     * is a no-op. Permitted rather than refused: refusing would mean new parser state to detect a
+     * combination that is harmless, and under a width multiplier the line can land a column short,
+     * where alignment is not even a no-op.
+     */
+    @Test
+    void permitsAFillInsideAnAlignment() throws Exception {
+        Line line = MarkupParser.parse("<align=center>a<fill>b</align>");
+
+        assertEquals(Align.CENTER, line.align());
+        assertEquals(1, line.fills().size());
     }
 }
