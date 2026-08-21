@@ -122,6 +122,7 @@ public class FenPOSAgent extends FoxLib {
     private static ScheduledExecutorService janitor;
     private static ConsoleOutput consoleOutput;
     private static ConsoleManager console;
+    /** Follows the server's setting once a config.sync arrives; the built-in until then. */
     private static Duration shutdownGrace = JobSettings.DEFAULTS.shutdownGrace();
     private static volatile boolean shuttingDown;
 
@@ -176,21 +177,25 @@ public class FenPOSAgent extends FoxLib {
     }
 
     /**
-     * Adopts a device set the server pushed.
+     * Adopts a device set and the job settings the server pushed.
      * <p>
-     * The single entry point for {@code config.sync}, so the two layers that care are always
-     * updated together and in the right order: the serial layer first, because a print queue
-     * is built around the port that layer owns.
+     * The single entry point for {@code config.sync}, so the layers that care are always updated
+     * together and in the right order: the serial layer first, because a print queue is built
+     * around the port that layer owns; the job settings last, because they change what the print
+     * service does with the queues rather than which queues exist.
      *
      * @param wire the devices as the server described them
+     * @param jobs retention and shutdown settings as the server has them configured
      */
-    public static synchronized void applyConfig(List<Frames.DeviceConfig> wire) {
+    public static synchronized void applyConfig(List<Frames.DeviceConfig> wire, JobSettings jobs) {
         if (shuttingDown) {
             return;
         }
         devices.apply(wire);
         connections.applyDevices();
         printService.applyDevices();
+        printService.settings(jobs);
+        shutdownGrace = jobs.shutdownGrace();
         logger.info("Configuration applied: " + devices.size() + " device(s)");
     }
 
@@ -316,11 +321,11 @@ public class FenPOSAgent extends FoxLib {
     }
 
     private static void printBanner() {
-        println("[35m _____               ____    ___   ____  ");
-        println("[35m|  ___|  ___  _ __  |  _ \\  / _ \\ / ___| ");
-        println("[35m| |_    / _ \\| '_ \\ | |_) || | | |\\___ \\ ");
-        println("[35m|  _|  |  __/| | | ||  __/ | |_| | ___) |");
-        println("[35m|_|     \\___||_| |_||_|     \\___/ |____/ ");
+        println("[35m _____             ____    ___   ____  ");
+        println("[35m|  ___|___  _ __  |  _ \\  / _ \\ / ___| ");
+        println("[35m| |_  / _ \\| '_ \\ | |_) || | | |\\___ \\ ");
+        println("[35m|  _||  __/| | | ||  __/ | |_| | ___) |");
+        println("[35m|_|   \\___||_| |_||_|     \\___/ |____/ ");
         println("[35m• Version: " + VERSION);
         println("[35m• Author: NATroutter");
         println("[35m• Website: https://NATroutter.fi");

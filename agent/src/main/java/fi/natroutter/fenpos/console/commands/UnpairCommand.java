@@ -2,16 +2,16 @@ package fi.natroutter.fenpos.console.commands;
 
 import fi.natroutter.fenpos.console.Command;
 import fi.natroutter.fenpos.console.ConsoleOutput;
-import fi.natroutter.fenpos.link.Frames;
 import fi.natroutter.fenpos.link.LinkClient;
+import fi.natroutter.fenpos.link.LinkDispatcher;
 import fi.natroutter.fenpos.pair.PairingException;
 import fi.natroutter.fenpos.pair.PairingService;
+import fi.natroutter.fenpos.print.JobSettings;
 import fi.natroutter.fenpos.store.AgentIdentity;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.Consumer;
 
 /**
  * Forgets this agent's credential and drops the link.
@@ -26,19 +26,20 @@ public class UnpairCommand implements Command {
     private final ConsoleOutput out;
     private final PairingService pairing;
     private final LinkClient link;
-    private final Consumer<List<Frames.DeviceConfig>> applyConfig;
+    private final LinkDispatcher.ConfigListener applyConfig;
 
     /**
      * @param out     output sink
      * @param pairing the shared pairing implementation
      * @param link    the connection to stop
-     * @param applyConfig adopts a device set; given an empty one to release the printers that
-     *                    belonged to the server being left
+     * @param applyConfig adopts a device set and job settings; given an empty device set and
+     *                    {@link JobSettings#DEFAULTS} to release the printers that belonged to the
+     *                    server being left and stop following settings that server pushed
      */
     public UnpairCommand(ConsoleOutput out,
                          PairingService pairing,
                          LinkClient link,
-                         Consumer<List<Frames.DeviceConfig>> applyConfig) {
+                         LinkDispatcher.ConfigListener applyConfig) {
         this.out = Objects.requireNonNull(out, "out");
         this.pairing = Objects.requireNonNull(pairing, "pairing");
         this.link = Objects.requireNonNull(link, "link");
@@ -66,8 +67,10 @@ public class UnpairCommand implements Command {
 
             link.stop("unpaired at the agent console");
             // Through the same seam a config.sync takes, so the ports close and the queues
-            // drain exactly as they would if the server had removed every device.
-            applyConfig.accept(List.of());
+            // drain exactly as they would if the server had removed every device. Job settings
+            // reset to the defaults too: with no server left to push them, this agent is
+            // unconfigured again exactly as it was before its first config.sync.
+            applyConfig.accept(List.of(), JobSettings.DEFAULTS);
 
             out.println("Unpaired from " + cleared.get().serverUrl() + ".");
             out.println("The server still lists this agent; remove it there too, under Agents.");

@@ -35,7 +35,6 @@ public class JobStore {
 
     private final Map<String, PrintJob> jobs = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
-    private final JobSettings settings;
     private final Clock clock;
 
     /**
@@ -43,6 +42,13 @@ public class JobStore {
      * after the store has been constructed and while queue workers may already be running.
      */
     private volatile JobListener listener = JobListener.NONE;
+
+    /**
+     * Retention and cap settings. Volatile for the same reason as {@link #listener}: the server
+     * pushes these with {@code config.sync}, which arrives after construction and while queue
+     * workers may already be running.
+     */
+    private volatile JobSettings settings;
 
     /**
      * @param settings retention and cap settings
@@ -63,6 +69,19 @@ public class JobStore {
      */
     public void listener(JobListener listener) {
         this.listener = Objects.requireNonNull(listener, "listener");
+    }
+
+    /**
+     * Replaces the retention and cap settings.
+     *
+     * <p>The new cap is enforced on the next write rather than immediately. Evicting on the setter
+     * would mean a {@code config.sync} deleting records while a console command is reading them,
+     * and the next write is never far away on an agent doing anything at all.
+     *
+     * @param settings the settings to apply from now on
+     */
+    public void settings(JobSettings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     /**

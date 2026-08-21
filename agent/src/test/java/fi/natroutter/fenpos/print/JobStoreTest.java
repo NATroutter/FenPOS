@@ -122,6 +122,27 @@ class JobStoreTest {
         assertTrue(store.find(queued.id()).isPresent());
     }
 
+    /**
+     * The store's own settings can be replaced after construction, once the server pushes new
+     * ones — mirroring {@link JobStore#listener}, which is already mutable for the same reason.
+     * <p>
+     * The 20 initial jobs are completed, not left {@code QUEUED}: {@link JobStore#enforceCap()}
+     * only ever drops finished jobs, so an uncompleted job would never be eligible for eviction
+     * and the new cap would have nothing to bite on.
+     */
+    @Test
+    void appliesANewRecordCapToJobsAlreadyHeld() {
+        JobStore store = new JobStore(new JobSettings(Duration.ofHours(1), 100, Duration.ofSeconds(10)), clock);
+        for (int index = 0; index < 20; index++) {
+            store.create("printer", compiled()).complete();
+        }
+
+        store.settings(new JobSettings(Duration.ofHours(1), 5, Duration.ofSeconds(10)));
+        store.create("printer", compiled());
+
+        assertEquals(5, store.all().size());
+    }
+
     @Test
     void listsJobsForOneDeviceNewestFirst() {
         JobStore store = store(Duration.ofMinutes(10), 500);

@@ -25,7 +25,14 @@ import java.util.Optional;
 public class PrintService {
 
     private final DeviceRegistry devices;
-    private final JobSettings settings;
+
+    /**
+     * Job retention, cap and shutdown-grace settings. Volatile because the server pushes new
+     * values with {@code config.sync}, which arrives after construction and while queues may
+     * already be running.
+     */
+    private volatile JobSettings settings;
+
     private final JobStore jobs;
     private final PortLookup ports;
     private final Map<String, PrintQueue> queues = new LinkedHashMap<>();
@@ -71,6 +78,20 @@ public class PrintService {
         this.ports = Objects.requireNonNull(ports, "ports");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.jobs = new JobStore(settings, Objects.requireNonNull(clock, "clock"));
+    }
+
+    /**
+     * Replaces the job settings, here and in the store behind this service.
+     *
+     * <p>A queue already shutting down keeps the grace period it started with — the value is read
+     * when {@code shutdown} is called, and re-reading it mid-teardown would mean a queue whose
+     * deadline moved while it was waiting.
+     *
+     * @param settings the settings to apply from now on
+     */
+    public void settings(JobSettings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
+        jobs.settings(settings);
     }
 
     /** Starts every queue that exists, and marks later arrivals to start on creation. */

@@ -6,6 +6,7 @@ import fi.natroutter.fenpos.device.DeviceRegistry;
 import fi.natroutter.fenpos.enums.JobState;
 import fi.natroutter.fenpos.print.CompiledJob;
 import fi.natroutter.fenpos.print.JobListener;
+import fi.natroutter.fenpos.print.JobSettings;
 import fi.natroutter.fenpos.print.PrintJob;
 import fi.natroutter.fenpos.print.PrintImages;
 import fi.natroutter.fenpos.print.PrintQueue;
@@ -59,8 +60,25 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private final DeviceRegistry devices;
     private final PrintService printing;
     private final DeviceConnectionManager connections;
-    private final Consumer<List<Frames.DeviceConfig>> applyConfig;
+    private final ConfigListener applyConfig;
     private final FoxLogger logger;
+
+    /**
+     * Adopts a device set and the job settings the server pushed, together.
+     * <p>
+     * One method taking both rather than two separate callbacks, because both arrive in the same
+     * {@code config.sync} frame and the receiving side must apply them as a single update — the
+     * job settings only make sense read alongside the devices they now govern.
+     */
+    @FunctionalInterface
+    public interface ConfigListener {
+
+        /**
+         * @param wire the devices as the server described them
+         * @param jobs retention and shutdown settings as the server has them configured
+         */
+        void accept(List<Frames.DeviceConfig> wire, JobSettings jobs);
+    }
 
     /**
      * Jobs this agent accepted from the server and has not yet finished.
@@ -84,13 +102,13 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * @param devices     this agent's device set, consulted for every dispatch
      * @param printing    where accepted jobs are queued
      * @param connections the serial layer, for opening and closing ports
-     * @param applyConfig adopts a device set the server pushed
+     * @param applyConfig adopts a device set and job settings the server pushed
      * @param logger      where activity is reported
      */
     public LinkDispatcher(DeviceRegistry devices,
                           PrintService printing,
                           DeviceConnectionManager connections,
-                          Consumer<List<Frames.DeviceConfig>> applyConfig,
+                          ConfigListener applyConfig,
                           FoxLogger logger) {
         this.devices = Objects.requireNonNull(devices, "devices");
         this.printing = Objects.requireNonNull(printing, "printing");
@@ -151,7 +169,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      */
     private void onConfigSync(Frames.ConfigSync sync) {
         devices.applyRasters(sync.assets());
-        applyConfig.accept(sync.devices());
+        applyConfig.accept(sync.devices(), sync.jobs());
         reportStatus();
     }
 

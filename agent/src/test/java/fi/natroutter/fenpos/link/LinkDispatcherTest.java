@@ -444,12 +444,13 @@ class LinkDispatcherTest {
         throw new AssertionError("no " + kind.getSimpleName() + "; saw " + sent);
     }
 
-    /** Mirrors the bootstrap: registry first, then the serial layer, then the queues. */
-    private void applyConfig(List<Frames.DeviceConfig> wire) {
+    /** Mirrors the bootstrap: registry first, then the serial layer, then the queues and settings. */
+    private void applyConfig(List<Frames.DeviceConfig> wire, JobSettings jobs) {
         applied.add(wire);
         registry.apply(wire);
         connections.applyDevices();
         printing.applyDevices();
+        printing.settings(jobs);
     }
 
     /** Registers a port for a device, pushes it as configuration, and starts the queues. */
