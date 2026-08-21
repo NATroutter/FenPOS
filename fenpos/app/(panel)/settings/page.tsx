@@ -1,5 +1,5 @@
 import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
-import { listSettings } from "@/lib/settings/settings-service";
+import { CATEGORIES, listSettings } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings" };
 
@@ -16,33 +16,25 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
 	const settings = await listSettings();
 
-	// This form only knows how to render an integer setting today. Every setting currently is one
-	// (asserted by the test that walks SETTINGS in settings-service.test.ts); a later task teaches
-	// this page to render the other variants, so a non-integer definition is filtered out here
-	// rather than reaching a form field built for numbers.
-	const fields: SettingFieldData[] = settings.flatMap((setting) => {
-		if (setting.definition.type !== "integer" || typeof setting.value !== "number") {
-			return [];
-		}
-		return [
-			{
-				key: setting.definition.key,
-				label: setting.definition.label,
-				description: setting.definition.description,
-				min: setting.definition.min,
-				max: setting.definition.max,
-				fallback: setting.definition.fallback,
-				unit: setting.definition.unit,
-				value: setting.value,
-				overridden: setting.overridden,
-			},
-		];
-	});
+	// The definition is passed through whole, not flattened field by field — flattening a union
+	// loses the discriminant the form narrows on. Which categories and controls actually appear is
+	// the form's call, not this page's.
+	const fields: SettingFieldData[] = settings.map((setting) => ({
+		definition: setting.definition,
+		value: setting.value,
+		overridden: setting.overridden,
+	}));
+
+	// Filtered here rather than in the form: a category with nothing under it would otherwise
+	// render as a nav entry leading to an empty panel, and between Task 5 and the second plan
+	// several categories are exactly that. It also keeps `settings-service` — a server-only
+	// module — out of the client form's import graph; only its types cross that boundary.
+	const categories = CATEGORIES.filter((category) => fields.some((field) => field.definition.category === category.id));
 
 	return (
 		<div className="flex flex-col gap-5">
 			<div>
-				<SettingsForm settings={fields} />
+				<SettingsForm categories={categories} settings={fields} />
 			</div>
 		</div>
 	);
