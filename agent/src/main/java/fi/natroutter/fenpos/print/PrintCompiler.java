@@ -13,6 +13,7 @@ import fi.natroutter.fenpos.encoding.EscPosRenderer;
 import fi.natroutter.fenpos.encoding.SymbolEncodingException;
 import fi.natroutter.fenpos.encoding.UnsupportedCharacterException;
 import fi.natroutter.fenpos.enums.Linefeed;
+import fi.natroutter.fenpos.markup.FillResolver;
 import fi.natroutter.fenpos.markup.ImageResolver;
 import fi.natroutter.fenpos.markup.LineWrapper;
 import fi.natroutter.fenpos.markup.MarkupException;
@@ -207,10 +208,14 @@ public final class PrintCompiler {
                 Line parsed = MarkupParser.parse(elements.get(index), images);
                 Line checked = CharsetValidator.validate(
                         parsed, print.codepage(), print.onUnsupported());
-                boolean wrap = checked.wrap() == null ? print.defaultWrap() : checked.wrap();
+                // After this line no fill remains, which is what lets the wrapper and the renderer
+                // stay ignorant of the tag. It runs after the charset check so that an unprintable
+                // fill character is reported once, at the column the caller wrote it.
+                Line filled = FillResolver.resolve(checked, print.columns());
+                boolean wrap = filled.wrap() == null ? print.defaultWrap() : filled.wrap();
                 lines.addAll(wrap
-                        ? LineWrapper.wrap(checked, print.columns())
-                        : List.of(checked));
+                        ? LineWrapper.wrap(filled, print.columns())
+                        : List.of(filled));
             } catch (MarkupException e) {
                 throw PrintRequestException.at(
                         e.error().apiCode(), lineNumber, e.column(), e.getMessage());

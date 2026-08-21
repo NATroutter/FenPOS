@@ -157,6 +157,29 @@ class PrintCompilerTest {
     }
 
     /**
+     * Proves the resolver is wired into the pipeline, which a line count cannot: an unfilled "ab"
+     * is one line too. This file does not otherwise read the payload, and this is the case that
+     * needs to.
+     */
+    @Test
+    void padsAFillToTheDevicesWidth() throws Exception {
+        CompiledJob job = compile("{\"data\":[\"a<fill>b\"]}");
+
+        byte[] expected = ("a" + " ".repeat(8) + "b").getBytes(Codepage.CP858.charset());
+        assertTrue(indexOf(job.payload(), expected) >= 0, "the payload should carry the padded row");
+    }
+
+    /**
+     * A filled line is exactly the paper's width, and the wrapper breaks on more than that, so it
+     * survives whole. Worth pinning: the property falls out of the wrapper rather than being stated
+     * anywhere, and this fixture's device wraps by default.
+     */
+    @Test
+    void doesNotWrapALineItFilled() throws Exception {
+        assertEquals(1, compile("{\"data\":[\"a<fill>b\"]}").lines());
+    }
+
+    /**
      * Limits are checked before content: a request that is both oversized and malformed
      * should be refused for the cheaper reason, without parsing megabytes of markup first.
      */
@@ -260,5 +283,19 @@ class PrintCompilerTest {
         assertEquals("unknown_field", assertThrows(PrintRequestException.class,
                 () -> PrintCompiler.compile("{\"wrap\":false}", device()))
                 .apiCode());
+    }
+
+    /** Returns where {@code needle} starts in {@code haystack}, or -1 when it is absent. */
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        outer:
+        for (int start = 0; start + needle.length <= haystack.length; start++) {
+            for (int offset = 0; offset < needle.length; offset++) {
+                if (haystack[start + offset] != needle[offset]) {
+                    continue outer;
+                }
+            }
+            return start;
+        }
+        return -1;
     }
 }

@@ -101,4 +101,86 @@ class CharsetValidatorTest {
             throws Exception {
         return CharsetValidator.validate(MarkupParser.parse(markup), codepage, policy);
     }
+
+    // -------------------------------------------------------------------------
+    // Fills
+    // -------------------------------------------------------------------------
+
+    @Test
+    void rejectsAFillCharacterTheCodepageCannotRepresent() {
+        assertThrows(UnsupportedCharacterException.class,
+                () -> CharsetValidator.validate(
+                        MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
+    }
+
+    @Test
+    void reportsTheFillsOwnColumnWhenItRejectsOne() {
+        UnsupportedCharacterException thrown = assertThrows(UnsupportedCharacterException.class,
+                () -> CharsetValidator.validate(
+                        MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
+
+        assertEquals(2, thrown.column());
+    }
+
+    @Test
+    void leavesAPrintableFillCharacterAlone() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("a<fill=.>b"), Codepage.CP437, UnsupportedPolicy.REJECT);
+
+        assertEquals(".", line.fills().getFirst().character());
+    }
+
+    @Test
+    void leavesAFillsIndexAloneWhenNothingIsDropped() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("a<fill>b"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertEquals(1, line.fills().getFirst().afterSpans());
+    }
+
+    @Test
+    void substitutesAFillCharacterUnderTheReplacePolicy() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REPLACE);
+
+        assertEquals("?", line.fills().getFirst().character());
+    }
+
+    @Test
+    void dropsAFillWhoseCharacterTheStripPolicyRemoves() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertTrue(line.fills().isEmpty());
+    }
+
+    /**
+     * {@code afterSpans} indexes a list this pass rewrites. U+0161 is absent from CP437, so
+     * stripping it removes the span the fill was recorded against, and without the repair the pad
+     * would land on the wrong side of what is left.
+     */
+    @Test
+    void movesAFillPastASpanTheStripPolicyRemoved() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("š<fill>b"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertEquals(1, line.spans().size());
+        assertEquals("b", line.spans().getFirst().text());
+        assertEquals(0, line.fills().getFirst().afterSpans());
+    }
+
+    /**
+     * The boundary the survivors array is one entry longer for: a fill after the <em>last</em> span,
+     * whose only preceding span was dropped. Every other case here puts the fill between two spans,
+     * so without this one the final entry can be dropped and the suite stays green — while a
+     * trailing fill indexes past the end of the array.
+     */
+    @Test
+    void movesATrailingFillPastADroppedSpan() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("š<fill>"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertTrue(line.spans().isEmpty());
+        assertEquals(0, line.fills().getFirst().afterSpans());
+    }
 }

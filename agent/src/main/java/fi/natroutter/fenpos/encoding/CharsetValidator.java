@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.encoding;
 
 import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.UnsupportedPolicy;
+import fi.natroutter.fenpos.markup.model.Fill;
 import fi.natroutter.fenpos.markup.model.Line;
 import fi.natroutter.fenpos.markup.model.Span;
 
@@ -42,7 +43,14 @@ public final class CharsetValidator {
         CharsetEncoder encoder = codepage.charset().newEncoder();
 
         List<Span> converted = new ArrayList<>(line.spans().size());
-        for (Span span : line.spans()) {
+        // How many spans survive before each original index, so a fill recorded against the parser's
+        // numbering still sits between the same two words after a span is dropped. One entry longer
+        // than spans, because a fill may sit after the last one.
+        int[] survivors = new int[line.spans().size() + 1];
+
+        for (int index = 0; index < line.spans().size(); index++) {
+            survivors[index] = converted.size();
+            Span span = line.spans().get(index);
             String text = convert(span, encoder, codepage, policy);
             // A span stripped down to nothing is dropped rather than kept as an empty run,
             // so later stages never have to reason about zero-width spans.
@@ -50,8 +58,39 @@ public final class CharsetValidator {
                 converted.add(span.withText(text));
             }
         }
+        survivors[line.spans().size()] = converted.size();
 
-        return new Line(line.align(), line.wrap(), converted, line.fills(), line.directives());
+        List<Fill> fills = new ArrayList<>(line.fills().size());
+        for (Fill fill : line.fills()) {
+            String character = convertCharacter(fill, encoder, codepage, policy);
+            // A fill whose character cannot be printed at all is dropped, for the same reason an
+            // emptied span is. The slack it would have taken falls to the fills that remain.
+            if (!character.isEmpty()) {
+                fills.add(fill.withCharacter(character).withAfterSpans(survivors[fill.afterSpans()]));
+            }
+        }
+
+        return new Line(line.align(), line.wrap(), converted, fills, line.directives());
+    }
+
+    /**
+     * Applies the policy to a fill's character.
+     * <p>
+     * Runs before the fill is expanded, which is the point of the ordering: the caller is told about
+     * one character they wrote, at the column they wrote it, rather than about the thirtieth copy.
+     *
+     * @return the character to repeat, or an empty string when the policy is to strip it
+     * @throws UnsupportedCharacterException under {@link UnsupportedPolicy#REJECT}
+     */
+    private static String convertCharacter(Fill fill, CharsetEncoder encoder, Codepage codepage,
+                                           UnsupportedPolicy policy) throws UnsupportedCharacterException {
+        if (encoder.canEncode(fill.character())) {
+            return fill.character();
+        }
+        if (policy == UnsupportedPolicy.REJECT) {
+            throw new UnsupportedCharacterException(fill.character(), fill.sourceColumn(), codepage);
+        }
+        return policy == UnsupportedPolicy.REPLACE ? String.valueOf(REPLACEMENT) : "";
     }
 
     /**
