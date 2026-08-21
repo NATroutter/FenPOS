@@ -3,6 +3,7 @@
 import { ChevronRight, LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/brand-mark";
 import { HEADER_STRIP } from "@/components/panel/panel-header";
 import { ProfileDialog } from "@/components/panel/profile-dialog";
@@ -143,9 +144,11 @@ export function AppSidebar({
  * The parent is a trigger, not a link: clicking "Docs" opens the group rather than navigating,
  * because with children present there is nothing at `/docs` to navigate to — it redirects.
  *
- * `open` is derived from the current path rather than held in state: a group is open when the page
- * you are on is inside it. Held in state, the group would drift out of agreement with the URL the
- * first time a link somewhere else navigated into it.
+ * `open` is held in state, re-synced to the path only when it crosses the group's boundary: entering
+ * the group opens it, so a link followed from elsewhere never lands you on a page whose section is
+ * shut. Re-syncing on entry rather than on every path change is what lets a click close the group
+ * while you are still inside it, instead of the URL immediately forcing it back open. Nothing here
+ * is persisted — the state resets to whatever the path implies on the next load.
  *
  * The parent carries no accent bar. A parent whose child is active should read as containing the
  * current page, not as being it, so the mark goes on the child's own sub-button instead.
@@ -158,9 +161,17 @@ export function AppSidebar({
 function NavGroupItem({ item, pathname }: { item: NavItem; pathname: string }) {
 	const children = item.children ?? [];
 	const inside = children.some((child) => owns(pathname, child.href));
+	const [open, setOpen] = useState(inside);
+
+	// Navigation wins over the toggle, but only when it crosses the group's boundary. Re-synced on
+	// `inside` rather than on `pathname` so that following a link INTO the group opens it, while
+	// moving between two children does not re-open a group that was just closed by hand.
+	useEffect(() => {
+		setOpen(inside);
+	}, [inside]);
 
 	return (
-		<Collapsible render={<SidebarMenuItem />} open={inside}>
+		<Collapsible render={<SidebarMenuItem />} open={open} onOpenChange={setOpen}>
 			<CollapsibleTrigger
 				render={
 					<SidebarMenuButton className="group">
