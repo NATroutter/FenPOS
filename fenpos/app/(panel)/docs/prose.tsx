@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { API_ERROR_STATUS } from "@/lib/errors";
 
@@ -126,4 +127,22 @@ export function Mono({ children }: { children: ReactNode }) {
 /** An HTTP status referred to inside a sentence. */
 export function Status({ children }: { children: ReactNode }) {
 	return <span className="font-mono text-[11.5px] font-medium text-emerald-400">{children}</span>;
+}
+
+/**
+ * A link from one reference page to a section of the other.
+ *
+ * Styled as the tag and code chips are rather than as body text, because what it points at is a
+ * section of the reference and not a page on the web. Splitting the docs made two of these
+ * necessary: a sentence that said "see Blocks below" now has to say where Blocks went.
+ */
+export function DocLink({ href, children }: { href: string; children: ReactNode }) {
+	return (
+		<Link
+			href={href}
+			className="text-sky-300/90 underline decoration-sky-300/40 underline-offset-2 transition-colors hover:text-sky-200 hover:decoration-sky-200"
+		>
+			{children}
+		</Link>
+	);
 }
