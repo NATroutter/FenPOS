@@ -277,6 +277,12 @@ docker compose pull && docker compose up -d
 Images are tagged `latest`, the exact version, and `major.minor`, so you can pin as loosely
 or as tightly as you want.
 
+If **Settings → Print limits → Printed lines per job** was ever set above 1000, an upgrade past
+this release silently reverts it to its default: the setting's cap now derives from the same bound
+the dispatch frame enforces, and a stored value above the new cap is treated the same as any other
+out-of-range value — ignored rather than clamped. Check that setting after upgrading if you had
+raised it.
+
 ---
 
 ## Security

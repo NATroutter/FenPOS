@@ -13,7 +13,13 @@ import { z } from "zod";
  * would be a real disclosure.
  */
 
-const envSchema = z.object({
+/**
+ * The environment variables this server validates at startup.
+ *
+ * Exported — not merely used internally — so a test can assert on its shape directly, such as
+ * confirming a removed variable stays removed. See `public-url.test.ts`.
+ */
+export const envSchema = z.object({
 	/**
 	 * SQLite connection string, e.g. `file:./data/fenpos.db`. Relative paths resolve from the
 	 * server directory. In Docker this must point at a mounted volume.

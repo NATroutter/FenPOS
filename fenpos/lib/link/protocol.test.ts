@@ -319,7 +319,9 @@ describe("serialiseServerFrame", () => {
 		});
 		expect(JSON.parse(text).devices[0].codepage).toBe("CP858");
 	});
+});
 
+describe("configSyncSchema", () => {
 	it("carries job settings when the server sends them", () => {
 		const parsed = configSyncSchema.parse({
 			type: "config.sync",

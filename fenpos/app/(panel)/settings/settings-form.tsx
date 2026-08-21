@@ -116,9 +116,8 @@ export function SettingsForm({
 /**
  * One setting: its label and key, the control for its variant, and the shared footer.
  *
- * Narrows on `definition.type` in {@link Control} rather than filtering in the page, so an
- * unsupported setting still gets a slot in the grid; it simply renders nothing into it until its
- * control exists.
+ * Narrows on `definition.type` in {@link Control} rather than filtering in the page, so adding a
+ * fifth variant is a matter of adding a case there, not touching the page or this component.
  */
 function SettingField({ setting }: { setting: SettingFieldData }) {
 	return (
@@ -225,6 +224,11 @@ function FieldFooter({
 }) {
 	const { definition } = setting;
 	const line = bounds(definition);
+	// `String(...)` rather than a template literal directly on `definition.fallback`, so a
+	// `boolean` fallback stringifies to "true"/"false" instead of being coerced some other way.
+	// Empty is a real fallback too — `server.publicUrl`'s is `""` — and "Reset to " with nothing
+	// after it is a worse label than the setting-agnostic "Reset" this falls back to.
+	const fallbackLabel = String(definition.fallback);
 
 	return (
 		<p className="text-[11.5px] leading-relaxed text-muted-foreground">
@@ -255,7 +259,7 @@ function FieldFooter({
 						}
 					>
 						{pending ? <Spinner className="size-3" /> : <RotateCcw className="size-3" />}
-						Reset to {String(definition.fallback)}
+						{fallbackLabel ? `Reset to ${fallbackLabel}` : "Reset"}
 					</Button>
 				</>
 			) : (

@@ -2,8 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
-import { JOB_LIMITS } from "@/lib/link/protocol";
-import { logger, setMinimumLevel } from "@/lib/logger";
+import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 
 /**
@@ -16,9 +16,9 @@ import type { CompileLimits } from "@/lib/markup/compiler";
  *
  * Every setting declares its own bounds, whatever its type — an integer's range, an enum's
  * values, a string's length. There is no free-text setting with no stated limit, deliberately: a
- * setting nobody can state the bounds of is one nobody can validate. Every setting today happens
- * to be `type: "integer"`; the other variants exist so a later setting can pick the shape that
- * fits it instead of being forced into a number.
+ * setting nobody can state the bounds of is one nobody can validate. Four variants exist —
+ * integer, boolean, enum, string — so a setting can pick the shape that actually fits it instead
+ * of being forced into a number.
  */
 
 /**
@@ -53,7 +53,7 @@ export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" |
  * settings that belong to them are added.
  */
 export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
-	{ id: "general", title: "General", summary: "Install-wide basics that do not fit a more specific category." },
+	{ id: "general", title: "General", summary: "How this install identifies itself." },
 	{
 		id: "limits",
 		title: "Print limits",
@@ -125,6 +125,34 @@ export function toClientDefinition(definition: SettingDefinition): ClientSetting
 	}
 	const { pattern: _pattern, ...rest } = definition;
 	return rest;
+}
+
+/**
+ * Reads the min and max a `jobSettingsSchema` field declares, so a `jobs.*` setting's bounds are
+ * derived rather than restated.
+ *
+ * The two fields share one number in three places already — this schema, the agent's
+ * `FrameCodec.readJobSettings`, and (until this function existed) a literal copy here — and a
+ * bound widened in `SETTINGS` without a matching widening in `jobSettingsSchema` is exactly how
+ * `limits.maxOutputLines` used to fail: a setting the panel accepts that `serialiseServerFrame`
+ * then refuses, caught only by `pushDeviceConfig`'s catch-and-log, so the agent silently never
+ * receives the change. Deriving from the schema instead means widening it here is the only edit
+ * `jobs.*` bounds ever need.
+ *
+ * `.minValue`/`.maxValue` type as `number | null` because a Zod number schema need not declare
+ * either; every `jobSettingsSchema` field does, and `setting definitions` (settings-service.test.ts)
+ * asserts as much, so the throw below is unreachable in practice rather than a case this module
+ * has to recover from.
+ *
+ * @param field a field of {@link jobSettingsSchema}
+ * @returns that field's declared bounds
+ * @throws Error when the field declares no min or no max
+ */
+function jobBound(field: { minValue: number | null; maxValue: number | null }): { min: number; max: number } {
+	if (field.minValue === null || field.maxValue === null) {
+		throw new Error("jobSettingsSchema field declares no bound to derive from");
+	}
+	return { min: field.minValue, max: field.maxValue };
 }
 
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
@@ -216,8 +244,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		description: "How long a finished job stays readable before it is swept. Pushed to every agent.",
 		category: "jobs",
 		type: "integer",
-		min: 1,
-		max: 40_320,
+		...jobBound(jobSettingsSchema.shape.retentionMinutes),
 		fallback: 1440,
 		unit: "minutes",
 	},
@@ -228,8 +255,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 			"Hard cap, evicting the oldest finished jobs first. Bounds memory on a busy agent. Pushed to every agent.",
 		category: "jobs",
 		type: "integer",
-		min: 100,
-		max: 1_000_000,
+		...jobBound(jobSettingsSchema.shape.maxRecords),
 		fallback: 10_000,
 		unit: "records",
 	},
@@ -239,8 +265,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		description: "How long an agent waits for an in-flight print before failing it. Pushed to every agent.",
 		category: "jobs",
 		type: "integer",
-		min: 1,
-		max: 300,
+		...jobBound(jobSettingsSchema.shape.shutdownGraceSeconds),
 		fallback: 10,
 		unit: "seconds",
 	},
@@ -248,7 +273,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "logs.minimumLevel",
 		label: "Minimum level",
 		description:
-			"Lines below this are dropped. DEBUG is loud enough to be worth turning off again once whatever you are chasing is found.",
+			"Lines below this are dropped. DEBUG is loud enough to be worth turning off again once whatever you are chasing is found. A development server starts at DEBUG regardless of this default — only a production build, or an explicit override, actually starts here.",
 		category: "logs",
 		type: "enum",
 		values: LogLevel.values,
@@ -540,15 +565,32 @@ export async function clearSetting(key: string): Promise<void> {
  * that hold a mutable current value and this function pushes into it — at startup, and after any
  * change, so a saved setting takes effect without a restart.
  *
- * The log level is the only one today. The panel's date formatting joins it when `panel.locale`
- * ships, for the same reason: `formatDateTime` is synchronous and called during render.
+ * `logs.minimumLevel` distinguishes stored from default rather than always pushing a value: when it
+ * is **overridden**, that value is pushed; when it is not, `resetMinimumLevel()` puts the logger back
+ * on its own built-in default instead of pushing the setting's `fallback`. The two are not
+ * interchangeable — the fallback is `"INFO"`, chosen as what the panel should display and what a
+ * production start should use, while the logger's built-in is `DEBUG` outside production. Pushing
+ * the fallback on every untouched install would quietly drop a development server from DEBUG to
+ * INFO moments after boot; skipping the push entirely would leave a *cleared* setting stuck at
+ * whatever level was last pushed, defeating the reset. `resetMinimumLevel()` is the third option
+ * that gets both right.
+ *
+ * Reads every setting with one `listSettings()` call rather than one query per pushed setting —
+ * `panel.locale`, `panel.timeFormat` and `panel.timezone` join `logs.minimumLevel` here as they
+ * ship, and a query per setting would mean a query per one of those on every save.
  *
  * Failures are logged and swallowed. A settings read that fails must not stop the server starting,
  * and the modules involved all have a working built-in value.
  */
 export async function applyPushedSettings(): Promise<void> {
 	try {
-		setMinimumLevel(await enumSetting<LogLevel>("logs.minimumLevel"));
+		const settings = await listSettings();
+		const minimumLevel = settings.find((setting) => setting.definition.key === "logs.minimumLevel");
+		if (minimumLevel?.overridden) {
+			setMinimumLevel(minimumLevel.value as LogLevel);
+		} else {
+			resetMinimumLevel();
+		}
 	} catch (error) {
 		logger.error("Could not apply pushed settings", error);
 	}

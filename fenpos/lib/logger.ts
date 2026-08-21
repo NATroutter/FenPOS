@@ -46,17 +46,30 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 };
 
 /**
+ * This module's own default: quiet in production, loud everywhere else.
+ *
+ * Named rather than inlined so {@link resetMinimumLevel} restores exactly this value instead of
+ * recomputing an expression that would have to stay in sync with the one below.
+ */
+const BUILT_IN_MINIMUM_LEVEL: LogLevel = isProduction ? "INFO" : "DEBUG";
+
+/**
  * Below this level, lines are dropped.
  *
  * Mutable, and pushed in by the settings store rather than read from it. `write` is synchronous and
  * runs on every line, so it cannot await a database read; and `settings-service.ts` imports this
- * module, so reading the store from here would be a cycle. The store calls `setMinimumLevel`
- * instead — at startup and after every save.
+ * module, so reading the store from here would be a cycle. The store calls `setMinimumLevel` or
+ * `resetMinimumLevel` instead — at startup and after every save or reset.
  *
- * The initial value is what this module used before the setting existed, which is what a caller
- * that never reaches startup — a unit test, an edge runtime — keeps getting.
+ * Starts at {@link BUILT_IN_MINIMUM_LEVEL}. A caller that never reaches startup — a unit test, an
+ * edge runtime — keeps that value forever, since nothing there ever calls `setMinimumLevel` or
+ * `resetMinimumLevel`. **The dev server is not such a caller**: `applyPushedSettings`
+ * (`settings-service.ts`) runs at every startup there too, and calls `resetMinimumLevel` whenever
+ * `logs.minimumLevel` is not overridden — which reinstates this same value rather than skipping the
+ * push. A fresh install's dev server logs at DEBUG not because startup left it alone, but because
+ * startup explicitly puts it back.
  */
-let minimumLevel: LogLevel = isProduction ? "INFO" : "DEBUG";
+let minimumLevel: LogLevel = BUILT_IN_MINIMUM_LEVEL;
 
 /**
  * Sets the level below which lines are dropped.
@@ -65,6 +78,17 @@ let minimumLevel: LogLevel = isProduction ? "INFO" : "DEBUG";
  */
 export function setMinimumLevel(level: LogLevel): void {
 	minimumLevel = level;
+}
+
+/**
+ * Restores {@link BUILT_IN_MINIMUM_LEVEL}, undoing whatever `setMinimumLevel` last pushed.
+ *
+ * Exists because "no stored override" and "do nothing" are not the same instruction: the settings
+ * store must be able to put this module back to what it started at, the same way clearing any
+ * other setting returns it to its declared fallback — see `applyPushedSettings`.
+ */
+export function resetMinimumLevel(): void {
+	minimumLevel = BUILT_IN_MINIMUM_LEVEL;
 }
 
 /**

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isProduction } from "@/lib/env";
-import { logger, setMinimumLevel } from "@/lib/logger";
+import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 
 /**
  * Tests for the logger's level gate.
@@ -33,7 +32,7 @@ describe("logger", () => {
 	afterEach(() => {
 		// Restores the module's own built-in default, so a level set by one test cannot leak
 		// into the next.
-		setMinimumLevel(isProduction ? "INFO" : "DEBUG");
+		resetMinimumLevel();
 	});
 
 	it("uses the built-in level until one is pushed", () => {

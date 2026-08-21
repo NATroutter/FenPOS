@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import { envSchema } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -45,8 +46,19 @@ describe("getPublicAddress", () => {
 		expect((await getPublicAddress()).source).toBe("request");
 	});
 
-	it("ignores PUBLIC_URL in the environment", async () => {
-		// The variable is gone; this asserts the removal stayed complete.
+	it("no longer declares PUBLIC_URL as an environment variable", () => {
+		// The behavioural check below cannot fail on its own: `env.ts` parses `process.env` at
+		// module load, long before a test body could set `PUBLIC_URL`, so re-adding it to
+		// `envSchema` and restoring `getPublicAddress`'s `env.PUBLIC_URL` branch would leave that
+		// check green regardless. This is the structural assertion that actually pins the removal
+		// down — it fails the moment `PUBLIC_URL` reappears in the schema, whether or not anything
+		// reads it afterwards.
+		expect(Object.keys(envSchema.shape)).not.toContain("PUBLIC_URL");
+	});
+
+	it("ignores PUBLIC_URL in the environment even when one happens to be set", async () => {
+		// Not a regression test on its own — see the structural assertion above — but worth keeping
+		// as a behavioural sanity check now that it can no longer be the only guard.
 		process.env.PUBLIC_URL = "https://stale.example.com";
 		try {
 			expect((await getPublicAddress()).url).not.toBe("https://stale.example.com");

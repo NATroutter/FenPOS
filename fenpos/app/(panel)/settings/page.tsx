@@ -31,9 +31,10 @@ export default async function SettingsPage() {
 	}));
 
 	// Filtered here rather than in the form: a category with nothing under it would otherwise
-	// render as a nav entry leading to an empty panel, and between Task 5 and the second plan
-	// several categories are exactly that. It also keeps `settings-service` — a server-only
-	// module — out of the client form's import graph; only its types cross that boundary.
+	// render as a nav entry leading to an empty panel, and `media`, `security`, `connections` and
+	// `panel` are exactly that until settings are added to them. It also keeps `settings-service`
+	// — a server-only module — out of the client form's import graph; only its types cross that
+	// boundary.
 	const categories = CATEGORIES.filter((category) => fields.some((field) => field.definition.category === category.id));
 
 	return (

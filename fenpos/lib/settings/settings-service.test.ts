@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
-import { isProduction } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
-import { JOB_LIMITS } from "@/lib/link/protocol";
-import { logger, setMinimumLevel } from "@/lib/logger";
+import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { logger, resetMinimumLevel } from "@/lib/logger";
 
 import type { SettingKey, SettingType } from "@/lib/settings/settings-service";
 import {
@@ -22,6 +21,7 @@ import {
 	SETTINGS,
 	setSetting,
 	stringSetting,
+	toClientDefinition,
 } from "@/lib/settings/settings-service";
 
 /**
@@ -242,8 +242,8 @@ describe("limits.maxOutputLines bounds", () => {
  * Exercises `setSetting`'s per-variant validation and the typed accessors, through
  * `limits.maxLines` — an existing `type: "integer"` setting. Only the integer path can be
  * exercised this way today; no boolean setting exists yet, and a test key added to
- * `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for. `logs.minimumLevel`
- * (Task 9) gives the enum variant its real coverage below; `server.publicUrl` (Task 10) does the
+ * `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for.
+ * `logs.minimumLevel` gives the enum variant its real coverage below; `server.publicUrl` does the
  * same for the string variant.
  */
 describe("value variants", () => {
@@ -300,7 +300,7 @@ describe("logs.minimumLevel", () => {
 	afterEach(() => {
 		// applyPushedSettings mutates the logger's shared module state; restore its built-in
 		// default so a level this describe block set cannot leak into an unrelated test.
-		setMinimumLevel(isProduction ? "INFO" : "DEBUG");
+		resetMinimumLevel();
 	});
 
 	it("pushes the log level into the logger when it changes", async () => {
@@ -336,6 +336,23 @@ describe("logs.minimumLevel", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "logs.minimumLevel" } });
 		expect(row?.value).toBe(JSON.stringify("INFO"));
 		expect(row?.value).toBe('"INFO"');
+	});
+
+	it("resets the logger to its own built-in level when cleared, not to the fallback", async () => {
+		// The setting's `fallback` is "INFO" — what the panel shows as "default" — but the logger's
+		// own built-in outside production is "DEBUG" (logger.ts). Clearing an override must restore
+		// the built-in, not push the fallback: pushing "INFO" here is exactly what used to drop a
+		// fresh install's dev server from DEBUG to INFO the moment startup ran applyPushedSettings.
+		await setSetting("logs.minimumLevel", "ERROR");
+		await clearSetting("logs.minimumLevel");
+
+		const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		try {
+			logger.debug("written only once the logger is back at its DEBUG built-in");
+			expect(spy).toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 
@@ -395,5 +412,54 @@ describe("server.publicUrl", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "server.publicUrl" } });
 		expect(row?.value).toBe(JSON.stringify("https://fenpos.example.com"));
 		expect(row?.value).toBe('"https://fenpos.example.com"');
+	});
+});
+
+/**
+ * `toClientDefinition` is the only runtime guard against a render-time crash: `pattern` is a
+ * `RegExp`, and a `RegExp` cannot cross React's server→client boundary. The function only strips
+ * it from the `string` variant — `type !== "string"` returns the definition untouched — so a
+ * `RegExp`, `Date`, or function added to the `integer`, `boolean` or `enum` variant would pass
+ * straight through with no compile error, since TypeScript types are erased at runtime.
+ *
+ * A JSON round trip is what actually catches that: `JSON.stringify` turns a `RegExp` into `{}`,
+ * so a client definition carrying one no longer equals its own round trip. `structuredClone` would
+ * not do this — it clones a `RegExp` faithfully, so a definition that leaked one would still equal
+ * its clone and this test would pass regardless.
+ */
+describe("toClientDefinition", () => {
+	it("produces a definition that survives a JSON round trip unchanged, for every setting", () => {
+		for (const definition of SETTINGS) {
+			const clientDefinition = toClientDefinition(definition);
+			expect(clientDefinition, definition.key).toEqual(JSON.parse(JSON.stringify(clientDefinition)));
+		}
+	});
+});
+
+/**
+ * `jobs.retentionMinutes`, `jobs.maxRecords` and `jobs.shutdownGraceSeconds` derive their bounds
+ * from `jobSettingsSchema` (`lib/link/protocol.ts`) rather than restating them, for the same
+ * reason `limits.maxOutputLines` derives from `JOB_LIMITS.maxLines`: a bound widened in `SETTINGS`
+ * without a matching widening in the wire schema is a setting the panel accepts that
+ * `serialiseServerFrame` then refuses, which `pushDeviceConfig` only catches and logs — the agent
+ * silently never receives the change.
+ */
+describe("jobs.* bounds", () => {
+	it("match jobSettingsSchema's own declared bounds", () => {
+		const cases: readonly [SettingKey, "retentionMinutes" | "maxRecords" | "shutdownGraceSeconds"][] = [
+			["jobs.retentionMinutes", "retentionMinutes"],
+			["jobs.maxRecords", "maxRecords"],
+			["jobs.shutdownGraceSeconds", "shutdownGraceSeconds"],
+		];
+
+		for (const [settingKey, schemaField] of cases) {
+			const definition = SETTINGS.find((setting) => setting.key === settingKey);
+			if (definition?.type !== "integer") {
+				throw new Error(`expected ${settingKey} to be an integer setting`);
+			}
+			const field = jobSettingsSchema.shape[schemaField];
+			expect(definition.min, settingKey).toBe(field.minValue);
+			expect(definition.max, settingKey).toBe(field.maxValue);
+		}
 	});
 });
