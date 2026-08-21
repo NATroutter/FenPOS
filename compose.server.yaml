@@ -25,11 +25,6 @@ services:
       - ./data:/app/data
 
     environment:
-      # The address agents should dial. Optional — the panel otherwise derives it from the
-      # request. Uncomment it when the panel is reached on a different address than agents
-      # use. Whatever is set here is what the panel hands out, so an unedited placeholder
-      # would send every operator to an address that does not exist.
-      # PUBLIC_URL: "https://fenpos.example.com"
       TZ: "Europe/Helsinki"
 
     healthcheck:

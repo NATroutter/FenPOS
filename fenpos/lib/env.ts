@@ -28,17 +28,6 @@ const envSchema = z.object({
 	/** Port the combined Next.js and WebSocket server listens on. */
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 
-	/**
-	 * The address agents should dial, e.g. `https://fenpos.example.com`.
-	 *
-	 * Optional. When unset, the panel derives the address from the request that rendered it,
-	 * which is correct for a direct connection and usually correct behind a proxy that sets
-	 * the forwarded headers. Set it explicitly when the panel is reached on a different
-	 * address than agents should use — an internal hostname versus a public one, say —
-	 * because an operator copying the wrong address gets a agent that silently never connects.
-	 */
-	PUBLIC_URL: z.string().url("must be an absolute URL, e.g. https://fenpos.example.com").optional(),
-
 	NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

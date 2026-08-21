@@ -1,13 +1,14 @@
 import "server-only";
 import { headers } from "next/headers";
 import { env } from "@/lib/env";
+import { stringSetting } from "@/lib/settings/settings-service";
 
 /**
  * The address agents should be told to dial.
  *
  * This value is copied off a screen and typed into a terminal in a shop, so getting it wrong
- * costs a site visit. It is resolved from configuration when available and from the request
- * otherwise, and the panel says which of the two it used.
+ * costs a site visit. It is resolved from Settings when an operator has saved one and from the
+ * request otherwise, and the panel says which of the two it used.
  */
 
 /** Where the displayed address came from, so the panel can qualify it honestly. */
@@ -22,16 +23,18 @@ export interface PublicAddress {
 /**
  * Resolves the address agents should connect to.
  *
- * `PUBLIC_URL` wins when set, because only an operator knows whether the address they reach
- * the panel on is the address a agent in another building can reach. Otherwise the request is
- * used: `X-Forwarded-Proto` and `X-Forwarded-Host` first, since behind a proxy the socket's
- * own view is the internal address rather than the published one.
+ * `server.publicUrl` wins when it holds anything but the empty string, because only an
+ * operator knows whether the address they reach the panel on is the address a agent in
+ * another building can reach. Otherwise the request is used: `X-Forwarded-Proto` and
+ * `X-Forwarded-Host` first, since behind a proxy the socket's own view is the internal
+ * address rather than the published one.
  *
  * @returns the address and whether it was configured or inferred
  */
 export async function getPublicAddress(): Promise<PublicAddress> {
-	if (env.PUBLIC_URL) {
-		return { url: stripTrailingSlash(env.PUBLIC_URL), source: "configured" };
+	const configured = await stringSetting("server.publicUrl");
+	if (configured !== "") {
+		return { url: stripTrailingSlash(configured), source: "configured" };
 	}
 
 	const headerList = await headers();

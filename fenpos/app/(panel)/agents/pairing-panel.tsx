@@ -40,8 +40,8 @@ export function PairingPanel({
 				<CopyableValue value={serverAddress} label="Server address" />
 				{addressIsInferred ? (
 					<p className="text-[11px] leading-relaxed text-subtle-foreground">
-						Inferred from this request. If agents reach the server on a different address, set{" "}
-						<code className="font-mono">PUBLIC_URL</code>.
+						Inferred from this request. If agents reach the server on a different address, set it under{" "}
+						<span className="font-medium">Settings → General</span>.
 					</p>
 				) : null}
 			</div>

@@ -21,6 +21,7 @@ import {
 	SETTING_KEYS,
 	SETTINGS,
 	setSetting,
+	stringSetting,
 } from "@/lib/settings/settings-service";
 
 /**
@@ -159,6 +160,7 @@ describe("setting definitions", () => {
 		// without an entry here. `fits()` rejecting a bad value is a side effect of the behavioural
 		// tests, not a check on the declared type itself — this is that check.
 		const expectedTypes: Record<SettingKey, SettingType> = {
+			"server.publicUrl": "string",
 			"limits.maxLines": "integer",
 			"limits.maxLineChars": "integer",
 			"limits.maxTotalChars": "integer",
@@ -239,9 +241,10 @@ describe("limits.maxOutputLines bounds", () => {
 /**
  * Exercises `setSetting`'s per-variant validation and the typed accessors, through
  * `limits.maxLines` — an existing `type: "integer"` setting. Only the integer path can be
- * exercised this way today; no boolean or string setting exists yet, and a test key added to
+ * exercised this way today; no boolean setting exists yet, and a test key added to
  * `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for. `logs.minimumLevel`
- * (Task 9) gives the enum variant its real coverage below; Task 10 adds the first string setting.
+ * (Task 9) gives the enum variant its real coverage below; `server.publicUrl` (Task 10) does the
+ * same for the string variant.
  */
 describe("value variants", () => {
 	beforeEach(async () => {
@@ -333,5 +336,64 @@ describe("logs.minimumLevel", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "logs.minimumLevel" } });
 		expect(row?.value).toBe(JSON.stringify("INFO"));
 		expect(row?.value).toBe('"INFO"');
+	});
+});
+
+/**
+ * `server.publicUrl` — the first string setting, and the first with a `pattern`.
+ *
+ * The empty string is a real, meaningful value here rather than "unset": it means "derive the
+ * address from the request", which is what an install that has never touched this setting does.
+ * That is why it must fit the pattern rather than be refused by it, and why it is the fallback.
+ */
+describe("server.publicUrl", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("defaults to the empty string, meaning derive from the request", async () => {
+		expect(await stringSetting("server.publicUrl")).toBe("");
+	});
+
+	it("stores and reads back an absolute URL", async () => {
+		await setSetting("server.publicUrl", "https://fenpos.example.com");
+		expect(await stringSetting("server.publicUrl")).toBe("https://fenpos.example.com");
+	});
+
+	it("accepts the empty string", async () => {
+		await setSetting("server.publicUrl", "https://fenpos.example.com");
+		await setSetting("server.publicUrl", "");
+		expect(await stringSetting("server.publicUrl")).toBe("");
+	});
+
+	it("refuses a value with no scheme", async () => {
+		await expect(setSetting("server.publicUrl", "fenpos.example.com")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a scheme other than http or https", async () => {
+		await expect(setSetting("server.publicUrl", "ftp://fenpos.example.com")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a value longer than the declared maximum", async () => {
+		const definition = SETTINGS.find((setting) => setting.key === "server.publicUrl");
+		if (definition?.type !== "string") {
+			throw new Error("expected server.publicUrl to be a string setting");
+		}
+		const tooLong = `https://${"a".repeat(definition.maxLength)}.example.com`;
+		await expect(setSetting("server.publicUrl", tooLong)).rejects.toThrow(ApiError);
+	});
+
+	it("throws when an accessor is pointed at another variant", async () => {
+		await expect(integerSetting("server.publicUrl")).rejects.toThrow();
+	});
+
+	it("stores the address as quoted JSON, not as bare text", async () => {
+		// The regression this guards against is the same as logs.minimumLevel's: a write path that
+		// reverted to `String(value)` would store the URL unquoted, which is not valid JSON, so the
+		// next read would fail to parse it and the setting would silently revert to its default.
+		await setSetting("server.publicUrl", "https://fenpos.example.com");
+		const row = await prisma.setting.findUnique({ where: { key: "server.publicUrl" } });
+		expect(row?.value).toBe(JSON.stringify("https://fenpos.example.com"));
+		expect(row?.value).toBe('"https://fenpos.example.com"');
 	});
 });

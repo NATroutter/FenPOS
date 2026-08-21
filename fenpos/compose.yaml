@@ -21,15 +21,6 @@ services:
       - ./data:/app/data
 
     environment:
-      # The address agents should dial. Optional — the panel otherwise derives it
-      # from the request that rendered it, which is right for a direct connection
-      # and usually right behind a proxy that sets forwarded headers. Uncomment it
-      # when the panel is reached on a different address than agents should use,
-      # since an operator copying the wrong one gets an agent that silently never
-      # connects. Left commented on purpose: whatever is set here is what the panel
-      # shows, so an unedited placeholder would be handed out as if it were real.
-      # PUBLIC_URL: "https://fenpos.example.com"
-
       # Job and log timestamps are user-facing, so the container's zone matters.
       TZ: "Europe/Helsinki"
 

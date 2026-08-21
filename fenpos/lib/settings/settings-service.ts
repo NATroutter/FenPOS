@@ -49,10 +49,11 @@ export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" |
  * The categories in the order the panel lists them.
  *
  * Only the categories with at least one setting appear here — an entry with nothing under it
- * would be a dead spot in the nav. `general`, `logs`, `media`, `security`, `connections` and
- * `panel` join as the settings that belong to them are added.
+ * would be a dead spot in the nav. `media`, `security`, `connections` and `panel` join as the
+ * settings that belong to them are added.
  */
 export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
+	{ id: "general", title: "General", summary: "Install-wide basics that do not fit a more specific category." },
 	{
 		id: "limits",
 		title: "Print limits",
@@ -128,6 +129,7 @@ export function toClientDefinition(definition: SettingDefinition): ClientSetting
 
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
 export const SETTING_KEYS = [
+	"server.publicUrl",
 	"limits.maxLines",
 	"limits.maxLineChars",
 	"limits.maxTotalChars",
@@ -147,6 +149,19 @@ export type SettingKey = (typeof SETTING_KEYS)[number];
  * "default" is the number actually applied to a device that overrides nothing.
  */
 export const SETTINGS: readonly SettingDefinition[] = [
+	{
+		key: "server.publicUrl",
+		label: "Public address",
+		description:
+			"The address agents dial. Set it when the panel is reached on a different address than agents use; leave it empty to use whatever address the request arrived on.",
+		category: "general",
+		type: "string",
+		maxLength: 255,
+		// Absolute http or https only. The empty string is allowed by the length check above and
+		// means "derive from the request", which is what an install that has never set this does.
+		pattern: /^$|^https?:\/\/[^\s/$.?#][^\s]*$/i,
+		fallback: "",
+	},
 	{
 		key: "limits.maxLines",
 		label: "Elements per request",

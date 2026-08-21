@@ -243,7 +243,6 @@ The **Docs** tab carries the full reference, generated from the running install.
 |---|---|---|
 | `DATABASE_URL` | `file:/app/data/fenpos.db` | SQLite file. Must point at a mounted volume. |
 | `PORT` | `3000` | Panel, print API and agent link share it. |
-| `PUBLIC_URL` | derived from the request | The address agents should dial. Set it when the panel is reached on a different address than agents use. |
 | `FENPOS_HOST` | `0.0.0.0` | Interface to bind. Rarely changed. |
 | `TZ` | UTC | Job and log timestamps are user-facing. |
 
@@ -255,8 +254,11 @@ The **Docs** tab carries the full reference, generated from the running install.
 | `FENPOS_PAIR_CODE` | — | Single-use pairing code. Read only when no identity is stored. |
 | `TZ` | UTC | Job timestamps are user-facing. |
 
-Everything else — limits, retention, per-printer settings — lives in the panel under
-**Settings** and **Devices**, not in environment variables.
+Everything else — the public address, limits, retention, per-printer settings — lives in the
+panel under **Settings** and **Devices**, not in environment variables. The public address
+agents dial is under **Settings → General**: leave it empty to derive the address from the
+request that reached the panel, or set it explicitly when the panel is reached on a different
+address than agents should use.
 
 ---
 
