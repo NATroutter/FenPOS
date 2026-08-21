@@ -4,6 +4,7 @@ import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.markup.model.Directive;
+import fi.natroutter.fenpos.markup.model.Fill;
 import fi.natroutter.fenpos.markup.model.Line;
 import fi.natroutter.fenpos.markup.model.Span;
 import org.junit.jupiter.api.Test;
@@ -705,5 +706,96 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("<drawer>"));
 
         assertEquals(MarkupError.UNKNOWN_TAG, thrown.error());
+    }
+
+    // -------------------------------------------------------------------------
+    // Fills
+    // -------------------------------------------------------------------------
+
+    @Test
+    void recordsAFillBetweenTheSpansItSeparates() throws Exception {
+        Line line = MarkupParser.parse("Coffee<fill>2.50");
+
+        assertEquals(List.of("Coffee", "2.50"), line.spans().stream().map(Span::text).toList());
+        assertEquals(1, line.fills().size());
+        assertEquals(1, line.fills().getFirst().afterSpans());
+        assertEquals(" ", line.fills().getFirst().character());
+        assertEquals(7, line.fills().getFirst().sourceColumn());
+    }
+
+    @Test
+    void takesAFillCharacterFromTheArgument() throws Exception {
+        assertEquals(".", MarkupParser.parse("a<fill=.>b").fills().getFirst().character());
+    }
+
+    /**
+     * An astral character is one character and two {@code char}s. Counting {@code char}s would
+     * refuse this as though the caller had written two, so accepting it pins the code-point count.
+     */
+    @Test
+    void acceptsAFillCharacterOutsideTheBasicPlane() throws Exception {
+        assertEquals("🙂", MarkupParser.parse("a<fill=🙂>b").fills().getFirst().character());
+    }
+
+    @Test
+    void refusesAFillArgumentThatIsNotExactlyOneCharacter() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill=ab>b"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    /** Already refused by requireArgumentPolicy; asserted so the two test tables match. */
+    @Test
+    void refusesAnEmptyFillArgument() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill=>b"));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+    }
+
+    @Test
+    void refusesAClosingFillTag() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill>b</fill>"));
+
+        assertEquals(MarkupError.UNEXPECTED_CLOSE_TAG, thrown.error());
+    }
+
+    @Test
+    void capturesTheStyleInEffectWhereTheFillWasWritten() throws Exception {
+        Line line = MarkupParser.parse("<bold>Total<fill=.>5.00</bold>");
+
+        assertTrue(line.fills().getFirst().style().bold());
+    }
+
+    @Test
+    void recordsSeveralFillsInTheOrderTheyWereWritten() throws Exception {
+        Line line = MarkupParser.parse("Qty<fill>Item<fill>Price");
+
+        assertEquals(List.of(1, 2), line.fills().stream().map(Fill::afterSpans).toList());
+    }
+
+    /**
+     * A fill produces no span, so the sole-occupant check has to count fills as well or one element
+     * could put a rule and a pad on the same line and print two lines of paper.
+     */
+    @Test
+    void refusesAFillSharingAnElementWithARule() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("<hr><fill>"));
+
+        assertEquals(MarkupError.INVALID_RULE_SCOPE, thrown.error());
+    }
+
+    @Test
+    void refusesAFillInsideABlock() {
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("<qr>a<fill>b</qr>"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+    }
+
+    @Test
+    void refusesAFillAfterALineOwningTagHasClosed() {
+        MarkupException thrown =
+                assertThrows(MarkupException.class, () -> MarkupParser.parse("<align=right>x</align><fill>"));
+
+        assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
 }

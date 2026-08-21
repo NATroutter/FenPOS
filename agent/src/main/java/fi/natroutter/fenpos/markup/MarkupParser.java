@@ -4,6 +4,7 @@ import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Font;
 import fi.natroutter.fenpos.markup.model.Directive;
+import fi.natroutter.fenpos.markup.model.Fill;
 import fi.natroutter.fenpos.markup.model.Line;
 import fi.natroutter.fenpos.markup.model.Span;
 import fi.natroutter.fenpos.markup.model.SpanStyle;
@@ -104,6 +105,7 @@ public final class MarkupParser {
     private final ImageResolver images;
 
     private final List<Span> spans = new ArrayList<>();
+    private final List<Fill> fills = new ArrayList<>();
     private final List<Directive> directives = new ArrayList<>();
     private final Deque<OpenTag> open = new ArrayDeque<>();
     private final StringBuilder pending = new StringBuilder();
@@ -198,7 +200,7 @@ public final class MarkupParser {
 
         verifyBlockScope();
 
-        return new Line(align, wrap, spans, directives);
+        return new Line(align, wrap, spans, fills, directives);
     }
 
     // -------------------------------------------------------------------------
@@ -318,6 +320,13 @@ public final class MarkupParser {
 
         requireArgumentPolicy(tag, argument, column);
 
+        // Void, but not a directive: a fill is a position in the text rather than a printer action,
+        // so it never reaches appendDirective.
+        if (tag == Tag.FILL) {
+            appendFill(argument, column);
+            return;
+        }
+
         if (tag.kind() == Tag.Kind.VOID) {
             appendDirective(tag, argument, column);
             return;
@@ -401,7 +410,7 @@ public final class MarkupParser {
             case SIZE -> applySize(argument, column);
             case FONT -> style.withFont(Enums.parse(Font.class, argument).orElseThrow(
                     () -> argumentError(tag, column, "must be 'a' or 'b'")));
-            case ALIGN, WRAP, NOWRAP, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
+            case ALIGN, WRAP, NOWRAP, FILL, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
                     throw new IllegalStateException(
                             "Tag " + tag + " does not carry a span style");
         };
@@ -676,6 +685,27 @@ public final class MarkupParser {
         }
     }
 
+    /**
+     * Records a pad, to be expanded when the column count is known.
+     * <p>
+     * {@link #flushPending()} first is load-bearing. {@link #pending} holds text that has not become
+     * a span yet, so without it {@code Coffee<fill>2.50} would record {@code afterSpans = 0} and pad
+     * the wrong side of the word.
+     */
+    private void appendFill(String argument, int column) throws MarkupException {
+        requireInsideLineScope(column);
+
+        String character = argument == null ? " " : argument;
+        // Code points, not chars: an astral character is one character and two chars, and measuring
+        // chars would refuse a legitimate single character as though it were two.
+        if (character.codePointCount(0, character.length()) != 1) {
+            throw argumentError(Tag.FILL, column, "takes a single character, written <fill=x>");
+        }
+
+        flushPending();
+        fills.add(new Fill(spans.size(), character, style, column));
+    }
+
     private Directive.Cut.Mode cutMode(String argument, int column) throws MarkupException {
         if (argument == null || argument.equalsIgnoreCase("full")) {
             return Directive.Cut.Mode.FULL;
@@ -708,7 +738,9 @@ public final class MarkupParser {
         if (soleOccupant == null) {
             return;
         }
-        if (spans.isEmpty() && directives.size() == 1) {
+        // Fills count towards sharing even though they produce no span yet. `<hr><fill=.>` would
+        // otherwise print a line of dots, feed, and then the rule — one element, two lines of paper.
+        if (spans.isEmpty() && fills.isEmpty() && directives.size() == 1) {
             return;
         }
         throw new MarkupException(soleOccupant.error(), soleOccupant.column(), soleOccupant.name(),

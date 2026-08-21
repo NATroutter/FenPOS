@@ -43,6 +43,14 @@ public enum Tag {
     /** Print this line as written. Paired, and required to enclose the whole element. */
     NOWRAP("nowrap", Kind.PAIRED, Argument.NONE),
 
+    /**
+     * Pad to the paper's width. Argument is the character to repeat, default a space.
+     * <p>
+     * The one tag whose printed width is not knowable from the element: it stands for however many
+     * columns are left over, which is a property of the device. See {@code FillResolver}.
+     */
+    FILL("fill", Kind.VOID, Argument.OPTIONAL),
+
     /** Cut the paper, fully by default. */
     CUT("cut", Kind.VOID, Argument.OPTIONAL),
 

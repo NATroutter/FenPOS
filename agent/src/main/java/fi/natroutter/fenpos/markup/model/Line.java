@@ -14,21 +14,25 @@ import java.util.List;
  * @param align       justification for the whole line
  * @param wrap        whether this line is broken to the paper width; null defers to the device setting
  * @param spans       styled text, in printing order; empty for a directive-only line
+ * @param fills       pads to be expanded once the column count is known; empty from
+ *                    {@code FillResolver} onward, which is the second half of a line's life
  * @param directives  actions emitted after the text, in the order they appeared
  */
-public record Line(Align align, Boolean wrap, List<Span> spans, List<Directive> directives) {
+public record Line(Align align, Boolean wrap, List<Span> spans, List<Fill> fills,
+                   List<Directive> directives) {
 
     public Line {
         if (align == null) {
             throw new IllegalArgumentException("align must not be null");
         }
         spans = List.copyOf(spans);
+        fills = List.copyOf(fills);
         directives = List.copyOf(directives);
     }
 
     /** Returns an empty left-aligned line, which prints as a blank line feed. */
     public static Line empty() {
-        return new Line(Align.LEFT, null, List.of(), List.of());
+        return new Line(Align.LEFT, null, List.of(), List.of(), List.of());
     }
 
     /**

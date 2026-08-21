@@ -150,6 +150,8 @@ public final class LineWrapper {
                     source.align(),
                     source.wrap(),
                     toSpans(rows.get(index)),
+                    // Always empty: the wrapper only runs on a line FillResolver has already emptied.
+                    List.of(),
                     last ? source.directives() : List.of()));
         }
         return lines;

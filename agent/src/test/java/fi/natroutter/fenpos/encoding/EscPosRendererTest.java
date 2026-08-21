@@ -332,7 +332,7 @@ class EscPosRendererTest {
     }
 
     private static Line directiveLine(Align align, Directive directive) {
-        return new Line(align, null, List.of(), List.of(directive));
+        return new Line(align, null, List.of(), List.of(), List.of(directive));
     }
 
     private static int indexOf(byte[] haystack, byte[] needle) {

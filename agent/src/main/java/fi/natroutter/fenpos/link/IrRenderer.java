@@ -99,7 +99,8 @@ public final class IrRenderer {
             directives.add(toDirective(directive, registry));
         }
 
-        return new Line(wire.align(), null, spans, directives);
+        // A fill is resolved on the server, so a line off the wire never carries one.
+        return new Line(wire.align(), null, spans, List.of(), directives);
     }
 
     /**
