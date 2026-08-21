@@ -24,12 +24,7 @@ export function resolveFills(line: Line, columns: number): Line {
 		return line;
 	}
 
-	let slack = Math.max(0, columns - lineColumns(line));
-	// Don't expand a single fill if the slack is minimal; jam the halves together instead
-	if (line.fills.length === 1 && slack <= 3) {
-		slack = 0;
-	}
-	const budgets = share(slack, line.fills.length);
+	const budgets = share(Math.max(0, columns - lineColumns(line)), line.fills.length);
 	const spans: Span[] = [];
 	let next = 0;
 

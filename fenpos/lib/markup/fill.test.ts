@@ -57,7 +57,29 @@ describe("resolveFills", () => {
 	 * an over-long row meet with nothing between them.
 	 */
 	it("emits nothing when the text overruns the paper, jamming the halves together", () => {
-		expect(filled("A very long product name goes here<fill>12.50")).toBe("A very long product name goes here12.50");
+		expect(filled("A very long product name that goes here<fill>12.50")).toBe(
+			"A very long product name that goes here12.50",
+		);
+	});
+
+	/**
+	 * The boundary the collapse rule does not reach: three columns of slack is still slack, and a
+	 * fill given it pads. Guards against a threshold creeping back in — a narrow roll is exactly
+	 * where a jammed row is most likely and least noticed.
+	 */
+	it("pads a single fill given only a few columns of slack", () => {
+		expect(filled("Coffee<fill>2.50", 12)).toBe("Coffee  2.50");
+	});
+
+	/**
+	 * A budget that cannot buy even one character of an enlarged fill. Distinct from having no
+	 * slack: there are columns left over, and they stay unspent because the character will not fit.
+	 */
+	it("emits nothing when the budget is smaller than one fill character", () => {
+		const line = resolveFills(parseMarkup("X<size=2>A<fill>B</size>"), 6);
+
+		expect(line.spans.map((span) => span.text).join("")).toBe("XAB");
+		expect(lineColumns(line)).toBe(5);
 	});
 
 	/**
