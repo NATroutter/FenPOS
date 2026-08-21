@@ -38,7 +38,7 @@ export function PanelHeader({ startedAt }: { startedAt: number }) {
 		<header
 			className={cn("flex flex-none flex-wrap items-center gap-4 border-b border-border px-6 py-3", HEADER_STRIP)}
 		>
-			<SidebarTrigger className="md:hidden" />
+			<SidebarTrigger />
 
 			<div className="min-w-[220px] flex-1">
 				<h1 className="text-xl font-semibold tracking-tight">{item?.title ?? "FenPOS"}</h1>

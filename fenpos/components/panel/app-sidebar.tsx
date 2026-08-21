@@ -9,6 +9,14 @@ import { NavUser } from "@/components/panel/nav-user";
 import { HEADER_STRIP } from "@/components/panel/panel-header";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuGroup,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
 	Sidebar,
 	SidebarContent,
 	SidebarFooter,
@@ -22,6 +30,8 @@ import {
 	SidebarMenuSub,
 	SidebarMenuSubButton,
 	SidebarMenuSubItem,
+	SidebarRail,
+	useSidebar,
 } from "@/components/ui/sidebar";
 import { NAV_GROUPS, type NavItem } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
@@ -84,7 +94,7 @@ export function AppSidebar({
 	const pathname = usePathname();
 
 	return (
-		<Sidebar>
+		<Sidebar collapsible="icon">
 			{/* Same height as the page header beside it, so the two bottom borders read as the one
 			    line they appear to be. See HEADER_STRIP. */}
 			<SidebarHeader className={cn("justify-center border-b border-sidebar-border px-4 py-3", HEADER_STRIP)}>
@@ -132,6 +142,8 @@ export function AppSidebar({
 					minimumPasswordLength={minimumPasswordLength}
 				/>
 			</SidebarFooter>
+
+			<SidebarRail />
 		</Sidebar>
 	);
 }
@@ -157,6 +169,7 @@ export function AppSidebar({
  * already does — `SidebarMenuSub` hides itself at that width.
  */
 function NavGroupItem({ item, pathname }: { item: NavItem; pathname: string }) {
+	const { state, isMobile } = useSidebar();
 	const children = item.children ?? [];
 	const inside = children.some((child) => owns(pathname, child.href));
 	const [open, setOpen] = useState(inside);
@@ -167,6 +180,35 @@ function NavGroupItem({ item, pathname }: { item: NavItem; pathname: string }) {
 	useEffect(() => {
 		setOpen(inside);
 	}, [inside]);
+
+	// Collapsed to icons there is no room for a sub-menu, and the primitive hides it anyway. A
+	// flyout keeps both children reachable and gives the icon a label, which the collapsible
+	// trigger could not carry: `SidebarMenuButton` given a `tooltip` returns a `<Tooltip>` wrapper
+	// that a `CollapsibleTrigger` cannot render into.
+	if (state === "collapsed" && !isMobile) {
+		return (
+			<SidebarMenuItem>
+				<DropdownMenu>
+					<DropdownMenuTrigger render={<SidebarMenuButton />}>
+						<item.icon />
+						<span className="sr-only">{item.label}</span>
+					</DropdownMenuTrigger>
+
+					<DropdownMenuContent side="right" align="start" sideOffset={4} className="min-w-44">
+						<DropdownMenuGroup>
+							<DropdownMenuLabel>{item.label}</DropdownMenuLabel>
+						</DropdownMenuGroup>
+						{children.map((child) => (
+							<DropdownMenuItem key={child.href} render={<Link href={child.href} />}>
+								<child.icon />
+								<span>{child.label}</span>
+							</DropdownMenuItem>
+						))}
+					</DropdownMenuContent>
+				</DropdownMenu>
+			</SidebarMenuItem>
+		);
+	}
 
 	return (
 		<Collapsible render={<SidebarMenuItem />} open={open} onOpenChange={setOpen}>
