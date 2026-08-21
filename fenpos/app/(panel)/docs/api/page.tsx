@@ -111,130 +111,136 @@ export default async function ApiDocsPage() {
 	const base = address.url;
 
 	return (
-		<div className="flex w-full flex-col gap-5">
-			<section className="overflow-hidden rounded-lg border border-border bg-card">
-				{/* The two values every call is built from, given the top of the page rather than a
+		// One grid for the whole page, so the opening card is a column-mate of the sections rather
+		// than a band above them. Outside it, the card stretched under the contents rail and its
+		// right edge sat 174px past every section below — the kind of misalignment that reads as a
+		// mistake even when nobody can say what is wrong.
+		<div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
+			<div className="flex min-w-0 flex-col gap-3">
+				<section className="overflow-hidden rounded-lg border border-border bg-card">
+					{/* The two values every call is built from, given the top of the page rather than a
 				    clause in the middle of a sentence. They are the only facts here a reader needs
 				    before they have read anything: what to put in front of a path, and which version
 				    of the API those paths belong to. Everything under them is explanation. */}
-				{/* Sized to their contents and packed left, rather than sharing the width out. Stretched
+					{/* Sized to their contents and packed left, rather than sharing the width out. Stretched
 				    across a wide monitor the two values ended up two thousand pixels apart, reading as
 				    two lost labels instead of one address you build a call from. */}
-				<div className="flex flex-col divide-y divide-border border-b border-border bg-muted/30 sm:flex-row sm:divide-x sm:divide-y-0">
-					<div className="min-w-0 px-5 py-3.5">
-						<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">Base URL</div>
-						<div className="mt-1.5 truncate font-mono text-[15px] text-foreground" title={base}>
-							{base}
+					<div className="flex flex-col divide-y divide-border border-b border-border bg-muted/30 sm:flex-row sm:divide-x sm:divide-y-0">
+						<div className="min-w-0 px-5 py-3.5">
+							<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">
+								Base URL
+							</div>
+							<div className="mt-1.5 truncate font-mono text-[15px] text-foreground" title={base}>
+								{base}
+							</div>
 						</div>
-					</div>
 
-					<div className="px-5 py-3.5">
-						<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">
-							Path prefix
-						</div>
-						{/* The same sky the markup reference uses for a literal you type, because that is
+						<div className="px-5 py-3.5">
+							<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">
+								Path prefix
+							</div>
+							{/* The same sky the markup reference uses for a literal you type, because that is
 						    what this is: a path segment to be copied, not a number to be read. */}
-						<div className="mt-1.5 font-mono text-[15px] text-sky-300/90">{API_BASE}</div>
+							<div className="mt-1.5 font-mono text-[15px] text-sky-300/90">{API_BASE}</div>
+						</div>
 					</div>
-				</div>
 
-				{/* Held to a readable measure. These paragraphs used to sit outside the page's two-column
+					{/* Held to a readable measure. These paragraphs used to sit outside the page's two-column
 				    grid, which is the one place nothing constrained their width — so on a desktop window
 				    they ran to about a hundred and eighty characters a line, the exact thing `P` exists
 				    to prevent for the prose inside the sections. */}
-				<div className="flex max-w-[82ch] flex-col gap-3 px-5 py-4 text-[12.5px] leading-[1.65]">
-					<P>
-						Every path below is relative to that address. Apart from <Mono>/api/health</Mono>, every request carries an
-						API key; Authentication, first below, says where one comes from and what it has to be granted before it can
-						do anything.
-					</P>
+					<div className="flex max-w-[82ch] flex-col gap-3 px-5 py-4 text-[12.5px] leading-[1.65]">
+						<P>
+							Every path below is relative to that address. Apart from <Mono>/api/health</Mono>, every request carries
+							an API key; Authentication, first below, says where one comes from and what it has to be granted before it
+							can do anything.
+						</P>
 
-					<P>
-						The version is part of the path, so the endpoints you call live under <Mono>{API_BASE}</Mono>. Pin that
-						prefix rather than deriving it: a future version will sit beside this one rather than replacing it, and a
-						request to a path this build does not serve comes back as <ErrorRef code="unknown_endpoint" /> naming the
-						version that is served, in the same envelope as every other refusal.
-					</P>
+						<P>
+							The version is part of the path, so the endpoints you call live under <Mono>{API_BASE}</Mono>. Pin that
+							prefix rather than deriving it: a future version will sit beside this one rather than replacing it, and a
+							request to a path this build does not serve comes back as <ErrorRef code="unknown_endpoint" /> naming the
+							version that is served, in the same envelope as every other refusal.
+						</P>
 
-					<P>
-						<Mono>/api/health</Mono> is deliberately outside that. A container runtime calls it from a healthcheck line
-						nobody wants to edit on a version bump, and whether the process is alive is not a contract that evolves.
-					</P>
+						<P>
+							<Mono>/api/health</Mono> is deliberately outside that. A container runtime calls it from a healthcheck
+							line nobody wants to edit on a version bump, and whether the process is alive is not a contract that
+							evolves.
+						</P>
 
-					{/* Sits with the material it qualifies rather than above the page, because it is a
+						{/* Sits with the material it qualifies rather than above the page, because it is a
 					    caveat about the examples below and true of this install right now. */}
-					{device ? null : <P>No printers are configured yet, so the examples below use placeholder names.</P>}
-				</div>
-			</section>
+						{device ? null : <P>No printers are configured yet, so the examples below use placeholder names.</P>}
+					</div>
+				</section>
 
-			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
-				<div className="flex min-w-0 flex-col gap-3">
-					<DocSection {...SECTIONS[0]}>
-						<Split>
-							<Col>
-								<P>
-									Every request carries <Mono>Authorization: Bearer fpk_…</Mono>, where the token is a key created on
-									the <Mono>API keys</Mono> tab. A key is shown once, at the moment it is created, and stored here only
-									as a hash — so a lost key is replaced rather than recovered, and this panel cannot tell you what an
-									existing one is.
-								</P>
+				<DocSection {...SECTIONS[0]}>
+					<Split>
+						<Col>
+							<P>
+								Every request carries <Mono>Authorization: Bearer fpk_…</Mono>, where the token is a key created on the{" "}
+								<Mono>API keys</Mono> tab. A key is shown once, at the moment it is created, and stored here only as a
+								hash — so a lost key is replaced rather than recovered, and this panel cannot tell you what an existing
+								one is.
+							</P>
 
-								<P>A key does nothing until it is granted both a permission and at least one printer.</P>
+							<P>A key does nothing until it is granted both a permission and at least one printer.</P>
 
-								<P>
-									Only <EnforcedList /> gate an endpoint today. The rest name capabilities this panel has and the API
-									does not expose yet, so a key granted one of them has nothing to spend it on — they are listed because
-									they are grantable, not because there is a request they unlock.
-								</P>
+							<P>
+								Only <EnforcedList /> gate an endpoint today. The rest name capabilities this panel has and the API does
+								not expose yet, so a key granted one of them has nothing to spend it on — they are listed because they
+								are grantable, not because there is a request they unlock.
+							</P>
 
-								<P>
-									Raw ESC/POS writes are deliberately absent from that list. They hand arbitrary bytes to hardware and
-									are reachable only from an admin session on the Tools tab, so no key can be granted them.
-								</P>
+							<P>
+								Raw ESC/POS writes are deliberately absent from that list. They hand arbitrary bytes to hardware and are
+								reachable only from an admin session on the Tools tab, so no key can be granted them.
+							</P>
 
-								<Aside>
-									A key addressing a printer it has no grant for gets <ErrorRef code="unknown_device" /> — the same
-									answer as a printer that does not exist. That is intentional: distinguishing the two would let a
-									caller enumerate every printer in the install by probing names.
-								</Aside>
-							</Col>
+							<Aside>
+								A key addressing a printer it has no grant for gets <ErrorRef code="unknown_device" /> — the same answer
+								as a printer that does not exist. That is intentional: distinguishing the two would let a caller
+								enumerate every printer in the install by probing names.
+							</Aside>
+						</Col>
 
-							<div className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border">
-								{PERMISSIONS.map((permission) => (
-									<div key={permission.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
-										<span className="rounded border border-border bg-muted/60 px-1.5 py-px font-mono text-[11px] text-foreground">
-											{permission.id}
-										</span>
-										<span className="min-w-0 flex-1 text-[12px] text-muted-foreground">{permission.description}</span>
-									</div>
-								))}
-							</div>
-						</Split>
-					</DocSection>
+						<div className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border">
+							{PERMISSIONS.map((permission) => (
+								<div key={permission.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+									<span className="rounded border border-border bg-muted/60 px-1.5 py-px font-mono text-[11px] text-foreground">
+										{permission.id}
+									</span>
+									<span className="min-w-0 flex-1 text-[12px] text-muted-foreground">{permission.description}</span>
+								</div>
+							))}
+						</div>
+					</Split>
+				</DocSection>
 
-					<DocSection {...SECTIONS[1]}>
-						<Split>
-							<Col>
-								<P>
-									Paths are agent-scoped. A device name only has to be unique within its agent, so every site can have
-									its own <Mono>kitchen</Mono> without coordinating names across the install.
-								</P>
+				<DocSection {...SECTIONS[1]}>
+					<Split>
+						<Col>
+							<P>
+								Paths are agent-scoped. A device name only has to be unique within its agent, so every site can have its
+								own <Mono>kitchen</Mono> without coordinating names across the install.
+							</P>
 
-								<P>
-									A <Status>202</Status> means the job was compiled, recorded and handed to the agent. It has not
-									printed yet — the response carries the job id to follow it with.
-								</P>
+							<P>
+								A <Status>202</Status> means the job was compiled, recorded and handed to the agent. It has not printed
+								yet — the response carries the job id to follow it with.
+							</P>
 
-								<P>
-									<Mono>data</Mono> is required and <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
-									<Mono>NONE</Mono>) is optional, defaulting to the device's own setting. No other field is accepted.
-									Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
-									<Mono>&lt;nowrap&gt;</Mono>.
-								</P>
-							</Col>
+							<P>
+								<Mono>data</Mono> is required and <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
+								<Mono>NONE</Mono>) is optional, defaulting to the device's own setting. No other field is accepted.
+								Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
+								<Mono>&lt;nowrap&gt;</Mono>.
+							</P>
+						</Col>
 
-							<Col>
-								<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -250,107 +256,106 @@ export default async function ApiDocsPage() {
     ]
   }'`}</CodeBlock>
 
-								<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
-							</Col>
-						</Split>
-					</DocSection>
+							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
 
-					<DocSection {...SECTIONS[2]}>
-						<Split>
-							<Col>
-								<P>
-									<Mono>GET</Mono> needs <Mono>jobs:read</Mono> and returns the job's state and timings. A key sees only
-									the jobs it submitted itself.
-								</P>
+				<DocSection {...SECTIONS[2]}>
+					<Split>
+						<Col>
+							<P>
+								<Mono>GET</Mono> needs <Mono>jobs:read</Mono> and returns the job's state and timings. A key sees only
+								the jobs it submitted itself.
+							</P>
 
-								<P>
-									<Mono>DELETE</Mono> needs <Mono>jobs:cancel</Mono> and returns <Status>202</Status>. Cancellation is a
-									request, not a fact: only the agent knows whether the job is still queued or already halfway through
-									the paper, so the final state arrives from it.
-								</P>
-							</Col>
+							<P>
+								<Mono>DELETE</Mono> needs <Mono>jobs:cancel</Mono> and returns <Status>202</Status>. Cancellation is a
+								request, not a fact: only the agent knows whether the job is still queued or already halfway through the
+								paper, so the final state arrives from it.
+							</P>
+						</Col>
 
-							<Col>
-								<CodeBlock label="Request">{`curl ${base}${API_BASE}/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-							</Col>
-						</Split>
-					</DocSection>
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
 
-					<DocSection {...SECTIONS[3]}>
-						<Split>
-							<Col>
-								<P>
-									The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
-									needed a credential would need one stored somewhere to use it — so this is what a container runtime or
-									a load balancer calls, and it is deliberately the only thing they can call.
-								</P>
+				<DocSection {...SECTIONS[3]}>
+					<Split>
+						<Col>
+							<P>
+								The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
+								needed a credential would need one stored somewhere to use it — so this is what a container runtime or a
+								load balancer calls, and it is deliberately the only thing they can call.
+							</P>
 
-								<P>
-									It answers <Status>200</Status> when the process is up and its database answers, and{" "}
-									<Status>503</Status> when the database is unreachable. The round trip is the point: a process that has
-									started but cannot reach its volume serves HTTP perfectly well while being useless, and reporting that
-									as healthy is how a broken deploy gets left running.
-								</P>
+							<P>
+								It answers <Status>200</Status> when the process is up and its database answers, and{" "}
+								<Status>503</Status> when the database is unreachable. The round trip is the point: a process that has
+								started but cannot reach its volume serves HTTP perfectly well while being useless, and reporting that
+								as healthy is how a broken deploy gets left running.
+							</P>
 
-								<P>
-									It reports nothing else, and nothing about the failure. Counts of agents, devices or jobs would turn a
-									liveness probe into a way to watch an install from outside it, and the database error's own text is a
-									file path or a driver version. Both stay in the server log.
-								</P>
-							</Col>
+							<P>
+								It reports nothing else, and nothing about the failure. Counts of agents, devices or jobs would turn a
+								liveness probe into a way to watch an install from outside it, and the database error's own text is a
+								file path or a driver version. Both stay in the server log.
+							</P>
+						</Col>
 
-							<Col>
-								<CodeBlock label="Request">{`curl ${base}/api/health`}</CodeBlock>
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}/api/health`}</CodeBlock>
 
-								<CodeBlock label="200 OK">{`{ "status": "ok", "database": "ok" }`}</CodeBlock>
+							<CodeBlock label="200 OK">{`{ "status": "ok", "database": "ok" }`}</CodeBlock>
 
-								<CodeBlock label="503 Service Unavailable">{`{ "status": "unavailable", "database": "unreachable" }`}</CodeBlock>
-							</Col>
-						</Split>
-					</DocSection>
+							<CodeBlock label="503 Service Unavailable">{`{ "status": "unavailable", "database": "unreachable" }`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
 
-					<DocSection {...SECTIONS[4]}>
-						<Split>
-							<Col>
-								<P>
-									Every non-2xx response is <Mono>{`{ "error": "<code>", "message": "…" }`}</Mono>. Branch on{" "}
-									<Mono>error</Mono>; the message is for people and may change.
-								</P>
+				<DocSection {...SECTIONS[4]}>
+					<Split>
+						<Col>
+							<P>
+								Every non-2xx response is <Mono>{`{ "error": "<code>", "message": "…" }`}</Mono>. Branch on{" "}
+								<Mono>error</Mono>; the message is for people and may change.
+							</P>
 
-								<P>
-									A content error also carries <Mono>line</Mono> (1-based index into <Mono>data</Mono>) and, where the
-									problem is one character, <Mono>column</Mono>. An unsupported character adds <Mono>character</Mono>{" "}
-									and <Mono>codepage</Mono>.
-								</P>
+							<P>
+								A content error also carries <Mono>line</Mono> (1-based index into <Mono>data</Mono>) and, where the
+								problem is one character, <Mono>column</Mono>. An unsupported character adds <Mono>character</Mono> and{" "}
+								<Mono>codepage</Mono>.
+							</P>
 
-								<P>
-									The status groups codes by what you have to do about them, and is a summary of the code rather than a
-									second contract beside it. A <Status>400</Status> means the request could not be read — the envelope
-									is wrong, nothing was interpreted as a receipt, and nothing in that group carries a position because
-									there is none to name. A <Status>422</Status> means the request was read and the receipt it describes
-									cannot be printed: those are the codes that carry a <Mono>line</Mono>, and you fix the markup rather
-									than the request. A <Status>413</Status> means it is well-formed and printable and over a limit, whose
-									only remedy is to send less. Branch on <Mono>error</Mono>, not on the status: a code may be
-									re-bucketed when the grouping is sharpened, as the content errors were when they moved off{" "}
-									<Status>400</Status>.
-								</P>
+							<P>
+								The status groups codes by what you have to do about them, and is a summary of the code rather than a
+								second contract beside it. A <Status>400</Status> means the request could not be read — the envelope is
+								wrong, nothing was interpreted as a receipt, and nothing in that group carries a position because there
+								is none to name. A <Status>422</Status> means the request was read and the receipt it describes cannot
+								be printed: those are the codes that carry a <Mono>line</Mono>, and you fix the markup rather than the
+								request. A <Status>413</Status> means it is well-formed and printable and over a limit, whose only
+								remedy is to send less. Branch on <Mono>error</Mono>, not on the status: a code may be re-bucketed when
+								the grouping is sharpened, as the content errors were when they moved off <Status>400</Status>.
+							</P>
 
-								<P>
-									Most failures are settled before the response. A job can still fail after its <Status>202</Status> —
-									the agent re-checks every dispatch against its own device set and renders it itself — and when one
-									does, the reason reaches you the same way as anything else here: a code in <Mono>error</Mono>, with{" "}
-									<Mono>errorMessage</Mono> beside it, on the job's own <Mono>GET</Mono>. That is what makes these codes
-									worth branching on. An image the agent was never sent is one such reason; see{" "}
-									<DocLink href="/docs/markup#blocks">Blocks</DocLink>.
-								</P>
-							</Col>
+							<P>
+								Most failures are settled before the response. A job can still fail after its <Status>202</Status> — the
+								agent re-checks every dispatch against its own device set and renders it itself — and when one does, the
+								reason reaches you the same way as anything else here: a code in <Mono>error</Mono>, with{" "}
+								<Mono>errorMessage</Mono> beside it, on the job's own <Mono>GET</Mono>. That is what makes these codes
+								worth branching on. An image the agent was never sent is one such reason; see{" "}
+								<DocLink href="/docs/markup#blocks">Blocks</DocLink>.
+							</P>
+						</Col>
 
-							<Col>
-								{/* The status is read from the registry rather than written here. It was written here
+						<Col>
+							{/* The status is read from the registry rather than written here. It was written here
 								    once, and said 422 while the table directly below it — which has always been
 								    generated — said 400. An example that contradicts the table beside it is worse than
 								    no example. */}
-								<CodeBlock label={`${API_ERROR_STATUS.unsupported_character} Unprocessable Content`}>{`{
+							<CodeBlock label={`${API_ERROR_STATUS.unsupported_character} Unprocessable Content`}>{`{
   "error": "unsupported_character",
   "message": "Character '€' (U+20AC) cannot be printed in codepage CP437",
   "line": 3,
@@ -359,50 +364,49 @@ export default async function ApiDocsPage() {
   "codepage": "CP437"
 }`}</CodeBlock>
 
-								<div className="min-w-0 overflow-hidden rounded-lg border border-border">
-									<Table>
-										<TableHeader>
-											<TableRow>
-												<TableHead className="w-[90px]">Status</TableHead>
-												<TableHead>Codes</TableHead>
-											</TableRow>
-										</TableHeader>
-										<TableBody>
-											{groupByStatus().map(([status, codes]) => (
-												<TableRow key={status}>
-													<TableCell className="align-top">
-														<span
-															className={`rounded border px-1.5 py-px font-mono text-[11px] font-medium ${statusStyle(status)}`}
-														>
-															{status}
-														</span>
-													</TableCell>
-													<TableCell>
-														{/* Chips rather than a comma-separated line: a reader is matching one code
+							<div className="min-w-0 overflow-hidden rounded-lg border border-border">
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead className="w-[90px]">Status</TableHead>
+											<TableHead>Codes</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{groupByStatus().map(([status, codes]) => (
+											<TableRow key={status}>
+												<TableCell className="align-top">
+													<span
+														className={`rounded border px-1.5 py-px font-mono text-[11px] font-medium ${statusStyle(status)}`}
+													>
+														{status}
+													</span>
+												</TableCell>
+												<TableCell>
+													{/* Chips rather than a comma-separated line: a reader is matching one code
 												    against this list, and a blob of forty makes that a search rather than a look. */}
-														<div className="flex flex-wrap gap-1.5">
-															{codes.map((code) => (
-																<span
-																	key={code}
-																	className="rounded border border-border bg-muted/50 px-1.5 py-px font-mono text-[11px] text-muted-foreground"
-																>
-																	{code}
-																</span>
-															))}
-														</div>
-													</TableCell>
-												</TableRow>
-											))}
-										</TableBody>
-									</Table>
-								</div>
-							</Col>
-						</Split>
-					</DocSection>
-				</div>
-
-				<ContentsRail sections={SECTIONS} />
+													<div className="flex flex-wrap gap-1.5">
+														{codes.map((code) => (
+															<span
+																key={code}
+																className="rounded border border-border bg-muted/50 px-1.5 py-px font-mono text-[11px] text-muted-foreground"
+															>
+																{code}
+															</span>
+														))}
+													</div>
+												</TableCell>
+											</TableRow>
+										))}
+									</TableBody>
+								</Table>
+							</div>
+						</Col>
+					</Split>
+				</DocSection>
 			</div>
+
+			<ContentsRail sections={SECTIONS} />
 		</div>
 	);
 }
