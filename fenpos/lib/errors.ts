@@ -91,12 +91,24 @@ export const API_ERROR_STATUS = {
 	 */
 	too_many_remote_images: 413,
 	/**
-	 * A receipt whose images come to more dots than one job can carry.
+	 * An image too large for this system to carry, print, or store.
 	 *
-	 * Only dots that must travel inside the job are counted — a URL image, or a stored one printed
-	 * at a width the agent was not synced at. A stored image at the paper's own width costs nothing
-	 * against this, because its dots reached the agent with the printer's configuration. See
-	 * `MAX_INLINE_IMAGE_CHARS` in `lib/markup/resolve-images.ts`.
+	 * One code for three measurements, because the remedy is the same for all of them — use a
+	 * smaller image — and a caller cannot tell which one they hit:
+	 *
+	 * - **Beyond `MAX_IMAGE_DIMENSION` on a side.** Read from the file's own header before the
+	 *   decoder is handed the bytes, since the allocation being defended against happens inside
+	 *   the decode.
+	 * - **A shape that projects to a raster taller than `IMAGE_LIMITS.maxHeightDots`.** A 4x1024
+	 *   source is small by every other measure and derives a 384x98,304 raster.
+	 * - **More dots than one job can carry.** Only dots that must travel inside the job are
+	 *   counted — a URL image, or a stored one printed at a width the agent was not synced at. A
+	 *   stored image at the paper's own width costs nothing against this, because its dots reached
+	 *   the agent with the printer's configuration. See `MAX_INLINE_IMAGE_CHARS` in
+	 *   `lib/markup/resolve-images.ts`.
+	 *
+	 * The first two are reachable from an upload and a URL import as well as from `<image>`, since
+	 * all three doors share one gate in `asset-service.ts`.
 	 */
 	image_too_large: 413,
 	/**
@@ -121,6 +133,18 @@ export const API_ERROR_STATUS = {
 	 * beside them.
 	 */
 	control_character: 422,
+	/**
+	 * Bytes that are not an image this pipeline can print.
+	 *
+	 * Not a decodable PNG or JPEG at all, or an interlaced PNG — which is refused because `pngjs`
+	 * decodes Adam7 through an unbounded inflate, so a declared size stops bounding the decode.
+	 *
+	 * Distinct from `invalid_type`, which it was split out of. That code means a value is not the
+	 * shape the request called for — a name that is not a slug, a `data` that is not an array — and
+	 * belongs with the envelope checks on 400. An unreadable image is a fault in the receipt's
+	 * content, reported with a `line` like every other content failure.
+	 */
+	invalid_image: 422,
 	unknown_tag: 422,
 	unclosed_tag: 422,
 	unexpected_close_tag: 422,

@@ -616,7 +616,7 @@ async function measured(bytes: Buffer): Promise<DecodedImage> {
 			// The decoder's message is already written for whoever chose the file. Re-raised as an
 			// ApiError so the panel shows it, instead of the action's catch-all turning a bad
 			// upload into "something went wrong, check the server log".
-			throw new ApiError("invalid_type", thrown.message, {}, { cause: thrown });
+			throw new ApiError("invalid_image", thrown.message, {}, { cause: thrown });
 		}
 		throw thrown;
 	}
@@ -684,13 +684,13 @@ export function requireWithinByteCap(byteLength: number): void {
 function requireDecodableSize(bytes: Buffer): void {
 	const declared = declaredSize(bytes);
 	if (!declared) {
-		throw new ApiError("invalid_type", "Images must be PNG or JPEG.");
+		throw new ApiError("invalid_image", "Images must be PNG or JPEG.");
 	}
 	if (declared.interlaced) {
 		// Checked before the dimensions, because for an interlaced PNG the dimensions are exactly
 		// the thing that has stopped being true.
 		throw new ApiError(
-			"invalid_type",
+			"invalid_image",
 			"Interlaced (Adam7) PNGs are not accepted. Save this image without interlacing and upload it again.",
 		);
 	}
@@ -708,7 +708,7 @@ function requireDecodableSize(bytes: Buffer): void {
 function requireWithinDimensions(width: number, height: number): void {
 	if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
 		throw new ApiError(
-			"invalid_type",
+			"image_too_large",
 			`An image must be at most ${MAX_IMAGE_DIMENSION} pixels on each side; this one is ${width}x${height}.`,
 		);
 	}
@@ -741,7 +741,7 @@ function requireProjectedHeight(width: number, height: number): void {
 	const projected = projectedHeightDots(width, height, MAX_PAPER_DOTS);
 	if (projected > IMAGE_LIMITS.maxHeightDots) {
 		throw new ApiError(
-			"invalid_type",
+			"image_too_large",
 			`This image is ${width}x${height}, which on the widest paper this system prints would come out ${projected} dots tall — more than the ${IMAGE_LIMITS.maxHeightDots} a raster can be. Crop it, or scale it down before uploading.`,
 		);
 	}

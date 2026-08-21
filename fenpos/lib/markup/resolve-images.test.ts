@@ -271,13 +271,11 @@ describe("resolveImages", () => {
 
 		const thrown = await refusal(["<image>https://x.test/page.html</image>"]);
 
-		// 400 rather than the 422 the other content failures carry, because this path reuses
-		// `invalid_type` — the envelope code for a field of the wrong JSON type. The status follows
-		// the code and the code's dominant meaning is the envelope one, so this is correct as it
-		// stands; whether an undecodable image deserves a code of its own is a separate question,
-		// and a new code would be additive rather than a rename.
-		expect(thrown.code).toBe("invalid_type");
-		expect(thrown.status).toBe(400);
+		// `invalid_image` rather than the `invalid_type` this once reported: bytes that will not
+		// decode are a fault in the receipt's content, not in the shape of the request, so they
+		// carry 422 with every other content failure rather than 400 with the envelope checks.
+		expect(thrown.code).toBe("invalid_image");
+		expect(thrown.status).toBe(422);
 	});
 
 	/**

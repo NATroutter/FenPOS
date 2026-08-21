@@ -231,9 +231,9 @@ describe("createAsset", () => {
 	});
 
 	it("refuses bytes that will not decode", async () => {
-		// An ApiError rather than the decoder's own error: a bad upload is a 400 the panel can
+		// An ApiError rather than the decoder's own error: a bad upload is a refusal the panel can
 		// word, not a server fault that reaches the operator as "check the server log".
-		await refusal(() => createAsset("broken", Buffer.from("nope")));
+		expect((await refusal(() => createAsset("broken", Buffer.from("nope")))).code).toBe("invalid_image");
 	});
 
 	it("refuses a format outside PNG and JPEG", async () => {
@@ -259,7 +259,7 @@ describe("createAsset", () => {
 			"image/png",
 		);
 
-		expect((await refusal(() => createAsset("wide", tooWide))).code).toBe("invalid_type");
+		expect((await refusal(() => createAsset("wide", tooWide))).code).toBe("image_too_large");
 	});
 
 	/**
@@ -305,7 +305,7 @@ describe("createAsset", () => {
 	it("refuses an interlaced PNG, whose declared size does not bound its decode", async () => {
 		const refused = await refusal(() => createAsset("adam7", interlacedHeader()));
 
-		expect(refused.code).toBe("invalid_type");
+		expect(refused.code).toBe("invalid_image");
 		expect(refused.message).toMatch(/interlac/i);
 	});
 
@@ -359,7 +359,7 @@ describe("createAsset", () => {
 
 		const refused = await refusal(() => createAsset("tall", tall));
 
-		expect(refused.code).toBe("invalid_type");
+		expect(refused.code).toBe("image_too_large");
 		expect(refused.message).toMatch(/dots tall/);
 		expect(ditherToRaster).not.toHaveBeenCalled();
 	});
@@ -388,7 +388,7 @@ describe("createAsset", () => {
 		// A BMP decodes perfectly well in jimp and would otherwise reach the decoder unmeasured.
 		const bmp = await new Jimp({ width: 4, height: 4, color: 0xff0000ff }).getBuffer("image/bmp");
 
-		await refusal(() => createAsset("bitmap", bmp));
+		expect((await refusal(() => createAsset("bitmap", bmp))).code).toBe("invalid_image");
 	});
 });
 
