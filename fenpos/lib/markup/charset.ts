@@ -1,7 +1,7 @@
 import iconv from "iconv-lite";
 import type { Codepage, UnsupportedPolicy } from "@/lib/domain/enums";
 import { UnsupportedCharacterError } from "@/lib/markup/errors";
-import { columnAt, type Line, type Span } from "@/lib/markup/model";
+import { columnAt, type Fill, type Line, type Span } from "@/lib/markup/model";
 
 /**
  * Checks that every character of a line can be represented in the device's codepage.
@@ -100,8 +100,13 @@ export function canEncode(character: string, codepage: Codepage): boolean {
  */
 export function validateCharset(line: Line, codepage: Codepage, policy: UnsupportedPolicy): Line {
 	const converted: Span[] = [];
+	// How many spans survive before each original index, so a fill recorded against the parser's
+	// numbering still sits between the same two words after a span is dropped. One entry longer than
+	// `spans`, because a fill may sit after the last one.
+	const survivors: number[] = [];
 
 	for (const span of line.spans) {
+		survivors.push(converted.length);
 		const text = convert(span, codepage, policy);
 		// A span stripped down to nothing is dropped rather than kept as an empty run, so later
 		// stages never have to reason about zero-width spans.
@@ -109,8 +114,38 @@ export function validateCharset(line: Line, codepage: Codepage, policy: Unsuppor
 			converted.push({ ...span, text });
 		}
 	}
+	survivors.push(converted.length);
 
-	return { align: line.align, wrap: line.wrap, spans: converted, fills: line.fills, directives: line.directives };
+	const fills: Fill[] = [];
+	for (const fill of line.fills) {
+		const character = convertCharacter(fill, codepage, policy);
+		// A fill whose character cannot be printed at all is dropped, for the same reason an emptied
+		// span is. The slack it would have taken falls to the fills that remain.
+		if (character.length > 0) {
+			fills.push({ ...fill, character, afterSpans: survivors[fill.afterSpans] });
+		}
+	}
+
+	return { align: line.align, wrap: line.wrap, spans: converted, fills, directives: line.directives };
+}
+
+/**
+ * Applies the policy to a fill's character.
+ *
+ * Runs before the fill is expanded, which is the point of the ordering: the caller is told about one
+ * character they wrote, at the column they wrote it, rather than about the thirtieth copy of it.
+ *
+ * @returns the character to repeat, or an empty string when the policy is to strip it
+ * @throws UnsupportedCharacterError under the `REJECT` policy
+ */
+function convertCharacter(fill: Fill, codepage: Codepage, policy: UnsupportedPolicy): string {
+	if (repertoireOf(codepage).has(fill.character)) {
+		return fill.character;
+	}
+	if (policy === "REJECT") {
+		throw new UnsupportedCharacterError(fill.character, fill.sourceColumn, codepage);
+	}
+	return policy === "REPLACE" ? REPLACEMENT : "";
 }
 
 /**

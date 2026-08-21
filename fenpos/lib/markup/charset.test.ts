@@ -86,4 +86,52 @@ describe("validateCharset", () => {
 		expect(line.spans[0].style.bold).toBe(true);
 		expect(line.directives).toHaveLength(1);
 	});
+
+	// -----------------------------------------------------------------------
+	// Fills
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The euro is the right character to test this with and a middle dot is the wrong one: CP437
+	 * holds U+00B7 at 0xFA, so `<fill=·>` prints there perfectly well.
+	 */
+	it("rejects a fill character the codepage cannot represent", () => {
+		expect(rejection("a<fill=€>b", "CP437").character).toBe("€");
+	});
+
+	it("reports the fill's own column when it rejects one", () => {
+		expect(rejection("a<fill=€>b", "CP437").column).toBe(2);
+	});
+
+	it("substitutes a fill character under the replace policy", () => {
+		expect(validate("a<fill=€>b", "CP437", "REPLACE").fills[0].character).toBe("?");
+	});
+
+	/**
+	 * A fill whose character cannot be printed at all is dropped, matching a span stripped to
+	 * nothing. What slack it would have taken goes to whatever fills remain.
+	 */
+	it("drops a fill whose character the strip policy removes", () => {
+		expect(validate("a<fill=€>b", "CP437", "STRIP").fills).toEqual([]);
+	});
+
+	it("leaves a printable fill character alone", () => {
+		expect(validate("a<fill=.>b", "CP437", "REJECT").fills[0].character).toBe(".");
+	});
+
+	/**
+	 * `afterSpans` indexes a list this pass rewrites. `š` is absent from CP437, so stripping it
+	 * removes the span the fill was recorded against, and without the repair the pad would land on
+	 * the wrong side of what is left.
+	 */
+	it("moves a fill past a span the strip policy removed", () => {
+		const line = validate("š<fill>b", "CP437", "STRIP");
+
+		expect(line.spans.map((span) => span.text)).toEqual(["b"]);
+		expect(line.fills[0].afterSpans).toBe(0);
+	});
+
+	it("leaves a fill's index alone when nothing is dropped", () => {
+		expect(validate("a<fill>b", "CP437", "STRIP").fills[0].afterSpans).toBe(1);
+	});
 });
