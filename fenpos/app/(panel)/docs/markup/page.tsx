@@ -1,7 +1,7 @@
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection } from "@/app/(panel)/docs/doc-section";
-import { Aside, Col, ErrorRef, Mono, megabytes, P, Split, seconds } from "@/app/(panel)/docs/prose";
+import { Aside, Col, DocLink, ErrorRef, Mono, megabytes, P, Split, seconds } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
@@ -127,6 +127,14 @@ export default function MarkupDocsPage() {
 								<P>
 									Control characters are refused. Markup is the only way to reach printer state, which is what stops a
 									request desynchronising the device — a raw <Mono>ESC</Mono> in your text is an error, not a command.
+								</P>
+
+								<P>
+									Every refusal is like that one: it comes back as a code, with the <Mono>line</Mono> of{" "}
+									<Mono>data</Mono> that caused it and, where the problem is one character, the column — so a template
+									that will not print says which element to look at rather than that something was wrong somewhere. The
+									codes this page names are listed with the rest, and the body they arrive in described, under{" "}
+									<DocLink href="/docs/api#errors">Errors</DocLink>.
 								</P>
 
 								<P>
