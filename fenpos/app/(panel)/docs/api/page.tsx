@@ -14,7 +14,7 @@ import {
 	statusStyle,
 } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { API_BASE, API_VERSION } from "@/lib/api-version";
+import { API_BASE } from "@/lib/api-version";
 import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
@@ -112,33 +112,60 @@ export default async function ApiDocsPage() {
 
 	return (
 		<div className="flex w-full flex-col gap-5">
-			{/* Stays on the page rather than joining the description in the top bar, because it is
-			    true of this install right now rather than of the section — and it is a caveat about
-			    the examples directly below it, which is where a caveat should sit. */}
-			{device ? null : (
-				<p className="text-[12.5px] text-muted-foreground">
-					No printers are configured yet, so the examples below use placeholder names.
-				</p>
-			)}
+			<section className="overflow-hidden rounded-lg border border-border bg-card">
+				{/* The two values every call is built from, given the top of the page rather than a
+				    clause in the middle of a sentence. They are the only facts here a reader needs
+				    before they have read anything: what to put in front of a path, and which version
+				    of the API those paths belong to. Everything under them is explanation. */}
+				{/* Sized to their contents and packed left, rather than sharing the width out. Stretched
+				    across a wide monitor the two values ended up two thousand pixels apart, reading as
+				    two lost labels instead of one address you build a call from. */}
+				<div className="flex flex-col divide-y divide-border border-b border-border bg-muted/30 sm:flex-row sm:divide-x sm:divide-y-0">
+					<div className="min-w-0 px-5 py-3.5">
+						<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">Base URL</div>
+						<div className="mt-1.5 truncate font-mono text-[15px] text-foreground" title={base}>
+							{base}
+						</div>
+					</div>
 
-			<P>
-				Every path below is relative to <Mono>{base}</Mono>, the address this panel is being served from. Apart from{" "}
-				<Mono>/api/health</Mono>, every request carries an API key; Authentication, first below, says where one comes
-				from and what it has to be granted before it can do anything.
-			</P>
+					<div className="px-5 py-3.5">
+						<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">
+							Path prefix
+						</div>
+						{/* The same sky the markup reference uses for a literal you type, because that is
+						    what this is: a path segment to be copied, not a number to be read. */}
+						<div className="mt-1.5 font-mono text-[15px] text-sky-300/90">{API_BASE}</div>
+					</div>
+				</div>
 
-			<P>
-				The API is versioned in the path, and this server serves <Mono>{API_VERSION}</Mono> — so the endpoints you call
-				live under <Mono>{API_BASE}</Mono>. Pin that prefix rather than deriving it: a future version will sit beside
-				this one rather than replacing it, and a request to a path this build does not serve comes back as{" "}
-				<ErrorRef code="unknown_endpoint" /> naming the version that is served, in the same envelope as every other
-				refusal.
-			</P>
+				{/* Held to a readable measure. These paragraphs used to sit outside the page's two-column
+				    grid, which is the one place nothing constrained their width — so on a desktop window
+				    they ran to about a hundred and eighty characters a line, the exact thing `P` exists
+				    to prevent for the prose inside the sections. */}
+				<div className="flex max-w-[82ch] flex-col gap-3 px-5 py-4 text-[12.5px] leading-[1.65]">
+					<P>
+						Every path below is relative to that address. Apart from <Mono>/api/health</Mono>, every request carries an
+						API key; Authentication, first below, says where one comes from and what it has to be granted before it can
+						do anything.
+					</P>
 
-			<P>
-				<Mono>/api/health</Mono> is deliberately outside that. A container runtime calls it from a healthcheck line
-				nobody wants to edit on a version bump, and whether the process is alive is not a contract that evolves.
-			</P>
+					<P>
+						The version is part of the path, so the endpoints you call live under <Mono>{API_BASE}</Mono>. Pin that
+						prefix rather than deriving it: a future version will sit beside this one rather than replacing it, and a
+						request to a path this build does not serve comes back as <ErrorRef code="unknown_endpoint" /> naming the
+						version that is served, in the same envelope as every other refusal.
+					</P>
+
+					<P>
+						<Mono>/api/health</Mono> is deliberately outside that. A container runtime calls it from a healthcheck line
+						nobody wants to edit on a version bump, and whether the process is alive is not a contract that evolves.
+					</P>
+
+					{/* Sits with the material it qualifies rather than above the page, because it is a
+					    caveat about the examples below and true of this install right now. */}
+					{device ? null : <P>No printers are configured yet, so the examples below use placeholder names.</P>}
+				</div>
+			</section>
 
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
 				<div className="flex min-w-0 flex-col gap-3">
