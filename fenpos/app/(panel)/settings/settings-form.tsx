@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactNode, TransitionStartFunction } from "react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { resetSetting, saveSetting } from "@/app/(panel)/settings/actions";
@@ -200,22 +200,30 @@ function bounds(definition: ClientSettingDefinition): ReactNode {
  * hands a successful reset back to the control that needs to show it: the server row is gone, but
  * only the control holds the piece of state that has to snap to the fallback on screen.
  *
+ * `startTransition` is the control's own, passed in rather than owned here, so a save and a reset
+ * for the same setting share one `pending` flag instead of two independent ones. Before this
+ * split, a single `useTransition` covered both actions in one component, which kept the input
+ * disabled for the duration of either; giving the reset link its own transition would reopen the
+ * input mid-reset, letting someone type over a value that is about to be overwritten anyway.
+ *
  * @param setting the field this footer describes
- * @param pending whether the control itself has a save in flight, disabling the reset link too
- *   so a reset can't race a save
+ * @param pending whether the control has a save or a reset in flight, since both run through the
+ *   same `startTransition` — used to disable the reset link and to swap its icon for a spinner
+ * @param startTransition the control's own transition starter, shared with its save path
  * @param onReset called with the fallback value once the server confirms the reset
  */
 function FieldFooter({
 	setting,
 	pending,
+	startTransition,
 	onReset,
 }: {
 	setting: SettingFieldData;
 	pending: boolean;
+	startTransition: TransitionStartFunction;
 	onReset: (fallback: SettingFieldData["value"]) => void;
 }) {
 	const { definition } = setting;
-	const [resetting, startTransition] = useTransition();
 	const line = bounds(definition);
 
 	return (
@@ -233,7 +241,7 @@ function FieldFooter({
 					<Button
 						variant="link"
 						className="h-auto p-0 text-[11.5px] font-normal"
-						disabled={pending || resetting}
+						disabled={pending}
 						onClick={() =>
 							startTransition(async () => {
 								const result = await resetSetting(definition.key);
@@ -246,7 +254,7 @@ function FieldFooter({
 							})
 						}
 					>
-						{resetting ? <Spinner className="size-3" /> : <RotateCcw className="size-3" />}
+						{pending ? <Spinner className="size-3" /> : <RotateCcw className="size-3" />}
 						Reset to {String(definition.fallback)}
 					</Button>
 				</>
@@ -290,7 +298,12 @@ function IntegerControl({ setting }: { setting: IntegerField }) {
 				</NumberFieldGroup>
 			</NumberField>
 
-			<FieldFooter setting={setting} pending={pending} onReset={(fallback) => setValue(fallback as number)} />
+			<FieldFooter
+				setting={setting}
+				pending={pending}
+				startTransition={startTransition}
+				onReset={(fallback) => setValue(fallback as number)}
+			/>
 		</>
 	);
 }
@@ -311,7 +324,12 @@ function BooleanControl({ setting }: { setting: BooleanField }) {
 				}}
 			/>
 
-			<FieldFooter setting={setting} pending={pending} onReset={(fallback) => setValue(fallback as boolean)} />
+			<FieldFooter
+				setting={setting}
+				pending={pending}
+				startTransition={startTransition}
+				onReset={(fallback) => setValue(fallback as boolean)}
+			/>
 		</>
 	);
 }
@@ -348,7 +366,12 @@ function EnumControl({ setting }: { setting: EnumField }) {
 				</SelectContent>
 			</Select>
 
-			<FieldFooter setting={setting} pending={pending} onReset={(fallback) => setValue(fallback as string)} />
+			<FieldFooter
+				setting={setting}
+				pending={pending}
+				startTransition={startTransition}
+				onReset={(fallback) => setValue(fallback as string)}
+			/>
 		</>
 	);
 }
@@ -374,7 +397,12 @@ function StringControl({ setting }: { setting: StringField }) {
 				}}
 			/>
 
-			<FieldFooter setting={setting} pending={pending} onReset={(fallback) => setValue(fallback as string)} />
+			<FieldFooter
+				setting={setting}
+				pending={pending}
+				startTransition={startTransition}
+				onReset={(fallback) => setValue(fallback as string)}
+			/>
 		</>
 	);
 }
