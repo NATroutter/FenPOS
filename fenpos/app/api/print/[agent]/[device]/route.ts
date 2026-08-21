@@ -12,11 +12,15 @@ import { getClientAddress } from "@/lib/request-context";
  * site can have a `kitchen` without coordinating names across the whole install, which is what
  * multi-site operators actually want.
  *
- * **Everything is decided before the response.** The body is parsed, limit-checked, wrapped to
- * the device's width and validated against its codepage, all synchronously — so a `422` names
- * the exact line, column and character at fault. Once a `202` is returned the job can only fail
- * for hardware reasons. That property is the whole point of compiling on the server, and it is
- * what makes the error contract worth reading.
+ * **Everything about the request is decided before the response.** The body is parsed, limit-checked,
+ * wrapped to the device's width and validated against its codepage, all synchronously — so a `422`
+ * names the exact line, column and character at fault. Once a `202` is returned, the job is still
+ * not guaranteed to print: the agent re-checks the dispatch against its own device set and renders
+ * the job itself, and either of those can fail there independently of the hardware, which can of
+ * course fail too. None of that reaches this response — it reaches the caller as `error` and
+ * `errorMessage` on the job's own GET. That the request itself is fully settled synchronously is
+ * still the whole point of compiling on the server, and it is what makes the error contract worth
+ * reading.
  */
 
 /** Largest body accepted. Bounded before parsing, so an oversized request costs nothing. */
