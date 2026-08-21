@@ -18,11 +18,19 @@ datasource db {
   provider = "sqlite"
 }
 
-/// Singleton row holding the one administrator credential for this install.
+/// Singleton row holding the administrator record for this install: the one credential and
+/// the identity that goes with it. The two live together because there is exactly one
+/// administrator to have either, and nothing else yet needs to read one without the other.
 /// Kept a singleton by the fixed primary key rather than by convention.
 model AdminAuth {
   id                Int      @id @default(1)
   passwordHash      String   @map("password_hash")
+  /// Shown in the sidebar footer and used for the avatar's initial. Non-null with a default so
+  /// the one existing row migrates without a backfill and the footer always has something to draw.
+  displayName       String   @default("Administrator") @map("display_name")
+  /// Optional, and meaningfully so: "not set" is what a fresh install has, and it is what selects
+  /// the locally drawn initial over a Gravatar request.
+  email             String?  @map("email")
   /// True while the password is the one generated at first boot. While set, the panel is
   /// unreachable: signing in leads only to the page that replaces this password.
   isGenerated       Boolean  @default(false) @map("is_generated")

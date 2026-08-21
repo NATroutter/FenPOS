@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+	DEFAULT_DISPLAY_NAME,
 	ensureAdminPassword,
+	getAdminProfile,
 	isAdminConfigured,
 	isPasswordGenerated,
 	setAdminPassword,
+	setAdminProfile,
 	verifyAdminPassword,
 } from "@/lib/auth/admin";
 import { passwordSchema } from "@/lib/auth/password";
@@ -141,5 +144,63 @@ describe("administrator credential", () => {
 
 			expect(first).not.toBe(second);
 		});
+	});
+});
+
+describe("administrator profile", () => {
+	beforeEach(async () => {
+		await prisma.session.deleteMany({});
+		await prisma.adminAuth.deleteMany({});
+	});
+
+	/**
+	 * A fresh install has no row at all until a password is set, and the sidebar renders on every
+	 * page. Returning the default rather than null keeps a name in the footer at the one moment
+	 * there is nothing to read.
+	 */
+	it("falls back to the default name when no administrator row exists", async () => {
+		await expect(getAdminProfile()).resolves.toEqual({ displayName: DEFAULT_DISPLAY_NAME, email: null });
+	});
+
+	it("gives a newly bootstrapped install the default name and no email", async () => {
+		await setAdminPassword("correct horse battery staple");
+
+		await expect(getAdminProfile()).resolves.toEqual({ displayName: DEFAULT_DISPLAY_NAME, email: null });
+	});
+
+	it("stores and reads back a name and an email", async () => {
+		await setAdminPassword("correct horse battery staple");
+		await setAdminProfile({ displayName: "NATroutter", email: "me@natroutter.fi" });
+
+		await expect(getAdminProfile()).resolves.toEqual({ displayName: "NATroutter", email: "me@natroutter.fi" });
+	});
+
+	it("stores an absent email as null rather than an empty string", async () => {
+		await setAdminPassword("correct horse battery staple");
+		await setAdminProfile({ displayName: "NATroutter", email: null });
+
+		const row = await prisma.adminAuth.findFirst({ select: { email: true } });
+		expect(row?.email).toBeNull();
+	});
+
+	/**
+	 * The profile and the credential share one row. Writing the profile must not disturb the hash,
+	 * and changing the password must not reset the name — the two are edited from different forms
+	 * and neither should be a side effect of the other.
+	 */
+	it("leaves the password alone when the profile changes", async () => {
+		await setAdminPassword("correct horse battery staple");
+		await setAdminProfile({ displayName: "NATroutter", email: "me@natroutter.fi" });
+
+		await expect(verifyAdminPassword("correct horse battery staple")).resolves.toBe(true);
+	});
+
+	it("leaves the profile alone when the password changes", async () => {
+		await setAdminPassword("correct horse battery staple");
+		await setAdminProfile({ displayName: "NATroutter", email: "me@natroutter.fi" });
+
+		await setAdminPassword("a different passphrase entirely");
+
+		await expect(getAdminProfile()).resolves.toEqual({ displayName: "NATroutter", email: "me@natroutter.fi" });
 	});
 });

@@ -134,6 +134,54 @@ export async function ensureAdminPassword(): Promise<string | null> {
 }
 
 /**
+ * The name a row carries before anyone changes it.
+ *
+ * Duplicated as `@default` on the column, which is what migrates the existing row; this constant
+ * is what answers for an install that has no row at all. The two must agree, and there is no way
+ * to derive one from the other, so they are stated together here.
+ */
+export const DEFAULT_DISPLAY_NAME = "Administrator";
+
+/** The administrator's identity, as the sidebar and the profile dialog need it. */
+export interface AdminProfile {
+	displayName: string;
+	email: string | null;
+}
+
+/**
+ * Reads the administrator's identity.
+ *
+ * Falls back to the default rather than failing when no row exists: this is read by the panel
+ * layout, so it runs on every page, including the window between an install starting and a
+ * password being set.
+ *
+ * @returns the name and email
+ */
+export async function getAdminProfile(): Promise<AdminProfile> {
+	const row = await prisma.adminAuth.findUnique({
+		where: { id: ADMIN_ROW_ID },
+		select: { displayName: true, email: true },
+	});
+
+	return { displayName: row?.displayName ?? DEFAULT_DISPLAY_NAME, email: row?.email ?? null };
+}
+
+/**
+ * Replaces the administrator's identity.
+ *
+ * Deliberately touches only these two columns: the password hash lives in the same row and is
+ * changed from a different form, for a different reason, with a different check in front of it.
+ *
+ * @param profile the name and email to store, already validated
+ */
+export async function setAdminProfile(profile: AdminProfile): Promise<void> {
+	await prisma.adminAuth.update({
+		where: { id: ADMIN_ROW_ID },
+		data: { displayName: profile.displayName, email: profile.email },
+	});
+}
+
+/**
  * Verifies a candidate administrator password.
  *
  * Takes comparable time whether or not an administrator is configured, so the response does
