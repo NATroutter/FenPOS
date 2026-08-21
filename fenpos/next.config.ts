@@ -25,19 +25,23 @@ const nextConfig: NextConfig = {
 			/**
 			 * Ceiling for a server action's request body.
 			 *
-			 * Next defaults to 1 MB, which is below the 2 MB an asset upload is allowed and would
-			 * reject a legitimate one before any of this project's code saw it — as a framework
-			 * error page, not as something the Assets tab could word.
+			 * Next defaults to 1 MB, which is below even the smallest `assets.maxUploadKb` an
+			 * operator could set and would reject a legitimate upload before any of this project's
+			 * code saw it — as a framework error page, not as something the Assets tab could word.
 			 *
-			 * Set to twice the real limit rather than to it. `MAX_ASSET_BYTES` in
-			 * `lib/assets/asset-service.ts` is what actually decides, and it is enforced in the
-			 * action and again in the service, so an over-large upload is refused by this project
-			 * with this project's message. The gap is deliberate headroom: a multipart body carries
-			 * field names and boundaries beyond the file itself, so a file exactly at the cap is
-			 * a request slightly over it, and a framework limit set to the same number would turn
-			 * the boundary case into the wrong error. Raising this alone raises nothing.
+			 * Must stay above `assets.maxUploadKb`'s declared maximum (`SETTINGS` in
+			 * `lib/settings/settings-service.ts`, 8192 KiB today) with headroom to spare, not merely
+			 * above whatever an install currently has it set to: `assets.maxUploadKb` is what
+			 * actually decides, enforced in the action and again in the service, so an over-large
+			 * upload is refused by this project with this project's message — but only if this
+			 * ceiling never becomes the thing that refuses it first. 16 MB leaves room for a
+			 * multipart body's own field names and boundaries on top of a file at the setting's
+			 * maximum, so a file exactly at that cap is a request slightly over it, and this ceiling
+			 * set to the same number would turn the boundary case into the wrong error. Raising
+			 * `assets.maxUploadKb`'s maximum without raising this is exactly what
+			 * `settings-service.test.ts`'s "assets.maxUploadKb's ceiling" test exists to catch.
 			 */
-			bodySizeLimit: "4mb",
+			bodySizeLimit: "16mb",
 		},
 	},
 };

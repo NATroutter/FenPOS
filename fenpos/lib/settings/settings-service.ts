@@ -60,6 +60,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 		summary: "Counted on the request as received, before markup is interpreted.",
 	},
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
+	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
 	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 ];
 
@@ -165,6 +166,7 @@ export const SETTING_KEYS = [
 	"jobs.retentionMinutes",
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
+	"assets.maxUploadKb",
 	"logs.minimumLevel",
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
@@ -271,6 +273,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		...jobBound(jobSettingsSchema.shape.shutdownGraceSeconds),
 		fallback: 10,
 		unit: "seconds",
+	},
+	{
+		key: "assets.maxUploadKb",
+		label: "Maximum upload size",
+		description:
+			"Largest image accepted, uploaded or fetched. The decode is bounded separately by a fixed pixel limit, so this is about storage rather than safety.",
+		category: "media",
+		type: "integer",
+		min: 256,
+		max: 8_192,
+		fallback: 2_048,
+		unit: "KiB",
 	},
 	{
 		key: "logs.minimumLevel",

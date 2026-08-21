@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_ASSET_BYTES } from "@/lib/assets/asset-service";
+import { maxAssetBytes } from "@/lib/assets/asset-service";
 import { prisma } from "@/lib/db";
 
 /**
@@ -8,9 +8,10 @@ import { prisma } from "@/lib/db";
  *
  * The property worth pinning here is the upload cap. It is the one limit in this feature that a
  * framework would otherwise decide: Next caps a server action's body at 1 MB by default, and
- * `next.config.ts` raises that ceiling to 4 MB precisely so that the 2 MB this product enforces is
- * a number written in this repository. If someone deletes the check in the action, nothing in the
- * framework puts it back — the config now says 4 MB — so this is what notices.
+ * `next.config.ts` raises that ceiling to 16 MB precisely so that `assets.maxUploadKb` — 2 MB by
+ * default, and this product's to enforce — is a number this project actually applies rather than
+ * one a framework default overrides. If someone deletes the check in the action, nothing in the
+ * framework puts it back — the config now says 16 MB — so this is what notices.
  *
  * The session guard is stubbed rather than satisfied: it redirects, and a redirect is not what these
  * tests are about. `revalidatePath` is stubbed because it needs a request scope these do not have.
@@ -61,6 +62,10 @@ function upload(name: string, bytes: Buffer): FormData {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
+	// Not this file's subject, but the cap this test asserts against is now read from a setting
+	// rather than a fixed constant, so a stray override left by another suite sharing this
+	// worker's database would silently change what "the cap this product enforces" means here.
+	await prisma.setting.deleteMany({ where: { key: "assets.maxUploadKb" } });
 	scheduled.length = 0;
 	pushConfigToEveryAgent.mockClear();
 });
@@ -73,7 +78,7 @@ describe("uploadAsset", () => {
 	});
 
 	it("refuses a file past the cap this product enforces", async () => {
-		const result = await uploadAsset(upload("huge", Buffer.alloc(MAX_ASSET_BYTES + 1)));
+		const result = await uploadAsset(upload("huge", Buffer.alloc((await maxAssetBytes()) + 1)));
 
 		expect(result.error).toMatch(/at most 2 MB/);
 		expect(await prisma.asset.count()).toBe(0);

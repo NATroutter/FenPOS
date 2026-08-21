@@ -3,10 +3,11 @@ import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection } from "@/app/(panel)/docs/doc-section";
 import { Aside, Col, DocLink, ErrorRef, Mono, megabytes, P, Split, seconds } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION } from "@/lib/assets/asset-service";
+import { MAX_IMAGE_DIMENSION, maxAssetBytes } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
 import { MAX_REMOTE_IMAGE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "@/lib/assets/fetch-remote";
 import { BarcodeSystem } from "@/lib/domain/enums";
+import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { MAX_REMOTE_IMAGES } from "@/lib/markup/resolve-images";
 
@@ -102,7 +103,9 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
  * address here and no key — a receipt template is written by someone who may never make the call
  * that prints it, and the material they need is the tag table and what each tag costs the paper.
  */
-export default function MarkupDocsPage() {
+export default async function MarkupDocsPage() {
+	const assetCap = await maxAssetBytes();
+
 	return (
 		<div className="flex w-full flex-col gap-5">
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
@@ -220,7 +223,7 @@ export default function MarkupDocsPage() {
 									Images are added on the Assets tab, by upload or by importing a URL once, and markup refers to one by
 									its slug: the example beside names an image called <Mono>logo</Mono>, and a name that is not stored on
 									this install is <ErrorRef code="unknown_asset" />. Whichever door a picture comes through, it must be
-									a PNG or a JPEG of at most {megabytes(MAX_ASSET_BYTES)} and {MAX_IMAGE_DIMENSION} pixels on each side,
+									a PNG or a JPEG of at most {describeBytes(assetCap)} and {MAX_IMAGE_DIMENSION} pixels on each side,
 									and a PNG must not be interlaced.
 								</P>
 

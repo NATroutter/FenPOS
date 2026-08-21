@@ -13,9 +13,11 @@ import { prisma } from "@/lib/db";
 import { AssetKind } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
+import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import type { ImageSource } from "@/lib/markup/images";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * The image library a receipt's `<image>` tag draws from.
@@ -39,17 +41,23 @@ import type { ImageSource } from "@/lib/markup/images";
 /**
  * The largest asset this system will store, in bytes.
  *
- * Two megabytes — the same figure the remote fetch streams up to in `MAX_REMOTE_IMAGE_BYTES`, so an
- * upload and an import turn away the same file, and this one still decides for both because both go
- * through {@link store}. Stated here rather than left to Next's server-action body limit: a limit
- * inherited from a framework default is one nobody can find, and upgrading the framework would
- * silently change the product. `next.config.ts` raises its own ceiling above this on purpose, so
- * that this constant is what actually decides.
+ * Read from the `assets.maxUploadKb` setting — an operator's own call, an install storing mostly
+ * logos and one fetching full photographs want different answers — rather than a fixed constant.
+ * The same figure bounds an upload and an import alike, because both go through {@link store}.
+ * Stated here rather than left to Next's server-action body limit: a limit inherited from a
+ * framework default is one nobody can find, and upgrading the framework would silently change the
+ * product. `next.config.ts` raises its own ceiling above the setting's declared maximum on purpose,
+ * so that this is what actually decides, whatever an operator sets it to —
+ * `settings-service.test.ts` is what keeps that ceiling from drifting back below it.
  *
  * This bounds the bytes that arrive. It does not bound what they decode to — see
  * {@link MAX_IMAGE_DIMENSION}, which is the bound that matters.
+ *
+ * @returns the configured cap, in bytes
  */
-export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
+export async function maxAssetBytes(): Promise<number> {
+	return (await integerSetting("assets.maxUploadKb")) * 1024;
+}
 
 /**
  * The one asset name this module refuses to store anything under.
@@ -605,7 +613,7 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
  * @throws ApiError if they are too large, too big in pixels, or not an image this pipeline prints
  */
 async function measured(bytes: Buffer): Promise<DecodedImage> {
-	requireWithinByteCap(bytes.length);
+	await requireWithinByteCap(bytes.length);
 	requireDecodableSize(bytes);
 
 	let decoded: DecodedImage;
@@ -638,14 +646,14 @@ async function measured(bytes: Buffer): Promise<DecodedImage> {
  * this one, behind it, is the one that cannot be skipped.
  *
  * @param byteLength how many bytes the file is
- * @throws ApiError if that is beyond {@link MAX_ASSET_BYTES}
+ * @throws ApiError if that is beyond {@link maxAssetBytes}
  */
-export function requireWithinByteCap(byteLength: number): void {
-	if (byteLength > MAX_ASSET_BYTES) {
-		const cap = Math.floor(MAX_ASSET_BYTES / 1024 / 1024);
+export async function requireWithinByteCap(byteLength: number): Promise<void> {
+	const cap = await maxAssetBytes();
+	if (byteLength > cap) {
 		throw new ApiError(
 			"body_too_large",
-			`An image must be at most ${cap} MB; this one is ${(byteLength / 1024 / 1024).toFixed(1)} MB.`,
+			`An image must be at most ${describeBytes(cap)}; this one is ${(byteLength / 1024 / 1024).toFixed(1)} MB.`,
 		);
 	}
 }

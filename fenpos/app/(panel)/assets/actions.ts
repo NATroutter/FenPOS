@@ -91,7 +91,7 @@ export async function uploadAsset(formData: FormData): Promise<ActionState> {
 		if (!(file instanceof File) || file.size === 0) {
 			throw new ApiError("missing_field", "Choose an image to upload.");
 		}
-		requireWithinByteCap(file.size);
+		await requireWithinByteCap(file.size);
 
 		const name = formData.get("name");
 		await createAsset(typeof name === "string" ? name : "", Buffer.from(await file.arrayBuffer()));

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
@@ -179,6 +180,7 @@ describe("setting definitions", () => {
 			"jobs.retentionMinutes": "integer",
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
+			"assets.maxUploadKb": "integer",
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
@@ -475,5 +477,29 @@ describe("jobs.* bounds", () => {
 			expect(definition.min, settingKey).toBe(field.minValue);
 			expect(definition.max, settingKey).toBe(field.maxValue);
 		}
+	});
+});
+
+/**
+ * `assets.maxUploadKb`'s ceiling and `next.config.ts`'s server-action body limit are two numbers
+ * that have to agree, and nothing in the type system connects them: the setting is validated in
+ * `settings-service.ts`, the framework limit lives in a config file neither imports, and an
+ * operator who raises the setting past the framework's own ceiling would be told no by Next
+ * itself — a page with no wording this project chose, for a number nobody could find. This is
+ * what notices if the two drift: it fails the moment someone widens the setting's `max` without
+ * widening `bodySizeLimit` to stay above it.
+ */
+describe("assets.maxUploadKb's ceiling", () => {
+	it("keeps the framework body ceiling above the setting's maximum", () => {
+		const definition = SETTINGS.find((setting) => setting.key === "assets.maxUploadKb");
+		if (definition?.type !== "integer") {
+			throw new Error("assets.maxUploadKb must be an integer setting.");
+		}
+
+		const config = readFileSync("next.config.ts", "utf8");
+		const ceiling = /bodySizeLimit:\s*"(\d+)mb"/i.exec(config);
+
+		expect(ceiling).not.toBeNull();
+		expect(Number(ceiling?.[1]) * 1024).toBeGreaterThan(definition.max);
 	});
 });

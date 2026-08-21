@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Jimp } from "jimp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { deviceInputSchema } from "@/lib/devices/device-service";
 import { ApiError } from "@/lib/errors";
 import { dotWidth } from "@/lib/markup/blocks";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the asset store.
@@ -53,7 +55,6 @@ vi.mock("@/lib/assets/dither", async (importOriginal) => {
 });
 
 const {
-	MAX_ASSET_BYTES,
 	MAX_IMAGE_DIMENSION,
 	MAX_PAPER_DOTS,
 	RESERVED_ASSET_NAME,
@@ -62,6 +63,7 @@ const {
 	forgetRasters,
 	importAssetFromUrl,
 	listAssets,
+	maxAssetBytes,
 	rasterCacheStats,
 	rasterFor,
 } = await import("@/lib/assets/asset-service");
@@ -178,8 +180,32 @@ async function refusal(work: () => Promise<unknown>): Promise<ApiError> {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
+	// Cleared here too: several tests below override `assets.maxUploadKb`, and the byte-cap
+	// tests need to know they are starting from the built-in default rather than whatever the
+	// previous test — or another suite sharing this worker's database — left behind.
+	await prisma.setting.deleteMany({ where: { key: "assets.maxUploadKb" } });
 	fetchRemoteImage.mockReset();
 });
+
+/**
+ * A PNG dense enough that PNG's deflate cannot shrink it much, so its encoded size tracks its
+ * pixel count rather than collapsing to a few hundred bytes the way {@link solidPng} does.
+ *
+ * Needed for the upload-cap tests below, which have to prove a real, decodable file crossed a
+ * byte threshold — a solid-colour PNG of any dimensions compresses to almost nothing, so it could
+ * never produce a multi-megabyte file without exceeding {@link MAX_IMAGE_DIMENSION} many times
+ * over. Random pixel data defeats the compression instead, at dimensions that stay well inside
+ * every other cap this module enforces.
+ *
+ * @param width pixels across
+ * @param height pixels down
+ * @returns the encoded PNG
+ */
+async function noisyPng(width: number, height: number): Promise<Buffer> {
+	const image = new Jimp({ width, height, color: 0x000000ff });
+	crypto.randomBytes(width * height * 4).copy(image.bitmap.data);
+	return Buffer.from(await image.getBuffer("image/png"));
+}
 
 describe("createAsset", () => {
 	it("stores the source bytes, not a raster", async () => {
@@ -243,9 +269,39 @@ describe("createAsset", () => {
 	});
 
 	it("refuses more bytes than the upload cap", async () => {
-		const tooBig = Buffer.alloc(MAX_ASSET_BYTES + 1);
+		const tooBig = Buffer.alloc((await maxAssetBytes()) + 1);
 
 		expect((await refusal(() => createAsset("huge", tooBig))).code).toBe("body_too_large");
+	});
+
+	/**
+	 * The cap this task turned into a setting. `256` is the setting's declared minimum
+	 * (`SETTINGS` in `settings-service.ts`) — `setSetting` refuses anything below it, so the
+	 * lowest value actually reachable is the one exercised here, not an arbitrary small number.
+	 */
+	it("refuses an upload above the configured size", async () => {
+		await setSetting("assets.maxUploadKb", 256);
+
+		await expect(createAsset("big", Buffer.alloc(300 * 1024))).rejects.toThrow(ApiError);
+	});
+
+	/**
+	 * The other half of the same property: raising the setting has to actually raise what is
+	 * accepted, not just what is refused. `noisyPng` is required rather than a solid-colour
+	 * fixture — a uniform image compresses to a few hundred bytes at any size, so it could never
+	 * cross 2 MiB without dimensions many times over {@link MAX_IMAGE_DIMENSION}.
+	 */
+	it("accepts an upload the configured size allows but the built-in default would not", async () => {
+		await setSetting("assets.maxUploadKb", 4_096);
+
+		// Comfortably over the 2 MiB default and comfortably under the configured 4096 KiB —
+		// generated, not fixed, because a compressed size cannot be dictated exactly, so its
+		// byte length is checked here rather than merely assumed.
+		const big = await noisyPng(1000, 750);
+		expect(big.length).toBeGreaterThan(2 * 1024 * 1024);
+		expect(big.length).toBeLessThan(4_096 * 1024);
+
+		await expect(createAsset("big", big)).resolves.toBeDefined();
 	});
 
 	it("accepts an image at the dimension cap", async () => {

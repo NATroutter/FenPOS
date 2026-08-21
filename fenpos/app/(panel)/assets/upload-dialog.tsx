@@ -20,6 +20,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toNameCandidate } from "@/lib/domain/naming";
+import { describeBytes } from "@/lib/format/bytes";
 
 /** What the file picker offers, matching the two formats the decoder accepts. */
 const ACCEPTED = "image/png,image/jpeg";
@@ -79,7 +80,7 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 	 *
 	 * The server checks this too, twice, and its answer is the one that decides. This copy exists
 	 * because past a certain size the server's answer never arrives: Next rejects a server action
-	 * whose body is over `serverActions.bodySizeLimit` before the action runs, so a 10 MB holiday
+	 * whose body is over `serverActions.bodySizeLimit` before the action runs, so a 20 MB holiday
 	 * photograph would fail as a thrown request rather than as the sentence the action would have
 	 * returned. Refusing it here also spares the operator uploading megabytes to be told no.
 	 */
@@ -89,7 +90,7 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 			// until its key changes, so dropping only the form's copy leaves the operator looking at a
 			// filename the form no longer has — with Clear disabled, because that is keyed off `file`.
 			clearFile();
-			setError(`That image is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${megabytes(maxBytes)} MB.`);
+			setError(`That image is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${describeBytes(maxBytes)}.`);
 			return;
 		}
 		setError(null);
@@ -135,7 +136,7 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 				<DialogHeader>
 					<DialogTitle>Add an image</DialogTitle>
 					<DialogDescription>
-						PNG or JPEG, up to {megabytes(maxBytes)} MB. It is stored as uploaded and dithered for each printer's own
+						PNG or JPEG, up to {describeBytes(maxBytes)}. It is stored as uploaded and dithered for each printer's own
 						paper width, so the same image suits 58mm and 80mm alike.
 					</DialogDescription>
 				</DialogHeader>
@@ -229,17 +230,4 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 			</DialogContent>
 		</Dialog>
 	);
-}
-
-/**
- * States a byte cap the way the copy says it.
- *
- * The cap arrives from the server as bytes, and every sentence in this dialog says megabytes. One
- * conversion so the description and the refusal cannot end up quoting different numbers.
- *
- * @param bytes the cap
- * @returns whole megabytes
- */
-function megabytes(bytes: number): number {
-	return Math.floor(bytes / 1024 / 1024);
 }
