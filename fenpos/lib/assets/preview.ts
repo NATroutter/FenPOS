@@ -35,8 +35,11 @@ import type { ImageRaster } from "@/lib/assets/dither";
  * inlines its SVG for the same reason.
  *
  * The image is drawn at one screen pixel per printer dot. Fitting it into a card is the caller's
- * business — and a caller that scales it should say `image-rendering: pixelated`, or the browser
- * will smooth exactly the speckle this exists to show.
+ * business — and a caller that scales it should hand it to `components/panel/dithered-image.tsx`
+ * rather than pick a filter itself, because the right filter depends on which way it scaled. Drawn
+ * at one-to-one or larger the dots are the subject and want `pixelated`; drawn smaller the tone is,
+ * and nearest-neighbour throws away most of the dots and returns moiré. `ditherFilterFor` carries
+ * the full reasoning.
  *
  * @param raster a dithered raster, from `ditherToRaster` or `rasterFor`
  * @returns a `data:image/png;base64,…` URI of the same dots

@@ -1,5 +1,7 @@
 "use client";
 
+import { DitheredImage } from "@/components/panel/dithered-image";
+
 /**
  * An `<image>` as it will come out of the printer.
  *
@@ -66,8 +68,7 @@ export function ImagePreview({
 			    block, and a block ignores the line's alignment and sits hard against the left of the
 			    paper however the element was aligned. Inline is what lets a centred logo be centred
 			    by the same rule that centres a centred line of text. */}
-			{/** biome-ignore lint/performance/noImgElement: a data URI is already inlined; there is nothing for the image pipeline to optimise. */}
-			<img
+			<DitheredImage
 				src={png}
 				alt={`${reference}, dithered as it will print`}
 				style={{
@@ -77,11 +78,6 @@ export function ImagePreview({
 					width: `${Math.min(widthFraction, 1) * 100}%`,
 					height: `${inkedLines * lineHeightPx}px`,
 					verticalAlign: "top",
-					// Load-bearing. The raster is one dot per pixel and the sheet is drawn at fewer
-					// pixels than that, so the browser scales it — and its default smoothing blends
-					// the dither back into the greys the dither existed to get rid of, showing an
-					// operator a picture no thermal head can produce.
-					imageRendering: "pixelated",
 				}}
 			/>
 		</div>

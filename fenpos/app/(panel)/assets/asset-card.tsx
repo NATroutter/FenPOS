@@ -4,6 +4,7 @@ import { Check, Copy, Image as ImageIcon, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { removeAsset } from "@/app/(panel)/assets/actions";
+import { DitheredImage } from "@/components/panel/dithered-image";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -102,15 +103,15 @@ export function AssetCard({ asset }: { asset: AssetCardData }) {
 					// tab's sheet is drawn on — a hairline ring rather than a border, because a
 					// dark border around white paper reads as a frame around the picture instead.
 					<div className="flex items-center justify-center overflow-hidden rounded-sm bg-white p-2 shadow-sm ring-1 ring-black/10">
-						{/** biome-ignore lint/performance/noImgElement: a data URI is already inlined; there is nothing for the image pipeline to optimise. */}
-						<img
+						{/* The resampling is chosen from the drawn size rather than fixed, because neither
+					    answer is right at both. This card is usually narrower than the paper, where
+					    averaging the dots is what shows the tone the paper shows — but a small stored
+					    image is stretched up to the card instead, and there the dots are the subject.
+					    See `ditherFilterFor`. */}
+						<DitheredImage
 							src={asset.preview}
 							alt={`${asset.name}, dithered as it will print`}
-							// `pixelated` is load-bearing. The raster is one dot per pixel and the card is
-							// narrower than the paper, so the browser scales it — and its default smoothing
-							// blends a dither back into the greys the dither existed to get rid of, which
-							// would show the operator a picture no printer can produce.
-							className="max-h-64 w-full object-contain [image-rendering:pixelated]"
+							className="max-h-64 w-full object-contain"
 						/>
 					</div>
 				) : (
