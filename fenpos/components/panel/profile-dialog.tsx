@@ -1,6 +1,5 @@
 "use client";
 
-import { UserCog } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changePassword } from "@/app/(panel)/settings/actions";
@@ -15,7 +14,6 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
@@ -29,10 +27,19 @@ import { Spinner } from "@/components/ui/spinner";
  * about the person at the keyboard, is reached for on impulse, and belongs next to the name
  * it concerns and the sign-out button beside it.
  *
- * A dialog rather than a page because there is nothing else to put on that page.
+ * A dialog rather than a page because there is nothing else to put on that page. Controlled by
+ * the caller rather than holding its own `open` state, so it now opens from the account menu
+ * rather than from a button of its own.
  */
-export function ProfileDialog({ minimumLength }: { minimumLength: number }) {
-	const [open, setOpen] = useState(false);
+export function ProfileDialog({
+	open,
+	onOpenChange,
+	minimumLength,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	minimumLength: number;
+}) {
 	const [current, setCurrent] = useState("");
 	const [next, setNext] = useState("");
 	const [confirm, setConfirm] = useState("");
@@ -59,7 +66,7 @@ export function ProfileDialog({ minimumLength }: { minimumLength: number }) {
 				return;
 			}
 			reset();
-			setOpen(false);
+			onOpenChange(false);
 			toast.success("Password changed. Other sessions have been signed out.");
 		});
 	};
@@ -68,21 +75,13 @@ export function ProfileDialog({ minimumLength }: { minimumLength: number }) {
 		<Dialog
 			open={open}
 			onOpenChange={(nextOpen) => {
-				setOpen(nextOpen);
+				onOpenChange(nextOpen);
 				// Typed credentials do not survive the dialog closing, however it closed.
 				if (!nextOpen) {
 					reset();
 				}
 			}}
 		>
-			<DialogTrigger
-				render={
-					<Button variant="outline" size="icon" className="size-8" title="Profile" aria-label="Profile">
-						<UserCog className="size-3.5" />
-					</Button>
-				}
-			/>
-
 			<DialogContent className="sm:max-w-[420px]">
 				<DialogHeader>
 					<DialogTitle>Administrator</DialogTitle>

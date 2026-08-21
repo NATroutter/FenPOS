@@ -4,7 +4,8 @@ import { EventStreamProvider } from "@/components/panel/event-stream";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { isPasswordGenerated } from "@/lib/auth/admin";
+import { getAdminProfile, isPasswordGenerated } from "@/lib/auth/admin";
+import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
 import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
@@ -54,9 +55,21 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 		redirect("/set-password");
 	}
 
+	// Read here rather than in the sidebar: the footer is part of this layout, and a client
+	// component cannot reach the database anyway.
+	const profile = await getAdminProfile();
+
 	return (
 		<SidebarProvider>
-			<AppSidebar version={APP_VERSION} signOutAction={signOut} minimumPasswordLength={MINIMUM_PASSWORD_LENGTH} />
+			<AppSidebar
+				version={APP_VERSION}
+				signOutAction={signOut}
+				minimumPasswordLength={MINIMUM_PASSWORD_LENGTH}
+				displayName={profile.displayName}
+				email={profile.email}
+				avatarUrl={gravatarUrl(profile.email)}
+				initial={avatarInitial(profile.displayName)}
+			/>
 			<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
 				{/* Wraps the header as well as the pages, because the chip that governs the stream
 				    lives in the header while everything consuming it is below. */}

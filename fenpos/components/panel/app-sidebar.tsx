@@ -1,13 +1,12 @@
 "use client";
 
-import { ChevronRight, LogOut, ShieldCheck } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/brand-mark";
+import { NavUser } from "@/components/panel/nav-user";
 import { HEADER_STRIP } from "@/components/panel/panel-header";
-import { ProfileDialog } from "@/components/panel/profile-dialog";
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
 	Sidebar,
@@ -62,6 +61,10 @@ export function AppSidebar({
 	version,
 	signOutAction,
 	minimumPasswordLength,
+	displayName,
+	email,
+	avatarUrl,
+	initial,
 }: {
 	/** Application version, shown under the wordmark. */
 	version: string;
@@ -70,6 +73,13 @@ export function AppSidebar({
 	/** Shortest acceptable password, shown as a hint in the profile dialog. Passed from the
 	    server so this client component does not import the argon2-backed password module. */
 	minimumPasswordLength: number;
+	/** The administrator's name, shown in the account menu. */
+	displayName: string;
+	/** Null when none is set, which is also what selects the drawn initial over a Gravatar. */
+	email: string | null;
+	/** Resolved on the server, so no address and no hashing reach the browser. */
+	avatarUrl: string | null;
+	initial: string;
 }) {
 	const pathname = usePathname();
 
@@ -112,27 +122,15 @@ export function AppSidebar({
 				))}
 			</SidebarContent>
 
-			<SidebarFooter className="border-t border-sidebar-border p-3">
-				<div className="flex items-center gap-2.5">
-					<ShieldCheck className="size-4 shrink-0 text-subtle-foreground" />
-					<div className="min-w-0 flex-1">
-						<div className="text-[12.5px] font-semibold">Administrator</div>
-					</div>
-					<ProfileDialog minimumLength={minimumPasswordLength} />
-
-					<form action={signOutAction}>
-						<Button
-							type="submit"
-							variant="outline"
-							size="icon"
-							className="size-8"
-							title="Sign out"
-							aria-label="Sign out"
-						>
-							<LogOut className="size-3.5" />
-						</Button>
-					</form>
-				</div>
+			<SidebarFooter className="border-t border-sidebar-border">
+				<NavUser
+					displayName={displayName}
+					email={email}
+					avatarUrl={avatarUrl}
+					initial={initial}
+					signOutAction={signOutAction}
+					minimumPasswordLength={minimumPasswordLength}
+				/>
 			</SidebarFooter>
 		</Sidebar>
 	);
