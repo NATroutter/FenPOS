@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { clearLogWindow, ingestLog, sweepLogsNow } from "@/lib/logs/ingest";
+import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
-import { integerSetting, setSetting } from "@/lib/settings/settings-service";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for agent log ingestion.
@@ -197,14 +197,25 @@ describe("log ingestion", () => {
 			expect((await listLogs()).lines[0].message).toHaveLength(200);
 		});
 
-		it("sweeps down to the configured row cap rather than the built-in one", async () => {
-			// 1000 is logs.maxRecords's declared minimum. Seeded directly rather than through
-			// ingestLog: reaching it through real ingestion would mean thousands of throttled,
-			// awaited writes just to build up a backlog, when what this test cares about is
-			// whether the sweep itself honours a configured cap rather than the built-in 20,000.
+		it("sweeps down to the configured row cap through the real ingest path, rather than the built-in one", async () => {
+			// ingest.ts's own write counter (fenposLogWrites) is shared across every test in this
+			// file and persists between them. Reset it so SWEEP_EVERY's gate (500, unchanged by
+			// this task) trips at a known point in this test's own loop below, rather than at
+			// whatever offset earlier tests happened to leave it.
+			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
+
+			// High enough that the throttle — not what this test is exercising — never engages
+			// across the real calls below.
+			await setSetting("logs.linesPerMinutePerAgent", 600);
+			// 1000 is logs.maxRecords's declared minimum.
 			await setSetting("logs.maxRecords", 1000);
+
+			// The backlog is seeded directly, so building it up past the cap stays one bulk query.
+			// Only the writes that need to be real — enough to cross SWEEP_EVERY and trigger
+			// sweepOccasionally for real, through ingestLog itself rather than by calling the sweep
+			// entry point directly — go through the throttled, awaited ingestLog path below.
 			await prisma.logEntry.createMany({
-				data: Array.from({ length: 1010 }, (_, index) => ({
+				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
 					severity: 1,
 					message: `backlog ${index}`,
@@ -213,12 +224,22 @@ describe("log ingestion", () => {
 				})),
 			});
 
-			// The sweep entry point, called directly with the setting's own current value: the
-			// gate that would normally invoke it (SWEEP_EVERY, unrelated to this task) is not
-			// exercised here, since it is only the configured cap being asserted.
-			await sweepLogsNow(await integerSetting("logs.maxRecords"));
+			for (let attempt = 0; attempt < 500; attempt++) {
+				await ingestLog(
+					agentId,
+					line({ message: `message ${attempt}`, at: new Date(Date.now() + 1000 + attempt).toISOString() }),
+				);
+			}
 
-			expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+			// The counter reset to 0 above and exactly 500 accepted writes below land the counter
+			// on exactly SWEEP_EVERY, so sweepOccasionally's real gate fires once, on the last of
+			// these calls — via ingestLog -> sweepOccasionally(settings.maxRows) -> sweepLogsNow.
+			// That call is fire-and-forget (ingestLog does not await it), so the deletion this
+			// proves may still be in flight the instant the loop above returns; wait for it rather
+			// than asserting immediately.
+			await vi.waitFor(async () => {
+				expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+			});
 		});
 	});
 });

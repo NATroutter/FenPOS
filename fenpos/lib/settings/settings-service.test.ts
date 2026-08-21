@@ -15,6 +15,7 @@ import {
 	enumSetting,
 	globalJobSettings,
 	globalLimits,
+	globalLogIngestSettings,
 	integerSetting,
 	listSettings,
 	SETTING_KEYS,
@@ -124,6 +125,16 @@ describe("settings", () => {
 			retentionMinutes: 1440,
 			maxRecords: 500,
 			shutdownGraceSeconds: 10,
+		});
+	});
+
+	it("reads log ingestion settings as one object, honouring overrides", async () => {
+		await prisma.setting.create({ data: { key: "logs.maxRecords", value: "5000" } });
+
+		expect(await globalLogIngestSettings()).toEqual({
+			linesPerMinutePerAgent: 120,
+			maxRecords: 5000,
+			maxMessageChars: 1000,
 		});
 	});
 });

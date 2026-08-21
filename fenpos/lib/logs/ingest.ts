@@ -5,7 +5,7 @@ import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { globalLogIngestSettings } from "@/lib/settings/settings-service";
 
 /**
  * Recording log lines an agent forwarded.
@@ -66,7 +66,7 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
 /**
  * Re-reads the three `logs.*` settings from the database and caches them.
  *
- * `ingestLog` runs on the hot path for every line every agent sends, so reading three settings
+ * `ingestLog` runs on the hot path for every line every agent sends, so reading these settings
  * there directly would be a database query per line. Instead this is called only from {@link allow}
  * when an agent's rate-limit window is (re)created — its first line, or its first line after 60
  * seconds of quiet — which happens at most once per agent per window rather than once per line.
@@ -74,16 +74,19 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
  * mid-window reaching an already-connected agent up to one window late, in exchange for turning a
  * per-line query into roughly one per agent per minute.
  *
+ * Reads all three as one {@link globalLogIngestSettings} call rather than one settings lookup
+ * each — the same reason that function itself reads `listSettings()` once rather than per key.
+ *
  * @returns the settings just read
  */
 async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
-	const [maxLinesPerWindow, maxMessageChars, maxRows] = await Promise.all([
-		integerSetting("logs.linesPerMinutePerAgent"),
-		integerSetting("logs.maxMessageChars"),
-		integerSetting("logs.maxRecords"),
-	]);
+	const { linesPerMinutePerAgent, maxRecords, maxMessageChars } = await globalLogIngestSettings();
 
-	const settings: LogIngestSettings = { maxLinesPerWindow, maxMessageChars, maxRows };
+	const settings: LogIngestSettings = {
+		maxLinesPerWindow: linesPerMinutePerAgent,
+		maxMessageChars,
+		maxRows: maxRecords,
+	};
 	globalForIngest.fenposLogIngestSettings = settings;
 	return settings;
 }

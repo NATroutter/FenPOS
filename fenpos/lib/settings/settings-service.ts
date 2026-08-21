@@ -469,6 +469,37 @@ export async function globalJobSettings(): Promise<GlobalJobSettings> {
 	};
 }
 
+/** The log ingestion limits as configured, in the shape `lib/logs/ingest.ts` reads. */
+export interface GlobalLogIngestSettings {
+	linesPerMinutePerAgent: number;
+	maxRecords: number;
+	maxMessageChars: number;
+}
+
+/**
+ * Reads the log ingestion settings as one object, honouring overrides.
+ *
+ * Separate from {@link globalLimits} and {@link globalJobSettings} because these three go to a
+ * third place: the per-line log ingest path (`lib/logs/ingest.ts`), which caches the result rather
+ * than calling this for every line — the same reason `globalLimits`/`globalJobSettings` read once
+ * per group instead of once per setting, applied one level up.
+ *
+ * @returns the log ingestion settings in effect install-wide
+ */
+export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings> {
+	const settings = await listSettings();
+	// Every key named below is declared `type: "integer"`, asserted by the test that walks
+	// SETTINGS. A mismatch here is a definition that changed type without its readers being
+	// updated, which is a programming error rather than a stored value.
+	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
+
+	return {
+		linesPerMinutePerAgent: value("logs.linesPerMinutePerAgent"),
+		maxRecords: value("logs.maxRecords"),
+		maxMessageChars: value("logs.maxMessageChars"),
+	};
+}
+
 /**
  * Stores a setting.
  *
