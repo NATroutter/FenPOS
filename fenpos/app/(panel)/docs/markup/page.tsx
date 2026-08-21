@@ -301,7 +301,7 @@ export default function MarkupDocsPage() {
 
 								<CodeBlock label="data">{`[
   "<align=center><image>logo</image></align>",
-  "<align=center><qr>https://corner.cafe/r/8f21</qr></align>",
+  "<align=center><qr>https://natroutter.fi</qr></align>",
   "<align=center><barcode=EAN13>5901234123457</barcode></align>",
   "<bold>Total<fill>5.50</bold><drawer>",
   "<feed=3>",

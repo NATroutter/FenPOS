@@ -46,7 +46,7 @@ public final class TestPage {
     private static final String BARCODE_CONTENT = "FENPOS";
 
     /** Payload for the QR code: short enough to stay a low version at the default module size. */
-    private static final String QR_CONTENT = "https://fenpos.test/page";
+    private static final String QR_CONTENT = "https://natroutter.fi";
 
     /** Payload for the PDF417 symbol. */
     private static final String PDF417_CONTENT = "FENPOS TEST";

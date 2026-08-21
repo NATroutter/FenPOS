@@ -74,7 +74,7 @@ class TestPageTest {
     void printsEachOfTheSymbolBlocks() {
         List<String> lines = elements();
 
-        assertTrue(lines.contains("<align=center><qr>https://fenpos.test/page</qr></align>"),
+        assertTrue(lines.contains("<align=center><qr>https://natroutter.fi</qr></align>"),
                 "no QR code");
         assertTrue(lines.contains("<align=center><barcode=CODE39>FENPOS</barcode></align>"),
                 "no barcode");

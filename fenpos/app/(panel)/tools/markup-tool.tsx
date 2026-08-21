@@ -199,7 +199,7 @@ const EXAMPLES: Example[] = [
 				CODEPAGE_SAMPLE,
 				"<hr>",
 				"Blocks:",
-				"<align=center><qr>https://fenpos.test/page</qr></align>",
+				"<align=center><qr>https://natroutter.fi</qr></align>",
 				"<align=center><barcode=CODE39>FENPOS</barcode></align>",
 				"<align=center><pdf417>FENPOS TEST</pdf417></align>",
 				`<align=center><image>${BUNDLED_LOGO}</image></align>`,
