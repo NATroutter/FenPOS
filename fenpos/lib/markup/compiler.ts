@@ -4,6 +4,7 @@ import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as
 import { dotWidth } from "@/lib/markup/blocks";
 import { validateCharset } from "@/lib/markup/charset";
 import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
+import { resolveFills } from "@/lib/markup/fill";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
@@ -216,8 +217,8 @@ export function compile(
  *
  * @param request the validated request
  * @param settings the device's compile settings
- * @returns one line per line of paper, before the rule is expanded and the symbols leave for the
- *          agent
+ * @returns one line per line of paper, with every fill already expanded, before the rule is
+ *          expanded and the symbols leave for the agent
  * @throws ApiError when an element is malformed
  */
 export function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
@@ -229,11 +230,15 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 			const parsed = parseMarkup(request.data[index]);
 			requireSymbolsFitThePaper(parsed, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
-			const wrap = checked.wrap ?? settings.defaultWrap;
+			// After this line no fill remains, which is what lets the wrapper, the wire types and
+			// the agent all stay ignorant of the tag. It runs after the charset check so that an
+			// unprintable fill character is reported once, at the column the caller wrote it.
+			const filled = resolveFills(checked, settings.columns);
+			const wrap = filled.wrap ?? settings.defaultWrap;
 			if (wrap) {
-				lines.push(...wrapLine(checked, settings.columns));
+				lines.push(...wrapLine(filled, settings.columns));
 			} else {
-				lines.push(checked);
+				lines.push(filled);
 			}
 		} catch (error) {
 			throw translate(error, lineNumber);

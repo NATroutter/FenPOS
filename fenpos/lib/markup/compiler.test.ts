@@ -5,6 +5,7 @@ import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
 	type CompileSettings,
+	collectElementErrors,
 	compile,
 	countOutputLines,
 	countTextLines,
@@ -279,6 +280,55 @@ describe("compile pipeline", () => {
 		it("still accepts data and linefeed", () => {
 			expect(() => run({ data: ["x"], linefeed: "CRLF" })).not.toThrow();
 		});
+	});
+
+	// -----------------------------------------------------------------------
+	// Fills
+	// -----------------------------------------------------------------------
+
+	/** Flattens one compiled wire line back to the characters that would print. */
+	const printed = (line: { spans: { text: string }[] }): string => line.spans.map((span) => span.text).join("");
+
+	it("pads a fill to the device's width", () => {
+		const job = run({ data: ["a<fill>b"] });
+
+		expect(printed(job.lines[0])).toBe(`a${" ".repeat(8)}b`);
+	});
+
+	/**
+	 * A filled line is exactly the paper's width, and the wrapper breaks on more than that, so it
+	 * survives whole. Worth pinning: the property falls out of the wrapper rather than being stated
+	 * anywhere, and `defaultWrap` is on in this fixture.
+	 */
+	it("does not wrap a line it filled", () => {
+		const job = run({ data: ["a<fill>b"] });
+
+		expect(job.lines).toHaveLength(1);
+	});
+
+	it("fills the same markup differently for a narrower device", () => {
+		const request = readRequest({ data: ["a<fill>b"] }, limits, settings);
+		const narrow = compile("job-1", "kitchen", request, limits, { ...settings, columns: 6 });
+
+		expect(printed(narrow.lines[0])).toBe(`a${" ".repeat(4)}b`);
+	});
+
+	it("carries no fill across the wire", () => {
+		const job = run({ data: ["a<fill>b"] });
+
+		expect(compiledJobSchema.safeParse(job).success).toBe(true);
+		expect(job.lines[0]).not.toHaveProperty("fills");
+	});
+
+	/**
+	 * The preview collects every element's errors without a device in hand, so a fill character has
+	 * to be checkable before the column count exists. That is why the charset pass runs first.
+	 */
+	it("reports an unprintable fill character with no column count in hand", () => {
+		const errors = collectElementErrors({ data: ["a<fill=€>b"], linefeed: "LF" }, { ...settings, codepage: "CP437" });
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0].code).toBe("unsupported_character");
 	});
 });
 
