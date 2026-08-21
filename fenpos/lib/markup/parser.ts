@@ -8,7 +8,7 @@ import {
 	validateSymbolContent,
 } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
-import { type Directive, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
+import { type Directive, type Fill, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
 
 /**
@@ -123,6 +123,7 @@ class Parser {
 	private readonly source: string;
 
 	private readonly spans: Span[] = [];
+	private readonly fills: Fill[] = [];
 	private readonly directives: Directive[] = [];
 	private readonly open: OpenTag[] = [];
 	private pending = "";
@@ -200,7 +201,7 @@ class Parser {
 
 		this.verifyBlockScope();
 
-		return { align: this.align, wrap: this.wrap, spans: this.spans, directives: this.directives };
+		return { align: this.align, wrap: this.wrap, spans: this.spans, fills: this.fills, directives: this.directives };
 	}
 
 	// -----------------------------------------------------------------------
@@ -332,6 +333,13 @@ class Parser {
 		}
 
 		this.requireArgumentPolicy(tag, argument, column);
+
+		// Void, but not a directive: a fill is a position in the text rather than a printer action,
+		// so it never reaches `appendDirective`.
+		if (tag.name === "fill") {
+			this.appendFill(argument, column);
+			return;
+		}
 
 		if (tag.kind === "VOID") {
 			this.appendDirective(tag, argument, column);
@@ -749,6 +757,26 @@ class Parser {
 		}
 	}
 
+	/**
+	 * Records a pad, to be expanded when the column count is known.
+	 *
+	 * `flushPending` first is load-bearing. `pending` holds text that has not become a span yet, so
+	 * without it `Coffee<fill>2.50` would record `afterSpans: 0` and pad the wrong side of the word.
+	 */
+	private appendFill(argument: string | null, column: number): void {
+		this.requireInsideLineScope(column);
+
+		const character = argument ?? " ";
+		// Code points, not UTF-16 units: an astral character is one character and two units, and
+		// measuring units would refuse a legitimate single character as though it were two.
+		if ([...character].length !== 1) {
+			throw this.argumentError(TAGS.fill, column, "takes a single character, written <fill=x>");
+		}
+
+		this.flushPending();
+		this.fills.push({ afterSpans: this.spans.length, character, style: this.style, sourceColumn: column });
+	}
+
 	private cutMode(argument: string | null, column: number): "FULL" | "PARTIAL" {
 		if (argument === null || argument.toLowerCase() === "full") {
 			return "FULL";
@@ -787,7 +815,9 @@ class Parser {
 			return;
 		}
 		const printing = this.directives.filter((directive) => directive.kind !== "DRAWER");
-		if (this.spans.length === 0 && printing.length === 1) {
+		// Fills count towards sharing even though they produce no span yet. `<hr><fill=.>` would
+		// otherwise print a line of dots, feed, and then the rule — one element, two lines of paper.
+		if (this.spans.length === 0 && this.fills.length === 0 && printing.length === 1) {
 			return;
 		}
 		throw new MarkupError(

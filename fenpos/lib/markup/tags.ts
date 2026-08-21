@@ -38,6 +38,13 @@ export const TAGS: Record<string, Tag> = {
 	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE" },
 	/** Print this line as written. Paired, and required to enclose the whole element. */
 	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE" },
+	/**
+	 * Pad to the paper's width. Argument is the character to repeat, default a space.
+	 *
+	 * The one tag whose printed width is not knowable from the element: it stands for however many
+	 * columns are left over, which is a property of the device. See `lib/markup/fill.ts`.
+	 */
+	fill: { name: "fill", kind: "VOID", argument: "OPTIONAL" },
 	/** Cut the paper, fully by default. */
 	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL" },
 	/** Advance the paper by a number of lines. */

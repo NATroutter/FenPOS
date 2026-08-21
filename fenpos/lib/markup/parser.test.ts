@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
-import { isDirectiveOnly, type Line } from "@/lib/markup/model";
+import { isDirectiveOnly, type Line, PLAIN } from "@/lib/markup/model";
 import { parseMarkup } from "@/lib/markup/parser";
 
 /**
@@ -175,6 +175,86 @@ describe("parseMarkup", () => {
 	 */
 	it("rejects alignment opened inside a styling tag, same as wrap", () => {
 		expect(error("<bold><align=right>x</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
+	// -----------------------------------------------------------------------
+	// Fills
+	// -----------------------------------------------------------------------
+
+	it("records a fill between the spans it separates", () => {
+		const line = parseMarkup("Coffee<fill>2.50");
+
+		expect(line.spans.map((span) => span.text)).toEqual(["Coffee", "2.50"]);
+		expect(line.fills).toEqual([{ afterSpans: 1, character: " ", style: PLAIN, sourceColumn: 7 }]);
+	});
+
+	it("defaults a fill to a space and takes any other character from the argument", () => {
+		expect(parseMarkup("a<fill>b").fills[0].character).toBe(" ");
+		expect(parseMarkup("a<fill=.>b").fills[0].character).toBe(".");
+	});
+
+	/**
+	 * An astral character is one character and two UTF-16 units. Counting units would refuse this
+	 * as though the caller had written two, so accepting it is what pins the code-point counting.
+	 */
+	it("accepts a fill character outside the basic plane", () => {
+		expect(parseMarkup("a<fill=🙂>b").fills[0].character).toBe("🙂");
+	});
+
+	it("refuses a fill argument that is not exactly one character", () => {
+		expect(error("a<fill=ab>b").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(error("a<fill=>b").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("refuses a closing fill tag", () => {
+		expect(error("a<fill>b</fill>").code).toBe(MARKUP_ERRORS.unexpectedCloseTag);
+	});
+
+	it("captures the style in effect where the fill was written", () => {
+		const line = parseMarkup("<bold>Total<fill=.>5.00</bold>");
+
+		expect(line.fills[0].style.bold).toBe(true);
+	});
+
+	it("records several fills in the order they were written", () => {
+		const line = parseMarkup("Qty<fill>Item<fill>Price");
+
+		expect(line.fills.map((fill) => fill.afterSpans)).toEqual([1, 2]);
+	});
+
+	/**
+	 * A fill produces no span, so the sole-occupant check has to count fills as well or an element
+	 * would be free to put a rule and a pad on the same line and print two lines of paper from one.
+	 */
+	it("refuses a fill sharing an element with a rule", () => {
+		const thrown = error("<hr><fill>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidRuleScope);
+	});
+
+	it("refuses a fill sharing an element with a symbol", () => {
+		expect(error("<qr>abc</qr><fill>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("refuses a fill inside a block", () => {
+		expect(error("<qr>a<fill>b</qr>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("refuses a fill after a line-owning tag has closed", () => {
+		expect(error("<align=right>x</align><fill>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
+	/**
+	 * A filled line spans the paper, so alignment around one has nothing left to move and the pair
+	 * is a no-op. Permitted rather than refused: refusing would mean new parser state to detect a
+	 * combination that is harmless, and under a width multiplier the line can land a column short,
+	 * where alignment is not even a no-op.
+	 */
+	it("permits a fill inside an alignment", () => {
+		const line = parseMarkup("<align=center>a<fill>b</align>");
+
+		expect(line.align).toBe("CENTER");
+		expect(line.fills).toHaveLength(1);
 	});
 
 	// -----------------------------------------------------------------------

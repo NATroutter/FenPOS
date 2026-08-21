@@ -50,6 +50,28 @@ export interface Span {
 }
 
 /**
+ * A pad, waiting for the column count that decides how wide it is.
+ *
+ * The only member of this model that describes an instruction rather than something printed:
+ * `resolveFills` replaces it with the span it stands for, and every line from the wrapper onward
+ * carries none.
+ */
+export interface Fill {
+	/**
+	 * How many spans precede it.
+	 *
+	 * An index into a list that a later stage rewrites. `validateCharset` drops a span stripped to
+	 * nothing and adjusts this to match; any stage inserted between the parser and the resolver
+	 * inherits that obligation.
+	 */
+	afterSpans: number;
+	/** The character to repeat. Exactly one code point; a space unless the tag said otherwise. */
+	character: string;
+	style: SpanStyle;
+	sourceColumn: number;
+}
+
+/**
  * A printer action that is not text.
  *
  * Directives occupy no columns and are invisible to wrapping, but most of them still consume
@@ -138,6 +160,13 @@ export interface Line {
 	 */
 	wrap: boolean | null;
 	spans: Span[];
+	/**
+	 * Pads to be expanded once the device's column count is known.
+	 *
+	 * Empty from `resolveFills` onward, which is the second half of a line's life: the wrapper, the
+	 * wire and the agent never see one.
+	 */
+	fills: Fill[];
 	directives: Directive[];
 }
 

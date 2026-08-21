@@ -211,7 +211,10 @@ describe("compile pipeline", () => {
 
 		expect(job.lines).toHaveLength(2);
 		expect(
-			countTextLines([{ align: "LEFT", wrap: null, spans: [], directives: [{ kind: "CUT", mode: "FULL" }] }], settings),
+			countTextLines(
+				[{ align: "LEFT", wrap: null, spans: [], fills: [], directives: [{ kind: "CUT", mode: "FULL" }] }],
+				settings,
+			),
 		).toBe(0);
 	});
 

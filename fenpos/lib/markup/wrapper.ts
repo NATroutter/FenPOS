@@ -147,6 +147,8 @@ function toLines(rows: Cell[][], source: Line): Line[] {
 		align: source.align,
 		wrap: source.wrap,
 		spans: toSpans(row),
+		// Always empty: the wrapper only ever runs on a line `resolveFills` has already emptied.
+		fills: [],
 		directives: index === rows.length - 1 ? source.directives : [],
 	}));
 }
