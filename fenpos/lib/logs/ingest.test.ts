@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
-import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
+import { clearLogWindow, ingestLog, sweepLogsNow } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
+import { integerSetting, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for agent log ingestion.
@@ -19,6 +20,7 @@ describe("log ingestion", () => {
 		await prisma.logEntry.deleteMany();
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
+		await prisma.setting.deleteMany();
 
 		agentId = (await prisma.agent.create({ data: { name: "site-a" }, select: { id: true } })).id;
 		otherAgentId = (await prisma.agent.create({ data: { name: "site-b" }, select: { id: true } })).id;
@@ -153,5 +155,70 @@ describe("log ingestion", () => {
 
 		expect((await listLogs({ take: 2 })).more).toBe(true);
 		expect((await listLogs({ take: 50 })).more).toBe(false);
+	});
+
+	// -----------------------------------------------------------------------
+	// Configured via settings
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The throttle, retention and truncation limits above are all configurable via the `logs.*`
+	 * settings — these tests confirm a stored value actually reaches this path, not merely that it
+	 * is stored (which `settings-service.test.ts` already covers).
+	 *
+	 * Settings are read once per rate-limit window rather than once per line (`ingest.ts`,
+	 * `refreshLogIngestSettings`), which this file's `beforeEach` cooperates with: it creates a
+	 * fresh agent id and calls `clearLogWindow` for it every test, so the first `ingestLog` call in
+	 * each test always finds no window and refreshes the cached settings before checking anything
+	 * against them.
+	 */
+	describe("configured via settings", () => {
+		it("throttles at the configured rate rather than the built-in one", async () => {
+			// 10 is logs.linesPerMinutePerAgent's declared minimum.
+			await setSetting("logs.linesPerMinutePerAgent", 10);
+
+			let accepted = 0;
+			for (let attempt = 0; attempt < 15; attempt++) {
+				if (await ingestLog(agentId, line({ message: `message ${attempt}` }))) {
+					accepted++;
+				}
+			}
+
+			// Ten through, then the throttle. With the built-in 120 all fifteen would land.
+			expect(accepted).toBe(10);
+		});
+
+		it("truncates a message at the configured length rather than the built-in one", async () => {
+			// 200 is logs.maxMessageChars's declared minimum.
+			await setSetting("logs.maxMessageChars", 200);
+
+			await ingestLog(agentId, line({ message: "a".repeat(500) }));
+
+			expect((await listLogs()).lines[0].message).toHaveLength(200);
+		});
+
+		it("sweeps down to the configured row cap rather than the built-in one", async () => {
+			// 1000 is logs.maxRecords's declared minimum. Seeded directly rather than through
+			// ingestLog: reaching it through real ingestion would mean thousands of throttled,
+			// awaited writes just to build up a backlog, when what this test cares about is
+			// whether the sweep itself honours a configured cap rather than the built-in 20,000.
+			await setSetting("logs.maxRecords", 1000);
+			await prisma.logEntry.createMany({
+				data: Array.from({ length: 1010 }, (_, index) => ({
+					level: "INFO",
+					severity: 1,
+					message: `backlog ${index}`,
+					agentId,
+					ts: new Date(Date.now() + index),
+				})),
+			});
+
+			// The sweep entry point, called directly with the setting's own current value: the
+			// gate that would normally invoke it (SWEEP_EVERY, unrelated to this task) is not
+			// exercised here, since it is only the configured cap being asserted.
+			await sweepLogsNow(await integerSetting("logs.maxRecords"));
+
+			expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+		});
 	});
 });

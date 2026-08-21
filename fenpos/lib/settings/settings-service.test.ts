@@ -169,6 +169,9 @@ describe("setting definitions", () => {
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
 			"logs.minimumLevel": "enum",
+			"logs.linesPerMinutePerAgent": "integer",
+			"logs.maxRecords": "integer",
+			"logs.maxMessageChars": "integer",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in

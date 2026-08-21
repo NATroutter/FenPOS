@@ -5,6 +5,7 @@ import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Recording log lines an agent forwarded.
@@ -18,17 +19,15 @@ import { LOG_SEVERITY } from "@/lib/logs/log-sort";
  * happened this shift", not to be an archive.
  */
 
-/** Lines one agent may record per window before the rest are dropped. */
-const MAX_LINES_PER_WINDOW = 120;
-
-/** How long a rate-limit window lasts. */
+/**
+ * How long a rate-limit window lasts.
+ *
+ * A constant, deliberately, even though the limit it enforces (`logs.linesPerMinutePerAgent`) is
+ * now configurable: that setting is expressed *per minute*, so a fixed 60-second window is what
+ * makes the configured number mean what its label promises. Letting the window drift too would
+ * decouple the two — "200 lines per minute" enforced over some other window is not that.
+ */
 const WINDOW_MS = 60_000;
-
-/** Longest message stored. Anything beyond is truncated rather than rejected. */
-const MAX_MESSAGE_LENGTH = 1000;
-
-/** Rows kept before the oldest are swept. */
-const MAX_ROWS = 20_000;
 
 /** How often the sweep runs, measured in ingested lines rather than in time. */
 const SWEEP_EVERY = 500;
@@ -40,9 +39,22 @@ interface Window {
 	warned: boolean;
 }
 
+/**
+ * The `logs.*` settings this module reads, cached rather than read fresh for every ingested line.
+ */
+interface LogIngestSettings {
+	/** `logs.linesPerMinutePerAgent`: lines one agent may record per window before the rest are dropped. */
+	maxLinesPerWindow: number;
+	/** `logs.maxMessageChars`: longest message stored. Anything beyond is truncated rather than rejected. */
+	maxMessageChars: number;
+	/** `logs.maxRecords`: rows kept before the oldest are swept. */
+	maxRows: number;
+}
+
 const globalForIngest = globalThis as unknown as {
 	fenposLogWindows: Map<string, Window> | undefined;
 	fenposLogWrites: number | undefined;
+	fenposLogIngestSettings: LogIngestSettings | undefined;
 };
 
 if (!globalForIngest.fenposLogWindows) {
@@ -52,6 +64,31 @@ if (!globalForIngest.fenposLogWindows) {
 const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
 
 /**
+ * Re-reads the three `logs.*` settings from the database and caches them.
+ *
+ * `ingestLog` runs on the hot path for every line every agent sends, so reading three settings
+ * there directly would be a database query per line. Instead this is called only from {@link allow}
+ * when an agent's rate-limit window is (re)created — its first line, or its first line after 60
+ * seconds of quiet — which happens at most once per agent per window rather than once per line.
+ * The settings themselves change, at most, a few times a year, so the cost is a change made
+ * mid-window reaching an already-connected agent up to one window late, in exchange for turning a
+ * per-line query into roughly one per agent per minute.
+ *
+ * @returns the settings just read
+ */
+async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
+	const [maxLinesPerWindow, maxMessageChars, maxRows] = await Promise.all([
+		integerSetting("logs.linesPerMinutePerAgent"),
+		integerSetting("logs.maxMessageChars"),
+		integerSetting("logs.maxRecords"),
+	]);
+
+	const settings: LogIngestSettings = { maxLinesPerWindow, maxMessageChars, maxRows };
+	globalForIngest.fenposLogIngestSettings = settings;
+	return settings;
+}
+
+/**
  * Records a log line an agent sent.
  *
  * @param agentId the agent that sent it
@@ -59,9 +96,13 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
  * @returns whether it was recorded
  */
 export async function ingestLog(agentId: string, frame: LogFrame): Promise<boolean> {
-	if (!allow(agentId)) {
+	if (!(await allow(agentId))) {
 		return false;
 	}
+
+	// Populated by allow() above, which refreshes it whenever this agent's window is (re)created —
+	// guaranteed to have run at least once by the time any window exists.
+	const settings = globalForIngest.fenposLogIngestSettings as LogIngestSettings;
 
 	// Resolved by name within this agent, so a agent cannot attribute a line to another's device
 	// by naming it. A name that matches nothing records the line against the agent alone.
@@ -78,7 +119,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 			// Derived here rather than at read time: the filter and the Level ordering both run in the
 			// database, and neither can compare a level string.
 			severity: LOG_SEVERITY[frame.level],
-			message: frame.message.slice(0, MAX_MESSAGE_LENGTH),
+			message: frame.message.slice(0, settings.maxMessageChars),
 			agentId,
 			deviceId: device?.id ?? null,
 			// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
@@ -98,7 +139,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		deviceName: frame.device ?? null,
 	});
 
-	void sweepOccasionally();
+	void sweepOccasionally(settings.maxRows);
 	return true;
 }
 
@@ -108,17 +149,21 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
  * @param agentId the agent to check
  * @returns true when the line should be recorded
  */
-function allow(agentId: string): boolean {
+async function allow(agentId: string): Promise<boolean> {
 	const now = Date.now();
 	const window = windows.get(agentId);
 
 	if (!window || now >= window.resetAt) {
+		await refreshLogIngestSettings();
 		windows.set(agentId, { count: 1, resetAt: now + WINDOW_MS, warned: false });
 		return true;
 	}
 
 	window.count++;
-	if (window.count <= MAX_LINES_PER_WINDOW) {
+	// Set by refreshLogIngestSettings the last time any agent's window was (re)created, which has
+	// happened at least once by the time a pre-existing window reaches this line.
+	const settings = globalForIngest.fenposLogIngestSettings as LogIngestSettings;
+	if (window.count <= settings.maxLinesPerWindow) {
 		return true;
 	}
 
@@ -128,7 +173,7 @@ function allow(agentId: string): boolean {
 		// layer up.
 		logger.warn("Agent log rate limit engaged; further lines are being dropped", {
 			agentId,
-			limit: MAX_LINES_PER_WINDOW,
+			limit: settings.maxLinesPerWindow,
 		});
 	}
 	return false;
@@ -139,8 +184,10 @@ function allow(agentId: string): boolean {
  *
  * Counted in writes rather than scheduled on a timer, so a quiet install does no work at all and
  * a busy one sweeps in proportion to what it is producing.
+ *
+ * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
  */
-async function sweepOccasionally(): Promise<void> {
+async function sweepOccasionally(maxRows: number): Promise<void> {
 	const writes = (globalForIngest.fenposLogWrites ?? 0) + 1;
 	globalForIngest.fenposLogWrites = writes;
 
@@ -148,15 +195,27 @@ async function sweepOccasionally(): Promise<void> {
 		return;
 	}
 
+	await sweepLogsNow(maxRows);
+}
+
+/**
+ * Sweeps the log table down to `maxRows`, deleting the oldest rows first.
+ *
+ * Exported so a test can trigger a sweep directly rather than ingesting {@link SWEEP_EVERY} lines
+ * to reach the point at which {@link sweepOccasionally} would trigger it on its own.
+ *
+ * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
+ */
+export async function sweepLogsNow(maxRows: number): Promise<void> {
 	try {
 		const total = await prisma.logEntry.count();
-		if (total <= MAX_ROWS) {
+		if (total <= maxRows) {
 			return;
 		}
 
 		const cutoff = await prisma.logEntry.findMany({
 			orderBy: { ts: "desc" },
-			skip: MAX_ROWS - 1,
+			skip: maxRows - 1,
 			take: 1,
 			select: { ts: true },
 		});

@@ -166,6 +166,9 @@ export const SETTING_KEYS = [
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
 	"logs.minimumLevel",
+	"logs.linesPerMinutePerAgent",
+	"logs.maxRecords",
+	"logs.maxMessageChars",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -278,6 +281,40 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		type: "enum",
 		values: LogLevel.values,
 		fallback: "INFO",
+	},
+	{
+		key: "logs.linesPerMinutePerAgent",
+		label: "Lines per minute per agent",
+		description:
+			"Lines above this are dropped and a throttle notice is stored instead. Raise it while chasing a problem on a chatty agent.",
+		category: "logs",
+		type: "integer",
+		min: 10,
+		max: 5_000,
+		fallback: 120,
+		unit: "lines/min",
+	},
+	{
+		key: "logs.maxRecords",
+		label: "Log records kept",
+		description: "Hard cap, sweeping the oldest lines first. Bounds the table on a busy install.",
+		category: "logs",
+		type: "integer",
+		min: 1_000,
+		max: 1_000_000,
+		fallback: 20_000,
+		unit: "records",
+	},
+	{
+		key: "logs.maxMessageChars",
+		label: "Message length",
+		description: "Where a stored log message is truncated. A long stack trace is the case that hits it.",
+		category: "logs",
+		type: "integer",
+		min: 200,
+		max: 8_000,
+		fallback: 1_000,
+		unit: "characters",
 	},
 ];
 
