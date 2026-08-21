@@ -313,6 +313,13 @@ describe("compile pipeline", () => {
 		expect(printed(narrow.lines[0])).toBe(`a${" ".repeat(4)}b`);
 	});
 
+	/**
+	 * A fill is a compile-time instruction with no wire representation, and that is enforced by
+	 * construction: `toWireLine` builds each line from a fixed shape and the wire schema has no such
+	 * field. So this pins the *wire's shape*, not fill resolution — it passes whether or not
+	 * resolution ran. Its value is that a later `toWireLine` rewritten as a spread of the whole line
+	 * fails here, rather than shipping the agent a field it has no idea what to do with.
+	 */
 	it("carries no fill across the wire", () => {
 		const job = run({ data: ["a<fill>b"] });
 
