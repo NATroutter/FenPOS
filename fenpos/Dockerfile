@@ -89,6 +89,15 @@ COPY --from=build --chown=fenpos:fenpos /build/next.config.ts ./next.config.ts
 COPY --from=build --chown=fenpos:fenpos /build/tsconfig.json ./tsconfig.json
 COPY --from=build --chown=fenpos:fenpos /build/lib ./lib
 COPY --from=build --chown=fenpos:fenpos /build/app ./app
+
+# The logo, the favicons, and everything else served from the site root. Next serves
+# these from the filesystem at run time rather than folding them into `.next`, so
+# without this the brand mark and every icon 404 in a built image while working
+# perfectly under `next dev`. It is also read as a file rather than served: the
+# device test page dithers `fenpos-logo.png` from here, and a missing file fails
+# that outright instead of merely leaving a gap in the page.
+COPY --from=build --chown=fenpos:fenpos /build/public ./public
+
 # The password is set by running the script in here against the live database, so
 # it has to be in the image — without it the documented way to get a first login
 # is unavailable exactly where it is needed.
