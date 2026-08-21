@@ -1,12 +1,13 @@
 "use client";
 
-import { LogOut, ShieldCheck } from "lucide-react";
+import { ChevronRight, LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
 import { HEADER_STRIP } from "@/components/panel/panel-header";
 import { ProfileDialog } from "@/components/panel/profile-dialog";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
 	Sidebar,
 	SidebarContent,
@@ -18,9 +19,36 @@ import {
 	SidebarMenu,
 	SidebarMenuButton,
 	SidebarMenuItem,
+	SidebarMenuSub,
+	SidebarMenuSubButton,
+	SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
-import { NAV_GROUPS } from "@/lib/navigation";
+import { NAV_GROUPS, type NavItem } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
+
+/**
+ * The accent bar marking the current section.
+ *
+ * Styled here rather than in the sidebar primitive because it belongs to this product's
+ * navigation, not to every menu button the primitive will ever draw. It earns a strong colour by
+ * encoding something true — which page you are on — rather than decorating.
+ */
+const ACCENT_BAR = cn(
+	"relative before:absolute before:top-1/2 before:left-0 before:h-4 before:w-[3px]",
+	"before:-translate-y-1/2 before:rounded-full before:bg-brand before:opacity-0",
+	"before:transition-opacity data-active:before:opacity-100",
+);
+
+/**
+ * Whether a path is this section or nested inside it.
+ *
+ * @param pathname the current route
+ * @param href the section's path
+ * @returns whether the section owns the path
+ */
+function owns(pathname: string, href: string): boolean {
+	return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 /**
  * The panel's primary navigation.
@@ -58,21 +86,14 @@ export function AppSidebar({
 						<SidebarGroupLabel>{group.label}</SidebarGroupLabel>
 						<SidebarGroupContent>
 							<SidebarMenu>
-								{group.items.map((item) => {
-									const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-									return (
+								{group.items.map((item) =>
+									item.children?.length ? (
+										<NavGroupItem key={item.href} item={item} pathname={pathname} />
+									) : (
 										<SidebarMenuItem key={item.href}>
 											<SidebarMenuButton
-												isActive={active}
-												// The accent bar marking the current section. Styled here rather than in the
-												// sidebar primitive because it belongs to this product's navigation, not to
-												// every menu button the primitive will ever draw. It earns a strong colour by
-												// encoding something true — which page you are on — rather than decorating.
-												className={cn(
-													"relative before:absolute before:top-1/2 before:left-0 before:h-4 before:w-[3px]",
-													"before:-translate-y-1/2 before:rounded-full before:bg-brand before:opacity-0",
-													"before:transition-opacity data-active:before:opacity-100",
-												)}
+												isActive={owns(pathname, item.href)}
+												className={ACCENT_BAR}
 												tooltip={item.label}
 												render={
 													<Link href={item.href}>
@@ -82,8 +103,8 @@ export function AppSidebar({
 												}
 											/>
 										</SidebarMenuItem>
-									);
-								})}
+									),
+								)}
 							</SidebarMenu>
 						</SidebarGroupContent>
 					</SidebarGroup>
@@ -113,5 +134,60 @@ export function AppSidebar({
 				</div>
 			</SidebarFooter>
 		</Sidebar>
+	);
+}
+
+/**
+ * A nav entry that holds other nav entries.
+ *
+ * The parent is a trigger, not a link: clicking "Docs" opens the group rather than navigating,
+ * because with children present there is nothing at `/docs` to navigate to — it redirects.
+ *
+ * `open` is derived from the current path rather than held in state: a group is open when the page
+ * you are on is inside it. Held in state, the group would drift out of agreement with the URL the
+ * first time a link somewhere else navigated into it.
+ *
+ * The parent carries no accent bar. A parent whose child is active should read as containing the
+ * current page, not as being it, so the mark goes on the child's own sub-button instead.
+ *
+ * No tooltip on the trigger, unlike the leaf entries: `SidebarMenuButton` wraps itself in a
+ * `Tooltip` when given one, and that wrapper is not something a `CollapsibleTrigger` can render
+ * into. Collapsed-to-icons mode therefore shows this group unlabelled, which is what the sub-menu
+ * already does — `SidebarMenuSub` hides itself at that width.
+ */
+function NavGroupItem({ item, pathname }: { item: NavItem; pathname: string }) {
+	const children = item.children ?? [];
+	const inside = children.some((child) => owns(pathname, child.href));
+
+	return (
+		<Collapsible render={<SidebarMenuItem />} open={inside}>
+			<CollapsibleTrigger
+				render={
+					<SidebarMenuButton className="group">
+						<item.icon />
+						<span>{item.label}</span>
+						<ChevronRight className="ml-auto size-3.5 text-subtle-foreground transition-transform group-data-[panel-open]:rotate-90" />
+					</SidebarMenuButton>
+				}
+			/>
+
+			<CollapsibleContent>
+				<SidebarMenuSub>
+					{children.map((child) => (
+						<SidebarMenuSubItem key={child.href}>
+							<SidebarMenuSubButton
+								isActive={owns(pathname, child.href)}
+								render={
+									<Link href={child.href}>
+										<child.icon />
+										<span>{child.label}</span>
+									</Link>
+								}
+							/>
+						</SidebarMenuSubItem>
+					))}
+				</SidebarMenuSub>
+			</CollapsibleContent>
+		</Collapsible>
 	);
 }
