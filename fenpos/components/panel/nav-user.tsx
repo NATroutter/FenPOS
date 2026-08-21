@@ -94,7 +94,7 @@ export function NavUser({
 							{/* Still a form submission rather than an onSelect handler, so signing out keeps
 							    working without JavaScript and the server action itself is untouched. */}
 							<form action={signOutAction}>
-								<DropdownMenuItem render={<button type="submit" className="w-full" />}>
+								<DropdownMenuItem nativeButton render={<button type="submit" className="w-full" />}>
 									<LogOut className="size-3.5" />
 									Sign out
 								</DropdownMenuItem>
