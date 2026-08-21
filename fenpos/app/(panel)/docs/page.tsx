@@ -61,7 +61,7 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		meaning: "Print this line as written. Must enclose the whole element, like <align>.",
 	},
 	{
-		syntax: "<fill>…",
+		syntax: "<fill>",
 		meaning:
 			"Pad to the paper's width, so what follows sits at the right margin. <fill=.> repeats a dot instead of a space. Several on one line split the space evenly.",
 	},
@@ -396,7 +396,7 @@ export default async function DocsPage() {
       "<align=center><image>logo</image></align>",
       "<align=center><qr>https://corner.cafe/r/8f21</qr></align>",
       "<align=center><barcode=EAN13>5901234123457</barcode></align>",
-      "<bold>Total            5.50</bold><drawer>",
+      "<bold>Total<fill>5.50</bold><drawer>",
       "<feed=3>",
       "<cut>"
     ]

@@ -81,6 +81,18 @@ function tsConstant(name: string): string {
 }
 
 /**
+ * The value of a `const … = \`…\`` template literal in this package's TypeScript.
+ *
+ * Separate from {@link tsConstant} because a template literal spans lines — `SAMPLE` is a whole
+ * receipt — and a regex anchored to a single line would stop at the first newline inside it.
+ */
+function tsTemplateConstant(name: string): string {
+	const match = MARKUP_TOOL.match(new RegExp(`const ${name} = \`([\\s\\S]*?)\`;`));
+	expect(match, `${name} is not a plain template literal any more`).not.toBeNull();
+	return (match as RegExpMatchArray)[1];
+}
+
+/**
  * `ruler`, copied from the module because it is private to it.
  *
  * A copy is acceptable here for the same reason the text comparisons above are: what this file
@@ -105,15 +117,21 @@ function ruler(columns: number): string {
  * would be an element the preview below never exercises.
  *
  * @param device the values the example interpolates
+ * @param source the example's own source, defaulting to the Device test page for the tests below
+ *   that were written before any other example needed this
  * @returns one element per line, exactly as the Examples menu would insert them
  */
-function exampleElements(device: { deviceName: string; columns: number; codepage: string }): string[] {
-	const open = EXAMPLE.indexOf("[");
-	const close = EXAMPLE.indexOf('].join("\\n")');
+function exampleElements(
+	device: { deviceName: string; columns: number; codepage: string },
+	source: string = EXAMPLE,
+): string[] {
+	const open = source.indexOf("[");
+	const close = source.indexOf('].join("\\n")');
 	expect(open, "the example is not an array literal any more").toBeGreaterThan(-1);
 	expect(close).toBeGreaterThan(open);
 
-	return EXAMPLE.slice(open + 1, close)
+	return source
+		.slice(open + 1, close)
 		.split("\n")
 		.map((line) => line.trim().replace(/,$/, ""))
 		.filter((line) => line.length > 0)
@@ -132,6 +150,45 @@ function exampleElements(device: { deviceName: string; columns: number; codepage
 				.replaceAll("${device.codepage}", device.codepage)
 				.replaceAll("${BUNDLED_LOGO}", tsConstant("BUNDLED_LOGO"));
 		});
+}
+
+/** Every label the Examples menu offers, read out in the order the module defines them. */
+function exampleLabels(): string[] {
+	return [...MARKUP_TOOL.matchAll(/label: "([^"]*)"/g)].map((match) => match[1]);
+}
+
+/**
+ * One example's own source, from its label up to the next one's (or the end of the file for the
+ * last example).
+ *
+ * Slicing rather than parsing the object literal, for the same reason {@link EXAMPLE} above does:
+ * this is a text comparison against the module's source, not an evaluation of it.
+ */
+function exampleSource(label: string): string {
+	const labels = exampleLabels();
+	const index = labels.indexOf(label);
+	expect(index, `no example is labelled ${JSON.stringify(label)}`).toBeGreaterThanOrEqual(0);
+
+	const from = MARKUP_TOOL.indexOf(`label: "${label}"`);
+	const to = index + 1 < labels.length ? MARKUP_TOOL.indexOf(`label: "${labels[index + 1]}"`) : MARKUP_TOOL.length;
+	return MARKUP_TOOL.slice(from, to);
+}
+
+/**
+ * The markup one example would load into the editor, built the same way the Examples menu builds
+ * it for the given device.
+ *
+ * Two shapes exist among the examples. Most build an array of lines and join them, which
+ * {@link exampleElements} already evaluates for the Device test page; "Café receipt" instead
+ * returns {@link SAMPLE} — a template literal constant — directly, so that shape is read out on
+ * its own rather than forced through the array parser.
+ */
+function exampleMarkup(label: string, device: { deviceName: string; columns: number; codepage: string }): string {
+	const source = exampleSource(label);
+	if (source.includes("build: () => SAMPLE")) {
+		return tsTemplateConstant("SAMPLE");
+	}
+	return exampleElements(device, source).join("\n");
 }
 
 describe("the Device test page example", () => {
@@ -197,5 +254,43 @@ describe("the Device test page example", () => {
 		// declaration. The example is checked separately for actually using it.
 		expect(MARKUP_TOOL).toContain(`const BUNDLED_LOGO = "${javaConstant(BUNDLED_IMAGES, "NAME")}"`);
 		expect(EXAMPLE).toMatch(/<image>\$\{BUNDLED_LOGO\}<\/image>/);
+	});
+});
+
+describe("every example", () => {
+	/**
+	 * Labels this suite cannot exercise, and why — named explicitly rather than skipped silently,
+	 * so a reader can tell "excluded on purpose" from "the loop below forgot about it".
+	 *
+	 * Empty today: every example the menu currently offers evaluates through {@link exampleMarkup}
+	 * and compiles against the fixture below. If a future example needs an asset this harness has
+	 * no route to, or a device shape the fixture below cannot provide, name it here rather than
+	 * letting it fall out of coverage unnoticed.
+	 */
+	const EXCLUDED: Record<string, string> = {};
+
+	it("compiles every example the menu offers, except what is excluded above", async () => {
+		const agent = await prisma.agent.create({ data: { name: `every-example-${process.pid}` } });
+		const device = await prisma.device.create({
+			data: { agentId: agent.id, name: "every-example", port: "COM11", columns: 42 },
+		});
+
+		const labels = exampleLabels();
+		expect(labels.length, "the Examples menu is empty").toBeGreaterThan(0);
+
+		for (const label of labels) {
+			if (label in EXCLUDED) {
+				continue;
+			}
+
+			const markup = exampleMarkup(label, {
+				deviceName: device.name,
+				columns: device.columns,
+				codepage: device.codepage,
+			});
+			const result = await preview(device.id, markup);
+
+			expect(result.errors, `"${label}" failed to compile: ${JSON.stringify(result.errors)}`).toEqual([]);
+		}
 	});
 });

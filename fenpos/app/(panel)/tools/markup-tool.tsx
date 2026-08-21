@@ -77,10 +77,10 @@ function chosenLinefeed(value: string): Linefeed | null {
 
 const SAMPLE = `<align=center><bold>THE CORNER CAFE</bold></align>
 <hr>
-Coffee           2.50
-Pastry           3.00
+Coffee<fill>2.50
+Pastry<fill>3.00
 <hr>
-<bold>Total            5.50</bold>
+<bold>Total<fill>5.50</bold>
 <feed=3>
 <cut>`;
 
