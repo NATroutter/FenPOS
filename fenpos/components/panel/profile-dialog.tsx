@@ -30,8 +30,8 @@ type Category = "account" | "security";
  * Separated from Settings because the two answer different questions. Settings is about the
  * install — limits every device inherits, how long job history is kept — and is the sort of
  * page an operator visits to change something they thought about first. A profile is about the
- * person at the keyboard, is reached for on impulse, and belongs next to the name it concerns and
- * the sign-out button beside it.
+ * person at the keyboard, is reached for on impulse, and belongs next to the name it concerns —
+ * reached, like sign-out, from the account menu rather than a page of its own.
  *
  * Two categories rather than one form, because a name and an email answer a different question
  * than a password does, and conflating them under one Save would make one a side effect of the
@@ -193,11 +193,17 @@ export function ProfileDialog({
 							</Field>
 
 							<Field>
-								<FieldLabel>Avatar</FieldLabel>
+								{/*
+								 * A plain span, not `FieldLabel`: the avatar it names is decoration (`alt=""`,
+								 * `aria-hidden` on the initial) with nothing else in the field for a `<label>`
+								 * to point at, and a `for`-less label reaches assistive tech as pointing at
+								 * nothing.
+								 */}
+								<span className="flex items-center gap-2 text-sm leading-none font-medium select-none">Avatar</span>
 								<div className="flex items-center gap-3">
 									<Avatar src={avatarUrl} initial={initial} className="size-12" />
 									<FieldDescription className="mt-0">
-										The saved avatar. It updates once the profile below is saved.
+										The saved avatar. Save in the footer below updates it.
 									</FieldDescription>
 								</div>
 							</Field>

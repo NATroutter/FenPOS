@@ -13,14 +13,39 @@ vi.mock("@/lib/auth/require-session", () => ({
 }));
 
 // Revalidation is Next's, not this project's, and calling it outside a request context throws.
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+// Kept as a `vi.fn()` (not a no-op) so the default-argument tests below can assert what path
+// each action actually revalidates.
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath: (...args: unknown[]) => revalidatePath(...args) }));
 
-const { updateProfile } = await import("@/app/(panel)/settings/actions");
+const { changePassword, updateProfile } = await import("@/app/(panel)/settings/actions");
 
 beforeEach(async () => {
 	await prisma.session.deleteMany({});
 	await prisma.adminAuth.deleteMany({});
 	await setAdminPassword("correct horse battery staple");
+	revalidatePath.mockClear();
+});
+
+describe("run's default revalidation", () => {
+	/**
+	 * Neither action passes a third argument to `run`, so both rely on its default. Pinning both
+	 * branches here means a change to that default cannot silently stop revalidating what an
+	 * existing caller depends on.
+	 */
+	it("revalidates /settings for an action that passes no revalidate argument", async () => {
+		const result = await changePassword("correct horse battery staple", "a new correct password");
+
+		expect(result.error).toBeNull();
+		expect(revalidatePath).toHaveBeenCalledWith("/settings");
+	});
+
+	it("still revalidates the layout for updateProfile, which passes its own revalidate argument", async () => {
+		const result = await updateProfile("NATroutter", "me@natroutter.fi");
+
+		expect(result.error).toBeNull();
+		expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+	});
 });
 
 describe("updateProfile", () => {

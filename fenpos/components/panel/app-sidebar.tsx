@@ -165,8 +165,9 @@ export function AppSidebar({
  *
  * No tooltip on the trigger, unlike the leaf entries: `SidebarMenuButton` wraps itself in a
  * `Tooltip` when given one, and that wrapper is not something a `CollapsibleTrigger` can render
- * into. Collapsed-to-icons mode therefore shows this group unlabelled, which is what the sub-menu
- * already does — `SidebarMenuSub` hides itself at that width.
+ * into. Collapsed-to-icons mode therefore renders a dropdown flyout instead of the collapsible
+ * below — that keeps both children reachable at a width with no room for a sub-menu, and gives the
+ * icon a label the collapsible trigger could not carry.
  */
 function NavGroupItem({ item, pathname }: { item: NavItem; pathname: string }) {
 	const { state, isMobile } = useSidebar();
