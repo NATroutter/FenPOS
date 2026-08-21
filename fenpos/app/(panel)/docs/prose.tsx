@@ -84,18 +84,6 @@ export function Col({ children }: { children: ReactNode }) {
 	return <div className="flex min-w-0 flex-col gap-3">{children}</div>;
 }
 
-/** One of the facts every request needs, in the strip above the reference. */
-export function Fact({ label, value, tint }: { label: string; value: string; tint: string }) {
-	return (
-		<div className="bg-card px-3 py-2.5">
-			<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">{label}</div>
-			<div className={`mt-1 truncate font-mono text-[12px] ${tint}`} title={value}>
-				{value}
-			</div>
-		</div>
-	);
-}
-
 /**
  * A paragraph of reference prose.
  *
