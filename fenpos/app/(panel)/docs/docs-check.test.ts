@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import { PERMISSION_IDS } from "@/lib/domain/permissions";
 import { TAGS } from "@/lib/markup/tags";
 
 /**
@@ -82,6 +83,74 @@ async function device(name: string): Promise<string> {
 	});
 	return row.id;
 }
+
+/**
+ * Every permission some route under `app/api` actually requires, read from the routes themselves.
+ *
+ * Walked rather than listed, so a route file added tomorrow is covered without anyone remembering
+ * to add it here — the whole point being that the page's claim cannot quietly stop matching the
+ * code. The routes are read as text for the same reason the pages are: they are Next.js server
+ * modules and this suite is a plain Node environment.
+ *
+ * @returns the permission identifiers passed to `requirePermission`
+ */
+function permissionsRoutesRequire(): string[] {
+	const routes = readdirSync("app/api", { recursive: true, encoding: "utf8" }).filter((entry) =>
+		entry.endsWith("route.ts"),
+	);
+	expect(routes.length, "no route files were found under app/api — has the walk broken?").toBeGreaterThan(0);
+
+	const required = new Set<string>();
+	for (const route of routes) {
+		const source = readFileSync(`app/api/${route}`, "utf8");
+		for (const call of source.matchAll(/requirePermission\([^,)]+,\s*"([^"]+)"\)/g)) {
+			required.add(call[1]);
+		}
+	}
+
+	expect(
+		required.size,
+		"no requirePermission call was found in any route — has the call been renamed?",
+	).toBeGreaterThan(0);
+	return [...required].sort();
+}
+
+/**
+ * The `ENFORCED` array as the API page declares it.
+ *
+ * @returns the permission identifiers the page claims an endpoint checks
+ */
+function enforcedOnPage(): string[] {
+	const declaration = API_PAGE.match(/const ENFORCED: readonly Permission\[\] = \[([^\]]*)\]/);
+	expect(declaration, "the API page no longer declares ENFORCED").not.toBeNull();
+
+	const names = [...(declaration?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+	expect(names.length, "the API page's ENFORCED array is empty").toBeGreaterThan(0);
+	return names.sort();
+}
+
+/**
+ * The API page's claim about which permissions buy an integrator something.
+ *
+ * The page renders all six permissions, which is right — they are all grantable — and says beside
+ * them that only some are checked by an endpoint. Nothing in the code registers that fact, so the
+ * sentence is the only place it is written down and this is what keeps it honest in both
+ * directions: a permission claimed here that no route wants, and a route requiring one the page
+ * does not mention, are both a docs page lying to someone deciding what to grant a key.
+ */
+describe("the API page's enforced permissions", () => {
+	it("name exactly the permissions the routes require", () => {
+		expect(enforcedOnPage()).toEqual(permissionsRoutesRequire());
+	});
+
+	it("are all real permissions", () => {
+		// The page's own type says so, but this reads the array back out of the source as text, where
+		// nothing is typed. A typo here would render a chip naming a grant no key can hold.
+		for (const name of enforcedOnPage()) {
+			expect(PERMISSION_IDS, `ENFORCED names "${name}" and no such permission exists`).toContain(name);
+		}
+	});
+});
 
 describe("the markup page's tag table", () => {
 	it("has a row for every tag the language defines", () => {

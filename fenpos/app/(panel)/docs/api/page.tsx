@@ -15,7 +15,7 @@ import {
 } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
-import { PERMISSIONS } from "@/lib/domain/permissions";
+import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
 
@@ -52,6 +52,36 @@ const SECTIONS = [
 	},
 	{ id: "errors", title: "Errors", note: "Stable codes, and what carries a position" },
 ] as const;
+
+/**
+ * The permissions an endpoint on this API actually checks.
+ *
+ * `PERMISSIONS` is the whole vocabulary, and three of its entries — the device and status
+ * grants — describe capabilities the panel has but the API does not expose yet. Listing all six
+ * without saying so promises an integrator an endpoint to spend them on. Named here rather than
+ * derived, because nothing in the code registers "which permissions a route requires"; the test
+ * beside this page reads the routes and fails if this list stops matching them.
+ */
+const ENFORCED: readonly Permission[] = ["print", "jobs:read", "jobs:cancel"];
+
+/**
+ * {@link ENFORCED} as a readable list inside a sentence.
+ *
+ * Rendered from the constant rather than typed into the prose, so the paragraph cannot name a
+ * permission the constant above it does not — which is the whole failure this fix is about.
+ */
+function EnforcedList() {
+	return (
+		<>
+			{ENFORCED.map((permission, index) => (
+				<span key={permission}>
+					{index > 0 && (index === ENFORCED.length - 1 ? " and " : ", ")}
+					<Mono>{permission}</Mono>
+				</span>
+			))}
+		</>
+	);
+}
 
 /**
  * The Docs tab.
@@ -109,6 +139,12 @@ export default async function ApiDocsPage() {
 								</P>
 
 								<P>A key does nothing until it is granted both a permission and at least one printer.</P>
+
+								<P>
+									Only <EnforcedList /> gate an endpoint today. The rest name capabilities this panel has and the API
+									does not expose yet, so a key granted one of them has nothing to spend it on — they are listed because
+									they are grantable, not because there is a request they unlock.
+								</P>
 
 								<P>
 									Raw ESC/POS writes are deliberately absent from that list. They hand arbitrary bytes to hardware and
