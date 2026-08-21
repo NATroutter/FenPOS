@@ -29,8 +29,10 @@ import fi.natroutter.fenpos.link.Frames.Welcome;
 import fi.natroutter.fenpos.link.Frames.WireDirective;
 import fi.natroutter.fenpos.link.Frames.WireLine;
 import fi.natroutter.fenpos.link.Frames.WireSpan;
+import fi.natroutter.fenpos.print.JobSettings;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -217,7 +219,29 @@ public final class FrameCodec {
                     requireName(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
         }
 
-        return new ConfigSync(devices, assets);
+        JsonObject jobsObject = root.getAsJsonObject("jobs");
+        JobSettings jobs = jobsObject == null ? JobSettings.DEFAULTS : readJobSettings(jobsObject);
+
+        return new ConfigSync(devices, assets, jobs);
+    }
+
+    /**
+     * Reads the job settings a {@code config.sync} carries, restating the server's own bounds.
+     *
+     * <p>The object is optional on the wire — {@link #readConfigSync} supplies
+     * {@link JobSettings#DEFAULTS} when it is absent — but once present every field within it is
+     * required and bounded the same way every other field on this frame is: a receiver that
+     * trusts the sender's validation has not validated anything.
+     *
+     * @param jobs the {@code jobs} object of a {@code config.sync} frame
+     * @return the settings it describes
+     * @throws ProtocolException when a field is missing or out of range
+     */
+    private static JobSettings readJobSettings(JsonObject jobs) throws ProtocolException {
+        return new JobSettings(
+                Duration.ofMinutes(requireBoundedInt(jobs, "retentionMinutes", 1, 40_320)),
+                requireBoundedInt(jobs, "maxRecords", 100, 1_000_000),
+                Duration.ofSeconds(requireBoundedInt(jobs, "shutdownGraceSeconds", 1, 300)));
     }
 
     /**

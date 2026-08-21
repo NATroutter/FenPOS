@@ -13,7 +13,10 @@ import fi.natroutter.fenpos.link.Frames.JobDispatch;
 import fi.natroutter.fenpos.link.Frames.JobUpdate;
 import fi.natroutter.fenpos.link.Frames.Welcome;
 import fi.natroutter.fenpos.link.Frames.WireDirective;
+import fi.natroutter.fenpos.print.JobSettings;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -332,6 +335,45 @@ class FrameCodecTest {
     void refusesASnapshotThatCarriesNoAssetsFieldAtAll() {
         assertThrows(ProtocolException.class,
                 () -> codec.read("{\"type\":\"config.sync\",\"devices\":[]}"));
+    }
+
+    // -----------------------------------------------------------------
+    // Reading: job settings
+    // -----------------------------------------------------------------
+
+    @Test
+    void readsJobSettingsFromConfigSync() throws Exception {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],
+                 "jobs":{"retentionMinutes":1440,"maxRecords":10000,"shutdownGraceSeconds":30}}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(Duration.ofMinutes(1440), sync.jobs().retention());
+        assertEquals(10000, sync.jobs().maxRecords());
+        assertEquals(Duration.ofSeconds(30), sync.jobs().shutdownGrace());
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncOmitsJobSettings() throws Exception {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[]}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(JobSettings.DEFAULTS, sync.jobs());
+    }
+
+    @Test
+    void refusesJobSettingsOutsideTheirBounds() {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],
+                 "jobs":{"retentionMinutes":0,"maxRecords":10000,"shutdownGraceSeconds":30}}
+                """;
+
+        assertThrows(ProtocolException.class, () -> codec.read(json));
     }
 
     @Test

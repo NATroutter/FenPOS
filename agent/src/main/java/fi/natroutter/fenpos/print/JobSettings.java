@@ -15,7 +15,14 @@ public record JobSettings(
         int maxRecords,
         Duration shutdownGrace) {
 
-    /** Built-in settings. The server owns the panel-configurable equivalents. */
+    /**
+     * Settings used before the first {@code config.sync} arrives, and by an agent talking to a
+     * server old enough not to send them.
+     *
+     * <p>These are deliberately smaller than the server's defaults. An agent that has not been told
+     * what to keep should keep little: this is memory on a machine in a shop, and the server is the
+     * one with a disk and an operator looking at it.
+     */
     public static final JobSettings DEFAULTS =
             new JobSettings(Duration.ofMinutes(10), 500, Duration.ofSeconds(10));
 }

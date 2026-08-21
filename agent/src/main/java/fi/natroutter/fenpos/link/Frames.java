@@ -11,6 +11,7 @@ import fi.natroutter.fenpos.enums.JobState;
 import fi.natroutter.fenpos.enums.Linefeed;
 import fi.natroutter.fenpos.enums.LogLevel;
 import fi.natroutter.fenpos.enums.Parity;
+import fi.natroutter.fenpos.print.JobSettings;
 
 import java.util.List;
 
@@ -145,7 +146,8 @@ public final class Frames {
     }
 
     /**
-     * The authoritative device set for this agent, and the images its receipts may draw on.
+     * The authoritative device set, the images behind it, and the job settings that govern how
+     * long its results are kept.
      *
      * <p>Always a whole snapshot, never a delta. That makes it idempotent, so an agent that
      * missed changes while disconnected converges on reconnect without either side tracking
@@ -159,12 +161,16 @@ public final class Frames {
      *
      * @param devices every device configured behind this agent
      * @param assets  one raster per stored image per distinct paper width behind this agent
+     * @param jobs    retention and shutdown settings; never null — {@link JobSettings#DEFAULTS}
+     *                when the server omitted them, which is what an older server does
      */
-    public record ConfigSync(List<DeviceConfig> devices, List<AssetRaster> assets) implements ServerFrame {
+    public record ConfigSync(List<DeviceConfig> devices, List<AssetRaster> assets, JobSettings jobs)
+            implements ServerFrame {
 
         public ConfigSync {
             devices = List.copyOf(devices);
             assets = List.copyOf(assets);
+            jobs = jobs == null ? JobSettings.DEFAULTS : jobs;
         }
 
         @Override

@@ -84,7 +84,7 @@ class LinkDispatcherTest {
 
     @Test
     void adoptsADeviceSetTheServerPushes() {
-        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS));
 
         assertEquals(1, applied.size());
         assertEquals("kitchen", applied.get(0).get(0).name());
@@ -93,9 +93,9 @@ class LinkDispatcherTest {
 
     @Test
     void adoptsAnEmptyDeviceSet() {
-        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS));
 
-        dispatcher.accept(new Frames.ConfigSync(List.of(), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(), List.of(), JobSettings.DEFAULTS));
 
         assertEquals(0, registry.size());
     }
@@ -108,7 +108,8 @@ class LinkDispatcherTest {
     void adoptsTheImagesThatArriveWithTheDeviceSet() {
         dispatcher.accept(new Frames.ConfigSync(
                 List.of(device("kitchen")),
-                List.of(new Frames.AssetRaster("logo", 16, 2, new byte[4]))));
+                List.of(new Frames.AssetRaster("logo", 16, 2, new byte[4])),
+                JobSettings.DEFAULTS));
 
         assertEquals(2, registry.raster("logo", 16).orElseThrow().heightDots());
     }
@@ -251,7 +252,7 @@ class LinkDispatcherTest {
         FakePrinterPort port = new FakePrinterPort(1);
         port.failWrites();
         ports.put("kitchen", port);
-        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS));
         printing.start();
 
         dispatcher.accept(dispatch("job-1", "kitchen", "Kahvi"));
@@ -293,7 +294,7 @@ class LinkDispatcherTest {
     void clearsAQueueAndSaysHowManyItCancelled() {
         FakePrinterPort port = new FakePrinterPort(1);
         ports.put("kitchen", port);
-        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS));
         // Deliberately not started, so submitted jobs stay pending and can be counted.
         dispatcher.accept(dispatch("job-1", "kitchen", "one"));
         dispatcher.accept(dispatch("job-2", "kitchen", "two"));
@@ -368,7 +369,7 @@ class LinkDispatcherTest {
         configure("kitchen");
         sent.clear();
 
-        dispatcher.accept(new Frames.ConfigSync(List.of(), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(), List.of(), JobSettings.DEFAULTS));
 
         assertTrue(awaitFrame(Frames.StatusReport.class).devices().isEmpty());
     }
@@ -455,7 +456,7 @@ class LinkDispatcherTest {
     private FakePrinterPort configure(String name) {
         FakePrinterPort port = new FakePrinterPort(1);
         ports.put(name, port);
-        dispatcher.accept(new Frames.ConfigSync(List.of(device(name)), List.of()));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device(name)), List.of(), JobSettings.DEFAULTS));
         printing.start();
         return port;
     }
