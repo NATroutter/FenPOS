@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/errors";
 import { JOB_LIMITS } from "@/lib/link/protocol";
 import { logger, setMinimumLevel } from "@/lib/logger";
 
+import type { SettingKey, SettingType } from "@/lib/settings/settings-service";
 import {
 	applyPushedSettings,
 	booleanSetting,
@@ -17,6 +18,7 @@ import {
 	globalLimits,
 	integerSetting,
 	listSettings,
+	SETTING_KEYS,
 	SETTINGS,
 	setSetting,
 } from "@/lib/settings/settings-service";
@@ -150,14 +152,29 @@ describe("setting definitions", () => {
 		}
 	});
 
-	it("types every limits and jobs setting as an integer", () => {
-		// The blanket "every setting is an integer" this pinned down before Task 9 stopped being
-		// true the moment `logs.minimumLevel` (an enum) joined them — narrowed to the two
-		// categories it was actually protecting.
+	it("declares the type every setting is documented to have", () => {
+		// A key→type map rather than a blanket "every setting is an integer" (which stopped being
+		// true the moment `logs.minimumLevel`, the first enum, joined them): this must fail if ANY
+		// setting's declared `type` changes, and it must fail if a key is added to `SETTING_KEYS`
+		// without an entry here. `fits()` rejecting a bad value is a side effect of the behavioural
+		// tests, not a check on the declared type itself — this is that check.
+		const expectedTypes: Record<SettingKey, SettingType> = {
+			"limits.maxLines": "integer",
+			"limits.maxLineChars": "integer",
+			"limits.maxTotalChars": "integer",
+			"limits.maxOutputLines": "integer",
+			"jobs.retentionMinutes": "integer",
+			"jobs.maxRecords": "integer",
+			"jobs.shutdownGraceSeconds": "integer",
+			"logs.minimumLevel": "enum",
+		};
+
+		// Catches a key missing from the map above (as well as one present here but no longer in
+		// SETTING_KEYS), independently of the per-definition loop below.
+		expect(Object.keys(expectedTypes).sort()).toEqual([...SETTING_KEYS].sort());
+
 		for (const definition of SETTINGS) {
-			if (definition.category === "limits" || definition.category === "jobs") {
-				expect(definition.type).toBe("integer");
-			}
+			expect(definition.type, definition.key).toBe(expectedTypes[definition.key]);
 		}
 	});
 

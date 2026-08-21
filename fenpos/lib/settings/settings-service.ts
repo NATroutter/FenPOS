@@ -59,7 +59,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 		summary: "Counted on the request as received, before markup is interpreted.",
 	},
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
-	{ id: "logs", title: "Logs", summary: "How verbose the server's own log output is." },
+	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 ];
 
 /** What every setting carries, whatever its type. */
