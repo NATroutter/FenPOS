@@ -147,4 +147,19 @@ describe("validateCharset", () => {
 		expect(line.spans).toEqual([]);
 		expect(line.fills[0].afterSpans).toBe(0);
 	});
+
+	/**
+	 * The spec's other half: "the remaining fills absorb its slack" needs a fill still standing to
+	 * absorb it, so every test above — one fill each — leaves it unpinned. Only the character is
+	 * unprintable here; no span is dropped, so `afterSpans` is untouched and the surviving fill's
+	 * position is the thing this checks.
+	 */
+	it("keeps the surviving fill when the strip policy drops its neighbour", () => {
+		const line = validate("a<fill=€>b<fill=.>c", "CP437", "STRIP");
+
+		expect(line.spans.map((span) => span.text)).toEqual(["a", "b", "c"]);
+		expect(line.fills).toHaveLength(1);
+		expect(line.fills[0].character).toBe(".");
+		expect(line.fills[0].afterSpans).toBe(2);
+	});
 });

@@ -4,7 +4,10 @@ import fi.natroutter.fenpos.enums.Codepage;
 import fi.natroutter.fenpos.enums.UnsupportedPolicy;
 import fi.natroutter.fenpos.markup.MarkupParser;
 import fi.natroutter.fenpos.markup.model.Line;
+import fi.natroutter.fenpos.markup.model.Span;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -182,5 +185,37 @@ class CharsetValidatorTest {
 
         assertTrue(line.spans().isEmpty());
         assertEquals(0, line.fills().getFirst().afterSpans());
+    }
+
+    /**
+     * The same boundary as above, but with a surviving span before the fill, so the correct answer
+     * is not zero. Java zero-initialises int[], which means the previous test alone still passes if
+     * the array's final entry is simply never assigned — this one does not.
+     */
+    @Test
+    void movesATrailingFillPastAPartiallyStrippedSpan() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("aš<fill>"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertEquals(1, line.spans().size());
+        assertEquals("a", line.spans().getFirst().text());
+        assertEquals(1, line.fills().getFirst().afterSpans());
+    }
+
+    /**
+     * The spec's other half: "the remaining fills absorb its slack" needs a fill still standing to
+     * absorb it, so every test above — one fill each — leaves it unpinned. Only the character is
+     * unprintable here; no span is dropped, so {@code afterSpans} is untouched and the surviving
+     * fill's position is the thing this checks.
+     */
+    @Test
+    void keepsTheSurvivingFillWhenTheStripPolicyDropsItsNeighbour() throws Exception {
+        Line line = CharsetValidator.validate(
+                MarkupParser.parse("a<fill=€>b<fill=.>c"), Codepage.CP437, UnsupportedPolicy.STRIP);
+
+        assertEquals(List.of("a", "b", "c"), line.spans().stream().map(Span::text).toList());
+        assertEquals(1, line.fills().size());
+        assertEquals(".", line.fills().getFirst().character());
+        assertEquals(2, line.fills().getFirst().afterSpans());
     }
 }

@@ -55,6 +55,10 @@ describe("resolveFills", () => {
 	/**
 	 * The documented consequence of collapsing rather than guaranteeing a separator: the halves of
 	 * an over-long row meet with nothing between them.
+	 *
+	 * The label is 39 columns and the amount 5, so the row wants 44 of the paper's 42 — count them
+	 * before changing this string. An earlier draft used a 34-column label, which left three columns
+	 * of slack and so tested the opposite of what it names.
 	 */
 	it("emits nothing when the text overruns the paper, jamming the halves together", () => {
 		expect(filled("A very long product name that goes here<fill>12.50")).toBe(
@@ -63,7 +67,7 @@ describe("resolveFills", () => {
 	});
 
 	/**
-	 * The boundary the collapse rule does not reach: three columns of slack is still slack, and a
+	 * The boundary the collapse rule does not reach: two columns of slack is still slack, and a
 	 * fill given it pads. Guards against a threshold creeping back in — a narrow roll is exactly
 	 * where a jammed row is most likely and least noticed.
 	 */

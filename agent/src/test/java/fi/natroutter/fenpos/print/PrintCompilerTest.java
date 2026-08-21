@@ -180,6 +180,19 @@ class PrintCompilerTest {
     }
 
     /**
+     * The same markup, resolved against a narrower device, proves the resolver reads the columns
+     * it was actually given rather than one baked into a fixture.
+     */
+    @Test
+    void fillsTheSameMarkupDifferentlyForANarrowerDevice() throws Exception {
+        CompiledJob job = PrintCompiler.compile("{\"data\":[\"a<fill>b\"]}", narrowDevice());
+
+        byte[] expected = ("a" + " ".repeat(4) + "b").getBytes(Codepage.CP858.charset());
+        assertTrue(indexOf(job.payload(), expected) >= 0,
+                "the payload should carry the padded row at the narrower width");
+    }
+
+    /**
      * Limits are checked before content: a request that is both oversized and malformed
      * should be refused for the cheaper reason, without parsing megabytes of markup first.
      */
@@ -225,6 +238,17 @@ class PrintCompilerTest {
                         true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
                 new PrintSettings(10, Codepage.CP858, UnsupportedPolicy.REJECT, defaultWrap, Linefeed.LF),
                 new LimitSettings(5, 60, 200, 6, 100),
+                false);
+    }
+
+    /** The same device as {@link #device()}, narrowed to prove a fill reads the columns it is given. */
+    private static Device narrowDevice() {
+        return new Device(
+                "kitchen",
+                new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
+                        true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
+                new PrintSettings(6, Codepage.CP858, UnsupportedPolicy.REJECT, true, Linefeed.LF),
+                new LimitSettings(5, 20, 50, 3, 100),
                 false);
     }
 

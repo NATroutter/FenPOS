@@ -82,7 +82,7 @@ class FillResolverTest {
     }
 
     /**
-     * The boundary the collapse rule does not reach: three columns of slack is still slack, and a
+     * The boundary the collapse rule does not reach: two columns of slack is still slack, and a
      * fill given it pads. Guards against a threshold creeping in below which padding is skipped — a
      * narrow roll is exactly where a jammed row is most likely and least noticed.
      */
