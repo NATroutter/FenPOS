@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
+import { JOB_LIMITS } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 
@@ -94,7 +95,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		description:
 			"Applied after wrapping, which is the only place it can catch a short request that expands into a long receipt.",
 		min: 1,
-		max: 10_000,
+		// Derived, not restated. The dispatch frame refuses more than this (`protocol.ts` line 64)
+		// and so does the agent, so a higher setting produces jobs that compile and then fail to
+		// serialise — which is what it did until this became a reference rather than a number.
+		max: JOB_LIMITS.maxLines,
 		fallback: DEFAULT_LIMITS.maxOutputLines,
 		unit: "lines",
 	},

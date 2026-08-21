@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
+import { JOB_LIMITS } from "@/lib/link/protocol";
 
-import { clearSetting, DEFAULT_LIMITS, globalLimits, listSettings, setSetting } from "@/lib/settings/settings-service";
+import {
+	clearSetting,
+	DEFAULT_LIMITS,
+	globalLimits,
+	listSettings,
+	SETTINGS,
+	setSetting,
+} from "@/lib/settings/settings-service";
 
 /**
  * Tests for install-wide settings.
@@ -91,5 +99,49 @@ describe("settings", () => {
 		await setSetting("limits.maxOutputLines", 7);
 
 		expect((await globalLimits()).maxOutputLines).toBe(7);
+	});
+});
+
+/**
+ * `limits.maxOutputLines` must never offer more than the dispatch frame will accept
+ * (`JOB_LIMITS.maxLines`) — a higher setting produces jobs that compile and then fail to
+ * serialise. Pinned down separately because the bound is derived rather than a literal.
+ */
+describe("limits.maxOutputLines bounds", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("caps at the frame's line limit rather than restating a number", () => {
+		const definition = SETTINGS.find((setting) => setting.key === "limits.maxOutputLines");
+		expect(definition?.max).toBe(JOB_LIMITS.maxLines);
+	});
+
+	it("ignores a stored value above the cap, falling back to the default", async () => {
+		await prisma.setting.create({
+			data: { key: "limits.maxOutputLines", value: String(JOB_LIMITS.maxLines + 1) },
+		});
+
+		const settings = await listSettings();
+		const stored = settings.find((setting) => setting.definition.key === "limits.maxOutputLines");
+
+		expect(stored?.value).toBe(DEFAULT_LIMITS.maxOutputLines);
+		expect(stored?.overridden).toBe(false);
+	});
+
+	it("accepts a stored value at exactly the cap", async () => {
+		await prisma.setting.create({
+			data: { key: "limits.maxOutputLines", value: String(JOB_LIMITS.maxLines) },
+		});
+
+		const settings = await listSettings();
+		const stored = settings.find((setting) => setting.definition.key === "limits.maxOutputLines");
+
+		expect(stored?.value).toBe(JOB_LIMITS.maxLines);
+		expect(stored?.overridden).toBe(true);
+	});
+
+	it("refuses a save above the cap", async () => {
+		await expect(setSetting("limits.maxOutputLines", JOB_LIMITS.maxLines + 1)).rejects.toThrow(ApiError);
 	});
 });
