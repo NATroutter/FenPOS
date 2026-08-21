@@ -6,7 +6,7 @@ import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
 
 /**
- * `GET /api/jobs/{id}` and `DELETE /api/jobs/{id}` — reading and cancelling one job.
+ * `GET /api/v1/jobs/{id}` and `DELETE /api/v1/jobs/{id}` — reading and cancelling one job.
  *
  * **A key can only see the jobs it submitted.** Scoping to the key rather than to the device is
  * the stricter of the two and the right one: two systems sharing a printer should not be able to
@@ -60,7 +60,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 			errorMessage: job.errorMessage,
 		});
 	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/jobs/[id]", jobId: id });
+		return toErrorResponse(error, { route: "GET /api/v1/jobs/[id]", jobId: id });
 	}
 }
 
@@ -109,6 +109,6 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 		// 202: the request has been passed on, and the job's final state arrives from the agent.
 		return Response.json({ jobId: job.id, status: "CANCELLING" }, { status: 202 });
 	} catch (error) {
-		return toErrorResponse(error, { route: "DELETE /api/jobs/[id]", jobId: id });
+		return toErrorResponse(error, { route: "DELETE /api/v1/jobs/[id]", jobId: id });
 	}
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Naming rules for agents and devices.
  *
- * Both appear as path segments in the public API (`/api/print/{agent}/{device}`), in log
+ * Both appear as path segments in the public API (`/api/v1/print/{agent}/{device}`), in log
  * lines, and in the link protocol. Constraining the character set once here means no
  * consumer has to escape them — which is a far smaller surface than remembering to escape
  * correctly in every place they are interpolated.

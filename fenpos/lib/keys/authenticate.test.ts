@@ -48,7 +48,7 @@ describe("API key authorisation", () => {
 
 	const authenticate = (secret: string | null): Promise<AuthenticatedKey> =>
 		authenticateKey(
-			new Request("https://fenpos.test/api/print/site-a/kitchen", {
+			new Request("https://fenpos.test/api/v1/print/site-a/kitchen", {
 				headers: secret ? { authorization: `Bearer ${secret}` } : {},
 			}),
 		);

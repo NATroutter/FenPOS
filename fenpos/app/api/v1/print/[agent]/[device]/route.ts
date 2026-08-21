@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
 
 /**
- * `POST /api/print/{agent}/{device}` — submits a job to one printer.
+ * `POST /api/v1/print/{agent}/{device}` — submits a job to one printer.
  *
  * The path is agent-scoped, which is the one breaking change this architecture made to the old
  * single-machine API. In exchange, device names only have to be unique *within* an agent: every
@@ -60,7 +60,7 @@ export async function POST(
 			{ status: 202 },
 		);
 	} catch (error) {
-		return toErrorResponse(error, { route: "POST /api/print", agent, device, address });
+		return toErrorResponse(error, { route: "POST /api/v1/print", agent, device, address });
 	}
 }
 

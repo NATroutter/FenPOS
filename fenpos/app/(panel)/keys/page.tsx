@@ -3,6 +3,7 @@ import { KeyDialog } from "@/app/(panel)/keys/key-dialog";
 import { KeyRow, type KeyRowData } from "@/app/(panel)/keys/key-row";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { API_BASE } from "@/lib/api-version";
 import { prisma } from "@/lib/db";
 import { listApiKeys } from "@/lib/keys/key-service";
 
@@ -69,7 +70,7 @@ export default async function KeysPage() {
 						<EmptyTitle>No keys yet</EmptyTitle>
 						<EmptyDescription>
 							Create one to let a till or an ordering system submit jobs to{" "}
-							<span className="font-mono">POST /api/print/&#123;agent&#125;/&#123;device&#125;</span>.
+							<span className="font-mono">POST {API_BASE}/print/&#123;agent&#125;/&#123;device&#125;</span>.
 						</EmptyDescription>
 					</EmptyHeader>
 				</Empty>

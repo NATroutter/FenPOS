@@ -46,7 +46,7 @@ const RULE_STYLE: Record<Verb | "none", string> = {
  * error code — the browser's own find already does that job if the text is on the page.
  *
  * The header states the endpoint rather than describing it. An operator scanning for where to
- * send a receipt is looking for `POST /api/print/…`, not for a sentence about paths, so the
+ * send a receipt is looking for `POST /api/v1/print/…`, not for a sentence about paths, so the
  * method and the path are the heading's second line and everything prose-shaped waits inside.
  */
 export function DocSection({

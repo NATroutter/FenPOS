@@ -195,7 +195,7 @@ Create a key under **API keys**, granting it the devices and permissions it need
 hashed at rest and shown once.
 
 ```sh
-curl -X POST https://fenpos.example.com/api/print/kitchen/receipt-printer \
+curl -X POST https://fenpos.example.com/api/v1/print/kitchen/receipt-printer \
   -H "Authorization: Bearer fpk_QYm3xR7tK2vN8pLd..." \
   -H "Content-Type: application/json" \
   -d '{

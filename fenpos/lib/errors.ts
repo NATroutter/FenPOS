@@ -56,6 +56,15 @@ export const API_ERROR_STATUS = {
 	unknown_job: 404,
 	/** An `<image>` tag, or the Assets tab, naming a stored image that is not there. */
 	unknown_asset: 404,
+	/**
+	 * No endpoint at that path — most often a version this build does not serve.
+	 *
+	 * The public API is versioned, so the likeliest way to arrive here is a client pinned to a path
+	 * that has moved. Without this, such a caller gets Next's HTML error page: the one response on
+	 * the whole API that is not the JSON envelope every client is told to parse, delivered at
+	 * exactly the moment they most need to be told what went wrong.
+	 */
+	unknown_endpoint: 404,
 
 	// --- 409: the resource is in the wrong state for this action ---
 	job_not_cancellable: 409,

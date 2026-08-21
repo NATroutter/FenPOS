@@ -19,6 +19,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { API_BASE } from "@/lib/api-version";
 import { toNameCandidate } from "@/lib/domain/naming";
 
 /**
@@ -87,7 +88,9 @@ export function AddAgentDialog() {
 								/>
 								<FieldDescription>
 									Becomes part of the print API path, as in{" "}
-									<code className="font-mono">/api/print/{name || "kitchen"}/…</code>
+									<code className="font-mono">
+										{API_BASE}/print/{name || "kitchen"}/…
+									</code>
 								</FieldDescription>
 							</Field>
 

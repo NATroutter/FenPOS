@@ -14,6 +14,7 @@ import {
 	statusStyle,
 } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { API_BASE, API_VERSION } from "@/lib/api-version";
 import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
@@ -36,13 +37,13 @@ const SECTIONS = [
 		id: "submitting",
 		title: "Submitting a job",
 		verbs: ["POST"] as const satisfies readonly Verb[],
-		path: "/api/print/{agent}/{device}",
+		path: `${API_BASE}/print/{agent}/{device}`,
 	},
 	{
 		id: "following",
 		title: "Following a job",
 		verbs: ["GET", "DELETE"] as const satisfies readonly Verb[],
-		path: "/api/jobs/{id}",
+		path: `${API_BASE}/jobs/{id}`,
 	},
 	{
 		id: "health",
@@ -126,6 +127,19 @@ export default async function ApiDocsPage() {
 				from and what it has to be granted before it can do anything.
 			</P>
 
+			<P>
+				The API is versioned in the path, and this server serves <Mono>{API_VERSION}</Mono> — so the endpoints you call
+				live under <Mono>{API_BASE}</Mono>. Pin that prefix rather than deriving it: a future version will sit beside
+				this one rather than replacing it, and a request to a path this build does not serve comes back as{" "}
+				<ErrorRef code="unknown_endpoint" /> naming the version that is served, in the same envelope as every other
+				refusal.
+			</P>
+
+			<P>
+				<Mono>/api/health</Mono> is deliberately outside that. A container runtime calls it from a healthcheck line
+				nobody wants to edit on a version bump, and whether the process is alive is not a contract that evolves.
+			</P>
+
 			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
 				<div className="flex min-w-0 flex-col gap-3">
 					<DocSection {...SECTIONS[0]}>
@@ -193,7 +207,7 @@ export default async function ApiDocsPage() {
 							</Col>
 
 							<Col>
-								<CodeBlock label="Request">{`curl -X POST ${base}/api/print/${agentName}/${deviceName} \\
+								<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -230,7 +244,7 @@ export default async function ApiDocsPage() {
 							</Col>
 
 							<Col>
-								<CodeBlock label="Request">{`curl ${base}/api/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+								<CodeBlock label="Request">{`curl ${base}${API_BASE}/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
 							</Col>
 						</Split>
 					</DocSection>
