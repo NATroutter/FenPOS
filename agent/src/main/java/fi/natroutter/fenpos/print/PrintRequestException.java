@@ -5,24 +5,26 @@ import fi.natroutter.fenpos.enums.Codepage;
 /**
  * Thrown when a print request cannot be turned into a printable payload.
  * <p>
- * Carries everything the HTTP layer needs to build the error response, without depending on
- * that layer: the stable machine-readable code clients branch on, a human-readable message,
- * and — where the problem has a position — the line, column and offending character.
+ * Carries the stable machine-readable code clients branch on, a human-readable message, and —
+ * where the problem has a position — the line, column and offending character.
  * <p>
- * The status code lives here too because only the compile stage knows whether a failure is
- * the caller's fault, an oversized payload, or a limit being exceeded.
+ * <b>No HTTP status.</b> This agent serves no HTTP: its callers are the console commands and
+ * {@code LinkDispatcher}, which report {@link #apiCode()} and the message as text. A status field
+ * was carried here from the single-machine daemon that did serve HTTP, hardcoded to 400 at every
+ * factory method, and read by nothing. Statuses are the server's to decide — it maps a code to one
+ * through {@code API_ERROR_STATUS} in {@code fenpos/lib/errors.ts}, where the mapping is one table
+ * rather than a literal at each throw site, and where the content codes are 422 rather than the 400
+ * the field here claimed.
  */
 public class PrintRequestException extends Exception {
 
     private final String apiCode;
-    private final int status;
     private final Integer line;
     private final Integer column;
     private final String character;
     private final String codepage;
 
     private PrintRequestException(String apiCode,
-                                  int status,
                                   String message,
                                   Integer line,
                                   Integer column,
@@ -30,7 +32,6 @@ public class PrintRequestException extends Exception {
                                   String codepage) {
         super(message);
         this.apiCode = apiCode;
-        this.status = status;
         this.line = line;
         this.column = column;
         this.character = character;
@@ -44,16 +45,7 @@ public class PrintRequestException extends Exception {
      * @param message human-readable explanation
      */
     public static PrintRequestException of(String apiCode, String message) {
-        return new PrintRequestException(apiCode, 400, message, null, null, null, null);
-    }
-
-    /**
-     * A problem with the request as a whole, reported with a status other than 400.
-     *
-     * @param status HTTP status to return, such as 413 for an oversized body
-     */
-    public static PrintRequestException of(String apiCode, int status, String message) {
-        return new PrintRequestException(apiCode, status, message, null, null, null, null);
+        return new PrintRequestException(apiCode, message, null, null, null, null);
     }
 
     /**
@@ -62,7 +54,7 @@ public class PrintRequestException extends Exception {
      * @param line 1-based index into {@code data}
      */
     public static PrintRequestException atLine(String apiCode, int line, String message) {
-        return new PrintRequestException(apiCode, 400, message, line, null, null, null);
+        return new PrintRequestException(apiCode, message, line, null, null, null);
     }
 
     /**
@@ -72,7 +64,7 @@ public class PrintRequestException extends Exception {
      * @param column 1-based column within that element
      */
     public static PrintRequestException at(String apiCode, int line, int column, String message) {
-        return new PrintRequestException(apiCode, 400, message, line, column, null, null);
+        return new PrintRequestException(apiCode, message, line, column, null, null);
     }
 
     /**
@@ -85,18 +77,13 @@ public class PrintRequestException extends Exception {
                                                              String character,
                                                              Codepage codepage,
                                                              String message) {
-        return new PrintRequestException("unsupported_character", 400, message,
+        return new PrintRequestException("unsupported_character", message,
                 line, column, character, codepage.name());
     }
 
     /** Returns the stable code for the response's {@code error} field. */
     public String apiCode() {
         return apiCode;
-    }
-
-    /** Returns the HTTP status to respond with. */
-    public int status() {
-        return status;
     }
 
     /** Returns the 1-based index into {@code data}, or {@code null} if not positional. */

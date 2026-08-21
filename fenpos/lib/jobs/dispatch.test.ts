@@ -111,7 +111,7 @@ describe("submitJob", () => {
 
 		expect(thrown).toBeInstanceOf(ApiError);
 		expect((thrown as ApiError).code).toBe("job_too_large");
-		expect((thrown as ApiError).status).toBe(400);
+		expect((thrown as ApiError).status).toBe(413);
 		// Nothing reached the link, which is the point: an agent handed this would have closed it.
 		expect(sent).toHaveLength(0);
 

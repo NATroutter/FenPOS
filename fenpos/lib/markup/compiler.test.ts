@@ -414,7 +414,7 @@ describe("block line budget", () => {
 
 		expect(thrown).toBeInstanceOf(ApiError);
 		expect(thrown?.code).toBe("symbol_too_wide");
-		expect(thrown?.status).toBe(400);
+		expect(thrown?.status).toBe(422);
 		expect(thrown?.details).toMatchObject({ line: 2, column: element.indexOf("<qr=8>") + 1, detail: "qr" });
 		expect(thrown?.message).toMatch(/200 dots wide, more than the 120/);
 

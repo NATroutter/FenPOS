@@ -280,7 +280,7 @@ describe("preview", () => {
 		const result = await preview(deviceId, "<image>https://x.test/logo.png</image>");
 
 		expect(result.lines).toBeNull();
-		expect(result.errors).toEqual([expect.objectContaining({ code: "invalid_tag_argument", status: 400, line: 1 })]);
+		expect(result.errors).toEqual([expect.objectContaining({ code: "invalid_tag_argument", status: 422, line: 1 })]);
 		// The footer still has something true to say about the printer it was compiled against.
 		expect(result.columns).toBe(COLUMNS);
 	});

@@ -485,7 +485,11 @@ export default async function DocsPage() {
 							</Col>
 
 							<Col>
-								<CodeBlock label="422 Unprocessable">{`{
+								{/* The status is read from the registry rather than written here. It was written here
+								    once, and said 422 while the table directly below it — which has always been
+								    generated — said 400. An example that contradicts the table beside it is worse than
+								    no example. */}
+								<CodeBlock label={`${API_ERROR_STATUS.unsupported_character} Unprocessable Content`}>{`{
   "error": "unsupported_character",
   "message": "Character '€' (U+20AC) cannot be printed in codepage CP437",
   "line": 3,
