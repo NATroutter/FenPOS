@@ -104,7 +104,15 @@ export function NavUser({
 				</SidebarMenuItem>
 			</SidebarMenu>
 
-			<ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} minimumLength={minimumPasswordLength} />
+			<ProfileDialog
+				open={profileOpen}
+				onOpenChange={setProfileOpen}
+				minimumLength={minimumPasswordLength}
+				displayName={displayName}
+				email={email}
+				avatarUrl={avatarUrl}
+				initial={initial}
+			/>
 		</>
 	);
 }
