@@ -60,6 +60,11 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		syntax: "<nowrap>…</nowrap>",
 		meaning: "Print this line as written. Must enclose the whole element, like <align>.",
 	},
+	{
+		syntax: "<fill>…",
+		meaning:
+			"Pad to the paper's width, so what follows sits at the right margin. <fill=.> repeats a dot instead of a space. Several on one line split the space evenly.",
+	},
 	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its element." },
 	{
 		syntax: "<qr>…</qr>",
@@ -185,10 +190,10 @@ export default async function DocsPage() {
     "data": [
       "<align=center><bold>THE CORNER CAFE</bold></align>",
       "<hr>",
-      "Coffee           2.50",
-      "Pastry           3.00",
+      "Coffee<fill>2.50",
+      "Pastry<fill>3.00",
       "<hr>",
-      "<bold>Total            5.50</bold>",
+      "<bold>Total<fill>5.50</bold>",
       "<feed=3>",
       "<cut>"
     ]
@@ -207,6 +212,13 @@ export default async function DocsPage() {
 									except <Mono>&lt;align&gt;</Mono>, <Mono>&lt;wrap&gt;</Mono>, <Mono>&lt;nowrap&gt;</Mono> and{" "}
 									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it. So do the block tags,
 									which additionally admit no tags inside them — see Blocks below.
+								</P>
+
+								<P>
+									<Mono>&lt;fill&gt;</Mono> is the exception that proves it. Alignment justifies a whole line, so a
+									label on the left and an amount on the right cannot be two alignments — <Mono>&lt;fill&gt;</Mono> pads
+									the gap between them instead, to whatever the device's width leaves over. It owns nothing, and may
+									appear anywhere on a line and as often as you like.
 								</P>
 
 								<P>

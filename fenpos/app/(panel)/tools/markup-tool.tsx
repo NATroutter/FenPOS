@@ -228,10 +228,10 @@ const EXAMPLES: Example[] = [
 			[
 				"<align=center><bold>THE CORNER CAFE</bold></align>",
 				"<hr>",
-				"Coffee           2.50",
-				"Pastry           3.00",
+				"Coffee<fill>2.50",
+				"Pastry<fill>3.00",
 				"<hr>",
-				"<bold>Total            5.50</bold>",
+				"<bold>Total<fill>5.50</bold>",
 				"<feed=1>",
 				"<align=center>Scan for the full receipt</align>",
 				"<align=center><qr>https://cafe.example/o/1042</qr></align>",
