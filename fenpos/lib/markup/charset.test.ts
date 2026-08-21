@@ -134,4 +134,17 @@ describe("validateCharset", () => {
 	it("leaves a fill's index alone when nothing is dropped", () => {
 		expect(validate("a<fill>b", "CP437", "STRIP").fills[0].afterSpans).toBe(1);
 	});
+
+	/**
+	 * The boundary `survivors` is one entry longer for: a fill after the *last* span, whose only
+	 * preceding span was dropped. Every other case here puts the fill between two spans, so without
+	 * this one the final `survivors.push` can be deleted and the suite stays green — while a
+	 * trailing fill reads past the end of the array and takes `undefined` as its index.
+	 */
+	it("moves a trailing fill past a dropped span", () => {
+		const line = validate("š<fill>", "CP437", "STRIP");
+
+		expect(line.spans).toEqual([]);
+		expect(line.fills[0].afterSpans).toBe(0);
+	});
 });
