@@ -1,5 +1,5 @@
 import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
-import { CATEGORIES, listSettings } from "@/lib/settings/settings-service";
+import { CATEGORIES, listSettings, toClientDefinition } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings" };
 
@@ -19,8 +19,13 @@ export default async function SettingsPage() {
 	// The definition is passed through whole, not flattened field by field — flattening a union
 	// loses the discriminant the form narrows on. Which categories and controls actually appear is
 	// the form's call, not this page's.
+	//
+	// `toClientDefinition` runs here, at the boundary, because this is the one place a definition
+	// crosses from server to client. A string setting's `pattern` is a `RegExp`, which is not
+	// serialisable across that boundary — passing it through would crash the page at render time
+	// the moment a string setting exists, not at build time.
 	const fields: SettingFieldData[] = settings.map((setting) => ({
-		definition: setting.definition,
+		definition: toClientDefinition(setting.definition),
 		value: setting.value,
 		overridden: setting.overridden,
 	}));

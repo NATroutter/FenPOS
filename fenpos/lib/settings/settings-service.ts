@@ -86,6 +86,44 @@ export type SettingDefinition =
 /** The four kinds of value a setting can hold. */
 export type SettingType = SettingDefinition["type"];
 
+/**
+ * A {@link SettingDefinition}, minus `pattern` — the one field that must never reach a client
+ * component.
+ *
+ * `pattern` is a `RegExp`, and a `RegExp` is not serialisable across React's server→client
+ * boundary: handing one to a client component does not fail at build time, it throws at render
+ * time, the moment a string setting that carries one is rendered. The client has no legitimate
+ * use for it regardless — validation is server-side by design, `setSetting` below is the security
+ * boundary, and a rejected value comes back as a toast — so the client only ever needs
+ * `maxLength`, kept as a convenience attribute on the input.
+ *
+ * **Do not add `pattern` back to "complete" this type.** That reintroduces the exact crash this
+ * type exists to prevent. Use {@link toClientDefinition} to produce one from a `SettingDefinition`.
+ */
+export type ClientSettingDefinition =
+	| Exclude<SettingDefinition, { type: "string" }>
+	| Omit<Extract<SettingDefinition, { type: "string" }>, "pattern">;
+
+/**
+ * Strips `pattern` from a definition before it is handed to a client component.
+ *
+ * A type alone does not remove the field from the value at runtime — TypeScript types are erased
+ * at compile time, so merely annotating the result as {@link ClientSettingDefinition} would still
+ * pass React the same object, `pattern` and all. This function is the one place the field is
+ * actually dropped, and it must run before a definition crosses into a client component (today,
+ * that is the settings page building props for `SettingsForm`).
+ *
+ * @param definition a definition as declared in {@link SETTINGS}
+ * @returns the same definition, without `pattern`
+ */
+export function toClientDefinition(definition: SettingDefinition): ClientSettingDefinition {
+	if (definition.type !== "string") {
+		return definition;
+	}
+	const { pattern: _pattern, ...rest } = definition;
+	return rest;
+}
+
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
 export const SETTING_KEYS = [
 	"limits.maxLines",
