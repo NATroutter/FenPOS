@@ -105,7 +105,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "jobs.retentionMinutes",
 		label: "Job retention",
-		description: "How long a finished job stays readable before it is swept.",
+		description: "How long a finished job stays readable before it is swept. Pushed to every agent.",
 		min: 1,
 		max: 40_320,
 		fallback: 1440,
@@ -114,7 +114,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "jobs.maxRecords",
 		label: "Job records kept",
-		description: "Hard cap, evicting the oldest finished jobs first. Bounds the table on a busy install.",
+		description:
+			"Hard cap, evicting the oldest finished jobs first. Bounds memory on a busy agent. Pushed to every agent.",
 		min: 100,
 		max: 1_000_000,
 		fallback: 10_000,
@@ -179,6 +180,32 @@ export async function globalLimits(): Promise<CompileLimits> {
 		maxLineChars: value("limits.maxLineChars"),
 		maxTotalChars: value("limits.maxTotalChars"),
 		maxOutputLines: value("limits.maxOutputLines"),
+	};
+}
+
+/** Job retention and shutdown as configured, in the shape `config.sync` carries. */
+export interface GlobalJobSettings {
+	retentionMinutes: number;
+	maxRecords: number;
+	shutdownGraceSeconds: number;
+}
+
+/**
+ * Reads the job settings pushed to every agent.
+ *
+ * Separate from {@link globalLimits} because the two go to different places: limits are applied
+ * here, on the request, while these are applied on the machine holding the printer.
+ *
+ * @returns the job settings in effect install-wide
+ */
+export async function globalJobSettings(): Promise<GlobalJobSettings> {
+	const settings = await listSettings();
+	const value = (key: SettingKey): number => settings.find((setting) => setting.definition.key === key)?.value ?? 0;
+
+	return {
+		retentionMinutes: value("jobs.retentionMinutes"),
+		maxRecords: value("jobs.maxRecords"),
+		shutdownGraceSeconds: value("jobs.shutdownGraceSeconds"),
 	};
 }
 

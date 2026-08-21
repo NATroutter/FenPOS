@@ -335,6 +335,19 @@ export const welcomeSchema = z.object({
 });
 
 /**
+ * Job retention and shutdown, as the server has them configured.
+ *
+ * Bounds are the panel's, restated here because this is a wire contract: a frame is validated by
+ * whoever receives it, and a receiver that trusted the sender's range checks would be trusting the
+ * sender. The agent applies the same bounds — see `FrameCodec`.
+ */
+export const jobSettingsSchema = z.object({
+	retentionMinutes: z.number().int().min(1).max(40_320),
+	maxRecords: z.number().int().min(100).max(1_000_000),
+	shutdownGraceSeconds: z.number().int().min(1).max(300),
+});
+
+/**
  * Server to agent: the authoritative device set.
  *
  * Sent whole rather than as a delta. A full snapshot is idempotent, so a agent that missed an
@@ -347,11 +360,22 @@ export const welcomeSchema = z.object({
  * re-sent on every reconnect rather than only when they change — a few kilobytes per asset per
  * paper width, paid once at connect instead of once per receipt, which is the same trade this frame
  * already makes for the device set.
+ *
+ * It carries the job settings by the same argument again: an agent needs its retention, record
+ * cap, and shutdown grace before any job arrives, and re-sending them on every reconnect costs
+ * nothing worth tracking a delta to avoid.
  */
 export const configSyncSchema = z.object({
 	type: z.literal("config.sync"),
 	devices: z.array(deviceConfigSchema).max(256),
 	assets: z.array(assetRasterSchema).max(IMAGE_LIMITS.maxSyncedRasters),
+	/**
+	 * Optional so the frame stays compatible in both directions: an agent built before this field
+	 * existed ignores it, and one built after it falls back to its own defaults when an older
+	 * server omits it. Neither pairing refuses the frame, which a required field would have made
+	 * them do.
+	 */
+	jobs: jobSettingsSchema.optional(),
 });
 
 /** Server to agent: print this. */

@@ -6,6 +6,7 @@ import { JOB_LIMITS } from "@/lib/link/protocol";
 import {
 	clearSetting,
 	DEFAULT_LIMITS,
+	globalJobSettings,
 	globalLimits,
 	listSettings,
 	SETTINGS,
@@ -99,6 +100,16 @@ describe("settings", () => {
 		await setSetting("limits.maxOutputLines", 7);
 
 		expect((await globalLimits()).maxOutputLines).toBe(7);
+	});
+
+	it("reads job settings as one object, honouring overrides", async () => {
+		await prisma.setting.create({ data: { key: "jobs.maxRecords", value: "500" } });
+
+		expect(await globalJobSettings()).toEqual({
+			retentionMinutes: 1440,
+			maxRecords: 500,
+			shutdownGraceSeconds: 10,
+		});
 	});
 });
 

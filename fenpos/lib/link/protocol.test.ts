@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	configSyncSchema,
 	directiveSchema,
 	FrameTooLargeError,
 	IMAGE_LIMITS,
@@ -313,6 +314,34 @@ describe("serialiseServerFrame", () => {
 			assets: [],
 		});
 		expect(JSON.parse(text).devices[0].codepage).toBe("CP858");
+	});
+
+	it("carries job settings when the server sends them", () => {
+		const parsed = configSyncSchema.parse({
+			type: "config.sync",
+			devices: [],
+			assets: [],
+			jobs: { retentionMinutes: 1440, maxRecords: 10_000, shutdownGraceSeconds: 10 },
+		});
+
+		expect(parsed.jobs).toEqual({ retentionMinutes: 1440, maxRecords: 10_000, shutdownGraceSeconds: 10 });
+	});
+
+	it("accepts a frame with no job settings, so an older server still parses", () => {
+		const parsed = configSyncSchema.parse({ type: "config.sync", devices: [], assets: [] });
+
+		expect(parsed.jobs).toBeUndefined();
+	});
+
+	it("refuses job settings outside their bounds", () => {
+		expect(() =>
+			configSyncSchema.parse({
+				type: "config.sync",
+				devices: [],
+				assets: [],
+				jobs: { retentionMinutes: 0, maxRecords: 10_000, shutdownGraceSeconds: 10 },
+			}),
+		).toThrow();
 	});
 });
 

@@ -19,6 +19,7 @@ import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLin
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
+import { globalJobSettings } from "@/lib/settings/settings-service";
 
 /**
  * One agent's connection, from the opening handshake to close.
@@ -475,7 +476,12 @@ export async function pushDeviceConfig(link: AgentLink, agentId: string): Promis
 		// After the devices are settled, because which rasters an agent needs follows from the paper
 		// widths of the devices it actually has — and a device whose stored configuration would not
 		// parse is not one of them.
-		link.send({ type: "config.sync", devices, assets: await rastersFor(devices, agentId) });
+		link.send({
+			type: "config.sync",
+			devices,
+			assets: await rastersFor(devices, agentId),
+			jobs: await globalJobSettings(),
+		});
 	} catch (error) {
 		logger.error("Could not push device configuration", error, { agentId });
 	}
