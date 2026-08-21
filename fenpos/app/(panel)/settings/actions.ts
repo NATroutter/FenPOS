@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { setAdminPassword, verifyAdminPassword } from "@/lib/auth/admin";
+import { setAdminPassword, setAdminProfile, verifyAdminPassword } from "@/lib/auth/admin";
 import { passwordSchema } from "@/lib/auth/password";
+import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/profile";
 import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
@@ -21,16 +23,23 @@ import { clearSetting, setSetting } from "@/lib/settings/settings-service";
  *
  * @param label short description used in the log line
  * @param work the action body
+ * @param revalidate what to refresh on success. Defaults to the Settings page, which is what
+ *   every action on that page wants; the profile action refreshes the layout instead, because
+ *   the name and avatar it changes are rendered by the sidebar rather than by any page.
  * @returns the state to render
  */
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
+async function run(
+	label: string,
+	work: () => Promise<void>,
+	revalidate: () => void = () => revalidatePath("/settings"),
+): Promise<ActionState> {
 	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
 	// it here would turn being signed out into a toast over a panel that no longer works.
 	await requireSession();
 
 	try {
 		await work();
-		revalidatePath("/settings");
+		revalidate();
 		return { error: null };
 	} catch (error) {
 		if (error instanceof ApiError) {
@@ -91,4 +100,46 @@ export async function changePassword(current: string, next: string): Promise<Act
 		const revoked = await setAdminPassword(parsed.data);
 		logger.info("Administrator password changed", { sessionsRevoked: revoked });
 	});
+}
+
+/**
+ * Replaces the administrator's display name and email.
+ *
+ * No current-password check, unlike `changePassword`. Neither field is a credential and neither
+ * can be used to sign in — asking for a password to change the name beside the avatar would be
+ * ceremony that teaches an operator to type their password into any box that asks.
+ *
+ * The email is validated and stored as typed. Nothing sends mail yet, so a confirmation loop
+ * would be theatre.
+ *
+ * @param displayName the new name
+ * @param email the new address, or null/empty to remove it
+ * @returns the state to render
+ */
+export async function updateProfile(displayName: string, email: string | null): Promise<ActionState> {
+	return run(
+		"update profile",
+		async () => {
+			const name = displayName.trim();
+			const address = (email ?? "").trim();
+
+			if (name === "") {
+				throw new ApiError("missing_field", "A display name is required.");
+			}
+			if (name.length > MAXIMUM_DISPLAY_NAME_LENGTH) {
+				throw new ApiError(
+					"invalid_type",
+					`Keep the display name to ${MAXIMUM_DISPLAY_NAME_LENGTH} characters or fewer.`,
+				);
+			}
+			if (address !== "" && !z.email().safeParse(address).success) {
+				throw new ApiError("invalid_type", "That is not a valid email address.");
+			}
+
+			await setAdminProfile({ displayName: name, email: address === "" ? null : address });
+		},
+		// The sidebar footer is in the layout, so refreshing a page would leave the name and the
+		// avatar showing their old values until a hard reload.
+		() => revalidatePath("/", "layout"),
+	);
 }
