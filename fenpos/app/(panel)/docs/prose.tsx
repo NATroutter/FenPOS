@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { API_ERROR_STATUS } from "@/lib/errors";
+import { API_ERROR_STATUS, type ApiErrorCode } from "@/lib/errors";
 
 /**
  * The small typographic pieces the reference prose is written with.
@@ -115,6 +115,23 @@ export function Mono({ children }: { children: ReactNode }) {
 /** An HTTP status referred to inside a sentence. */
 export function Status({ children }: { children: ReactNode }) {
 	return <span className="font-mono text-[11.5px] font-medium text-emerald-400">{children}</span>;
+}
+
+/**
+ * An error code, and the status it currently maps to.
+ *
+ * The status is read from the registry rather than written here. It was written here once, in six
+ * places, and every one of them said `400` after the codes moved to `413` and `422` — which is the
+ * failure mode that makes documentation untrustworthy: prose that was true when it was typed and
+ * that nothing makes false out loud. Typed as `ApiErrorCode`, so a code renamed in `lib/errors.ts`
+ * stops this page compiling rather than leaving it describing something that no longer exists.
+ */
+export function ErrorRef({ code }: { code: ApiErrorCode }) {
+	return (
+		<>
+			<Status>{API_ERROR_STATUS[code]}</Status> <Mono>{code}</Mono>
+		</>
+	);
 }
 
 /**

@@ -13,7 +13,7 @@ import { getClientAddress } from "@/lib/request-context";
  * multi-site operators actually want.
  *
  * **Everything is decided before the response.** The body is parsed, limit-checked, wrapped to
- * the device's width and validated against its codepage, all synchronously — so a `400` names
+ * the device's width and validated against its codepage, all synchronously — so a `422` names
  * the exact line, column and character at fault. Once a `202` is returned the job can only fail
  * for hardware reasons. That property is the whole point of compiling on the server, and it is
  * what makes the error contract worth reading.

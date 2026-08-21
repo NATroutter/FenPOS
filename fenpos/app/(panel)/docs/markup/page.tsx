@@ -1,9 +1,10 @@
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection } from "@/app/(panel)/docs/doc-section";
-import { Aside, Col, Mono, megabytes, P, Split, Status, seconds } from "@/app/(panel)/docs/prose";
+import { Aside, Col, ErrorRef, Mono, megabytes, P, Split, seconds } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_ASSET_BYTES, MAX_IMAGE_DIMENSION } from "@/lib/assets/asset-service";
+import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
 import { MAX_REMOTE_IMAGE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "@/lib/assets/fetch-remote";
 import { BarcodeSystem } from "@/lib/domain/enums";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
@@ -183,8 +184,7 @@ export default function MarkupDocsPage() {
 									paper width, and reach the agent with its device configuration — so a receipt printing one at the
 									paper's full width carries only its name, however many times it repeats. Any other width has to be
 									dithered for that width and carried inside the job, exactly as a URL's dots always are, and a receipt
-									whose images come to more than one job can hold is refused with <Status>400</Status>{" "}
-									<Mono>image_too_large</Mono>.
+									whose images come to more than one job can hold is refused with <ErrorRef code="image_too_large" />.
 								</P>
 
 								<P>
@@ -199,29 +199,30 @@ export default function MarkupDocsPage() {
 
 								<P>
 									A URL is fetched while the job compiles, which is the cost of naming a live image: an unreachable host
-									fails the print with <Status>400</Status> <Mono>invalid_tag_argument</Mono> instead of printing a
-									receipt with a hole in it, and a slow one holds the request up. The fetch is guarded — http or https
-									only, {seconds(REMOTE_FETCH_TIMEOUT_MS)} for the whole of it including redirects,{" "}
+									fails the print with <ErrorRef code="invalid_tag_argument" /> instead of printing a receipt with a
+									hole in it, and a slow one holds the request up. The fetch is guarded — http or https only,{" "}
+									{seconds(REMOTE_FETCH_TIMEOUT_MS)} for the whole of it including redirects,{" "}
 									{megabytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so a
 									receipt cannot use this server to read something inside your network. One request may name at most{" "}
-									{MAX_REMOTE_IMAGES} distinct URLs, or <Status>400</Status> <Mono>too_many_remote_images</Mono>; stored
-									images are not counted against that.
+									{MAX_REMOTE_IMAGES} distinct URLs, or <ErrorRef code="too_many_remote_images" />; stored images are
+									not counted against that.
 								</P>
 
 								<P>
 									Images are added on the Assets tab, by upload or by importing a URL once, and markup refers to one by
 									its slug: the example beside names an image called <Mono>logo</Mono>, and a name that is not stored on
-									this install is <Status>404</Status> <Mono>unknown_asset</Mono>. Whichever door a picture comes
-									through, it must be a PNG or a JPEG of at most {megabytes(MAX_ASSET_BYTES)} and {MAX_IMAGE_DIMENSION}{" "}
-									pixels on each side, and a PNG must not be interlaced.
+									this install is <ErrorRef code="unknown_asset" />. Whichever door a picture comes through, it must be
+									a PNG or a JPEG of at most {megabytes(MAX_ASSET_BYTES)} and {MAX_IMAGE_DIMENSION} pixels on each side,
+									and a PNG must not be interlaced.
 								</P>
 
 								<P>
 									One name is not an asset at all. <Mono>fenpos</Mono> is the application&apos;s own logo, which ships
 									with the software rather than being stored here — so it cannot be uploaded under that name, and it
-									cannot be deleted out from under the device test page. It is bundled at 384, 504 and 576 dots, which
-									is the full width of a 32, 42 or 48 column printer; asking for it at any other width is{" "}
-									<Status>400</Status> <Mono>unbundled_logo_width</Mono>, because the logo is never rescaled.
+									cannot be deleted out from under the device test page. It is bundled at{" "}
+									{BUNDLED_LOGO_WIDTHS.join(", ")} dots, which is the full width of a 32, 42 or 48 column printer;
+									asking for it at any other width is <ErrorRef code="unbundled_logo_width" />, because the logo is
+									never rescaled.
 								</P>
 
 								<P>
@@ -230,10 +231,10 @@ export default function MarkupDocsPage() {
 								</P>
 
 								<P>
-									Content is checked when the block closes, and refused with <Status>400</Status>{" "}
-									<Mono>invalid_tag_argument</Mono> at the opening tag. The rules beside are format only: a check digit
-									that does not add up is refused as well, by the encoder rather than by the rule, so both mistakes come
-									back in the response rather than on the paper.
+									Content is checked when the block closes, and refused with <ErrorRef code="invalid_tag_argument" /> at
+									the opening tag. The rules beside are format only: a check digit that does not add up is refused as
+									well, by the encoder rather than by the rule, so both mistakes come back in the response rather than
+									on the paper.
 								</P>
 
 								<P>
@@ -259,10 +260,10 @@ export default function MarkupDocsPage() {
 									costs the lines its dots cover, rounded up to a whole one, which at the paper's full width is the
 									picture's own proportions applied to the paper: a square logo on 32-column paper is 384 dots each way,
 									or sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of text, and can
-									come back <Status>400</Status> <Mono>too_many_output_lines</Mono>. A <Mono>&lt;hr&gt;</Mono> costs the
-									one line it prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and{" "}
-									<Mono>&lt;drawer&gt;</Mono> cost nothing, since none of them lays dots on the paper as text. The Tools
-									tab shows what a job would spend against the limit before it is sent.
+									come back <ErrorRef code="too_many_output_lines" />. A <Mono>&lt;hr&gt;</Mono> costs the one line it
+									prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and <Mono>&lt;drawer&gt;</Mono> cost
+									nothing, since none of them lays dots on the paper as text. The Tools tab shows what a job would spend
+									against the limit before it is sent.
 								</Aside>
 							</Col>
 

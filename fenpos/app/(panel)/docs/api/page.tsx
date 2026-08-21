@@ -1,7 +1,18 @@
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection, type Verb } from "@/app/(panel)/docs/doc-section";
-import { Aside, Col, DocLink, groupByStatus, Mono, P, Split, Status, statusStyle } from "@/app/(panel)/docs/prose";
+import {
+	Aside,
+	Col,
+	DocLink,
+	ErrorRef,
+	groupByStatus,
+	Mono,
+	P,
+	Split,
+	Status,
+	statusStyle,
+} from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { prisma } from "@/lib/db";
 import { PERMISSIONS } from "@/lib/domain/permissions";
@@ -50,10 +61,10 @@ const SECTIONS = [
  * reference someone has to translate into their own setup before trying is one they get wrong
  * the first time.
  *
- * **Laid out for someone whose request is failing right now.** The two facts every call needs —
- * where to send it and what to put in the header — are on screen before any prose; the contents
- * rail exists so "Errors" is one click away rather than a scroll; and each explanation sits
- * beside the call, table or list it describes rather than above it.
+ * **Laid out for someone whose request is failing right now.** The opening paragraph carries the
+ * address and points at Authentication, so the two facts every call needs are settled before any
+ * section is read; the contents rail exists so "Errors" is one click away rather than a scroll;
+ * and each explanation sits beside the call, table or list it describes rather than above it.
  */
 export default async function ApiDocsPage() {
 	const [address, device] = await Promise.all([
@@ -105,9 +116,9 @@ export default async function ApiDocsPage() {
 								</P>
 
 								<Aside>
-									A key addressing a printer it has no grant for gets <Mono>404 unknown_device</Mono> — the same answer
-									as a printer that does not exist. That is intentional: distinguishing the two would let a caller
-									enumerate every printer in the install by probing names.
+									A key addressing a printer it has no grant for gets <ErrorRef code="unknown_device" /> — the same
+									answer as a printer that does not exist. That is intentional: distinguishing the two would let a
+									caller enumerate every printer in the install by probing names.
 								</Aside>
 							</Col>
 
@@ -233,6 +244,18 @@ export default async function ApiDocsPage() {
 									A content error also carries <Mono>line</Mono> (1-based index into <Mono>data</Mono>) and, where the
 									problem is one character, <Mono>column</Mono>. An unsupported character adds <Mono>character</Mono>{" "}
 									and <Mono>codepage</Mono>.
+								</P>
+
+								<P>
+									The status groups codes by what you have to do about them, and is a summary of the code rather than a
+									second contract beside it. A <Status>400</Status> means the request could not be read — the envelope
+									is wrong, nothing was interpreted as a receipt, and nothing in that group carries a position because
+									there is none to name. A <Status>422</Status> means the request was read and the receipt it describes
+									cannot be printed: those are the codes that carry a <Mono>line</Mono>, and you fix the markup rather
+									than the request. A <Status>413</Status> means it is well-formed and printable and over a limit, whose
+									only remedy is to send less. Branch on <Mono>error</Mono>, not on the status: a code may be
+									re-bucketed when the grouping is sharpened, as the content errors were when they moved off{" "}
+									<Status>400</Status>.
 								</P>
 
 								<P>
