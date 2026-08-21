@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
  *
  * The property worth pinning here is the upload cap. It is the one limit in this feature that a
  * framework would otherwise decide: Next caps a server action's body at 1 MB by default, and
- * `next.config.ts` raises that ceiling to 16 MB precisely so that `assets.maxUploadKb` — 2 MB by
+ * `next.config.ts` raises that ceiling to 16 MB precisely so that `assets.maxUploadKb` — 2 MiB by
  * default, and this product's to enforce — is a number this project actually applies rather than
  * one a framework default overrides. If someone deletes the check in the action, nothing in the
  * framework puts it back — the config now says 16 MB — so this is what notices.
@@ -80,7 +80,7 @@ describe("uploadAsset", () => {
 	it("refuses a file past the cap this product enforces", async () => {
 		const result = await uploadAsset(upload("huge", Buffer.alloc((await maxAssetBytes()) + 1)));
 
-		expect(result.error).toMatch(/at most 2 MB/);
+		expect(result.error).toMatch(/at most 2 MiB/);
 		expect(await prisma.asset.count()).toBe(0);
 	});
 

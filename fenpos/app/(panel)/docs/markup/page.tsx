@@ -1,7 +1,7 @@
 import { CodeBlock } from "@/app/(panel)/docs/code-block";
 import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection } from "@/app/(panel)/docs/doc-section";
-import { Aside, Col, DocLink, ErrorRef, Mono, megabytes, P, Split, seconds } from "@/app/(panel)/docs/prose";
+import { Aside, Col, DocLink, ErrorRef, Mono, P, Split, seconds } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_IMAGE_DIMENSION, maxAssetBytes } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
@@ -213,8 +213,8 @@ export default async function MarkupDocsPage() {
 									fails the print with <ErrorRef code="invalid_tag_argument" /> instead of printing a receipt with a
 									hole in it, and a slow one holds the request up. The fetch is guarded — http or https only,{" "}
 									{seconds(REMOTE_FETCH_TIMEOUT_MS)} for the whole of it including redirects,{" "}
-									{megabytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so a
-									receipt cannot use this server to read something inside your network. One request may name at most{" "}
+									{describeBytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so
+									a receipt cannot use this server to read something inside your network. One request may name at most{" "}
 									{MAX_REMOTE_IMAGES} distinct URLs, or <ErrorRef code="too_many_remote_images" />; stored images are
 									not counted against that.
 								</P>

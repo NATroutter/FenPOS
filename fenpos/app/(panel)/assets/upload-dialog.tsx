@@ -90,7 +90,7 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 			// until its key changes, so dropping only the form's copy leaves the operator looking at a
 			// filename the form no longer has — with Clear disabled, because that is keyed off `file`.
 			clearFile();
-			setError(`That image is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${describeBytes(maxBytes)}.`);
+			setError(`That image is ${describeBytes(chosen.size)}. The limit is ${describeBytes(maxBytes)}.`);
 			return;
 		}
 		setError(null);

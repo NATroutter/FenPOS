@@ -3,6 +3,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { ApiError } from "@/lib/errors";
+import { describeBytes } from "@/lib/format/bytes";
 
 /**
  * Fetching an image that a receipt names by URL, without letting the receipt point the server
@@ -566,12 +567,15 @@ async function readCapped(response: RemoteResponse, target: URL): Promise<Buffer
 }
 
 function tooLarge(target: URL, seen: number): ApiError {
-	const limit = MAX_REMOTE_IMAGE_BYTES / (1024 * 1024);
-	return new ApiError("invalid_tag_argument", `This image is larger than the ${limit} MB limit.`, {
-		url: safeUrl(target),
-		limit: MAX_REMOTE_IMAGE_BYTES,
-		seen,
-	});
+	return new ApiError(
+		"invalid_tag_argument",
+		`This image is larger than the ${describeBytes(MAX_REMOTE_IMAGE_BYTES)} limit.`,
+		{
+			url: safeUrl(target),
+			limit: MAX_REMOTE_IMAGE_BYTES,
+			seen,
+		},
+	);
 }
 
 /**

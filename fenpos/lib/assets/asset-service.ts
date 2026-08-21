@@ -653,7 +653,7 @@ export async function requireWithinByteCap(byteLength: number): Promise<void> {
 	if (byteLength > cap) {
 		throw new ApiError(
 			"body_too_large",
-			`An image must be at most ${describeBytes(cap)}; this one is ${(byteLength / 1024 / 1024).toFixed(1)} MB.`,
+			`An image must be at most ${describeBytes(cap)}; this one is ${describeBytes(byteLength)}.`,
 		);
 	}
 }

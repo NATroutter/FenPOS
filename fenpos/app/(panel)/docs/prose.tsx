@@ -12,21 +12,6 @@ import { API_ERROR_STATUS, type ApiErrorCode } from "@/lib/errors";
  */
 
 /**
- * States a byte limit the way the refusal that enforces it states it.
- *
- * Read from the constant rather than written out, for the same reason the error table is read from
- * `API_ERROR_STATUS`: a documented limit that has to be remembered when the real one changes is a
- * limit this page will eventually be wrong about. Floored to match `requireWithinByteCap`, which is
- * what an operator is actually told when a file is refused.
- *
- * @param bytes the limit
- * @returns it in whole megabytes
- */
-export function megabytes(bytes: number): string {
-	return `${Math.floor(bytes / 1024 / 1024)} MB`;
-}
-
-/**
  * States a millisecond budget in the units a person waiting for it would use.
  *
  * @param ms the budget
