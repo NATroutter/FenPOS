@@ -51,28 +51,65 @@ async function run(
 }
 
 /**
- * Stores a setting.
+ * One staged change: a new value for a setting, or a return to its built-in default.
  *
- * `value` is `unknown` rather than a union: this is a public endpoint, so the type here would be a
- * claim about the caller rather than a check on them. `setSetting` validates against the setting's
- * own declared type.
- *
- * @param key which setting
- * @param value the new value
- * @returns the state to render
+ * A reset is its own kind rather than "set it to the fallback", because the two are different
+ * stored states. Storing the fallback leaves a row behind that pins the value forever; clearing it
+ * means "use whatever this version's default is", so an upgrade that improves a default reaches an
+ * install that never touched it. The Settings page offers both and they must not collapse into one.
  */
-export async function saveSetting(key: string, value: unknown): Promise<ActionState> {
-	return run("save", () => setSetting(key, value));
+export type SettingChange =
+	| { key: string; kind: "set"; value: number | string | boolean }
+	| { key: string; kind: "reset" };
+
+/** Which staged changes failed, keyed by setting. Empty when every change applied. */
+export interface SaveSettingsResult {
+	errors: Record<string, string>;
 }
 
 /**
- * Returns a setting to its built-in default.
+ * Applies a batch of staged changes.
  *
- * @param key which setting
- * @returns the state to render
+ * The Settings page stages edits and commits them together, so this takes the whole batch rather
+ * than one setting at a time: one session check, one revalidation, and one round trip however many
+ * knobs were turned.
+ *
+ * **Failures are per-setting, not per-batch.** A rejected value is a fact about that one setting —
+ * usually a bound or a pattern — and refusing the other nine because of it would make an operator
+ * redo work that was already acceptable. Each change is applied independently and the ones that
+ * failed come back named, so the page can keep exactly those staged and clear the rest.
+ *
+ * The session is re-checked here rather than trusted from the layout: an action is a POST endpoint
+ * in its own right, callable by anyone who knows its id. `setSetting` and `clearSetting` do the
+ * validation — the types on `SettingChange` are a shape, not a check.
+ *
+ * @param changes the staged changes, in the order they should be applied
+ * @returns the setting keys that failed, each with the message to show against it
  */
-export async function resetSetting(key: string): Promise<ActionState> {
-	return run("reset", () => clearSetting(key));
+export async function saveSettings(changes: SettingChange[]): Promise<SaveSettingsResult> {
+	await requireSession();
+
+	const errors: Record<string, string> = {};
+
+	for (const change of changes) {
+		try {
+			if (change.kind === "reset") {
+				await clearSetting(change.key);
+			} else {
+				await setSetting(change.key, change.value);
+			}
+		} catch (error) {
+			if (error instanceof ApiError) {
+				errors[change.key] = error.message;
+			} else {
+				logger.error("Settings action failed: save", error, { key: change.key });
+				errors[change.key] = "Something went wrong. Check the server log.";
+			}
+		}
+	}
+
+	revalidatePath("/settings");
+	return { errors };
 }
 
 /**

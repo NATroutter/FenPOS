@@ -74,16 +74,21 @@ function SelectContent({
 				alignItemWithTrigger={alignItemWithTrigger}
 				className="isolate z-50"
 			>
-				{/* No min-width: a floor wider than the trigger — min-w-36 was 144px against a 140px
-				    trigger — makes the list overhang the right edge of the thing it belongs to, which is
-				    the misalignment people notice. The trigger's own width is the right width. */}
+				{/* Width: the trigger's, as a FLOOR rather than a fixed size. A fixed `w-(--anchor-width)`
+				    is right only while the trigger is the wider of the two; a `w-fit` trigger is sized to
+				    its current value, so a short one — "INFO" at 73px — forced the list to 73px while its
+				    longest item needed 51px of text plus the 32px each item reserves for the checkmark.
+				    Items are `whitespace-nowrap`, so the text could not wrap and ran underneath the check
+				    instead. `min-w` keeps the original rule (never narrower than the trigger, so the list
+				    never looks like it missed its mark) and `w-fit` adds the one it was missing: never
+				    narrower than its own contents. `max-w` stops a long option dragging the list off-screen. */}
 				{/* No zoom on open: a popup that starts at 95% is briefly narrower than the trigger it
 				    hangs off, which reads as a list that missed its mark. It fades and slides instead. */}
 				<SelectPrimitive.Popup
 					data-slot="select-content"
 					data-align-trigger={alignItemWithTrigger}
 					className={cn(
-						"relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-1 data-[side=inline-end]:slide-in-from-left-1 data-[side=inline-start]:slide-in-from-right-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+						"relative isolate z-50 max-h-(--available-height) w-fit max-w-[min(24rem,var(--available-width))] min-w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-1 data-[side=inline-end]:slide-in-from-left-1 data-[side=inline-start]:slide-in-from-right-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
 						className,
 					)}
 					{...props}
