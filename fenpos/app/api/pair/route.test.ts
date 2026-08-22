@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import { API_ERROR_STATUS } from "@/lib/errors";
 import { PROTOCOL_VERSION } from "@/lib/link/protocol";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -10,9 +11,10 @@ import { setSetting } from "@/lib/settings/settings-service";
  * The test that matters most here is not "does it refuse" but "does it refuse *identically* to
  * a wrong code" (below). A disabled endpoint that answered with its own message would be a probe:
  * a caller could tell "pairing is worth attacking" from "it is switched off" without guessing a
- * single character of a code. Both tests assert on the actual status and parsed body — not on an
- * error class — because a route with the check silently deleted still throws `ApiError` by a
- * different path (`redeemPairingCode` returning `ok: false` for an unrecognised code), which
+ * single character of a code — including by volume alone, with no correct guess at all (see the
+ * rate-limiter test below). Every comparison asserts on the actual status and parsed body — not
+ * on an error class — because a route with the check silently deleted still throws `ApiError` by
+ * a different path (`redeemPairingCode` returning `ok: false` for an unrecognised code), which
  * would let a weaker assertion pass against broken code.
  *
  * `redeemPairingCode` is wrapped in a spy (real implementation preserved) so the "never looked up"
@@ -111,5 +113,37 @@ describe("POST /api/pair — pairing.enabled", () => {
 		const response = await POST(requestWith({ code: validCode }));
 
 		expect(response.status).toBe(200);
+	});
+
+	/**
+	 * The critical case a single-request comparison cannot see: the rate limiter must be consumed
+	 * the same way whether pairing is on or off, or a caller who sends enough volume — no correct
+	 * guess required — can tell the two states apart. Before `route.ts` consumed the limiter
+	 * unconditionally, an enabled install answered request #11 with 429 `rate_limited` while a
+	 * disabled one kept answering 401 forever, because the limiter was never reached. This floods
+	 * both scenarios past the limit and asserts the responses at that exact point — status and
+	 * parsed body, not an error class — are the same.
+	 */
+	it("answers identically under volume, once each scenario exhausts the rate limiter", async () => {
+		const flood = async (body: Record<string, unknown>): Promise<Response> => {
+			pairingLimiter.reset(CLIENT_ADDRESS);
+			let last: Response = await POST(requestWith(body));
+			for (let i = 1; i < 11; i++) {
+				last = await POST(requestWith(body));
+			}
+			return last;
+		};
+
+		await setSetting("pairing.enabled", false);
+		const disabledLast = await flood({ code: validCode });
+		const disabledBody = await disabledLast.json();
+
+		await setSetting("pairing.enabled", true);
+		const enabledLast = await flood({ code: "WRONGWRONGWR" });
+		const enabledBody = await enabledLast.json();
+
+		expect(disabledLast.status).toBe(API_ERROR_STATUS.rate_limited);
+		expect(enabledLast.status).toBe(API_ERROR_STATUS.rate_limited);
+		expect(disabledBody).toEqual(enabledBody);
 	});
 });

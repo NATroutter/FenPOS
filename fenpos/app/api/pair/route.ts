@@ -13,14 +13,16 @@ import { booleanSetting } from "@/lib/settings/settings-service";
  * The only unauthenticated write in the system. Everything about it is shaped by that:
  *
  * - Rate limited by client address, which is what makes the code's entropy budget hold. A
- *   twelve-character code is comfortable only because guessing is throttled.
+ *   twelve-character code is comfortable only because guessing is throttled. The limiter is
+ *   consumed unconditionally, before `pairing.enabled` is even read — see that check's own
+ *   comment below for why the ordering there is deliberate rather than an oversight.
  * - Every failure returns one identical response. Distinguishing "wrong", "expired" and
  *   "already used" would let a caller map the code space by probing for near-misses. The
  *   server log records which it was.
  * - The body is bounded and fully validated before anything touches the database.
- * - `pairing.enabled` is checked first, before the body is even read, and off answers with
- *   this same {@link REJECTION} rather than a distinct message — otherwise the endpoint would
- *   be a probe telling a caller whether pairing is worth attacking at all.
+ * - `pairing.enabled`, when off, answers with this same {@link REJECTION} rather than a
+ *   distinct message, and before the body is read — otherwise the endpoint would be a probe
+ *   telling a caller whether pairing is worth attacking at all.
  */
 
 /** Largest pairing request accepted. The body is four short strings. */
@@ -47,22 +49,25 @@ export async function POST(request: Request): Promise<Response> {
 	const address = await getClientAddress();
 
 	try {
-		// Checked before anything else — cheaper than the rate limiter, let alone the body —
-		// and answered with the exact same rejection a wrong code gets, so a caller cannot tell
-		// "pairing is off" from "that guess was wrong".
-		if (!(await booleanSetting("pairing.enabled"))) {
-			logger.warn("Pairing refused: pairing is switched off", { address });
-			return Response.json(REJECTION, { status: 401 });
-		}
-
-		// Consumed before the body is read, so a flood of malformed requests is throttled
-		// just as a flood of well-formed guesses would be.
+		// Consumed first, unconditionally — before the body is read and before `pairing.enabled`
+		// is even checked. Checking `pairing.enabled` first would be cheaper, but it would also
+		// mean the limiter's state never advances while pairing is off, and a caller who sends a
+		// flood of requests would see request #11 answered differently depending on whether
+		// pairing is on (429 rate_limited) or off (401, forever, since the limiter was never
+		// touched) — a volume-based oracle for "is this install worth attacking" that needs no
+		// correct code at all. Consuming here first keeps the limiter's state, and so the
+		// endpoint's behaviour under volume, identical in both cases. Do not "optimise" this back.
 		const limit = pairingLimiter.consume(address);
 		if (!limit.allowed) {
 			logger.warn("Pairing rate limit engaged", { address, retryAfterMs: limit.retryAfterMs });
 			throw new ApiError("rate_limited", "Too many pairing attempts. Try again shortly.", {
 				retryAfterSeconds: Math.ceil(limit.retryAfterMs / 1000),
 			});
+		}
+
+		if (!(await booleanSetting("pairing.enabled"))) {
+			logger.warn("Pairing refused: pairing is switched off", { address });
+			return Response.json(REJECTION, { status: 401 });
 		}
 
 		const raw = await request.text();
