@@ -66,7 +66,7 @@ export default async function LoginPage() {
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
-					Session cookie, {sessionHours} hours, HttpOnly · five attempts per minute
+					Session cookie, {sessionHours} {sessionHours === 1 ? "hour" : "hours"}, HttpOnly · five attempts per minute
 				</p>
 			</div>
 		</main>
