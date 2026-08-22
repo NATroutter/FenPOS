@@ -83,7 +83,7 @@ import { booleanSetting, integerSetting, stringSetting } from "@/lib/settings/se
  * multiply: five redirects would buy five times the wait, and a print job that hangs behind a slow
  * attacker-controlled host is its own small denial of service.
  *
- * An operator's own call, the same reason `assets.maxUploadKb` is a setting rather than a constant:
+ * An operator's own call, the same reason `assets.maxUploadMb` is a setting rather than a constant:
  * a host on a slow link an install actually depends on and a hostile one dragging out the wait look
  * identical from here, and only the operator knows which risk they would rather take.
  *

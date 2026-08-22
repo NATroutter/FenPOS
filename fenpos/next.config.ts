@@ -25,23 +25,34 @@ const nextConfig: NextConfig = {
 			/**
 			 * Ceiling for a server action's request body.
 			 *
-			 * Next defaults to 1 MB, which is below even the smallest `assets.maxUploadKb` an
+			 * Next defaults to 1 MB, which is below even the smallest `assets.maxUploadMb` an
 			 * operator could set and would reject a legitimate upload before any of this project's
 			 * code saw it — as a framework error page, not as something the Assets tab could word.
 			 *
-			 * Must stay above `assets.maxUploadKb`'s declared maximum (`SETTINGS` in
-			 * `lib/settings/settings-service.ts`, 8192 KiB today) with headroom to spare, not merely
-			 * above whatever an install currently has it set to: `assets.maxUploadKb` is what
+			 * Must stay above `assets.maxUploadMb`'s declared maximum (`SETTINGS` in
+			 * `lib/settings/settings-service.ts`, 512 MiB today) with headroom to spare, not merely
+			 * above whatever an install currently has it set to: `assets.maxUploadMb` is what
 			 * actually decides, enforced in the action and again in the service, so an over-large
 			 * upload is refused by this project with this project's message — but only if this
-			 * ceiling never becomes the thing that refuses it first. 16 MB leaves room for a
+			 * ceiling never becomes the thing that refuses it first. 520 MB leaves room for a
 			 * multipart body's own field names and boundaries on top of a file at the setting's
 			 * maximum, so a file exactly at that cap is a request slightly over it, and this ceiling
 			 * set to the same number would turn the boundary case into the wrong error. Raising
-			 * `assets.maxUploadKb`'s maximum without raising this is exactly what
-			 * `settings-service.test.ts`'s "assets.maxUploadKb's ceiling" test exists to catch.
+			 * `assets.maxUploadMb`'s maximum without raising this is exactly what
+			 * `settings-service.test.ts`'s "assets.maxUploadMb's ceiling" test exists to catch.
+			 *
+			 * This ceiling is also the memory exposure: Next buffers a server action's body before
+			 * this project's own code — the `assets.maxUploadMb` check inside the action, {@link
+			 * maxAssetBytes} in `lib/assets/asset-service.ts` — ever runs, so one in-flight upload
+			 * can hold up to this many bytes in the server's memory before anything validates it.
+			 * `MAX_IMAGE_DIMENSION` bounds the decode that follows a successful upload; it does
+			 * nothing for the bytes sitting in memory on the way in, and neither does anything else
+			 * in this path. Several uploads at once multiply this figure directly. That was already
+			 * true at 16 MB; at 520 MB it is a real amount of memory, and an install expecting to
+			 * take concurrent uploads on constrained hardware may want to keep `assets.maxUploadMb`
+			 * well under its new 512 MiB ceiling rather than only under whatever this constant is.
 			 */
-			bodySizeLimit: "16mb",
+			bodySizeLimit: "520mb",
 		},
 	},
 };

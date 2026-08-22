@@ -212,7 +212,7 @@ describe("setting definitions", () => {
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
 			"jobs.maxErrorMessageChars": "integer",
-			"assets.maxUploadKb": "integer",
+			"assets.maxUploadMb": "integer",
 			"assets.acceptedFormats": "enum",
 			"assets.rasterCacheMb": "integer",
 			"images.maxRemoteReferences": "integer",
@@ -578,26 +578,30 @@ describe("jobs.* bounds", () => {
 });
 
 /**
- * `assets.maxUploadKb`'s ceiling and `next.config.ts`'s server-action body limit are two numbers
+ * `assets.maxUploadMb`'s ceiling and `next.config.ts`'s server-action body limit are two numbers
  * that have to agree, and nothing in the type system connects them: the setting is validated in
  * `settings-service.ts`, the framework limit lives in a config file neither imports, and an
  * operator who raises the setting past the framework's own ceiling would be told no by Next
  * itself — a page with no wording this project chose, for a number nobody could find. This is
  * what notices if the two drift: it fails the moment someone widens the setting's `max` without
  * widening `bodySizeLimit` to stay above it.
+ *
+ * Both numbers are MiB-scale here — `assets.maxUploadMb`'s own unit, and `next.config.ts`'s
+ * `"Nmb"` string, which this project's convention (and Next's own `bytes` dependency) treats as
+ * 1024-based — so the comparison below is a direct one, with no unit conversion between them.
  */
-describe("assets.maxUploadKb's ceiling", () => {
+describe("assets.maxUploadMb's ceiling", () => {
 	it("keeps the framework body ceiling above the setting's maximum", () => {
-		const definition = SETTINGS.find((setting) => setting.key === "assets.maxUploadKb");
+		const definition = SETTINGS.find((setting) => setting.key === "assets.maxUploadMb");
 		if (definition?.type !== "integer") {
-			throw new Error("assets.maxUploadKb must be an integer setting.");
+			throw new Error("assets.maxUploadMb must be an integer setting.");
 		}
 
 		const config = readFileSync("next.config.ts", "utf8");
 		const ceiling = /bodySizeLimit:\s*"(\d+)mb"/i.exec(config);
 
 		expect(ceiling).not.toBeNull();
-		expect(Number(ceiling?.[1]) * 1024).toBeGreaterThan(definition.max);
+		expect(Number(ceiling?.[1])).toBeGreaterThan(definition.max);
 	});
 });
 

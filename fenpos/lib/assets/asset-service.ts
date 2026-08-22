@@ -43,7 +43,7 @@ import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
 /**
  * The largest asset this system will store, in bytes.
  *
- * Read from the `assets.maxUploadKb` setting — an operator's own call, an install storing mostly
+ * Read from the `assets.maxUploadMb` setting — an operator's own call, an install storing mostly
  * logos and one fetching full photographs want different answers — rather than a fixed constant.
  * The same figure bounds an upload and an import alike, because both go through {@link store}.
  * Stated here rather than left to Next's server-action body limit: a limit inherited from a
@@ -58,7 +58,7 @@ import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
  * @returns the configured cap, in bytes
  */
 export async function maxAssetBytes(): Promise<number> {
-	return (await integerSetting("assets.maxUploadKb")) * 1024;
+	return (await integerSetting("assets.maxUploadMb")) * 1024 * 1024;
 }
 
 /**

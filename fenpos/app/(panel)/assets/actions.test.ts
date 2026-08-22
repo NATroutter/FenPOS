@@ -8,10 +8,10 @@ import { prisma } from "@/lib/db";
  *
  * The property worth pinning here is the upload cap. It is the one limit in this feature that a
  * framework would otherwise decide: Next caps a server action's body at 1 MB by default, and
- * `next.config.ts` raises that ceiling to 16 MB precisely so that `assets.maxUploadKb` — 2 MiB by
+ * `next.config.ts` raises that ceiling to 520 MB precisely so that `assets.maxUploadMb` — 2 MiB by
  * default, and this product's to enforce — is a number this project actually applies rather than
  * one a framework default overrides. If someone deletes the check in the action, nothing in the
- * framework puts it back — the config now says 16 MB — so this is what notices.
+ * framework puts it back — the config now says 520 MB — so this is what notices.
  *
  * The session guard is stubbed rather than satisfied: it redirects, and a redirect is not what these
  * tests are about. `revalidatePath` is stubbed because it needs a request scope these do not have.
@@ -65,7 +65,7 @@ beforeEach(async () => {
 	// Not this file's subject, but the cap this test asserts against is now read from a setting
 	// rather than a fixed constant, so a stray override left by another suite sharing this
 	// worker's database would silently change what "the cap this product enforces" means here.
-	await prisma.setting.deleteMany({ where: { key: "assets.maxUploadKb" } });
+	await prisma.setting.deleteMany({ where: { key: "assets.maxUploadMb" } });
 	scheduled.length = 0;
 	pushConfigToEveryAgent.mockClear();
 });

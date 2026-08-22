@@ -10,23 +10,24 @@
  * States a byte count in whichever of KiB or MiB reads better.
  *
  * **Every caller, both halves of every sentence.** `describeBytes` exists because a megabytes-only
- * formatter floors `assets.maxUploadKb`'s 256 KiB minimum to "0 MB" — the exact number an operator
- * needs after a refusal, turned into the one number that tells them nothing. That protection is
- * void the moment only half of a refusal routes through it: "That image is 0.6 MB. The limit is
- * 256 KiB." is two different unit scales in one sentence, which is its own kind of confusing even
- * though neither half is wrong on its own. Every size shown to a person — the cap and the file
- * that tripped it alike — must come from this function so the sentence agrees with itself.
+ * formatter floors a small refusal — a truncated file of a few hundred bytes, say — to "0 MB", the
+ * exact number an operator needs after a refusal turned into the one number that tells them
+ * nothing. That protection is void the moment only half of a refusal routes through it: "That
+ * image is 0.6 MB. The limit is 1 MiB." is two different unit scales in one sentence, which is its
+ * own kind of confusing even though neither half is wrong on its own. Every size shown to a
+ * person — the cap and the file that tripped it alike — must come from this function so the
+ * sentence agrees with itself.
  *
  * **KiB and MiB, not KB and MB.** The arithmetic below is 1024-based, so those are the true units,
- * and `assets.maxUploadKb`'s own name and its `unit: "KiB"` already commit to binary units — a
- * value that reads "256 KiB" on the Settings page must read the same way wherever else it appears,
+ * and `assets.maxUploadMb`'s own name and its `unit: "MiB"` already commit to binary units — a
+ * value that reads "1 MiB" on the Settings page must read the same way wherever else it appears,
  * and matching the label is one edit here rather than relabelling the setting and changing what a
- * stored 256 means.
+ * stored 1 means.
  *
  * Floors within whichever unit it picks, matching how a byte cap has always been stated here: a
  * refusal that rounded up would tell someone a slightly larger file fits than actually does. One
- * decimal place within the chosen unit, so a size well under the next unit up — a 0.6 MiB file
- * refused by a 256 KiB cap — still reads as a number rather than always rounding to a whole unit.
+ * decimal place within the chosen unit, so a size well under the next unit up — a 1.6 MiB file
+ * refused by a 1 MiB cap — still reads as a number rather than always rounding to a whole unit.
  *
  * @param bytes the count to state
  * @returns e.g. `"256 KiB"`, `"1.5 KiB"`, or `"8 MiB"`

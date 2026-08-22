@@ -4,8 +4,8 @@ import { describeBytes } from "@/lib/format/bytes";
 /**
  * Tests for `describeBytes`, the one place a byte count is turned into something a person reads.
  *
- * The boundaries pinned here are the ones `assets.maxUploadKb` actually reaches: its declared
- * minimum (256 KiB) and maximum (8192 KiB), the KiB/MiB crossover a cap or a file can land on
+ * The boundaries pinned here are the ones `assets.maxUploadMb` actually reaches: its declared
+ * minimum (1 MiB) and maximum (512 MiB), the KiB/MiB crossover a cap or a file can land on
  * either side of, and 0. `describeBytes` floors rather than rounds — asserted directly below,
  * because a formatter that rounded up would tell an operator a slightly larger file fits than
  * actually does, which is the opposite of what a refusal is for.
@@ -29,22 +29,20 @@ describe("describeBytes", () => {
 		expect(describeBytes(1536)).toBe("1.5 KiB");
 	});
 
-	it("states assets.maxUploadKb's declared minimum, 256 KiB, exactly", () => {
-		expect(describeBytes(256 * 1024)).toBe("256 KiB");
-	});
-
 	it("stays in KiB just under the MiB crossover, however large the number reads", () => {
 		// 1048575 bytes is one byte short of 1 MiB — still the KiB unit, not a MiB value that
 		// rounds down to something smaller than the file actually is.
 		expect(describeBytes(1024 * 1024 - 1)).toBe("1023.9 KiB");
 	});
 
+	// Also assets.maxUploadMb's declared minimum, 1 MiB — the setting's floor lands exactly on
+	// the crossover this pins.
 	it("crosses to MiB at exactly one mebibyte", () => {
 		expect(describeBytes(1024 * 1024)).toBe("1 MiB");
 	});
 
-	it("states assets.maxUploadKb's declared maximum, 8192 KiB, as whole mebibytes", () => {
-		expect(describeBytes(8192 * 1024)).toBe("8 MiB");
+	it("states assets.maxUploadMb's declared maximum, 512 MiB, exactly", () => {
+		expect(describeBytes(512 * 1024 * 1024)).toBe("512 MiB");
 	});
 
 	it("pins the one-decimal rounding rule in MiB too", () => {

@@ -180,12 +180,12 @@ async function refusal(work: () => Promise<unknown>): Promise<ApiError> {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
-	// Cleared here too: several tests below override `assets.maxUploadKb` or
+	// Cleared here too: several tests below override `assets.maxUploadMb` or
 	// `assets.acceptedFormats`, and need to know they are starting from the built-in default rather
 	// than whatever the previous test — or another suite sharing this worker's database — left
 	// behind.
 	await prisma.setting.deleteMany({
-		where: { key: { in: ["assets.maxUploadKb", "assets.acceptedFormats", "assets.rasterCacheMb"] } },
+		where: { key: { in: ["assets.maxUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"] } },
 	});
 	fetchRemoteImage.mockReset();
 });
@@ -319,14 +319,14 @@ describe("createAsset", () => {
 	});
 
 	/**
-	 * The cap this task turned into a setting. `256` is the setting's declared minimum
+	 * The cap this task turned into a setting. `1` (MiB) is the setting's declared minimum
 	 * (`SETTINGS` in `settings-service.ts`) — `setSetting` refuses anything below it, so the
 	 * lowest value actually reachable is the one exercised here, not an arbitrary small number.
 	 */
 	it("refuses an upload above the configured size", async () => {
-		await setSetting("assets.maxUploadKb", 256);
+		await setSetting("assets.maxUploadMb", 1);
 
-		await expect(createAsset("big", Buffer.alloc(300 * 1024))).rejects.toThrow(ApiError);
+		await expect(createAsset("big", Buffer.alloc(1_200 * 1024))).rejects.toThrow(ApiError);
 	});
 
 	/**
@@ -336,14 +336,14 @@ describe("createAsset", () => {
 	 * cross 2 MiB without dimensions many times over {@link MAX_IMAGE_DIMENSION}.
 	 */
 	it("accepts an upload the configured size allows but the built-in default would not", async () => {
-		await setSetting("assets.maxUploadKb", 4_096);
+		await setSetting("assets.maxUploadMb", 4);
 
-		// Comfortably over the 2 MiB default and comfortably under the configured 4096 KiB —
+		// Comfortably over the 2 MiB default and comfortably under the configured 4 MiB —
 		// generated, not fixed, because a compressed size cannot be dictated exactly, so its
 		// byte length is checked here rather than merely assumed.
 		const big = await noisyPng(1000, 750);
 		expect(big.length).toBeGreaterThan(2 * 1024 * 1024);
-		expect(big.length).toBeLessThan(4_096 * 1024);
+		expect(big.length).toBeLessThan(4 * 1024 * 1024);
 
 		await expect(createAsset("big", big)).resolves.toBeDefined();
 	});
