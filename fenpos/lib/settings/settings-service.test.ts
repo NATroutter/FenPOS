@@ -187,6 +187,8 @@ describe("setting definitions", () => {
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
 			"logs.maxMessageChars": "integer",
+			"pairing.codeMinutes": "integer",
+			"auth.sessionHours": "integer",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in

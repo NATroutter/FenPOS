@@ -49,8 +49,8 @@ export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" |
  * The categories in the order the panel lists them.
  *
  * Only the categories with at least one setting appear here — an entry with nothing under it
- * would be a dead spot in the nav. `media`, `security`, `connections` and `panel` join as the
- * settings that belong to them are added.
+ * would be a dead spot in the nav. `connections` and `panel` join as the settings that belong
+ * to them are added.
  */
 export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
 	{ id: "general", title: "General", summary: "How this install identifies itself." },
@@ -61,6 +61,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 	},
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
 	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
+	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
 	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 ];
 
@@ -173,6 +174,8 @@ export const SETTING_KEYS = [
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
 	"logs.maxMessageChars",
+	"pairing.codeMinutes",
+	"auth.sessionHours",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -353,6 +356,30 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 8_000,
 		fallback: 1_000,
 		unit: "characters",
+	},
+	{
+		key: "pairing.codeMinutes",
+		label: "Pairing code lifetime",
+		description:
+			"How long a pairing code stays redeemable. Long enough to walk the code to the machine, short enough that a forgotten one expires.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 120,
+		fallback: 15,
+		unit: "minutes",
+	},
+	{
+		key: "auth.sessionHours",
+		label: "Session lifetime",
+		description:
+			"How long a panel sign-in lasts. A shared back-office terminal wants hours; a private office wants days. Applies to sessions created after the change — one already signed in keeps the lifetime it was issued.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 720,
+		fallback: 12,
+		unit: "hours",
 	},
 ];
 

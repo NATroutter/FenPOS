@@ -6,9 +6,9 @@ import {
 	destroySession,
 	purgeExpiredSessions,
 	resolveSession,
-	SESSION_TTL_MS,
 } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Exercises the session lifecycle against a real database.
@@ -19,8 +19,12 @@ import { prisma } from "@/lib/db";
 describe("session lifecycle", () => {
 	const now = new Date("2026-08-18T10:00:00.000Z");
 
+	/** The `auth.sessionHours` fallback (`settings-service.ts`), in milliseconds, for tests that leave it unset. */
+	const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
 	beforeEach(async () => {
 		await prisma.session.deleteMany({});
+		await prisma.setting.deleteMany({ where: { key: "auth.sessionHours" } });
 	});
 
 	it("creates a session that resolves immediately", async () => {
@@ -37,20 +41,40 @@ describe("session lifecycle", () => {
 		expect(rows[0].tokenHash).not.toBe(token);
 	});
 
-	it("expires exactly at the configured TTL", async () => {
+	it("expires exactly at the default TTL", async () => {
 		const { token, expiresAt } = await createSession({}, now);
-		expect(expiresAt.getTime()).toBe(now.getTime() + SESSION_TTL_MS);
+		expect(expiresAt.getTime()).toBe(now.getTime() + DEFAULT_SESSION_TTL_MS);
 
-		const justBefore = new Date(now.getTime() + SESSION_TTL_MS - 1);
+		const justBefore = new Date(now.getTime() + DEFAULT_SESSION_TTL_MS - 1);
 		await expect(resolveSession(token, justBefore)).resolves.not.toBeNull();
 
-		const atExpiry = new Date(now.getTime() + SESSION_TTL_MS);
+		const atExpiry = new Date(now.getTime() + DEFAULT_SESSION_TTL_MS);
 		await expect(resolveSession(token, atExpiry)).resolves.toBeNull();
+	});
+
+	it("issues a session lasting the configured number of hours", async () => {
+		await setSetting("auth.sessionHours", 1);
+		const { expiresAt } = await createSession({}, now);
+
+		expect(expiresAt.getTime()).toBe(now.getTime() + 60 * 60 * 1000);
+	});
+
+	it("does not shorten a session already issued when the setting changes afterwards", async () => {
+		// The expiry is stamped in at creation, not recomputed on read. An operator shortening
+		// the lifetime after, say, a laptop goes missing is not achieving what they might
+		// think — the fix for that is signing the session out, not this setting.
+		const { token, expiresAt } = await createSession({}, now);
+		expect(expiresAt.getTime()).toBe(now.getTime() + DEFAULT_SESSION_TTL_MS);
+
+		await setSetting("auth.sessionHours", 1);
+
+		const anHourAndAHalfLater = new Date(now.getTime() + 90 * 60 * 1000);
+		await expect(resolveSession(token, anHourAndAHalfLater)).resolves.not.toBeNull();
 	});
 
 	it("deletes an expired row as it is read, so expiry does not depend on a sweep", async () => {
 		const { token } = await createSession({}, now);
-		await resolveSession(token, new Date(now.getTime() + SESSION_TTL_MS + 1));
+		await resolveSession(token, new Date(now.getTime() + DEFAULT_SESSION_TTL_MS + 1));
 
 		expect(await prisma.session.count()).toBe(0);
 	});
@@ -112,7 +136,7 @@ describe("session lifecycle", () => {
 
 	it("purges only sessions that have expired", async () => {
 		const live = await createSession({}, now);
-		const stale = await createSession({}, new Date(now.getTime() - SESSION_TTL_MS));
+		const stale = await createSession({}, new Date(now.getTime() - DEFAULT_SESSION_TTL_MS));
 
 		expect(await purgeExpiredSessions(now)).toBe(1);
 

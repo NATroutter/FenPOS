@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-	issuePairingCode,
-	PAIRING_CODE_TTL_MS,
-	purgeExpiredPairingCodes,
-	redeemPairingCode,
-} from "@/lib/agents/pairing";
+import { issuePairingCode, purgeExpiredPairingCodes, redeemPairingCode } from "@/lib/agents/pairing";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Pairing is the only point at which an unauthenticated caller can claim an identity, so
@@ -15,6 +11,12 @@ import { prisma } from "@/lib/db";
 describe("pairing", () => {
 	const now = new Date("2026-08-18T10:00:00.000Z");
 
+	/**
+	 * The `pairing.codeMinutes` fallback (`settings-service.ts`), in milliseconds, for tests
+	 * that leave it unset.
+	 */
+	const DEFAULT_CODE_TTL_MS = 15 * 60_000;
+
 	async function createAgent(name = "kitchen") {
 		return prisma.agent.create({ data: { name }, select: { id: true, name: true } });
 	}
@@ -22,15 +24,32 @@ describe("pairing", () => {
 	beforeEach(async () => {
 		await prisma.pairingCode.deleteMany({});
 		await prisma.agent.deleteMany({});
+		await prisma.setting.deleteMany({ where: { key: "pairing.codeMinutes" } });
 	});
 
 	describe("issuePairingCode", () => {
-		it("issues a formatted code with the configured lifetime", async () => {
+		it("issues a formatted code with the default lifetime", async () => {
 			const agent = await createAgent();
 			const { code, expiresAt } = await issuePairingCode(agent.id, now);
 
 			expect(code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-			expect(expiresAt.getTime()).toBe(now.getTime() + PAIRING_CODE_TTL_MS);
+			expect(expiresAt.getTime()).toBe(now.getTime() + DEFAULT_CODE_TTL_MS);
+		});
+
+		it("honours a configured pairing code lifetime, both for issuing and for expiry", async () => {
+			await setSetting("pairing.codeMinutes", 1);
+			const agent = await createAgent();
+			const { code, expiresAt } = await issuePairingCode(agent.id, now);
+
+			expect(expiresAt.getTime()).toBe(now.getTime() + 60_000);
+
+			// The configured lifetime must actually reach redemption, not just the stored row:
+			// a code that would still be valid under the 15-minute default must be refused once
+			// the shorter configured lifetime has elapsed.
+			const stillWithinDefault = new Date(now.getTime() + 61_000);
+			const result = await redeemPairingCode(code, {}, stillWithinDefault);
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.failure).toBe("expired");
 		});
 
 		it("replaces an outstanding code rather than adding a second", async () => {
@@ -107,7 +126,7 @@ describe("pairing", () => {
 			const agent = await createAgent();
 			const { code } = await issuePairingCode(agent.id, now);
 
-			const late = new Date(now.getTime() + PAIRING_CODE_TTL_MS + 1);
+			const late = new Date(now.getTime() + DEFAULT_CODE_TTL_MS + 1);
 			const result = await redeemPairingCode(code, {}, late);
 
 			expect(result.ok).toBe(false);
@@ -118,7 +137,7 @@ describe("pairing", () => {
 			const agent = await createAgent();
 			const { code } = await issuePairingCode(agent.id, now);
 
-			const atExpiry = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
+			const atExpiry = new Date(now.getTime() + DEFAULT_CODE_TTL_MS);
 			expect((await redeemPairingCode(code, {}, atExpiry)).ok).toBe(false);
 		});
 
@@ -170,7 +189,7 @@ describe("pairing", () => {
 			const active = await issuePairingCode(paired.id, now);
 			await redeemPairingCode(active.code, {}, now);
 
-			const later = new Date(now.getTime() + PAIRING_CODE_TTL_MS + 1);
+			const later = new Date(now.getTime() + DEFAULT_CODE_TTL_MS + 1);
 			expect(await purgeExpiredPairingCodes(later)).toBe(1);
 			expect(await prisma.pairingCode.count()).toBe(1);
 		});

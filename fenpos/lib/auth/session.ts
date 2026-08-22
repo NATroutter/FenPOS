@@ -1,6 +1,7 @@
 import "server-only";
 import { generateToken, hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Administrator session lifecycle.
@@ -19,8 +20,20 @@ import { prisma } from "@/lib/db";
  * lifecycle logic and lets that logic be tested directly.
  */
 
-/** How long a session remains valid after sign-in. */
-export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+/**
+ * How long a session remains valid after sign-in, in milliseconds.
+ *
+ * Reads `auth.sessionHours` (`settings-service.ts`) at the moment a session is created. The
+ * expiry is stamped into the row then, not recomputed on every read, so shortening the setting
+ * applies to sessions created afterwards and does not retroactively cut short one already
+ * live — a session already in someone's browser keeps the lifetime it was issued until it is
+ * explicitly revoked (sign-out, or a password change via {@link destroyAllSessions}).
+ *
+ * @returns the configured lifetime, in milliseconds
+ */
+async function sessionTtlMs(): Promise<number> {
+	return (await integerSetting("auth.sessionHours")) * 3_600_000;
+}
 
 /**
  * How stale `lastSeenAt` may become before it is rewritten.
@@ -57,7 +70,7 @@ export async function createSession(
 	now: Date = new Date(),
 ): Promise<{ token: string; expiresAt: Date }> {
 	const token = generateToken();
-	const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+	const expiresAt = new Date(now.getTime() + (await sessionTtlMs()));
 
 	await prisma.session.create({
 		data: {

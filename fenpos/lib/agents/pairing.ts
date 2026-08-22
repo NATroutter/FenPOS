@@ -1,6 +1,7 @@
 import "server-only";
 import { generatePairingCode, generateToken, hashSecret, normalizePairingCode } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Agent pairing: issuing a short-lived code, and exchanging it for a long-lived token.
@@ -15,12 +16,18 @@ import { prisma } from "@/lib/db";
  */
 
 /**
- * How long a pairing code remains redeemable.
+ * How long a freshly issued pairing code remains redeemable, in milliseconds.
  *
- * Long enough to walk to the other end of a restaurant with it, short enough that a code
- * left on a screen is not a standing invitation.
+ * Reads `pairing.codeMinutes` (`settings-service.ts`) on every call rather than caching it, so
+ * a change to the setting takes effect on the very next code issued rather than needing a
+ * restart. Long enough to walk the code to the machine, short enough that a code left on a
+ * screen is not a standing invitation.
+ *
+ * @returns the configured lifetime, in milliseconds
  */
-export const PAIRING_CODE_TTL_MS = 15 * 60 * 1000;
+async function pairingCodeTtlMs(): Promise<number> {
+	return (await integerSetting("pairing.codeMinutes")) * 60_000;
+}
 
 /** What a agent learns by successfully redeeming a code. */
 export interface PairingGrant {
@@ -66,7 +73,7 @@ export async function issuePairingCode(
 	now: Date = new Date(),
 ): Promise<{ code: string; expiresAt: Date }> {
 	const code = generatePairingCode();
-	const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
+	const expiresAt = new Date(now.getTime() + (await pairingCodeTtlMs()));
 
 	await prisma.$transaction([
 		prisma.pairingCode.deleteMany({ where: { agentId, consumedAt: null } }),

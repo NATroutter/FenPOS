@@ -4,8 +4,8 @@ import { LoginForm } from "@/app/(auth)/login/login-form";
 import { BrandMark } from "@/components/brand-mark";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAdminConfigured } from "@/lib/auth/admin";
-import { SESSION_TTL_MS } from "@/lib/auth/session";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata: Metadata = {
 	title: "Sign in",
@@ -30,7 +30,7 @@ export default async function LoginPage() {
 	}
 
 	const configured = await isAdminConfigured();
-	const sessionHours = Math.round(SESSION_TTL_MS / 3_600_000);
+	const sessionHours = await integerSetting("auth.sessionHours");
 
 	return (
 		<main className="flex min-h-screen items-center justify-center p-6">
