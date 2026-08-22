@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
+import { resetFormatting } from "@/lib/format/datetime";
 import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel } from "@/lib/logger";
 
@@ -219,6 +220,9 @@ describe("setting definitions", () => {
 			"panel.logPageSize": "integer",
 			"panel.dashboardWindowHours": "integer",
 			"panel.dashboardTailLines": "integer",
+			"panel.locale": "enum",
+			"panel.timeFormat": "enum",
+			"panel.timezone": "enum",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in
@@ -571,5 +575,81 @@ describe("assets.maxUploadKb's ceiling", () => {
 
 		expect(ceiling).not.toBeNull();
 		expect(Number(ceiling?.[1]) * 1024).toBeGreaterThan(definition.max);
+	});
+});
+
+/**
+ * `panel.locale`, `panel.timeFormat` and `panel.timezone` — the second group of settings pushed
+ * into a module's mutable state rather than read where used, alongside `logs.minimumLevel`. The
+ * behaviour of the push itself (locale, clock, rebuilt formatters) belongs to `datetime.test.ts`;
+ * what belongs here is validation at the store's boundary and the raw text each writes, since all
+ * three are non-integer and so are the only settings that can actually prove `setSetting` writes
+ * JSON rather than `String(value)` — see `logs.minimumLevel`'s equivalent test above for why an
+ * integer cannot tell the two apart.
+ */
+describe("panel.locale, panel.timeFormat, panel.timezone", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	afterEach(() => {
+		// applyPushedSettings mutates datetime.ts's shared module state; restore its built-in
+		// formatting so a value this describe block pushed cannot leak into an unrelated test.
+		resetFormatting();
+	});
+
+	it("refuses a locale outside the fixed list", async () => {
+		await expect(setSetting("panel.locale", "xx-XX")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a clock value that is not 12h or 24h", async () => {
+		await expect(setSetting("panel.timeFormat", "36h")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a zone Intl does not recognise", async () => {
+		// panel.timezone is type: "enum", so fits() rejects anything outside its declared `values`
+		// (system, plus every zone Intl.supportedValuesOf named at module load) at the store
+		// boundary — the same enum check logs.minimumLevel's own refusal test exercises.
+		await expect(setSetting("panel.timezone", "Foo/Bar")).rejects.toThrow(ApiError);
+	});
+
+	it("stores and reads back a real IANA zone", async () => {
+		await setSetting("panel.timezone", "Europe/Helsinki");
+		expect(await enumSetting("panel.timezone")).toBe("Europe/Helsinki");
+	});
+
+	it("ignores a stored zone Intl no longer recognises, falling back to the default", async () => {
+		// Written directly rather than through setSetting, simulating a row saved under a Node/ICU
+		// version whose Intl.supportedValuesOf named this zone and a later one that does not. The
+		// same "ignore rather than clamp or coerce" rule every other setting follows (see
+		// `fits()`'s doc comment) applies here with no extra code.
+		await prisma.setting.create({ data: { key: "panel.timezone", value: JSON.stringify("Foo/Bar") } });
+
+		const settings = await listSettings();
+		const timezone = settings.find((setting) => setting.definition.key === "panel.timezone");
+
+		expect(timezone?.value).toBe("system");
+		expect(timezone?.overridden).toBe(false);
+	});
+
+	it("stores the locale as quoted JSON, not as bare text", async () => {
+		await setSetting("panel.locale", "fi-FI");
+		const row = await prisma.setting.findUnique({ where: { key: "panel.locale" } });
+		expect(row?.value).toBe(JSON.stringify("fi-FI"));
+		expect(row?.value).toBe('"fi-FI"');
+	});
+
+	it("stores the clock as quoted JSON, not as bare text", async () => {
+		await setSetting("panel.timeFormat", "24h");
+		const row = await prisma.setting.findUnique({ where: { key: "panel.timeFormat" } });
+		expect(row?.value).toBe(JSON.stringify("24h"));
+		expect(row?.value).toBe('"24h"');
+	});
+
+	it("stores the timezone as quoted JSON, not as bare text", async () => {
+		await setSetting("panel.timezone", "Europe/Helsinki");
+		const row = await prisma.setting.findUnique({ where: { key: "panel.timezone" } });
+		expect(row?.value).toBe(JSON.stringify("Europe/Helsinki"));
+		expect(row?.value).toBe('"Europe/Helsinki"');
 	});
 });

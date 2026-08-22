@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
+import { resetFormatting, setFormatting } from "@/lib/format/datetime";
 import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
@@ -34,6 +35,19 @@ export const DEFAULT_LIMITS: CompileLimits = {
 	maxTotalChars: 16_384,
 	maxOutputLines: 300,
 };
+
+/**
+ * The zones `panel.timezone` may be set to: the ambient `system` sentinel, plus every IANA zone
+ * this Node runtime knows about.
+ *
+ * Computed once at module load rather than per-request — `Intl.supportedValuesOf` is stable for
+ * the life of one process, so recomputing it on every `listSettings()` call would just repeat the
+ * same allocation. A value stored while a *different* Node/ICU version was running can fall out of
+ * this list across an upgrade; `fits()` then rejects it like any other stored value outside a
+ * setting's current bounds, and `listSettings` falls back to `system` rather than clamping or
+ * coercing it — the same "ignore rather than guess" rule every other setting follows.
+ */
+const TIME_ZONES = ["system", ...Intl.supportedValuesOf("timeZone")] as const;
 
 /**
  * Which part of the system a setting affects.
@@ -189,6 +203,9 @@ export const SETTING_KEYS = [
 	"panel.logPageSize",
 	"panel.dashboardWindowHours",
 	"panel.dashboardTailLines",
+	"panel.locale",
+	"panel.timeFormat",
+	"panel.timezone",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -533,6 +550,40 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		fallback: 12,
 		unit: "lines",
 	},
+	{
+		key: "panel.locale",
+		label: "Date format",
+		description: "Which locale's conventions dates and times are written in. The panel's own wording stays English.",
+		category: "panel",
+		type: "enum",
+		values: ["en-US", "en-GB", "fi-FI", "sv-SE", "de-DE", "fr-FR"] as const,
+		fallback: "en-US",
+	},
+	{
+		key: "panel.timeFormat",
+		label: "Clock",
+		description: "Whether times are written on a 12-hour or 24-hour clock, independently of the date format.",
+		category: "panel",
+		type: "enum",
+		values: ["12h", "24h"] as const,
+		fallback: "12h",
+	},
+	{
+		key: "panel.timezone",
+		label: "Time zone",
+		description:
+			"Which zone timestamps are shown in. `system` uses the server's own zone, which is right when the panel and its printers are on one site.",
+		category: "panel",
+		type: "enum",
+		// Every zone this Node runtime's ICU data knows, plus the `system` sentinel — see
+		// {@link TIME_ZONES}. An enum rather than a pattern-checked string because `fits()`'s
+		// membership check (`definition.values.includes(value)`) then does, for free, exactly the
+		// "is this a zone Intl actually knows" check a hand-rolled pattern could only approximate:
+		// a well-formed-looking zone that Intl does not recognise can never be stored in the first
+		// place, so nothing downstream has to guard against one reaching a formatter.
+		values: TIME_ZONES,
+		fallback: "system",
+	},
 ];
 
 /** A setting's current value, and whether it is stored or the built-in default. */
@@ -876,7 +927,37 @@ export async function applyPushedSettings(): Promise<void> {
 		} else {
 			resetMinimumLevel();
 		}
+
+		const locale = settings.find((setting) => setting.definition.key === "panel.locale");
+		const timeFormat = settings.find((setting) => setting.definition.key === "panel.timeFormat");
+		const timezone = settings.find((setting) => setting.definition.key === "panel.timezone");
+
+		if (!locale?.overridden && !timeFormat?.overridden && !timezone?.overridden) {
+			resetFormatting();
+		} else {
+			setFormatting({
+				locale: (locale?.overridden ? locale.value : locale?.definition.fallback) as string,
+				hour12: ((timeFormat?.overridden ? timeFormat.value : timeFormat?.definition.fallback) as string) === "12h",
+				timeZone: resolveTimeZone((timezone?.overridden ? timezone.value : timezone?.definition.fallback) as string),
+			});
+		}
 	} catch (error) {
 		logger.error("Could not apply pushed settings", error);
 	}
+}
+
+/**
+ * Resolves `panel.timezone`'s stored (or fallback) value to what `setFormatting` accepts.
+ *
+ * No membership check here: `panel.timezone` is `type: "enum"`, so `fits()` already refuses any
+ * value outside {@link TIME_ZONES} at the store boundary — a value that reaches this function has
+ * already been proven to be either `system` or a zone `Intl.supportedValuesOf` named at the moment
+ * it was validated. The only translation left is `system`'s meaning: `setFormatting` takes
+ * `undefined`, not the literal string, for "use the ambient zone".
+ *
+ * @param value the stored (or fallback) `panel.timezone` value
+ * @returns the zone to format with, or `undefined` for the ambient system zone
+ */
+function resolveTimeZone(value: string): string | undefined {
+	return value === "system" ? undefined : value;
 }
