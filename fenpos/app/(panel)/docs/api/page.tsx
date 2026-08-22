@@ -63,7 +63,14 @@ const SECTIONS = [
  * derived, because nothing in the code registers "which permissions a route requires"; the test
  * beside this page reads the routes and fails if this list stops matching them.
  */
-const ENFORCED: readonly Permission[] = ["print", "jobs:read", "jobs:cancel", "devices:read", "devices:control"];
+const ENFORCED: readonly Permission[] = [
+	"print",
+	"jobs:read",
+	"jobs:cancel",
+	"devices:read",
+	"devices:control",
+	"status:read",
+];
 
 /**
  * {@link ENFORCED} as a readable list inside a sentence.
