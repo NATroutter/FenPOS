@@ -203,6 +203,7 @@ model ApiKey {
   permissions ApiKeyPermission[]
   devices     ApiKeyDevice[]
   jobs        Job[]
+  webhook     Webhook?
 
   @@index([revokedAt])
   @@map("api_keys")
@@ -355,4 +356,57 @@ model Asset {
   /// for it without colliding with an image.
   @@unique([kind, name])
   @@map("assets")
+}
+
+/// Where one API key's job outcomes are delivered.
+///
+/// One row per key, registered through the admin panel rather than through the API. A key able to
+/// register its own callback could, if it leaked, redirect another integrator's notifications; the
+/// operator who granted the key is the right person to say where its events go.
+model Webhook {
+  id       String  @id @default(cuid())
+  apiKeyId String  @unique @map("api_key_id")
+  url      String
+  /// Shared secret for the HMAC signature, generated here and shown once. The receiver needs the
+  /// plaintext to verify, so unlike a credential this server checks, it cannot be stored hashed.
+  secret   String
+  enabled  Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  apiKey     ApiKey            @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@map("webhooks")
+}
+
+/// One attempted delivery of one job outcome.
+///
+/// Persisted rather than held in memory so a restart does not silently drop everything in flight —
+/// a notification that vanishes is worse than one that arrives late, because the receiver has no
+/// way to know it is waiting for something that will never come.
+model WebhookDelivery {
+  id        String @id @default(cuid())
+  webhookId String @map("webhook_id")
+  /// The job this delivery is about. Not a relation: the job may be swept by retention while a
+  /// delivery is still being retried, and losing the delivery record with it would hide the failure.
+  jobId     String @map("job_id")
+  /// The signed body, exactly as it will be sent. Frozen at queue time so a retry delivers what the
+  /// job looked like when it settled rather than what it looks like now.
+  payload   String
+
+  /// PENDING | DELIVERED | FAILED
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  lastError    String?   @map("last_error")
+  deliveredAt  DateTime? @map("delivered_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([webhookId])
+  @@map("webhook_deliveries")
 }
