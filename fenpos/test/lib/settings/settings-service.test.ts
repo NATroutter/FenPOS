@@ -231,6 +231,8 @@ describe("setting definitions", () => {
 			"auth.minimumPasswordLength": "integer",
 			"auth.lastSeenRefreshMinutes": "integer",
 			"api.readsPerMinute": "integer",
+			"api.defaultPageSize": "integer",
+			"api.maxPageSize": "integer",
 			"events.keepaliveSeconds": "integer",
 			"link.heartbeatSeconds": "integer",
 			"link.heartbeatTimeoutSeconds": "integer",
