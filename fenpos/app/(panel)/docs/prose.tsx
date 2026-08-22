@@ -22,6 +22,45 @@ export function seconds(ms: number): string {
 }
 
 /**
+ * The lead sentence of the markup docs page's remote-image paragraph, phrased for the configured
+ * `images.maxRemoteReferences`.
+ *
+ * Zero is not a small limit. `resolve-images.ts`'s `requireWithinRemoteLimit` treats it as the
+ * switch that turns outbound image fetching off entirely, so this says that rather than naming a
+ * limit of zero — "one request may name at most 0 distinct URLs" reads as a broken install, not as
+ * a choice an operator made, which is exactly the wording the refusal message itself was corrected
+ * to avoid.
+ *
+ * Returned as a plain string rather than JSX, on purpose: `docs-check.test.ts` cannot render the
+ * page it checks — this project's tests run in a Node environment, not a browser — so the sentence
+ * that changes shape at the boundary has to be checkable without rendering anything.
+ * `<ErrorRef code="too_many_remote_images" />` still belongs after whichever sentence this returns,
+ * since that error still fires in both cases; the page places it itself, immediately after this.
+ *
+ * @param limit the configured `images.maxRemoteReferences`
+ * @returns the sentence, ending just before the page's own `<ErrorRef>`
+ */
+export function remoteLimitLead(limit: number): string {
+	if (limit === 0) {
+		return "This install has switched off images fetched by URL. Naming one at all is refused with";
+	}
+	return `One request may name at most ${limit} distinct ${limit === 1 ? "URL" : "URLs"}, or`;
+}
+
+/**
+ * The clause that follows `<ErrorRef code="too_many_remote_images" />` in the same paragraph as
+ * {@link remoteLimitLead}.
+ *
+ * @param limit the configured `images.maxRemoteReferences`
+ * @returns the trailing clause, including its leading punctuation
+ */
+export function remoteLimitTrail(limit: number): string {
+	return limit === 0
+		? "; store the image on the Assets tab and reference it by name instead."
+		: "; stored images are not counted against that.";
+}
+
+/**
  * Groups the error codes by the status they map to.
  *
  * Read from the error module rather than restated, so a code added there appears here without
