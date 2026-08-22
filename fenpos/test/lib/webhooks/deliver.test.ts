@@ -222,9 +222,12 @@ describe("deliverDue", () => {
 	// --- Beyond the brief: overlapping passes ---
 	//
 	// Task 11 calls deliverDue on a timer, so a slow pass can still be in flight when the next one
-	// fires. None of the cases above exercise that, so this one does directly: two passes started
-	// together, racing over one delivery.
-	it("does not send the same delivery twice when two passes overlap", async () => {
+	// fires. Two distinct orderings matter here, and each needs its own case: two passes whose reads
+	// of the due row both land before either claims it (this one — the claim's compare-and-swap on
+	// `attempts` is what decides the winner), and a pass that starts while an earlier one's `send` is
+	// still genuinely in flight (the next one — that needs the lease, not just the CAS, since the row
+	// is still PENDING and still due for as long as nothing has pushed its nextAttemptAt out).
+	it("does not double-claim a delivery when two passes read it before either claims it", async () => {
 		const id = await queue();
 		let inFlight = 0;
 		let sawConcurrent = false;
@@ -247,5 +250,53 @@ describe("deliverDue", () => {
 		const row = await prisma.webhookDelivery.findUnique({ where: { id } });
 		expect(row?.status).toBe("DELIVERED");
 		expect(row?.attempts).toBe(1);
+	});
+
+	it("does not resend a delivery whose earlier attempt is still in flight when a later pass starts", async () => {
+		const id = await queue();
+		let releaseSend: (() => void) | undefined;
+		let sendStartedResolve: (() => void) | undefined;
+		const sendStarted = new Promise<void>((resolve) => {
+			sendStartedResolve = resolve;
+		});
+		const send = vi.fn(async () => {
+			sendStartedResolve?.();
+			await new Promise<void>((resolve) => {
+				releaseSend = resolve;
+			});
+			return { status: 200 };
+		});
+
+		// The first pass claims the row and calls `send`, which hangs until released below — this is
+		// deliberately sequential, not Promise.all, so the second pass's `findMany` runs strictly
+		// after the first pass's claim has already committed. That is the ordering a claim that is
+		// only a compare-and-swap on `attempts`, and not a lease on `nextAttemptAt`, cannot survive:
+		// the row is still PENDING and its `nextAttemptAt` is still in the past, so the second pass's
+		// due query finds it, and its own CAS against the now-current `attempts` succeeds too.
+		const firstPass = deliverDue(new Date(), send);
+		await sendStarted;
+
+		const secondPassAttempted = await deliverDue(new Date(), send);
+
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(secondPassAttempted).toBe(0);
+
+		releaseSend?.();
+		await firstPass;
+
+		const row = await prisma.webhookDelivery.findUnique({ where: { id } });
+		expect(row?.status).toBe("DELIVERED");
+		expect(row?.attempts).toBe(1);
+	});
+
+	it("does not let a setup failure become an unhandled rejection", async () => {
+		const findMany = vi.spyOn(prisma.setting, "findMany").mockRejectedValueOnce(new Error("db exploded"));
+		await queue();
+		const send = vi.fn(async () => ({ status: 200 }));
+
+		await expect(deliverDue(new Date(), send)).resolves.toBe(0);
+		expect(send).not.toHaveBeenCalled();
+
+		findMany.mockRestore();
 	});
 });

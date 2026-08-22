@@ -24,15 +24,17 @@ import { signPayload } from "@/lib/webhooks/signature";
  *
  * **Overlapping passes must not send the same delivery twice.** Task 11 calls {@link deliverDue} on
  * a timer, so a pass that is still working through a slow batch can still be running when the next
- * one fires. Nothing here holds a lock across a whole pass — instead, each delivery is claimed
- * individually with a compare-and-swap on `attempts` (`UPDATE ... WHERE id = ? AND attempts = ?`)
- * before it is touched. Two passes that both read the same row before either claims it will both try
- * to claim it, but only one `UPDATE` can match the row's still-unclaimed `attempts` value — the
- * other affects zero rows and that pass skips the delivery, leaving it for whichever pass actually
- * won. This is the same shape SQL job queues use for "claim one row, mine alone" without a
- * `SELECT ... FOR UPDATE` this schema's driver does not offer, and it costs nothing extra: `attempts`
- * already has to be incremented per attempt, so the claim *is* that increment, done as the atomic
- * step that decides who owns the row rather than as a fact recorded after the fact.
+ * one fires. Claiming a row is not enough on its own: an earlier version of this module claimed only
+ * by bumping `attempts`, which stops two passes claiming the row *at the same instant* but does
+ * nothing once the winner is mid-flight — the row is still `PENDING` and still due, so the *next*
+ * pass to run `findMany` finds it, claims it again (the CAS matches the winner's now-current
+ * `attempts`), and sends it a second time while the first send is still in the air. The fix is a
+ * lease: the same `UPDATE` that wins the claim also pushes `nextAttemptAt` out past this attempt's
+ * worst-case duration, so the row drops out of every other pass's due set for as long as it is
+ * actually being worked. Every outcome path (delivered, retried, given up) overwrites `nextAttemptAt`
+ * or `status` before returning, so the lease is invisible on the happy path — it only matters if the
+ * process dies mid-attempt, in which case the row simply becomes due again once the lease expires,
+ * which is the same "never permanently unclaimable" property the plain CAS had.
  *
  * **One hostile target must not stall the rest of the batch.** A batch is sent concurrently
  * ({@link Promise.all} over {@link processDelivery}), not one delivery after another — each attempt
@@ -41,7 +43,10 @@ import { signPayload } from "@/lib/webhooks/signature";
  * something unexpected (not a rejected `send`, which is already handled, but e.g. a database error)
  * is caught inside {@link processDelivery} rather than left to reject its place in the `Promise.all`
  * — this function runs on a timer with nobody to catch it, so one bad row must not cost every other
- * delivery in the same pass.
+ * delivery in the same pass. The same reasoning applies one level up: {@link deliverDue}'s own setup
+ * (reading `webhooks.enabled`, the due query, reading the rest of the settings) is a database round
+ * trip too, and a transient failure there must resolve to 0 rather than reject into a caller that,
+ * being a timer, has nobody to catch it either.
  */
 
 /** How one delivery reaches its target. A seam: tests pass their own, production passes none. */
@@ -64,6 +69,21 @@ const RETRYABLE_CLIENT_STATUSES: readonly number[] = [408, 429];
  */
 const MAX_BACKOFF_SECONDS = 24 * 60 * 60;
 
+/**
+ * Extra time added on top of an attempt's worst-case duration when leasing a delivery — see
+ * {@link processDelivery}.
+ *
+ * An attempt's own worst case is bounded by settings (DNS resolution up to `webhooks.timeoutMs`, then
+ * the send itself up to `webhooks.timeoutMs` again — see {@link resolveHostname}), but the lease also
+ * has to cover everything settings don't: the claim write, the two address checks, and the final
+ * write, all real database round trips. Five seconds is generous for that on the local SQLite this
+ * schema runs against — these are all single-row writes and reads — while staying small relative to
+ * even the shortest `webhooks.timeoutMs` window this matters for. Sized as a flat addition rather
+ * than a percentage: the overhead it covers doesn't scale with `timeoutMs`, so a percentage would
+ * either be too tight at the low end or absurdly generous at the high end.
+ */
+const LEASE_MARGIN_MS = 5_000;
+
 /** Settings read once per pass and threaded through {@link processDelivery} for every delivery in it. */
 interface DeliverySettings {
 	timeoutMs: number;
@@ -80,31 +100,40 @@ interface DeliverySettings {
  * @returns how many deliveries were attempted
  */
 export async function deliverDue(now: Date = new Date(), send: Sender = httpSender): Promise<number> {
-	if (!(await booleanSetting("webhooks.enabled"))) {
+	try {
+		if (!(await booleanSetting("webhooks.enabled"))) {
+			return 0;
+		}
+
+		const due = await prisma.webhookDelivery.findMany({
+			where: { status: "PENDING", nextAttemptAt: { lte: now } },
+			orderBy: { nextAttemptAt: "asc" },
+			take: BATCH,
+			include: { webhook: { select: { url: true, secret: true, enabled: true } } },
+		});
+
+		const [timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp] = await Promise.all([
+			integerSetting("webhooks.timeoutMs"),
+			integerSetting("webhooks.maxAttempts"),
+			integerSetting("webhooks.retryBackoffSeconds"),
+			booleanSetting("webhooks.allowPlainHttp"),
+		]);
+		const settings: DeliverySettings = { timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp };
+
+		// Concurrently, not one after another — see the module comment on why a slow target must not
+		// hold up the rest of the batch. Every element resolves (never rejects; see processDelivery),
+		// so Promise.all cannot itself throw here.
+		const attempted = await Promise.all(due.map((delivery) => processDelivery(delivery, now, send, settings)));
+
+		return attempted.filter(Boolean).length;
+	} catch (error) {
+		// This runs on a timer with nobody to catch a rejection — see the module comment. Everything
+		// above this point is a database round trip (the enabled check, the due query, the settings
+		// read), any of which can fail transiently, and a failure here must cost this pass rather than
+		// the ability to ever run again.
+		logger.error("A webhook delivery pass could not run", error);
 		return 0;
 	}
-
-	const due = await prisma.webhookDelivery.findMany({
-		where: { status: "PENDING", nextAttemptAt: { lte: now } },
-		orderBy: { nextAttemptAt: "asc" },
-		take: BATCH,
-		include: { webhook: { select: { url: true, secret: true, enabled: true } } },
-	});
-
-	const [timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp] = await Promise.all([
-		integerSetting("webhooks.timeoutMs"),
-		integerSetting("webhooks.maxAttempts"),
-		integerSetting("webhooks.retryBackoffSeconds"),
-		booleanSetting("webhooks.allowPlainHttp"),
-	]);
-	const settings: DeliverySettings = { timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp };
-
-	// Concurrently, not one after another — see the module comment on why a slow target must not
-	// hold up the rest of the batch. Every element resolves (never rejects; see processDelivery),
-	// so Promise.all cannot itself throw here.
-	const attempted = await Promise.all(due.map((delivery) => processDelivery(delivery, now, send, settings)));
-
-	return attempted.filter(Boolean).length;
 }
 
 /**
@@ -141,17 +170,23 @@ async function processDelivery(
 
 		const attempts = delivery.attempts + 1;
 
-		// The claim: only one of however many overlapping passes have read this row can match its
-		// still-unclaimed `attempts` value, so only one can win it. See the module comment.
+		// The claim is a lease, not just a compare-and-swap: matching `attempts` is what decides which
+		// of however many overlapping passes wins the row, but the same UPDATE also pushes
+		// `nextAttemptAt` past this attempt's worst case (DNS resolution, then the send itself — see
+		// resolveHostname and MAX_BACKOFF_SECONDS's sibling comment on LEASE_MARGIN_MS) so the row
+		// drops out of every *other* pass's due set for as long as this one might still be working it.
+		// Every path below overwrites nextAttemptAt or status before returning, so this value is never
+		// actually read back — it only matters if this process dies before reaching one of them.
+		const leaseUntil = new Date(now.getTime() + settings.timeoutMs * 2 + LEASE_MARGIN_MS);
 		const claim = await prisma.webhookDelivery.updateMany({
 			where: { id: delivery.id, status: "PENDING", attempts: delivery.attempts },
-			data: { attempts },
+			data: { attempts, nextAttemptAt: leaseUntil },
 		});
 		if (claim.count === 0) {
 			return false;
 		}
 
-		const refusal = await targetRefusal(delivery.webhook.url, settings.allowPlainHttp);
+		const refusal = await targetRefusal(delivery.webhook.url, settings.allowPlainHttp, settings.timeoutMs);
 		if (refusal !== null) {
 			// Not retried. The target is wrong rather than unavailable, and no number of attempts
 			// will make an address this server must not reach into one it may.
@@ -207,9 +242,10 @@ async function processDelivery(
  *
  * @param url the registered target
  * @param allowPlainHttp whether the install permits http
+ * @param timeoutMs how long address resolution may take — see {@link resolveHostname}
  * @returns the reason to refuse, or null when the target is acceptable
  */
-async function targetRefusal(url: string, allowPlainHttp: boolean): Promise<string | null> {
+async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: number): Promise<string | null> {
 	let target: URL;
 	try {
 		target = new URL(url);
@@ -230,7 +266,7 @@ async function targetRefusal(url: string, allowPlainHttp: boolean): Promise<stri
 	}
 
 	// A literal address needs no resolver; a hostname does. Both end at the same judgement.
-	const resolved = await resolveHostname(hostname);
+	const resolved = await resolveHostname(hostname, timeoutMs);
 	if (resolved === null) {
 		return `the hostname ${hostname} has no address`;
 	}
@@ -257,20 +293,47 @@ async function targetRefusal(url: string, allowPlainHttp: boolean): Promise<stri
  * `node:dns/promises`, and a webhook that never leaves an install where every target is a literal
  * address never pays for it.
  *
+ * **Bounded by `timeoutMs`, not the OS resolver's own timeout.** `dns.lookup` carries no timeout of
+ * its own — left alone it inherits whatever the platform resolver does, which can run well past the
+ * `webhooks.timeoutMs` ceiling this module otherwise holds every attempt to. Raced against a timer so
+ * that "DNS is slow" fails exactly like "DNS has no answer" — both become the same `null`, which
+ * {@link targetRefusal} turns into the same "has no address" refusal, so there is one failure path
+ * here rather than two. What this cannot do is cancel the underlying lookup: `dns.lookup` offers no
+ * abort signal, so a lookup that loses the race keeps running in Node's resolver thread pool until it
+ * finishes on its own — this only bounds how long the delivery *waits* for an answer, not how long
+ * the lookup itself runs.
+ *
  * @param hostname the target's hostname, brackets already stripped
- * @returns every address it resolves to, or null when it does not resolve at all
+ * @param timeoutMs how long to wait for an answer before treating this as unresolvable
+ * @returns every address it resolves to, or null when it does not resolve (or resolve in time)
  */
-async function resolveHostname(hostname: string): Promise<string[] | null> {
+async function resolveHostname(hostname: string, timeoutMs: number): Promise<string[] | null> {
 	if (isIP(hostname) !== 0) {
 		return [hostname];
 	}
 	try {
 		const { lookup } = await import("node:dns/promises");
-		const entries = await lookup(hostname, { all: true });
+		const entries = await Promise.race([lookup(hostname, { all: true }), rejectAfter(timeoutMs)]);
 		return entries.map((entry) => entry.address);
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Rejects after `ms`, for racing against an operation that carries no timeout of its own.
+ *
+ * The timer is unref'd so a lookup that is still pending when the process would otherwise exit does
+ * not hold it open on its own.
+ *
+ * @param ms how long to wait before rejecting
+ * @returns a promise that never resolves, only rejects
+ */
+function rejectAfter(ms: number): Promise<never> {
+	return new Promise((_resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+		timer.unref?.();
+	});
 }
 
 /**
@@ -342,5 +405,16 @@ const httpSender: Sender = async (url, body, signature, timeoutMs) => {
 		signal: AbortSignal.timeout(timeoutMs),
 		redirect: "manual",
 	});
+	// The status is read; the body never is. Left alone, an unconsumed body holds its connection open
+	// under undici until the Response is garbage collected — and this runs on a timer forever, against
+	// up to twenty targets a pass, some of which are hostile by construction (a refused address, a
+	// receiver that never finishes a response). Cancelling discards it and releases the connection.
+	// Its own try/catch: a body that already errored (the connection dropping mid-response, say)
+	// rejects on cancel, and that must not overwrite the status this function already has to report.
+	try {
+		await response.body?.cancel();
+	} catch {
+		// See above — deliberately ignored.
+	}
 	return { status: response.status };
 };
