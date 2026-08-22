@@ -139,3 +139,68 @@ export async function requireGrantedDevice(
 
 	return device;
 }
+
+/** A device a key may address, with the agent identity its observed state is keyed by. */
+export interface GrantedDevice {
+	id: string;
+	name: string;
+	agentId: string;
+	agentName: string;
+	port: string;
+	columns: number;
+	codepage: string;
+	defaultLinefeed: string;
+	paused: boolean;
+	maxQueueDepth: number | null;
+}
+
+/**
+ * Every device this key grants.
+ *
+ * The listing counterpart to {@link requireGrantedDevice}, and it inherits that function's rule:
+ * what is not granted is not merely forbidden, it is invisible. A listing that returned the whole
+ * install with a `granted` flag would hand a caller the printer map that `requireGrantedDevice`
+ * refuses to confirm one name at a time.
+ *
+ * Ordered by agent then device name so a caller rendering a picker gets a stable list rather than
+ * whatever order the grants happened to be written in.
+ *
+ * @param key the authenticated caller
+ * @returns the granted devices, agent-major
+ */
+export async function grantedDevices(key: AuthenticatedKey): Promise<GrantedDevice[]> {
+	const grants = await prisma.apiKeyDevice.findMany({
+		where: { apiKeyId: key.id },
+		select: {
+			device: {
+				select: {
+					id: true,
+					name: true,
+					agentId: true,
+					port: true,
+					columns: true,
+					codepage: true,
+					defaultLinefeed: true,
+					paused: true,
+					maxQueueDepth: true,
+					agent: { select: { name: true } },
+				},
+			},
+		},
+	});
+
+	return grants
+		.map((grant) => ({
+			id: grant.device.id,
+			name: grant.device.name,
+			agentId: grant.device.agentId,
+			agentName: grant.device.agent.name,
+			port: grant.device.port,
+			columns: grant.device.columns,
+			codepage: grant.device.codepage,
+			defaultLinefeed: grant.device.defaultLinefeed,
+			paused: grant.device.paused,
+			maxQueueDepth: grant.device.maxQueueDepth,
+		}))
+		.sort((a, b) => a.agentName.localeCompare(b.agentName) || a.name.localeCompare(b.name));
+}

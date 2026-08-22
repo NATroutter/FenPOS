@@ -5,6 +5,7 @@ import {
 	type AuthenticatedKey,
 	authenticateKey,
 	bearerToken,
+	grantedDevices,
 	requireGrantedDevice,
 	requirePermission,
 } from "@/lib/keys/authenticate";
@@ -264,5 +265,35 @@ describe("API key authorisation", () => {
 		await expect(requireGrantedDevice(kitchenKey, "site-a", "kitchen")).resolves.toBeDefined();
 		await expect(requireGrantedDevice(barKey, "site-a", "bar")).resolves.toBeDefined();
 		expect((await refusal(() => requireGrantedDevice(barKey, "site-a", "kitchen"))).code).toBe("unknown_device");
+	});
+});
+
+describe("grantedDevices", () => {
+	it("returns only the devices the key grants, with their agent's name", async () => {
+		const agent = await prisma.agent.create({ data: { name: `agent-${Date.now()}` } });
+		const granted = await prisma.device.create({
+			data: { agentId: agent.id, name: "kitchen", port: "COM1", columns: 42 },
+		});
+		await prisma.device.create({ data: { agentId: agent.id, name: "bar", port: "COM2", columns: 32 } });
+
+		const key = await prisma.apiKey.create({
+			data: { name: "till", keyHash: `hash-${Date.now()}`, maskedHint: "abcd" },
+		});
+		await prisma.apiKeyDevice.create({ data: { apiKeyId: key.id, deviceId: granted.id } });
+
+		const devices = await grantedDevices({ id: key.id, name: key.name, permissions: ["devices:read"] });
+
+		expect(devices).toHaveLength(1);
+		expect(devices[0].name).toBe("kitchen");
+		expect(devices[0].agentName).toBe(agent.name);
+		expect(devices[0].columns).toBe(42);
+	});
+
+	it("returns nothing for a key with no grants, which is what a fresh key is", async () => {
+		const key = await prisma.apiKey.create({
+			data: { name: "inert", keyHash: `hash-${Date.now()}-b`, maskedHint: "efgh" },
+		});
+
+		expect(await grantedDevices({ id: key.id, name: key.name, permissions: [] })).toEqual([]);
 	});
 });
