@@ -199,9 +199,9 @@ describe("log ingestion", () => {
 
 		it("sweeps down to the configured row cap through the real ingest path, rather than the built-in one", async () => {
 			// ingest.ts's own write counter (fenposLogWrites) is shared across every test in this
-			// file and persists between them. Reset it so SWEEP_EVERY's gate (500, unchanged by
-			// this task) trips at a known point in this test's own loop below, rather than at
-			// whatever offset earlier tests happened to leave it.
+			// file and persists between them. Reset it so logs.sweepEvery's gate — left at its
+			// built-in 500 in this test — trips at a known point in this test's own loop below,
+			// rather than at whatever offset earlier tests happened to leave it.
 			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
 
 			// High enough that the throttle — not what this test is exercising — never engages
@@ -211,9 +211,9 @@ describe("log ingestion", () => {
 			await setSetting("logs.maxRecords", 1000);
 
 			// The backlog is seeded directly, so building it up past the cap stays one bulk query.
-			// Only the writes that need to be real — enough to cross SWEEP_EVERY and trigger
-			// sweepOccasionally for real, through ingestLog itself rather than by calling the sweep
-			// entry point directly — go through the throttled, awaited ingestLog path below.
+			// Only the writes that need to be real — enough to cross logs.sweepEvery's built-in 500
+			// and trigger sweepOccasionally for real, through ingestLog itself rather than by calling
+			// the sweep entry point directly — go through the throttled, awaited ingestLog path below.
 			await prisma.logEntry.createMany({
 				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
@@ -232,11 +232,52 @@ describe("log ingestion", () => {
 			}
 
 			// The counter reset to 0 above and exactly 500 accepted writes below land the counter
-			// on exactly SWEEP_EVERY, so sweepOccasionally's real gate fires once, on the last of
-			// these calls — via ingestLog -> sweepOccasionally(settings.maxRows) -> sweepLogsNow.
-			// That call is fire-and-forget (ingestLog does not await it), so the deletion this
-			// proves may still be in flight the instant the loop above returns; wait for it rather
-			// than asserting immediately.
+			// on exactly the built-in logs.sweepEvery, so sweepOccasionally's real gate fires once,
+			// on the last of these calls — via ingestLog -> sweepOccasionally(maxRows, sweepEvery) ->
+			// sweepLogsNow. That call is fire-and-forget (ingestLog does not await it), so the
+			// deletion this proves may still be in flight the instant the loop above returns; wait
+			// for it rather than asserting immediately.
+			await vi.waitFor(async () => {
+				expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+			});
+		});
+
+		/**
+		 * The counterpart of the test above: a lower `logs.sweepEvery` makes the sweep trip after
+		 * far fewer writes than the built-in 500, proving the gate itself is configured rather than
+		 * only the row cap it sweeps down to.
+		 */
+		it("sweeps at the configured interval rather than the built-in one", async () => {
+			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
+
+			// High enough that the throttle never engages across the real calls below.
+			await setSetting("logs.linesPerMinutePerAgent", 600);
+			// 1000 is logs.maxRecords's declared minimum.
+			await setSetting("logs.maxRecords", 1000);
+			// 50 is logs.sweepEvery's declared minimum — a tenth of the built-in 500, so the sweep
+			// fires after 50 real writes rather than needing ten times as many.
+			await setSetting("logs.sweepEvery", 50);
+
+			await prisma.logEntry.createMany({
+				data: Array.from({ length: 1000 }, (_, index) => ({
+					level: "INFO",
+					severity: 1,
+					message: `backlog ${index}`,
+					agentId,
+					ts: new Date(Date.now() + index),
+				})),
+			});
+
+			for (let attempt = 0; attempt < 50; attempt++) {
+				await ingestLog(
+					agentId,
+					line({ message: `message ${attempt}`, at: new Date(Date.now() + 1000 + attempt).toISOString() }),
+				);
+			}
+
+			// The counter reset to 0 above and exactly 50 accepted writes below land it on exactly
+			// the configured sweepEvery, so the real gate fires once, on the last of these calls —
+			// which the built-in 500 would not have reached with only 50 writes.
 			await vi.waitFor(async () => {
 				expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
 			});

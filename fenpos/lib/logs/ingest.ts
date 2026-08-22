@@ -29,9 +29,6 @@ import { globalLogIngestSettings } from "@/lib/settings/settings-service";
  */
 const WINDOW_MS = 60_000;
 
-/** How often the sweep runs, measured in ingested lines rather than in time. */
-const SWEEP_EVERY = 500;
-
 interface Window {
 	count: number;
 	resetAt: number;
@@ -49,6 +46,8 @@ interface LogIngestSettings {
 	maxMessageChars: number;
 	/** `logs.maxRecords`: rows kept before the oldest are swept. */
 	maxRows: number;
+	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
+	sweepEvery: number;
 }
 
 const globalForIngest = globalThis as unknown as {
@@ -80,12 +79,13 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
  * @returns the settings just read
  */
 async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
-	const { linesPerMinutePerAgent, maxRecords, maxMessageChars } = await globalLogIngestSettings();
+	const { linesPerMinutePerAgent, maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
 	const settings: LogIngestSettings = {
 		maxLinesPerWindow: linesPerMinutePerAgent,
 		maxMessageChars,
 		maxRows: maxRecords,
+		sweepEvery,
 	};
 	globalForIngest.fenposLogIngestSettings = settings;
 	return settings;
@@ -142,7 +142,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		deviceName: frame.device ?? null,
 	});
 
-	void sweepOccasionally(settings.maxRows);
+	void sweepOccasionally(settings.maxRows, settings.sweepEvery);
 	return true;
 }
 
@@ -189,12 +189,13 @@ async function allow(agentId: string): Promise<boolean> {
  * a busy one sweeps in proportion to what it is producing.
  *
  * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
+ * @param sweepEvery how many ingested lines pass between sweeps (`logs.sweepEvery`)
  */
-async function sweepOccasionally(maxRows: number): Promise<void> {
+async function sweepOccasionally(maxRows: number, sweepEvery: number): Promise<void> {
 	const writes = (globalForIngest.fenposLogWrites ?? 0) + 1;
 	globalForIngest.fenposLogWrites = writes;
 
-	if (writes % SWEEP_EVERY !== 0) {
+	if (writes % sweepEvery !== 0) {
 		return;
 	}
 
@@ -204,7 +205,7 @@ async function sweepOccasionally(maxRows: number): Promise<void> {
 /**
  * Sweeps the log table down to `maxRows`, deleting the oldest rows first.
  *
- * Exported so a test can trigger a sweep directly rather than ingesting {@link SWEEP_EVERY} lines
+ * Exported so a test can trigger a sweep directly rather than ingesting `logs.sweepEvery` lines
  * to reach the point at which {@link sweepOccasionally} would trigger it on its own.
  *
  * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)

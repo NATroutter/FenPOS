@@ -182,8 +182,10 @@ export const SETTING_KEYS = [
 	"jobs.retentionMinutes",
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
+	"jobs.maxErrorMessageChars",
 	"assets.maxUploadKb",
 	"assets.acceptedFormats",
+	"assets.rasterCacheMb",
 	"images.maxRemoteReferences",
 	"images.remoteFetchTimeoutMs",
 	"images.allowPlainHttp",
@@ -192,11 +194,13 @@ export const SETTING_KEYS = [
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
 	"logs.maxMessageChars",
+	"logs.sweepEvery",
 	"pairing.enabled",
 	"pairing.codeMinutes",
 	"auth.sessionHours",
 	"auth.signInAttemptsPerMinute",
 	"auth.minimumPasswordLength",
+	"auth.lastSeenRefreshMinutes",
 	"events.keepaliveSeconds",
 	"link.heartbeatSeconds",
 	"link.heartbeatTimeoutSeconds",
@@ -317,6 +321,17 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "seconds",
 	},
 	{
+		key: "jobs.maxErrorMessageChars",
+		label: "Error message length",
+		description: "Where a stored job error is truncated.",
+		category: "jobs",
+		type: "integer",
+		min: 128,
+		max: 4_000,
+		fallback: 512,
+		unit: "characters",
+	},
+	{
 		key: "assets.maxUploadKb",
 		label: "Maximum upload size",
 		description:
@@ -337,6 +352,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		type: "enum",
 		values: ["png+jpeg", "png"] as const,
 		fallback: "png+jpeg",
+	},
+	{
+		key: "assets.rasterCacheMb",
+		label: "Raster cache size",
+		description:
+			"Memory held for dithered images, so a repeated print does not re-dither. Raise it on a busy install with many assets; lower it on a small machine.",
+		category: "media",
+		type: "integer",
+		min: 1,
+		max: 128,
+		fallback: 8,
+		unit: "MiB",
 	},
 	{
 		key: "images.maxRemoteReferences",
@@ -425,6 +452,17 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "characters",
 	},
 	{
+		key: "logs.sweepEvery",
+		label: "Sweep interval",
+		description: "How many stored lines pass between retention sweeps. Lower is tidier, higher is cheaper.",
+		category: "logs",
+		type: "integer",
+		min: 50,
+		max: 10_000,
+		fallback: 500,
+		unit: "records",
+	},
+	{
 		key: "pairing.enabled",
 		label: "Allow pairing",
 		description:
@@ -480,6 +518,17 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 128,
 		fallback: 12,
 		unit: "characters",
+	},
+	{
+		key: "auth.lastSeenRefreshMinutes",
+		label: "Session activity refresh",
+		description: "How often a live session updates its last-seen time. Purely a write-rate control.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 120,
+		fallback: 5,
+		unit: "minutes",
 	},
 	{
 		key: "events.keepaliveSeconds",
@@ -853,6 +902,8 @@ export interface GlobalLogIngestSettings {
 	linesPerMinutePerAgent: number;
 	maxRecords: number;
 	maxMessageChars: number;
+	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
+	sweepEvery: number;
 }
 
 /**
@@ -876,6 +927,7 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 		linesPerMinutePerAgent: value("logs.linesPerMinutePerAgent"),
 		maxRecords: value("logs.maxRecords"),
 		maxMessageChars: value("logs.maxMessageChars"),
+		sweepEvery: value("logs.sweepEvery"),
 	};
 }
 

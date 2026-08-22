@@ -271,12 +271,21 @@ export async function deleteAsset(id: string): Promise<void> {
 /**
  * How many bytes of dithered rasters this process keeps in memory.
  *
- * A real receipt logo at the widest common paper is 20-30 KB of dots, so eight megabytes holds a few
- * hundred — far more than any install's library across its paper widths, which means the eviction
- * below is a safety net rather than a working part. It is a cap on a *derived* value: everything in
- * here can be rebuilt from `Asset.data`, so losing it costs time and nothing else.
+ * Reads `assets.rasterCacheMb`, converted from MiB. A real receipt logo at the widest common paper
+ * is 20-30 KB of dots, so the built-in 8 MiB fallback holds a few hundred — far more than most
+ * installs' libraries across their paper widths, which means the eviction this drives is a safety
+ * net rather than a working part on a typical install. It is a cap on a *derived* value: everything
+ * in here can be rebuilt from `Asset.data`, so losing it costs time and nothing else — which is why
+ * an operator can lower it freely on a small machine.
+ *
+ * Read fresh on every call rather than cached at module load: this runs once per dither, not once
+ * per line the way `logs.*` ingestion does, so there is no hot path for the read to regress.
+ *
+ * @returns the configured cap, in bytes
  */
-const RASTER_CACHE_BYTES = 8 * 1024 * 1024;
+async function rasterCacheBytes(): Promise<number> {
+	return (await integerSetting("assets.rasterCacheMb")) * 1024 * 1024;
+}
 
 /**
  * Dithered rasters, keyed by the asset revision and the width they were dithered for.
@@ -323,7 +332,7 @@ const rasterCache = globalForRasters.fenposRasterCache;
  *
  * The cache lives in memory rather than in a table, which is a smaller commitment than the one this
  * function's earlier note anticipated and enough for what it costs: it is bounded by
- * {@link RASTER_CACHE_BYTES}, it is correct across restarts by being empty, and it keeps `Asset.data`
+ * {@link rasterCacheBytes}, it is correct across restarts by being empty, and it keeps `Asset.data`
  * holding nothing but the source. A cheap read of the row's id and timestamp happens on every call,
  * so a hit still cannot serve dots from bytes that have been replaced.
  *
@@ -414,7 +423,7 @@ async function derive(assetId: string, name: string, targetDots: number, key: st
 	// Not wrapped: these bytes decoded once already, on the way in. A failure now is this server
 	// disagreeing with itself, which is a 500 and a log line, not something the caller did wrong.
 	const raster = await ditherToRaster(Buffer.from(stored.data), targetDots);
-	remember(key, raster);
+	await remember(key, raster);
 	return raster;
 }
 
@@ -434,8 +443,9 @@ async function derive(assetId: string, name: string, targetDots: number, key: st
  * @param key the asset revision and width this was derived from
  * @param raster the dots
  */
-function remember(key: string, raster: ImageRaster): void {
-	if (raster.packed.length > RASTER_CACHE_BYTES) {
+async function remember(key: string, raster: ImageRaster): Promise<void> {
+	const cap = await rasterCacheBytes();
+	if (raster.packed.length > cap) {
 		return;
 	}
 
@@ -448,7 +458,7 @@ function remember(key: string, raster: ImageRaster): void {
 	rasterCache.bytes += raster.packed.length;
 
 	for (const [oldest, evicted] of rasterCache.entries) {
-		if (rasterCache.bytes <= RASTER_CACHE_BYTES) {
+		if (rasterCache.bytes <= cap) {
 			break;
 		}
 		rasterCache.entries.delete(oldest);

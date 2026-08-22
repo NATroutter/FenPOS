@@ -184,7 +184,9 @@ beforeEach(async () => {
 	// `assets.acceptedFormats`, and need to know they are starting from the built-in default rather
 	// than whatever the previous test — or another suite sharing this worker's database — left
 	// behind.
-	await prisma.setting.deleteMany({ where: { key: { in: ["assets.maxUploadKb", "assets.acceptedFormats"] } } });
+	await prisma.setting.deleteMany({
+		where: { key: { in: ["assets.maxUploadKb", "assets.acceptedFormats", "assets.rasterCacheMb"] } },
+	});
 	fetchRemoteImage.mockReset();
 });
 
@@ -863,6 +865,44 @@ describe("rasterFor", () => {
 			expect(ditherToRaster).toHaveBeenCalledTimes(1);
 			await rasterFor("logo", 200);
 			expect(ditherToRaster).toHaveBeenCalledTimes(2);
+		} finally {
+			ditherToRaster.mockImplementation(real.ditherToRaster);
+			forgetRasters();
+		}
+	});
+
+	/**
+	 * `assets.rasterCacheMb`, wired into {@link remember}'s eviction cap.
+	 *
+	 * The cache itself is module-level and its effect is otherwise invisible from outside this
+	 * module — nothing here exports the cap for a test to read directly, and it should not, for a
+	 * setting's sake. What *is* exported for tests, {@link rasterCacheStats}, is honest evidence of
+	 * the eviction the cap drives: two 600 KiB rasters fit comfortably under the built-in 8 MiB
+	 * cap and would both be kept, but not under the 1 MiB minimum this test configures, which
+	 * proves the eviction threshold actually reflects the stored setting rather than the constant
+	 * it replaced.
+	 */
+	it("shrinks the cache eviction threshold to the configured size", async () => {
+		// 1 is assets.rasterCacheMb's declared minimum.
+		await setSetting("assets.rasterCacheMb", 1);
+		await createAsset("logo", PNG);
+		forgetRasters();
+
+		const real = await vi.importActual<typeof import("@/lib/assets/dither")>("@/lib/assets/dither");
+		const chunk = 600 * 1024;
+		ditherToRaster.mockImplementation(async (_bytes, dots) => ({
+			widthDots: dots,
+			heightDots: 1,
+			packed: Buffer.alloc(chunk),
+		}));
+		try {
+			await rasterFor("logo", 100);
+			await rasterFor("logo", 200);
+
+			// Two chunks are 1.17 MiB, over the configured 1 MiB cap, so the first is evicted the
+			// moment the second is stored.
+			expect(rasterCacheStats().entries).toBe(1);
+			expect(rasterCacheStats().bytes).toBe(chunk);
 		} finally {
 			ditherToRaster.mockImplementation(real.ditherToRaster);
 			forgetRasters();

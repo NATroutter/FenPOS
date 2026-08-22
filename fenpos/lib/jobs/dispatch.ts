@@ -14,7 +14,7 @@ import {
 	readRequest,
 } from "@/lib/markup/compiler";
 import { resolveImages } from "@/lib/markup/resolve-images";
-import { globalLimits } from "@/lib/settings/settings-service";
+import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Submitting a job: validate it, compile it, record it, hand it to the agent.
@@ -126,7 +126,7 @@ export async function submitJob(
 	} catch (error) {
 		// Only the post-wrap limit can fail here; everything cheaper was checked before the row
 		// existed. The row is settled rather than deleted so the failure is visible in the panel.
-		await fail(job.id, error instanceof ApiError ? error.code : "invalid_job", message(error));
+		await fail(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
 		throw error;
 	}
 
@@ -144,7 +144,7 @@ export async function submitJob(
 		// one. Both are properties of the request, both left the caller with a 500 and the job
 		// queued forever. So the job is failed for *anything* thrown, and the shape of the error
 		// only decides what the caller is told.
-		await fail(job.id, sendFailureCode(error), message(error, "Could not send."));
+		await fail(job.id, sendFailureCode(error), await message(error, "Could not send."));
 		if (!(error instanceof FrameTooLargeError) && !(error instanceof ApiError)) {
 			// Not a shape anyone anticipated. The job is settled either way — that is the invariant —
 			// but this is how the next one gets a message written for a caller instead of a stack.
@@ -234,18 +234,18 @@ function sendFailureCode(error: unknown): string {
  * kilobytes of it. The panel shows this string in a job's row; the whole of it is in the log line
  * beside the stack.
  *
+ * The truncation length is `jobs.maxErrorMessageChars`, read fresh on each call rather than
+ * cached: this runs on the (already rare) failure path, not on every job, so there is no hot path
+ * for a settings read to regress.
+ *
  * @param error whatever was thrown
  * @param fallback what to say when it was not an `Error` at all
  * @returns a reason short enough to store and show
  */
-function message(error: unknown, fallback = "Could not compile."): string {
+async function message(error: unknown, fallback = "Could not compile."): Promise<string> {
 	if (!(error instanceof Error)) {
 		return fallback;
 	}
-	return error.message.length > MAX_ERROR_MESSAGE_CHARS
-		? `${error.message.slice(0, MAX_ERROR_MESSAGE_CHARS - 1)}…`
-		: error.message;
+	const maxChars = await integerSetting("jobs.maxErrorMessageChars");
+	return error.message.length > maxChars ? `${error.message.slice(0, maxChars - 1)}…` : error.message;
 }
-
-/** How much of a failure reason is worth storing. Matches the protocol's own cap on `errorMessage`. */
-const MAX_ERROR_MESSAGE_CHARS = 512;

@@ -25,7 +25,7 @@ describe("session lifecycle", () => {
 
 	beforeEach(async () => {
 		await prisma.session.deleteMany({});
-		await prisma.setting.deleteMany({ where: { key: "auth.sessionHours" } });
+		await prisma.setting.deleteMany({ where: { key: { in: ["auth.sessionHours", "auth.lastSeenRefreshMinutes"] } } });
 	});
 
 	it("creates a session that resolves immediately", async () => {
@@ -133,6 +133,25 @@ describe("session lifecycle", () => {
 		await resolveSession(token, later);
 		const refreshed = await prisma.session.findFirst({ select: { lastSeenAt: true } });
 		expect(refreshed?.lastSeenAt.toISOString()).toBe(later.toISOString());
+	});
+
+	/**
+	 * `auth.lastSeenRefreshMinutes`, wired into the staleness check above.
+	 *
+	 * 90 seconds is past the configured one-minute interval but well inside the built-in five —
+	 * so a refresh here only happens because the setting was read, not because the moment chosen
+	 * would have refreshed regardless of which value was in effect.
+	 */
+	it("refreshes last-seen sooner when the configured interval is lower than the built-in one", async () => {
+		// 1 is auth.lastSeenRefreshMinutes's declared minimum.
+		await setSetting("auth.lastSeenRefreshMinutes", 1);
+		const { token } = await createSession({}, now);
+
+		const ninetySeconds = new Date(now.getTime() + 90_000);
+		await resolveSession(token, ninetySeconds);
+
+		const refreshed = await prisma.session.findFirst({ select: { lastSeenAt: true } });
+		expect(refreshed?.lastSeenAt.toISOString()).toBe(ninetySeconds.toISOString());
 	});
 
 	it("purges only sessions that have expired", async () => {

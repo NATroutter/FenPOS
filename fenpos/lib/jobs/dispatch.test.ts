@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { FrameTooLargeError, JOB_LIMITS, serialiseServerFrame } from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * The one dispatch failure that costs more than the job it belongs to.
@@ -30,6 +31,7 @@ describe("submitJob", () => {
 		await prisma.job.deleteMany();
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
+		await prisma.setting.deleteMany({ where: { key: "jobs.maxErrorMessageChars" } });
 	});
 
 	/**
@@ -151,5 +153,37 @@ describe("submitJob", () => {
 		expect(job.status, "a job the wire refused must not be left QUEUED").toBe("FAILED");
 		expect(job.errorCode).toBe("job_undeliverable");
 		expect(job.errorMessage?.length ?? 0).toBeLessThanOrEqual(512);
+	});
+
+	/**
+	 * `jobs.maxErrorMessageChars`, wired into `message()` (`dispatch.ts`).
+	 *
+	 * The link's `send` is made to throw an error long enough that truncation is guaranteed to
+	 * bite regardless of the configured length, so the stored length is a direct readout of the
+	 * setting rather than an accident of some other error's own wording.
+	 */
+	it("truncates a failed job's stored reason at the configured length rather than the built-in one", async () => {
+		// 128 is jobs.maxErrorMessageChars's declared minimum.
+		await setSetting("jobs.maxErrorMessageChars", 128);
+		const { deviceId } = await connectedDevice();
+		if (!link) {
+			throw new Error("expected connectedDevice to have registered a link");
+		}
+		link.send = () => {
+			throw new Error("x".repeat(1000));
+		};
+
+		const thrown = await submitJob(deviceId, { data: ["Kahvi 2.50"] }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(thrown).not.toBeNull();
+		const [job] = await prisma.job.findMany();
+		expect(job.status).toBe("FAILED");
+		// Exactly 128: 127 characters of the original message plus the truncation ellipsis —
+		// less than the built-in 512 default would have kept, so this is the setting's effect
+		// and not merely a length that happens to fit under both.
+		expect(job.errorMessage).toHaveLength(128);
 	});
 });

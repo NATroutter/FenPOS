@@ -56,9 +56,15 @@ export function sessionLifetimePhrase(hours: number): string {
  * How stale `lastSeenAt` may become before it is rewritten.
  *
  * Updating on every request would add a write to every page load for a field only used to
- * display activity. Five minutes keeps it useful without the write amplification.
+ * display activity. Reads `auth.lastSeenRefreshMinutes`, whose five-minute fallback keeps it
+ * useful without the write amplification; an operator on a busier or quieter install can trade
+ * accuracy against write volume either way.
+ *
+ * @returns the configured interval, in milliseconds
  */
-const LAST_SEEN_REFRESH_MS = 5 * 60 * 1000;
+async function lastSeenRefreshMs(): Promise<number> {
+	return (await integerSetting("auth.lastSeenRefreshMinutes")) * 60_000;
+}
 
 /** An active session resolved from a request. */
 export interface ActiveSession {
@@ -138,7 +144,7 @@ export async function resolveSession(token: string, now: Date = new Date()): Pro
 		return null;
 	}
 
-	if (now.getTime() - session.lastSeenAt.getTime() > LAST_SEEN_REFRESH_MS) {
+	if (now.getTime() - session.lastSeenAt.getTime() > (await lastSeenRefreshMs())) {
 		await prisma.session.update({
 			where: { id: session.id },
 			data: { lastSeenAt: now },

@@ -148,6 +148,7 @@ describe("settings", () => {
 			linesPerMinutePerAgent: 120,
 			maxRecords: 5000,
 			maxMessageChars: 1000,
+			sweepEvery: 500,
 		});
 	});
 });
@@ -210,8 +211,10 @@ describe("setting definitions", () => {
 			"jobs.retentionMinutes": "integer",
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
+			"jobs.maxErrorMessageChars": "integer",
 			"assets.maxUploadKb": "integer",
 			"assets.acceptedFormats": "enum",
+			"assets.rasterCacheMb": "integer",
 			"images.maxRemoteReferences": "integer",
 			"images.remoteFetchTimeoutMs": "integer",
 			"images.allowPlainHttp": "boolean",
@@ -220,11 +223,13 @@ describe("setting definitions", () => {
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
 			"logs.maxMessageChars": "integer",
+			"logs.sweepEvery": "integer",
 			"pairing.enabled": "boolean",
 			"pairing.codeMinutes": "integer",
 			"auth.sessionHours": "integer",
 			"auth.signInAttemptsPerMinute": "integer",
 			"auth.minimumPasswordLength": "integer",
+			"auth.lastSeenRefreshMinutes": "integer",
 			"events.keepaliveSeconds": "integer",
 			"link.heartbeatSeconds": "integer",
 			"link.heartbeatTimeoutSeconds": "integer",
