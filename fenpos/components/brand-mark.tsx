@@ -38,11 +38,12 @@ export function BrandMark({
 
 	return (
 		<div className={cn("flex items-center gap-2.5", className)}>
-			{/* The mark is a dark charcoal printer, and the panel is near-black — on its own it sank
-			    into whatever it sat on. The tile is the surface the mark was drawn for, which is also
-			    how it appears as an app icon, and it makes the lockup the one lit thing in a dark
-			    sidebar rather than a shape you have to look for. */}
-			<div className={cn("grid shrink-0 place-items-center bg-brand ring-1 ring-black/10", variant.tile)}>
+			{/* The artwork is itself a brand-red tile with its own rounded edge, so this box paints
+			    nothing: a background behind it would show as a rim of a second colour where the
+			    artwork's corners fall away, and an outline would trace this box rather than the shape
+			    inside it. What is left is a fixed square the type sits beside, which is what keeps the
+			    lockup the same height whatever the artwork's own proportions turn out to be. */}
+			<div className={cn("grid shrink-0 place-items-center", variant.tile)}>
 				{/* Empty alt: the name is right beside it, so a screen reader announcing the mark as
 				    well would read the product name twice. */}
 				<Image src="/fenpos-logo.png" alt="" width={variant.mark} height={variant.mark} priority />
