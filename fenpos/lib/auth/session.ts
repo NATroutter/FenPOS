@@ -60,11 +60,34 @@ export function sessionLifetimePhrase(hours: number): string {
  * useful without the write amplification; an operator on a busier or quieter install can trade
  * accuracy against write volume either way.
  *
+ * **Called only past {@link MIN_LAST_SEEN_REFRESH_MS}** — see that constant and its call site in
+ * {@link resolveSession}. Every other setting this commit wires has an already-cheap call
+ * frequency to point to (`dispatch.ts`'s read is on a rare failure path, `asset-service.ts`'s
+ * runs once per dither, `ingest.ts`'s rides an existing per-window cache); this is the one
+ * consumer sitting on a genuinely hot path — `resolveSession` runs on every panel request — so
+ * unlike those three it earns its own guard rather than merely a note.
+ *
  * @returns the configured interval, in milliseconds
  */
 async function lastSeenRefreshMs(): Promise<number> {
 	return (await integerSetting("auth.lastSeenRefreshMinutes")) * 60_000;
 }
+
+/**
+ * The lowest `auth.lastSeenRefreshMinutes` can ever be configured to, restated here in
+ * milliseconds so {@link resolveSession} can skip reading the setting at all for a session seen
+ * more recently than this — no value the setting accepts can make a refresh due any sooner, so a
+ * `findMany` on the settings table would be pure overhead below this floor. `session.test.ts`
+ * exercises the boundary at exactly this value with the setting configured to its own declared
+ * `min` (`settings-service.ts`), so a mismatch between the two would show up as a refresh that
+ * either fires early or is wrongly withheld.
+ *
+ * This is what turns `lastSeenRefreshMs()`'s read from unconditional — on every single call to
+ * `resolveSession`, which is every panel request — into one bounded to at most once per minute
+ * per session, which is what "purely a write-rate control" (the setting's own description) is
+ * supposed to cost.
+ */
+const MIN_LAST_SEEN_REFRESH_MS = 60_000;
 
 /** An active session resolved from a request. */
 export interface ActiveSession {
@@ -144,7 +167,12 @@ export async function resolveSession(token: string, now: Date = new Date()): Pro
 		return null;
 	}
 
-	if (now.getTime() - session.lastSeenAt.getTime() > (await lastSeenRefreshMs())) {
+	// The floor check runs first and short-circuits the settings read below it: no configured
+	// value can ever be lower than MIN_LAST_SEEN_REFRESH_MS, so a session seen more recently than
+	// that cannot be due for a refresh under any setting, and lastSeenRefreshMs() never runs to
+	// find that out. See MIN_LAST_SEEN_REFRESH_MS's doc comment.
+	const staleMs = now.getTime() - session.lastSeenAt.getTime();
+	if (staleMs > MIN_LAST_SEEN_REFRESH_MS && staleMs > (await lastSeenRefreshMs())) {
 		await prisma.session.update({
 			where: { id: session.id },
 			data: { lastSeenAt: now },

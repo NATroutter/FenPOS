@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
 import {
 	createSession,
@@ -152,6 +152,51 @@ describe("session lifecycle", () => {
 
 		const refreshed = await prisma.session.findFirst({ select: { lastSeenAt: true } });
 		expect(refreshed?.lastSeenAt.toISOString()).toBe(ninetySeconds.toISOString());
+	});
+
+	/**
+	 * The guard `resolveSession` added around `lastSeenRefreshMs()`: below the setting's own
+	 * one-minute floor, no configured value could make a refresh due, so the settings table must
+	 * not be read at all. This is what would fail if that guard were removed and the read went
+	 * back to running on every call — `prisma.setting.findMany` (what `listSettings` issues)
+	 * would then be called here too.
+	 */
+	it("does not read the settings table for a session seen well inside the floor", async () => {
+		const { token } = await createSession({}, now);
+
+		const spy = vi.spyOn(prisma.setting, "findMany");
+		try {
+			// 30 seconds: comfortably under auth.lastSeenRefreshMinutes's one-minute floor, so no
+			// configured value could put a refresh due yet.
+			const thirtySeconds = new Date(now.getTime() + 30_000);
+			await resolveSession(token, thirtySeconds);
+
+			expect(spy).not.toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	/**
+	 * The floor and the setting's own declared minimum have to agree exactly, or one of two bugs
+	 * appears: set below floor, an operator's fastest configured refresh would never fire; set
+	 * above it, sessions would refresh sooner than any configuration allows. Configuring the
+	 * setting to its minimum (1 minute) and checking exactly at that boundary is what proves the
+	 * two numbers actually match rather than merely both looking like "a minute" in code.
+	 */
+	it("refreshes right at the floor when the setting is configured to its own minimum", async () => {
+		await setSetting("auth.lastSeenRefreshMinutes", 1);
+		const { token } = await createSession({}, now);
+
+		const atFloor = new Date(now.getTime() + 60_000);
+		await resolveSession(token, atFloor);
+		const unchanged = await prisma.session.findFirst({ select: { lastSeenAt: true } });
+		expect(unchanged?.lastSeenAt.toISOString()).toBe(now.toISOString());
+
+		const justPastFloor = new Date(now.getTime() + 60_001);
+		await resolveSession(token, justPastFloor);
+		const refreshed = await prisma.session.findFirst({ select: { lastSeenAt: true } });
+		expect(refreshed?.lastSeenAt.toISOString()).toBe(justPastFloor.toISOString());
 	});
 
 	it("purges only sessions that have expired", async () => {
