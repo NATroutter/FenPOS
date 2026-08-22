@@ -261,6 +261,22 @@ model Job {
   errorCode    String? @map("error_code")
   errorMessage String? @map("error_message")
 
+  /// The caller's `Idempotency-Key` header, when they sent one. Null for the great majority of
+  /// jobs, and for every job the panel submits.
+  ///
+  /// The job row *is* the idempotency record: there is no second table with its own lifetime to
+  /// keep in step. A key is therefore replayable for exactly as long as the job survives
+  /// `jobs.retentionMinutes` and `jobs.maxRecords`, and is free again afterwards. That coupling is
+  /// deliberate — an idempotency record that outlived the job it names would answer a retry by
+  /// describing something no longer in the system.
+  idempotencyKey  String? @map("idempotency_key")
+  /// SHA-256 of the request body the key was first used with.
+  ///
+  /// Without it, the same key with a different receipt would replay the first one and silently
+  /// print the wrong thing. With it, that request is refused as a conflict, which is the only answer
+  /// that keeps the header's guarantee meaningful.
+  idempotencyHash String? @map("idempotency_hash")
+
   agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
   device Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   apiKey ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
@@ -269,6 +285,10 @@ model Job {
   @@index([submittedAt])
   @@index([deviceId, submittedAt])
   @@index([agentId, submittedAt])
+  /// Scoped to the key, so two integrators may each use "order-1041" without colliding. Null keys
+  /// do not participate: SQLite treats NULLs as distinct in a unique index, which is exactly what
+  /// is wanted — every job without a key is unconstrained.
+  @@unique([apiKeyId, idempotencyKey])
   @@map("jobs")
 }
 
