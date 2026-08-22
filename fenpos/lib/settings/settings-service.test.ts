@@ -181,6 +181,8 @@ describe("setting definitions", () => {
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
 			"assets.maxUploadKb": "integer",
+			"images.maxRemoteReferences": "integer",
+			"images.remoteFetchTimeoutMs": "integer",
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",

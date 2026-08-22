@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
 	fetchRemoteImage,
 	MAX_REMOTE_IMAGE_BYTES,
@@ -9,7 +9,9 @@ import {
 	type RemoteResponse,
 	type RemoteTransport,
 } from "@/lib/assets/fetch-remote";
+import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * These tests never touch DNS and never open a socket to anything but loopback.
@@ -92,6 +94,13 @@ function stubTransport(reply: (url: URL, hop: number) => StubResponse): Stub {
 const neverCalled: RemoteTransport = async () => {
 	throw new Error("the transport was called, but the guard should have refused this URL");
 };
+
+beforeEach(async () => {
+	// The timeout tests below override `images.remoteFetchTimeoutMs`, and need to know they are
+	// starting from the built-in default rather than whatever a previous test — or another suite
+	// sharing this worker's database — left behind.
+	await prisma.setting.deleteMany({ where: { key: "images.remoteFetchTimeoutMs" } });
+});
 
 describe("fetchRemoteImage", () => {
 	// --- The brief's cases ---
@@ -591,6 +600,23 @@ describe("fetchRemoteImage size cap", () => {
 });
 
 describe("fetchRemoteImage timeout", () => {
+	/**
+	 * The cap this task turned into a setting. No `timeoutMs` option is passed here — the whole
+	 * point is that the configured `images.remoteFetchTimeoutMs` is what governs the wait when the
+	 * caller does not override it, the same seam every other case in this block uses to keep the
+	 * suite fast.
+	 */
+	it("gives up on a slow host after the configured timeout", async () => {
+		await setSetting("images.remoteFetchTimeoutMs", 250);
+		const transport: RemoteTransport = () => new Promise<RemoteResponse>(() => {});
+
+		const started = Date.now();
+		await expect(
+			fetchRemoteImage("http://cdn.example.com/logo.png", { resolve: alwaysPublic, transport }),
+		).rejects.toThrow(/time/i);
+		expect(Date.now() - started).toBeLessThan(2_000);
+	});
+
 	it("gives up on a transport that never answers", async () => {
 		const transport: RemoteTransport = () => new Promise<RemoteResponse>(() => {});
 		await expect(

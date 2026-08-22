@@ -5,11 +5,11 @@ import { Aside, Col, DocLink, ErrorRef, Mono, P, Split, seconds } from "@/app/(p
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_IMAGE_DIMENSION, maxAssetBytes } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
-import { MAX_REMOTE_IMAGE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "@/lib/assets/fetch-remote";
+import { MAX_REMOTE_IMAGE_BYTES, remoteFetchTimeoutMs } from "@/lib/assets/fetch-remote";
 import { BarcodeSystem } from "@/lib/domain/enums";
 import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
-import { MAX_REMOTE_IMAGES } from "@/lib/markup/resolve-images";
+import { maxRemoteReferences } from "@/lib/markup/resolve-images";
 
 export const metadata = { title: "Markup" };
 
@@ -105,6 +105,8 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
  */
 export default async function MarkupDocsPage() {
 	const assetCap = await maxAssetBytes();
+	const remoteTimeoutMs = await remoteFetchTimeoutMs();
+	const remoteLimit = await maxRemoteReferences();
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -212,11 +214,11 @@ export default async function MarkupDocsPage() {
 									A URL is fetched while the job compiles, which is the cost of naming a live image: an unreachable host
 									fails the print with <ErrorRef code="invalid_tag_argument" /> instead of printing a receipt with a
 									hole in it, and a slow one holds the request up. The fetch is guarded — http or https only,{" "}
-									{seconds(REMOTE_FETCH_TIMEOUT_MS)} for the whole of it including redirects,{" "}
+									{seconds(remoteTimeoutMs)} for the whole of it including redirects,{" "}
 									{describeBytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so
 									a receipt cannot use this server to read something inside your network. One request may name at most{" "}
-									{MAX_REMOTE_IMAGES} distinct URLs, or <ErrorRef code="too_many_remote_images" />; stored images are
-									not counted against that.
+									{remoteLimit} distinct URLs, or <ErrorRef code="too_many_remote_images" />; stored images are not
+									counted against that.
 								</P>
 
 								<P>

@@ -95,8 +95,9 @@ export const API_ERROR_STATUS = {
 	 *
 	 * A limit on the request as a whole rather than on any one tag: it counts the distinct URLs
 	 * across every element, so the tag that crosses the line is only the last one written rather
-	 * than the one at fault. See `MAX_REMOTE_IMAGES` in `lib/markup/resolve-images.ts` for what the
-	 * number bounds.
+	 * than the one at fault. See `maxRemoteReferences` in `lib/markup/resolve-images.ts` for what the
+	 * number bounds — configurable, and also raised when the setting is 0 and the receipt names a
+	 * URL at all.
 	 */
 	too_many_remote_images: 413,
 	/**

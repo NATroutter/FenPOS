@@ -4,6 +4,7 @@ import { request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { ApiError } from "@/lib/errors";
 import { describeBytes } from "@/lib/format/bytes";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Fetching an image that a receipt names by URL, without letting the receipt point the server
@@ -37,7 +38,7 @@ import { describeBytes } from "@/lib/format/bytes";
  *   by a second DNS answer — see {@link pinnedLookup}.
  * - **Redirects.** Followed at most {@link MAX_REDIRECTS} times, and every hop is put through the
  *   whole guard again. See {@link followTo} for why this is the easiest check to forget.
- * - **Time and size.** {@link REMOTE_FETCH_TIMEOUT_MS} for the entire operation and
+ * - **Time and size.** {@link remoteFetchTimeoutMs} for the entire operation and
  *   {@link MAX_REMOTE_IMAGE_BYTES} for the body, the latter enforced by counting bytes as they
  *   arrive rather than by measuring what was downloaded.
  *
@@ -65,13 +66,22 @@ import { describeBytes } from "@/lib/format/bytes";
  */
 
 /**
- * How long the whole fetch may take, in milliseconds.
+ * How long the whole fetch may take, in milliseconds. Read from the `images.remoteFetchTimeoutMs`
+ * setting.
  *
  * One budget for everything — DNS, connect, redirects, body — not one per hop. Per-hop budgets
- * multiply: five redirects would buy five times the wait, and a print job that hangs for fifteen
- * seconds behind a slow attacker-controlled host is its own small denial of service.
+ * multiply: five redirects would buy five times the wait, and a print job that hangs behind a slow
+ * attacker-controlled host is its own small denial of service.
+ *
+ * An operator's own call, the same reason `assets.maxUploadKb` is a setting rather than a constant:
+ * a host on a slow link an install actually depends on and a hostile one dragging out the wait look
+ * identical from here, and only the operator knows which risk they would rather take.
+ *
+ * @returns the configured budget, in milliseconds
  */
-export const REMOTE_FETCH_TIMEOUT_MS = 3_000;
+export async function remoteFetchTimeoutMs(): Promise<number> {
+	return await integerSetting("images.remoteFetchTimeoutMs");
+}
 
 /**
  * The largest remote image this system will accept, in bytes.
@@ -141,7 +151,7 @@ export type RemoteTransport = (url: URL, approved: PinnedAddress[], signal: Abor
 export interface RemoteFetchOptions {
 	resolve?: HostResolver;
 	transport?: RemoteTransport;
-	/** Overrides {@link REMOTE_FETCH_TIMEOUT_MS}. Tests use a few milliseconds so the suite stays fast. */
+	/** Overrides {@link remoteFetchTimeoutMs}. Tests use a few milliseconds so the suite stays fast. */
 	timeoutMs?: number;
 }
 
@@ -157,7 +167,7 @@ export interface RemoteFetchOptions {
 export async function fetchRemoteImage(url: string, options: RemoteFetchOptions = {}): Promise<Buffer> {
 	const resolve = options.resolve ?? systemResolver;
 	const transport = options.transport ?? pinnedTransport;
-	const budget = options.timeoutMs ?? REMOTE_FETCH_TIMEOUT_MS;
+	const budget = options.timeoutMs ?? (await remoteFetchTimeoutMs());
 	const signal = AbortSignal.timeout(budget);
 
 	let target = parseTarget(url);

@@ -7,6 +7,7 @@ import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { parseMarkup } from "@/lib/markup/parser";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * The pre-pass that turns every `<image>` reference in a request into a size the compiler can
@@ -30,13 +31,13 @@ import { parseMarkup } from "@/lib/markup/parser";
  *
  * **A URL image is fetched while the job compiles.** That is the accepted cost of the live-URL
  * option — an unreachable host makes the print fail, and a slow one makes the request wait, up to
- * `REMOTE_FETCH_TIMEOUT_MS` — and it is why stored assets are the documented default. What is
- * bounded here is how that cost grows: references are deduplicated, so a logo repeated on every
- * copy of a receipt is one fetch; they are resolved several at a time, so a receipt naming a few
- * hosts waits for the slowest rather than for the sum; never more than {@link RESOLVE_WINDOW} at a
- * time, so what one request can make this server hold is a constant rather than a multiple of how
- * many URLs it chose to name; and never more than {@link MAX_REMOTE_IMAGES} of them at all, which
- * is what turns the waiting into a number too.
+ * the configured `images.remoteFetchTimeoutMs` — and it is why stored assets are the documented
+ * default. What is bounded here is how that cost grows: references are deduplicated, so a logo
+ * repeated on every copy of a receipt is one fetch; they are resolved several at a time, so a receipt
+ * naming a few hosts waits for the slowest rather than for the sum; never more than
+ * {@link RESOLVE_WINDOW} at a time, so what one request can make this server hold is a constant
+ * rather than a multiple of how many URLs it chose to name; and never more than
+ * {@link maxRemoteReferences} of them at all, which is what turns the waiting into a number too.
  */
 
 /**
@@ -65,22 +66,29 @@ import { parseMarkup } from "@/lib/markup/parser";
 export const RESOLVE_WINDOW = 6;
 
 /**
- * How many distinct images one request may name by URL.
+ * How many distinct images one request may name by URL, read from the `images.maxRemoteReferences`
+ * setting.
  *
  * **The window bounds what this server holds; this bounds how long it waits.** They are different
  * exposures and neither implies the other. With the window alone, a receipt naming enough URLs still
- * waits one `REMOTE_FETCH_TIMEOUT_MS` per windowful — at the default line limit of 200 that is 34
- * windows, over a minute of a request-handling slot held by one caller. Capping the references is
- * what makes that a number: at most `ceil(12 / 6) = 2` windows, so six seconds, and a caller who
- * writes a thirteenth URL is told so immediately instead of waiting to find out.
+ * waits one remote fetch timeout per windowful — at the default line limit of 200 that is 34 windows,
+ * over a minute of a request-handling slot held by one caller. Capping the references is what makes
+ * that a number: at the default of twelve, at most `ceil(12 / 6) = 2` windows, so a bounded few
+ * seconds, and a caller who writes a thirteenth URL is told so immediately instead of waiting to find
+ * out.
  *
- * Twelve, for three reasons. It is two whole windows, so the bound divides evenly and raising it by
- * six is visibly another three seconds. It is far above any real receipt — the spec makes stored
- * assets the default and URLs the escape hatch, and a repeated logo is one reference after
- * deduplication — so nothing legitimate meets it. And it is deliberately *above*
+ * Twelve is the fallback, for three reasons. It is two whole windows, so the bound divides evenly and
+ * raising it by six is visibly another window's wait. It is far above any real receipt — the spec
+ * makes stored assets the default and URLs the escape hatch, and a repeated logo is one reference
+ * after deduplication — so nothing legitimate meets it. And it is deliberately *above*
  * {@link RESOLVE_WINDOW} rather than equal to it: were the two the same, every permitted receipt
  * would fit in one window and there would be no observable difference between windowing and not,
  * which would quietly cost the concurrency bound its test.
+ *
+ * **An operator may set it to 0.** That is not an edge case of the limit — it is the limit turned
+ * into a switch, and the one deliberate way to take outbound image fetching off an install entirely.
+ * {@link requireWithinRemoteLimit} gives that case its own refusal, because "you may reference at
+ * most 0 images" reads as a bug report, not as a security posture someone chose.
  *
  * **Remote references only.** A stored asset is a local read of two integer columns — no socket, no
  * buffer, no timeout to wait out — so counting them here would cap the thing this system asks people
@@ -91,8 +99,12 @@ export const RESOLVE_WINDOW = 6;
  * budget that merely stops waiting leaves those fetches running, still holding sockets and still
  * burning CPU, after the caller has already been answered. That is a leak wearing the costume of a
  * limit. Refusing up front costs nothing and cannot leak.
+ *
+ * @returns the configured limit
  */
-export const MAX_REMOTE_IMAGES = 12;
+export async function maxRemoteReferences(): Promise<number> {
+	return await integerSetting("images.maxRemoteReferences");
+}
 
 /**
  * How many base64 characters of image dots one request may put inside its job.
@@ -107,7 +119,7 @@ export const MAX_REMOTE_IMAGES = 12;
  * default `maxTotalChars`, and comfortably more than any receipt that also carries this many dots.
  * It sits above `IMAGE_LIMITS.maxRasterChars`, the wire's cap on any single raster, on purpose: one
  * image may spend two thirds of the allowance and several must share it, and the whole is wide
- * enough that the documented ceiling of {@link MAX_REMOTE_IMAGES} distinct URL logos still prints
+ * enough that the default ceiling of {@link maxRemoteReferences} distinct URL logos still prints
  * rather than being refused by an allowance narrower than the limit beside it.
  *
  * **Stored images at the paper's own width cost nothing here.** Their dots are already on the agent,
@@ -124,14 +136,15 @@ export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
  *        a stored raster was synced at and the dot widths the tags ask for
  * @returns each reference in them, mapped to the image's own pixel dimensions and to any dots that
  *          must travel inside the job
- * @throws ApiError if the request names more than {@link MAX_REMOTE_IMAGES} URLs, if its images
- *         come to more than {@link MAX_INLINE_IMAGE_CHARS}, if a reference names no stored image,
- *         or if a URL cannot be fetched or read as one; for the last two the element it was written
- *         on travels in `details.line`
+ * @throws ApiError if the request names more remote URLs than {@link maxRemoteReferences} allows —
+ *         or, when that setting is 0, if it names any at all — if its images come to more than
+ *         {@link MAX_INLINE_IMAGE_CHARS}, if a reference names no stored image, or if a URL cannot be
+ *         fetched or read as one; for the last two the element it was written on travels in
+ *         `details.line`
  */
 export async function resolveImages(data: readonly string[], columns: number): Promise<ResolvedImages> {
 	const queue = [...collect(data, columns)];
-	requireWithinRemoteLimit(queue);
+	await requireWithinRemoteLimit(queue);
 
 	const sized = new Map<string, ImageSource>();
 	const budget = { spent: 0 };
@@ -255,10 +268,13 @@ function isRemote(reference: string): boolean {
 }
 
 /**
- * Refuses a request naming more URLs than {@link MAX_REMOTE_IMAGES}.
+ * Refuses a request naming more URLs than {@link maxRemoteReferences} allows.
  *
  * Runs before the workers start, which is the whole of its value: a limit enforced after the fetches
  * were away would report the problem while still causing it.
+ *
+ * The setting is read only when the receipt actually names a remote reference. Most jobs name none at
+ * all, and there is no reason for those to pay for a settings read that can only ever pass.
  *
  * Raised as a request-level {@link ApiError} rather than a positioned `MarkupError`, because that is
  * what it is. The count is of *distinct* references across every element, so no single tag is at
@@ -266,16 +282,34 @@ function isRemote(reference: string): boolean {
  * would name an innocent tag. Same reasoning the compiler already applies to `too_many_lines` and
  * `text_too_large`, which are also whole-request refusals with no line to report.
  *
+ * **Zero is a switch, not merely a small limit.** An operator may set `images.maxRemoteReferences` to
+ * 0 to turn outbound image fetching off entirely — a security posture, not an edge case — so a
+ * receipt naming even one URL is refused with a message saying URL images are switched off on this
+ * install. "You may reference at most 0 images" would read as this server being broken rather than as
+ * a choice someone made.
+ *
  * @param references every reference the request names, deduplicated
- * @throws ApiError if too many of them are URLs
+ * @throws ApiError if too many of them are URLs, or if any of them is a URL while the limit is 0
  */
-function requireWithinRemoteLimit(references: readonly (readonly [string, ImageUse])[]): void {
+async function requireWithinRemoteLimit(references: readonly (readonly [string, ImageUse])[]): Promise<void> {
 	const remote = references.filter(([reference]) => isRemote(reference)).length;
-	if (remote > MAX_REMOTE_IMAGES) {
+	if (remote === 0) {
+		return;
+	}
+
+	const limit = await maxRemoteReferences();
+	if (limit === 0) {
 		throw new ApiError(
 			"too_many_remote_images",
-			`A receipt may name at most ${MAX_REMOTE_IMAGES} images by URL, and this one names ${remote}. Store them on the Assets tab and reference them by name instead.`,
-			{ limit: MAX_REMOTE_IMAGES, seen: remote },
+			"This install has switched off images fetched by URL. Store the image on the Assets tab and reference it by name instead.",
+			{ limit: 0, seen: remote },
+		);
+	}
+	if (remote > limit) {
+		throw new ApiError(
+			"too_many_remote_images",
+			`A receipt may name at most ${limit} images by URL, and this one names ${remote}. Store them on the Assets tab and reference them by name instead.`,
+			{ limit, seen: remote },
 		);
 	}
 }

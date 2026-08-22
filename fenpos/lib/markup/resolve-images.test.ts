@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { Jimp, JimpMime } from "jimp";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema, IMAGE_LIMITS } from "@/lib/link/protocol";
 import { type CompileSettings, compile, readRequest } from "@/lib/markup/compiler";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the pre-pass that gives the compiler an image's dimensions.
@@ -33,7 +34,20 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 }));
 
 const { createAsset } = await import("@/lib/assets/asset-service");
-const { MAX_REMOTE_IMAGES, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
+const { maxRemoteReferences, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
+
+/**
+ * The `images.maxRemoteReferences` fallback (`settings-service.ts`), for tests that leave it unset.
+ *
+ * Read inside `beforeAll` rather than at module scope: this module's top-level code runs during
+ * import, before the setup file's own `beforeAll` has migrated the test database, and a settings
+ * read that early finds no `settings` table at all.
+ */
+let MAX_REMOTE_IMAGES: number;
+
+beforeAll(async () => {
+	MAX_REMOTE_IMAGES = await maxRemoteReferences();
+});
 
 /**
  * The device these resolves are for: 42 columns, which is 504 dots of paper.
@@ -117,6 +131,10 @@ async function refusal(data: string[]): Promise<ApiError> {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
+	// Cleared here too: the remote-limit tests below override `images.maxRemoteReferences`, and
+	// need to know they are starting from the built-in default rather than whatever a previous test
+	// — or another suite sharing this worker's database — left behind.
+	await prisma.setting.deleteMany({ where: { key: "images.maxRemoteReferences" } });
 	fetchRemoteImage.mockReset();
 });
 
@@ -213,6 +231,37 @@ describe("resolveImages", () => {
 		expect(thrown.details).toMatchObject({ limit: MAX_REMOTE_IMAGES, seen: MAX_REMOTE_IMAGES + 1 });
 		// The whole point of checking before the workers start: refusing after the fetches are away
 		// would be a limit that reports the problem while still causing it.
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The cap this task turned into a setting. `2` is well below the built-in fallback, so this
+	 * proves the *configured* value is what is enforced rather than the default surviving underneath
+	 * it.
+	 */
+	it("refuses more distinct remote images than configured", async () => {
+		await setSetting("images.maxRemoteReferences", 2);
+
+		const thrown = await refusal(remoteImages(3));
+
+		expect(thrown.code).toBe("too_many_remote_images");
+		expect(thrown.details).toMatchObject({ limit: 2, seen: 3 });
+	});
+
+	/**
+	 * Zero is not merely a very small limit — it is the deliberate way to switch outbound image
+	 * fetching off an install entirely, which is a security posture an operator may choose. The
+	 * refusal has to say so: "you may reference at most 0 images" reads as this server being broken,
+	 * not as a choice someone made.
+	 */
+	it("disables remote images entirely at zero", async () => {
+		await setSetting("images.maxRemoteReferences", 0);
+
+		const thrown = await refusal(remoteImages(1));
+
+		expect(thrown.code).toBe("too_many_remote_images");
+		expect(thrown.message).toMatch(/switched off/i);
+		expect(thrown.message).not.toMatch(/at most 0/i);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
