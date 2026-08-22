@@ -61,6 +61,43 @@ export function remoteLimitTrail(limit: number): string {
 }
 
 /**
+ * The fetch guard's scheme clause, in the same sentence as {@link remoteLimitLead}, phrased for the
+ * configured `images.allowPlainHttp`.
+ *
+ * @param allowPlainHttp the configured `images.allowPlainHttp`
+ * @returns "http or https only" or, once an install switches plain http off, "https only"
+ */
+export function schemeClause(allowPlainHttp: boolean): string {
+	return allowPlainHttp ? "http or https only" : "https only";
+}
+
+/**
+ * The clause naming a non-empty `images.allowedRemoteHosts`, appended to the same sentence as
+ * {@link schemeClause}.
+ *
+ * Empty means "any host" and is the default — a reader whose install has not touched this setting
+ * should not be told about a restriction that is not there, so this returns nothing rather than a
+ * clause that would read as "restricted to (nothing)".
+ *
+ * @param allowedHosts the configured `images.allowedRemoteHosts`, comma-separated
+ * @returns a trailing clause, including its leading punctuation, or the empty string
+ */
+export function allowedHostsClause(allowedHosts: string): string {
+	return allowedHosts.trim() === "" ? "" : `, and only from ${allowedHosts}`;
+}
+
+/**
+ * Names the image formats this install currently accepts, phrased for the configured
+ * `assets.acceptedFormats`, for the sentence describing what a stored asset must be.
+ *
+ * @param formats the configured `assets.acceptedFormats`
+ * @returns "a PNG or a JPEG", or, once an install turns JPEG off, "a PNG"
+ */
+export function acceptedImageFormatsClause(formats: "png+jpeg" | "png"): string {
+	return formats === "png" ? "a PNG" : "a PNG or a JPEG";
+}
+
+/**
  * Groups the error codes by the status they map to.
  *
  * Read from the error module rather than restated, so a code added there appears here without

@@ -57,6 +57,34 @@ export class ImageDecodeError extends Error {
  */
 const ACCEPTED_MIME_TYPES: readonly string[] = [JimpMime.png, JimpMime.jpeg];
 
+/** The values `assets.acceptedFormats` may hold, mirroring that setting's declared `values`. */
+export type AcceptedFormatsSetting = "png+jpeg" | "png";
+
+/**
+ * Which MIME types each `assets.acceptedFormats` value admits.
+ *
+ * `"png+jpeg"` is exactly {@link ACCEPTED_MIME_TYPES} — this pipeline's own baseline, restated as a
+ * lookup rather than reformulated — and `"png"` narrows it to the one format that never touches the
+ * expensive JPEG decoder. Read by `asset-service.ts`'s `measured()`, which is the gate every new
+ * upload or import passes; {@link ditherToRaster} takes the full baseline instead of this lookup,
+ * because it re-renders bytes that were already accepted at intake — narrowing the setting
+ * afterwards must not stop an existing image from printing.
+ */
+export const FORMAT_MIME_TYPES: Record<AcceptedFormatsSetting, readonly string[]> = {
+	"png+jpeg": ACCEPTED_MIME_TYPES,
+	png: [JimpMime.png],
+};
+
+/**
+ * Names the accepted formats the way a person reads them, for a refusal message.
+ *
+ * @param mimeTypes the MIME types currently accepted, in the order they should be named
+ * @returns e.g. "PNG or JPEG", or "PNG" when JPEG is not among them
+ */
+function formatsLabel(mimeTypes: readonly string[]): string {
+	return mimeTypes.map((mime) => (mime === JimpMime.jpeg ? "JPEG" : "PNG")).join(" or ");
+}
+
 /**
  * The pixel ceiling handed to the JPEG decoder, in megapixels.
  *
@@ -174,11 +202,17 @@ const CHANNELS = 4;
  * — rather than at print time behind a printer where nobody can act on it.
  *
  * @param bytes the uploaded file
+ * @param acceptedFormats which MIME types to accept; defaults to {@link ACCEPTED_MIME_TYPES}, this
+ *        pipeline's full baseline. `asset-service.ts`'s `measured()` — the gate every new upload or
+ *        import passes — narrows this to the configured `assets.acceptedFormats`.
  * @returns the image's pixel dimensions and its actual format
- * @throws ImageDecodeError if the bytes are not a PNG or a JPEG
+ * @throws ImageDecodeError if the bytes will not decode, or decode to a format not in `acceptedFormats`
  */
-export async function decodeImage(bytes: Buffer): Promise<DecodedImage> {
-	const { image, mimeType } = await accepted(bytes);
+export async function decodeImage(
+	bytes: Buffer,
+	acceptedFormats: readonly string[] = ACCEPTED_MIME_TYPES,
+): Promise<DecodedImage> {
+	const { image, mimeType } = await accepted(bytes, acceptedFormats);
 	return { width: image.bitmap.width, height: image.bitmap.height, mimeType };
 }
 
@@ -214,7 +248,10 @@ export async function ditherToRaster(bytes: Buffer, targetDots: number): Promise
 		throw new RangeError(`A raster width must be a positive whole number of dots, not ${targetDots}`);
 	}
 
-	const { image } = await accepted(bytes);
+	// The full baseline, not the configured `assets.acceptedFormats` — see FORMAT_MIME_TYPES's doc
+	// comment. These bytes already passed `measured()` at intake; narrowing the setting afterwards
+	// must not stop an existing image from being re-dithered for a new paper width.
+	const { image } = await accepted(bytes, ACCEPTED_MIME_TYPES);
 	const projected = projectedHeightDots(image.bitmap.width, image.bitmap.height, targetDots);
 	if (projected > IMAGE_LIMITS.maxHeightDots) {
 		throw new ImageDecodeError(
@@ -241,11 +278,13 @@ export async function ditherToRaster(bytes: Buffer, targetDots: number): Promise
  * image this pipeline cannot name is an image it cannot promise to print.
  *
  * @param bytes the uploaded file
+ * @param acceptedFormats which MIME types to accept
  * @returns the decoded image and the format it actually is
- * @throws ImageDecodeError if the bytes will not decode, or decode to an unaccepted format
+ * @throws ImageDecodeError if the bytes will not decode, or decode to a format not in `acceptedFormats`
  */
 async function accepted(
 	bytes: Buffer,
+	acceptedFormats: readonly string[],
 ): Promise<{ image: Awaited<ReturnType<typeof Jimp.fromBuffer>>; mimeType: string }> {
 	let image: Awaited<ReturnType<typeof Jimp.fromBuffer>>;
 	try {
@@ -258,8 +297,8 @@ async function accepted(
 	if (mimeType === undefined) {
 		throw new ImageDecodeError("This file could not be read as an image.");
 	}
-	if (!ACCEPTED_MIME_TYPES.includes(mimeType)) {
-		throw new ImageDecodeError(`Images must be PNG or JPEG; this one is ${mimeType}.`);
+	if (!acceptedFormats.includes(mimeType)) {
+		throw new ImageDecodeError(`Images must be ${formatsLabel(acceptedFormats)}; this one is ${mimeType}.`);
 	}
 	return { image, mimeType };
 }

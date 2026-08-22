@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { importAsset, uploadAsset } from "@/app/(panel)/assets/actions";
+import { type AcceptedFormats, acceptAttributeFor, acceptedFormatsPhrase } from "@/app/(panel)/assets/prose";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,9 +23,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { toNameCandidate } from "@/lib/domain/naming";
 import { describeBytes } from "@/lib/format/bytes";
 
-/** What the file picker offers, matching the two formats the decoder accepts. */
-const ACCEPTED = "image/png,image/jpeg";
-
 /**
  * Adds an image, from a file or from a URL.
  *
@@ -38,7 +36,17 @@ const ACCEPTED = "image/png,image/jpeg";
  * never fetched again, which is worth saying in the dialog: an operator who expects the logo to
  * follow changes at the far end would otherwise find out much later.
  */
-export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger: ReactElement }) {
+export function UploadDialog({
+	maxBytes,
+	acceptedFormats,
+	trigger,
+}: {
+	maxBytes: number;
+	/** The configured `assets.acceptedFormats`, read server-side — `settings-service.ts` is
+	 *  server-only, so this has to arrive as a plain, serialisable prop rather than be read here. */
+	acceptedFormats: AcceptedFormats;
+	trigger: ReactElement;
+}) {
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [file, setFile] = useState<File | null>(null);
@@ -136,8 +144,8 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 				<DialogHeader>
 					<DialogTitle>Add an image</DialogTitle>
 					<DialogDescription>
-						PNG or JPEG, up to {describeBytes(maxBytes)}. It is stored as uploaded and dithered for each printer's own
-						paper width, so the same image suits 58mm and 80mm alike.
+						{acceptedFormatsPhrase(acceptedFormats)}, up to {describeBytes(maxBytes)}. It is stored as uploaded and
+						dithered for each printer's own paper width, so the same image suits 58mm and 80mm alike.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
@@ -167,7 +175,7 @@ export function UploadDialog({ maxBytes, trigger }: { maxBytes: number; trigger:
 									key={slot}
 									id="asset-file"
 									type="file"
-									accept={ACCEPTED}
+									accept={acceptAttributeFor(acceptedFormats)}
 									disabled={saving || trimmedUrl !== ""}
 									onChange={(event) => choose(event.target.files?.[0] ?? null)}
 								/>

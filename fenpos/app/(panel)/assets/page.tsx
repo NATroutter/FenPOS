@@ -1,5 +1,6 @@
 import { Image as ImageIcon, Plus } from "lucide-react";
 import { AssetCard, type AssetCardData } from "@/app/(panel)/assets/asset-card";
+import type { AcceptedFormats } from "@/app/(panel)/assets/prose";
 import { UploadDialog } from "@/app/(panel)/assets/upload-dialog";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -7,6 +8,7 @@ import { listAssets, maxAssetBytes, rasterFor } from "@/lib/assets/asset-service
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { logger } from "@/lib/logger";
 import { dotWidth } from "@/lib/markup/blocks";
+import { enumSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Assets" };
 
@@ -43,6 +45,7 @@ const PREVIEW_DOTS = dotWidth(32);
 export default async function AssetsPage() {
 	const assets = await listAssets();
 	const uploadCap = await maxAssetBytes();
+	const acceptedFormats = await enumSetting<AcceptedFormats>("assets.acceptedFormats");
 
 	// One at a time, not `Promise.all`. Rendering a preview decodes the image, and `MAX_IMAGE_DIMENSION`
 	// in the asset service is a bound on *one* decode — a 4096-pixel JPEG costs about half a gigabyte
@@ -71,6 +74,7 @@ export default async function AssetsPage() {
 			<div className="flex justify-end">
 				<UploadDialog
 					maxBytes={uploadCap}
+					acceptedFormats={acceptedFormats}
 					trigger={
 						<Button>
 							<Plus className="size-3.5" />

@@ -183,8 +183,11 @@ export const SETTING_KEYS = [
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
 	"assets.maxUploadKb",
+	"assets.acceptedFormats",
 	"images.maxRemoteReferences",
 	"images.remoteFetchTimeoutMs",
+	"images.allowPlainHttp",
+	"images.allowedRemoteHosts",
 	"logs.minimumLevel",
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
@@ -322,6 +325,16 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "KiB",
 	},
 	{
+		key: "assets.acceptedFormats",
+		label: "Accepted image formats",
+		description:
+			"Which formats may be uploaded. JPEG is the more expensive decode; a site that only uploads logos can turn it off.",
+		category: "media",
+		type: "enum",
+		values: ["png+jpeg", "png"] as const,
+		fallback: "png+jpeg",
+	},
+	{
 		key: "images.maxRemoteReferences",
 		label: "Remote images per job",
 		description: "Distinct URLs one job may fetch. Set it to 0 to switch off outbound image fetching entirely.",
@@ -342,6 +355,26 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 15_000,
 		fallback: 3_000,
 		unit: "ms",
+	},
+	{
+		key: "images.allowPlainHttp",
+		label: "Allow plain http images",
+		description:
+			"Whether images may be fetched over http as well as https. Switch it off on a site that should never fetch in the clear.",
+		category: "media",
+		type: "boolean",
+		fallback: true,
+	},
+	{
+		key: "images.allowedRemoteHosts",
+		label: "Allowed image hosts",
+		description:
+			"Comma-separated hostnames that images may be fetched from. Leave it empty to allow any host. Matching is exact — a listed host does not admit its subdomains.",
+		category: "media",
+		type: "string",
+		maxLength: 512,
+		pattern: /^$|^[A-Za-z0-9.-]+(?:\s*,\s*[A-Za-z0-9.-]+)*$/,
+		fallback: "",
 	},
 	{
 		key: "logs.minimumLevel",

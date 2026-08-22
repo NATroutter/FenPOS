@@ -200,8 +200,11 @@ describe("setting definitions", () => {
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",
 			"assets.maxUploadKb": "integer",
+			"assets.acceptedFormats": "enum",
 			"images.maxRemoteReferences": "integer",
 			"images.remoteFetchTimeoutMs": "integer",
+			"images.allowPlainHttp": "boolean",
+			"images.allowedRemoteHosts": "string",
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
@@ -651,5 +654,160 @@ describe("panel.locale, panel.timeFormat, panel.timezone", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "panel.timezone" } });
 		expect(row?.value).toBe(JSON.stringify("Europe/Helsinki"));
 		expect(row?.value).toBe('"Europe/Helsinki"');
+	});
+});
+
+/**
+ * `images.allowPlainHttp` — the first `type: "boolean"` setting the store has ever held.
+ *
+ * `fits()`'s boolean branch and `setSetting`'s JSON write path have been exercised only by
+ * `logs.minimumLevel`'s enum coverage and `limits.maxLines`'s integer coverage until now; the
+ * behaviour this setting actually controls belongs to `fetch-remote.test.ts`, and what belongs
+ * here is the same boundary the other variants get: validation at the store, and the raw text
+ * written, which for a boolean is the one place a regression could slip past every other test —
+ * `String(false)` and `JSON.stringify(false)` are both the four characters `false`, unquoted, so
+ * this setting cannot tell a `String(value)` regression apart from a correct write by its raw text
+ * alone the way `logs.minimumLevel` or `server.publicUrl` can. What it *can* still prove is that
+ * the value round-trips as a real JSON boolean rather than as a string that happens to read the
+ * same: `JSON.parse("false")` is the boolean `false`, while a `String(value)` regression on a
+ * setting that was `true` would have written `"true"`, which still parses back as a value — a
+ * boolean is simply not a variant where round-tripping alone can catch every regression the string
+ * and enum equivalents can.
+ */
+describe("images.allowPlainHttp", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("defaults to true", async () => {
+		expect(await booleanSetting("images.allowPlainHttp")).toBe(true);
+	});
+
+	it("stores and reads back false", async () => {
+		await setSetting("images.allowPlainHttp", false);
+		expect(await booleanSetting("images.allowPlainHttp")).toBe(false);
+	});
+
+	it("refuses a non-boolean value", async () => {
+		await expect(setSetting("images.allowPlainHttp", "false")).rejects.toThrow(ApiError);
+		await expect(setSetting("images.allowPlainHttp", 0)).rejects.toThrow(ApiError);
+	});
+
+	it("throws when an accessor is pointed at another variant", async () => {
+		await expect(integerSetting("images.allowPlainHttp")).rejects.toThrow();
+	});
+
+	it("stores the value as JSON, not as quoted text", async () => {
+		// The regression this guards against: a write path that quoted every value, or reverted to
+		// `String(value)` for a type it did not expect, would store `"false"` — a JSON string, not
+		// a JSON boolean — and `parseStored` would hand back a string that `fits()` then refuses,
+		// silently reverting the setting to its default on the very next read.
+		await setSetting("images.allowPlainHttp", false);
+		const row = await prisma.setting.findUnique({ where: { key: "images.allowPlainHttp" } });
+		expect(row?.value).toBe("false");
+		expect(row?.value).toBe(JSON.stringify(false));
+	});
+});
+
+/**
+ * `images.allowedRemoteHosts` — the plan's first `string` setting with a `pattern`, now that
+ * `panel.timezone` became an enum. Its pattern carries no `g` or `y` flag, which matters: either
+ * flag makes a `RegExp` stateful through `lastIndex`, so `pattern.test()` would alternate between
+ * matching and not matching the *same* input across successive calls — and `fits()` calls
+ * `definition.pattern.test(value)` on every `setSetting` and every `listSettings()`, so a stateful
+ * pattern would make validation depend on how many times it had already run. The second test below
+ * calls `setSetting` twice with the same value specifically to catch that.
+ *
+ * The behaviour the allowlist actually gates belongs to `fetch-remote.test.ts`; what belongs here
+ * is validation at the store's boundary and the raw text it writes, the same split every other
+ * setting's test file follows.
+ */
+describe("images.allowedRemoteHosts", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("defaults to the empty string, meaning any host", async () => {
+		expect(await stringSetting("images.allowedRemoteHosts")).toBe("");
+	});
+
+	it("accepts the empty string", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
+		await setSetting("images.allowedRemoteHosts", "");
+		expect(await stringSetting("images.allowedRemoteHosts")).toBe("");
+	});
+
+	it("accepts a single hostname", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
+		expect(await stringSetting("images.allowedRemoteHosts")).toBe("cdn.example.com");
+	});
+
+	it("accepts several comma-separated hostnames", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com, images.example.com");
+		expect(await stringSetting("images.allowedRemoteHosts")).toBe("cdn.example.com, images.example.com");
+	});
+
+	/** The same value validated twice, to catch a stateful pattern — see this block's doc comment. */
+	it("accepts the same value on a second save, proving the pattern is not stateful", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
+		await expect(setSetting("images.allowedRemoteHosts", "cdn.example.com")).resolves.toBeUndefined();
+	});
+
+	it("refuses a value that is not hostname-shaped", async () => {
+		await expect(setSetting("images.allowedRemoteHosts", "not a host")).rejects.toThrow(ApiError);
+		await expect(setSetting("images.allowedRemoteHosts", "https://cdn.example.com")).rejects.toThrow(ApiError);
+		await expect(setSetting("images.allowedRemoteHosts", "cdn.example.com,")).rejects.toThrow(ApiError);
+	});
+
+	it("refuses a value longer than the declared maximum", async () => {
+		const definition = SETTINGS.find((setting) => setting.key === "images.allowedRemoteHosts");
+		if (definition?.type !== "string") {
+			throw new Error("expected images.allowedRemoteHosts to be a string setting");
+		}
+		const tooLong = `${"a".repeat(definition.maxLength)}.example.com`;
+		await expect(setSetting("images.allowedRemoteHosts", tooLong)).rejects.toThrow(ApiError);
+	});
+
+	it("throws when an accessor is pointed at another variant", async () => {
+		await expect(booleanSetting("images.allowedRemoteHosts")).rejects.toThrow();
+	});
+
+	it("stores the value as quoted JSON, not as bare text", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
+		const row = await prisma.setting.findUnique({ where: { key: "images.allowedRemoteHosts" } });
+		expect(row?.value).toBe(JSON.stringify("cdn.example.com"));
+		expect(row?.value).toBe('"cdn.example.com"');
+	});
+});
+
+/**
+ * `assets.acceptedFormats` — an enum gating which image formats `measured()` (`asset-service.ts`)
+ * will decode, on top of what the upload dialog's file picker offers. The behaviour it drives
+ * belongs to `asset-service.test.ts`; what belongs here is the same store-boundary validation and
+ * raw-text assertion every other setting's test file carries.
+ */
+describe("assets.acceptedFormats", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("defaults to png+jpeg", async () => {
+		expect(await enumSetting("assets.acceptedFormats")).toBe("png+jpeg");
+	});
+
+	it("stores and reads back png", async () => {
+		await setSetting("assets.acceptedFormats", "png");
+		expect(await enumSetting("assets.acceptedFormats")).toBe("png");
+	});
+
+	it("refuses a value outside the fixed list", async () => {
+		await expect(setSetting("assets.acceptedFormats", "gif")).rejects.toThrow(ApiError);
+	});
+
+	it("stores the value as quoted JSON, not as bare text", async () => {
+		await setSetting("assets.acceptedFormats", "png");
+		const row = await prisma.setting.findUnique({ where: { key: "assets.acceptedFormats" } });
+		expect(row?.value).toBe(JSON.stringify("png"));
+		expect(row?.value).toBe('"png"');
 	});
 });

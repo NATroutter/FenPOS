@@ -4,7 +4,7 @@ import { request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { ApiError } from "@/lib/errors";
 import { describeBytes } from "@/lib/format/bytes";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { booleanSetting, integerSetting, stringSetting } from "@/lib/settings/settings-service";
 
 /**
  * Fetching an image that a receipt names by URL, without letting the receipt point the server
@@ -27,15 +27,25 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * `<image>http://192.168.1.1/</image>` must not work. Neither must the dozen ways of writing that
  * which do not look like it.
  *
- * So every fetch through {@link fetchRemoteImage} is bounded four ways, and each bound exists
+ * So every fetch through {@link fetchRemoteImage} is bounded six ways, and each bound exists
  * because removing it reopens something specific:
  *
  * - **Scheme.** `http` and `https` only. Without this, `file:///etc/passwd` and `gopher://` are
  *   reachable through the same code path.
+ * - **Plain http.** An operator's own choice, on top of the scheme bound above: the
+ *   `images.allowPlainHttp` setting can narrow "http or https" down to "https only" for a site
+ *   that should never fetch in the clear. Checked wherever the scheme itself is checked — the
+ *   initial URL and every redirect hop — so a plain-http redirect cannot slip past a scheme this
+ *   install has switched off. See {@link requireSchemeAllowed}.
  * - **Address.** The *resolved* address must be publicly routable — see {@link IPV4_RULES} and
  *   {@link IPV6_RULES}. Checking the hostname text instead would be defeated by one DNS A record
  *   pointing inward, and checking the address and then connecting by hostname would be defeated
  *   by a second DNS answer — see {@link pinnedLookup}.
+ * - **Host allowlist.** A second, independent bound an operator may add on top of the address
+ *   check above: `images.allowedRemoteHosts` (empty by default, meaning any host). Applied after
+ *   the scheme and address checks, never instead of them, and matched exactly on the hostname —
+ *   no wildcards, no suffix match, so a listed `example.com` does not admit `sub.example.com`. See
+ *   {@link requireHostAllowed}.
  * - **Redirects.** Followed at most {@link MAX_REDIRECTS} times, and every hop is put through the
  *   whole guard again. See {@link followTo} for why this is the easiest check to forget.
  * - **Time and size.** {@link remoteFetchTimeoutMs} for the entire operation and
@@ -167,13 +177,20 @@ export interface RemoteFetchOptions {
 export async function fetchRemoteImage(url: string, options: RemoteFetchOptions = {}): Promise<Buffer> {
 	const resolve = options.resolve ?? systemResolver;
 	const transport = options.transport ?? pinnedTransport;
+	// Read before the deadline starts, so resolving these two settings never eats into the budget
+	// that governs the fetch itself.
+	const allowPlainHttp = await booleanSetting("images.allowPlainHttp");
+	const allowedHosts = parseAllowedHosts(await stringSetting("images.allowedRemoteHosts"));
 	const budget = options.timeoutMs ?? (await remoteFetchTimeoutMs());
 	const signal = AbortSignal.timeout(budget);
 
 	let target = parseTarget(url);
+	requireSchemeAllowed(target, allowPlainHttp);
 
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
 		const approved = await guardAddress(target, resolve, signal, budget);
+		// After the scheme and address checks, never instead of them — see the module comment.
+		requireHostAllowed(target, allowedHosts);
 
 		let response: RemoteResponse;
 		try {
@@ -184,7 +201,7 @@ export async function fetchRemoteImage(url: string, options: RemoteFetchOptions 
 
 		try {
 			if (REDIRECT_STATUSES.includes(response.status)) {
-				target = followTo(target, response);
+				target = followTo(target, response, allowPlainHttp);
 				continue;
 			}
 			if (response.status < 200 || response.status >= 300) {
@@ -427,6 +444,81 @@ function requireWebScheme(target: URL): void {
 }
 
 /**
+ * Extends {@link requireWebScheme} with the operator's own choice of whether plain http may be
+ * used at all, read from the `images.allowPlainHttp` setting.
+ *
+ * Called wherever {@link requireWebScheme} would otherwise be called on its own — the initial URL
+ * in {@link fetchRemoteImage} and every redirect target in {@link followTo} — so a plain-http
+ * redirect cannot slip past a scheme this install has switched off. `https` is never restricted;
+ * the setting only narrows what `http` on its own is permitted to mean.
+ *
+ * @param target a parsed URL
+ * @param allowPlainHttp the configured `images.allowPlainHttp`
+ * @throws ApiError unless the scheme is http or https, or is http while plain http is disallowed
+ */
+function requireSchemeAllowed(target: URL, allowPlainHttp: boolean): void {
+	requireWebScheme(target);
+	if (target.protocol === "http:" && !allowPlainHttp) {
+		throw new ApiError("invalid_tag_argument", "This install only fetches images over https; this one is plain http.", {
+			url: safeUrl(target),
+		});
+	}
+}
+
+/**
+ * Parses `images.allowedRemoteHosts`'s comma-separated text into the hostnames it names.
+ *
+ * Lower-cased here, once, rather than at the point of comparison: `requireHostAllowed` runs on
+ * every hop of every fetch, while this setting changes only when an operator saves it, so there is
+ * no reason to redo the casing work on every hop when it can be done once per fetch instead.
+ *
+ * @param raw the configured (or fallback) `images.allowedRemoteHosts`
+ * @returns the hostnames the allowlist names, lower-cased; empty when the setting is empty, which
+ *          means "any host"
+ */
+function parseAllowedHosts(raw: string): readonly string[] {
+	if (raw.trim() === "") {
+		return [];
+	}
+	return raw
+		.split(",")
+		.map((host) => host.trim().toLowerCase())
+		.filter((host) => host !== "");
+}
+
+/**
+ * Refuses a host outside the configured allowlist.
+ *
+ * A second, independent bound an operator may add on top of {@link guardAddress}, never a
+ * replacement for it — called after that check has already approved the resolved address, on
+ * every hop, so a redirect cannot reach a host the allowlist does not name. An empty allowlist
+ * means "any host", which is the default and a real value rather than an unset one.
+ *
+ * **Matching is exact on the hostname. No wildcards, no suffix matching.** A listed `example.com`
+ * must not admit `notexample.com` or `sub.example.com` — a suffix match (`hostname.endsWith(host)`)
+ * would let both through, which is precisely the bug that makes an allowlist worthless: any
+ * attacker-registered domain ending in an allowed name, or any subdomain of one, would pass. Array
+ * membership (`includes`) is what actually enforces that; nothing here compares substrings.
+ *
+ * @param target the URL for this hop
+ * @param allowedHosts the parsed `images.allowedRemoteHosts`, lower-cased; empty means unrestricted
+ * @throws ApiError if the allowlist is non-empty and does not name this hostname exactly
+ */
+function requireHostAllowed(target: URL, allowedHosts: readonly string[]): void {
+	if (allowedHosts.length === 0) {
+		return;
+	}
+	// Same bracket-stripping as `guardAddress`, and the same reason: `URL.hostname` keeps the
+	// brackets around an IPv6 literal, and nothing here wants them.
+	const hostname = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	if (!allowedHosts.includes(hostname)) {
+		throw new ApiError("invalid_tag_argument", `${hostname} is not on this install's list of allowed image hosts.`, {
+			url: safeUrl(target),
+		});
+	}
+}
+
+/**
  * Works out which address this hop may connect to, and refuses if it is not one.
  *
  * A literal address in the URL is used as-is rather than being handed to a resolver, because
@@ -516,10 +608,12 @@ async function guardAddress(
  *
  * @param from the URL this response came from, which a relative `Location` is relative to
  * @param response the redirect response
+ * @param allowPlainHttp the configured `images.allowPlainHttp`, checked the same as on the first hop
  * @returns the next URL, still unguarded
- * @throws ApiError if there is no usable `Location`, or it leaves http(s)
+ * @throws ApiError if there is no usable `Location`, it leaves http(s), or it is plain http while
+ *         plain http is disallowed
  */
-function followTo(from: URL, response: RemoteResponse): URL {
+function followTo(from: URL, response: RemoteResponse, allowPlainHttp: boolean): URL {
 	if (response.location === null || response.location === "") {
 		throw new ApiError("invalid_tag_argument", `${from.host} sent a ${response.status} redirect with no location.`, {
 			url: safeUrl(from),
@@ -535,7 +629,7 @@ function followTo(from: URL, response: RemoteResponse): URL {
 			url: safeUrl(from),
 		});
 	}
-	requireWebScheme(next);
+	requireSchemeAllowed(next, allowPlainHttp);
 	return next;
 }
 

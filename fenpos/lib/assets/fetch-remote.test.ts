@@ -96,10 +96,13 @@ const neverCalled: RemoteTransport = async () => {
 };
 
 beforeEach(async () => {
-	// The timeout tests below override `images.remoteFetchTimeoutMs`, and need to know they are
-	// starting from the built-in default rather than whatever a previous test — or another suite
-	// sharing this worker's database — left behind.
-	await prisma.setting.deleteMany({ where: { key: "images.remoteFetchTimeoutMs" } });
+	// Several tests below override `images.remoteFetchTimeoutMs`, `images.allowPlainHttp` or
+	// `images.allowedRemoteHosts`, and need to know they are starting from the built-in default
+	// rather than whatever a previous test — or another suite sharing this worker's database — left
+	// behind.
+	await prisma.setting.deleteMany({
+		where: { key: { in: ["images.remoteFetchTimeoutMs", "images.allowPlainHttp", "images.allowedRemoteHosts"] } },
+	});
 });
 
 describe("fetchRemoteImage", () => {
@@ -291,6 +294,90 @@ describe("fetchRemoteImage", () => {
 			transport: stub.transport,
 		});
 		expect(stub.offered).toEqual([answers, answers]);
+	});
+});
+
+/**
+ * `images.allowPlainHttp` and `images.allowedRemoteHosts` — two operator-configurable bounds
+ * layered on top of, never instead of, the scheme and address guards exercised above.
+ *
+ * The allowlist match is exact on the hostname: no wildcards, no suffix match. The test named for
+ * it below is the most important one in this file — `example.com` in the list must not admit
+ * `notexample.com` or `sub.example.com`, which is exactly what a `hostname.endsWith(host)`
+ * implementation would let through, and is precisely the bug that makes an allowlist worthless.
+ */
+describe("fetchRemoteImage configurable gates", () => {
+	it("refuses a plain-http image when plain http is switched off", async () => {
+		await setSetting("images.allowPlainHttp", false);
+		await expect(
+			fetchRemoteImage("http://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
+		).rejects.toThrow(ApiError);
+	});
+
+	it("still allows https when plain http is switched off", async () => {
+		await setSetting("images.allowPlainHttp", false);
+		const stub = stubTransport(() => ({}));
+		await expect(
+			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
+		).resolves.toBeInstanceOf(Buffer);
+	});
+
+	/** The scheme bound has to hold on every hop, or a plain-http redirect defeats it. */
+	it("refuses a plain-http redirect target even when the first hop was https", async () => {
+		await setSetting("images.allowPlainHttp", false);
+		const stub = stubTransport(() => ({ status: 302, location: "http://images.example.net/logo.png" }));
+		await expect(
+			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
+		).rejects.toThrow(ApiError);
+	});
+
+	it("allows any host when the allowlist is empty", async () => {
+		await setSetting("images.allowedRemoteHosts", "");
+		const stub = stubTransport(() => ({}));
+		await expect(
+			fetchRemoteImage("https://anywhere.example/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
+		).resolves.toBeInstanceOf(Buffer);
+	});
+
+	it("refuses a host outside a non-empty allowlist", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com, images.example.com");
+		await expect(
+			fetchRemoteImage("https://elsewhere.example/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
+		).rejects.toThrow(ApiError);
+	});
+
+	it("matches an allowlisted host case-insensitively", async () => {
+		await setSetting("images.allowedRemoteHosts", "CDN.Example.com");
+		const stub = stubTransport(() => ({}));
+		await expect(
+			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
+		).resolves.toBeInstanceOf(Buffer);
+	});
+
+	/**
+	 * The security-critical case. `example.com` in the list must not admit `notexample.com` or
+	 * `sub.example.com` — a suffix match (`hostname.endsWith(host)`) would wave both through, which
+	 * is exactly the bug that makes an allowlist worthless: any attacker-registered domain merely
+	 * ending in an allowed name, or any subdomain of one, would then pass. Array membership
+	 * (`includes`) is what this module actually checks with, and it is immune to both.
+	 */
+	it("does not treat an allowlist entry as a suffix match", async () => {
+		await setSetting("images.allowedRemoteHosts", "example.com");
+		await expect(
+			fetchRemoteImage("https://notexample.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
+		).rejects.toThrow(ApiError);
+		await expect(
+			fetchRemoteImage("https://sub.example.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
+		).rejects.toThrow(ApiError);
+	});
+
+	/** The allowlist bound has to hold on every hop too, or a redirect defeats it the same way. */
+	it("refuses a redirect to a host outside the allowlist", async () => {
+		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
+		const stub = stubTransport(() => ({ status: 302, location: "https://images.example.net/logo.png" }));
+		await expect(
+			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
+		).rejects.toThrow(ApiError);
 	});
 });
 

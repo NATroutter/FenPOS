@@ -180,10 +180,11 @@ async function refusal(work: () => Promise<unknown>): Promise<ApiError> {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
-	// Cleared here too: several tests below override `assets.maxUploadKb`, and the byte-cap
-	// tests need to know they are starting from the built-in default rather than whatever the
-	// previous test — or another suite sharing this worker's database — left behind.
-	await prisma.setting.deleteMany({ where: { key: "assets.maxUploadKb" } });
+	// Cleared here too: several tests below override `assets.maxUploadKb` or
+	// `assets.acceptedFormats`, and need to know they are starting from the built-in default rather
+	// than whatever the previous test — or another suite sharing this worker's database — left
+	// behind.
+	await prisma.setting.deleteMany({ where: { key: { in: ["assets.maxUploadKb", "assets.acceptedFormats"] } } });
 	fetchRemoteImage.mockReset();
 });
 
@@ -266,6 +267,47 @@ describe("createAsset", () => {
 		const gif = await new Jimp({ width: 4, height: 4, color: 0xff0000ff }).getBuffer("image/gif");
 
 		await refusal(() => createAsset("animated", gif));
+	});
+
+	/**
+	 * `assets.acceptedFormats` narrows `measured`'s decode gate below the pipeline's own baseline —
+	 * an install that only ever uploads logos can turn JPEG off, which is the more expensive decode.
+	 * Fixture and refusal are otherwise identical to the JPEG acceptance test further down, so this
+	 * is the setting's effect and nothing else.
+	 */
+	it("refuses a JPEG when assets.acceptedFormats is set to png only", async () => {
+		await setSetting("assets.acceptedFormats", "png");
+		const jpeg = await new Jimp({ width: 64, height: 24, color: 0x336699ff }).getBuffer("image/jpeg");
+
+		const refused = await refusal(() => createAsset("photo", jpeg));
+
+		expect(refused.code).toBe("invalid_image");
+		expect(refused.message).toMatch(/PNG/);
+	});
+
+	it("still accepts a PNG when assets.acceptedFormats is set to png only", async () => {
+		await setSetting("assets.acceptedFormats", "png");
+
+		await expect(createAsset("logo", PNG)).resolves.toBeDefined();
+	});
+
+	/**
+	 * `ditherToRaster` (via `rasterFor`) deliberately does not re-check `assets.acceptedFormats`: a
+	 * JPEG accepted while the setting allowed it must go on printing after an operator later narrows
+	 * the setting to PNG only, since these bytes already passed `measured` once and the row is not
+	 * being re-validated, only re-rendered at a new width.
+	 */
+	it("keeps rendering a previously accepted JPEG after the setting narrows to png only", async () => {
+		const jpeg = await new Jimp({ width: 64, height: 24, color: 0x336699ff }).getBuffer("image/jpeg");
+		await createAsset("photo", jpeg);
+
+		await setSetting("assets.acceptedFormats", "png");
+
+		await expect(rasterFor("photo", 384)).resolves.toBeDefined();
+		// `ditherToRaster` is a shared mock across this whole file; other tests below assert on its
+		// call count from a clean slate, so this test must not leave its own call sitting in it.
+		ditherToRaster.mockClear();
+		forgetRasters();
 	});
 
 	it("refuses more bytes than the upload cap", async () => {

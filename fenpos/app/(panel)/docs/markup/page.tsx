@@ -3,6 +3,8 @@ import { ContentsRail } from "@/app/(panel)/docs/contents-rail";
 import { DocSection } from "@/app/(panel)/docs/doc-section";
 import {
 	Aside,
+	acceptedImageFormatsClause,
+	allowedHostsClause,
 	Col,
 	DocLink,
 	ErrorRef,
@@ -11,6 +13,7 @@ import {
 	remoteLimitLead,
 	remoteLimitTrail,
 	Split,
+	schemeClause,
 	seconds,
 } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -21,6 +24,7 @@ import { BarcodeSystem } from "@/lib/domain/enums";
 import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { maxRemoteReferences } from "@/lib/markup/resolve-images";
+import { booleanSetting, enumSetting, stringSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Markup" };
 
@@ -118,6 +122,9 @@ export default async function MarkupDocsPage() {
 	const assetCap = await maxAssetBytes();
 	const remoteTimeoutMs = await remoteFetchTimeoutMs();
 	const remoteLimit = await maxRemoteReferences();
+	const allowPlainHttp = await booleanSetting("images.allowPlainHttp");
+	const allowedHosts = await stringSetting("images.allowedRemoteHosts");
+	const acceptedFormats = await enumSetting<"png+jpeg" | "png">("assets.acceptedFormats");
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -224,20 +231,20 @@ export default async function MarkupDocsPage() {
 								<P>
 									A URL is fetched while the job compiles, which is the cost of naming a live image: an unreachable host
 									fails the print with <ErrorRef code="invalid_tag_argument" /> instead of printing a receipt with a
-									hole in it, and a slow one holds the request up. The fetch is guarded — http or https only,{" "}
-									{seconds(remoteTimeoutMs)} for the whole of it including redirects,{" "}
-									{describeBytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address, so
-									a receipt cannot use this server to read something inside your network. {remoteLimitLead(remoteLimit)}{" "}
-									<ErrorRef code="too_many_remote_images" />
+									hole in it, and a slow one holds the request up. The fetch is guarded — {schemeClause(allowPlainHttp)}
+									, {seconds(remoteTimeoutMs)} for the whole of it including redirects,{" "}
+									{describeBytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address
+									{allowedHostsClause(allowedHosts)}, so a receipt cannot use this server to read something inside your
+									network. {remoteLimitLead(remoteLimit)} <ErrorRef code="too_many_remote_images" />
 									{remoteLimitTrail(remoteLimit)}
 								</P>
 
 								<P>
 									Images are added on the Assets tab, by upload or by importing a URL once, and markup refers to one by
 									its slug: the example beside names an image called <Mono>logo</Mono>, and a name that is not stored on
-									this install is <ErrorRef code="unknown_asset" />. Whichever door a picture comes through, it must be
-									a PNG or a JPEG of at most {describeBytes(assetCap)} and {MAX_IMAGE_DIMENSION} pixels on each side,
-									and a PNG must not be interlaced.
+									this install is <ErrorRef code="unknown_asset" />. Whichever door a picture comes through, it must be{" "}
+									{acceptedImageFormatsClause(acceptedFormats)} of at most {describeBytes(assetCap)} and{" "}
+									{MAX_IMAGE_DIMENSION} pixels on each side, and a PNG must not be interlaced.
 								</P>
 
 								<P>

@@ -1,9 +1,11 @@
 import "server-only";
 import { BUNDLED_LOGO_NAME } from "@/lib/assets/bundled-logo";
 import {
+	type AcceptedFormatsSetting,
 	type DecodedImage,
 	decodeImage,
 	ditherToRaster,
+	FORMAT_MIME_TYPES,
 	ImageDecodeError,
 	type ImageRaster,
 	projectedHeightDots,
@@ -17,7 +19,7 @@ import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import type { ImageSource } from "@/lib/markup/images";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * The image library a receipt's `<image>` tag draws from.
@@ -610,15 +612,22 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
  *
  * @param bytes the image, as uploaded or as fetched
  * @returns what the bytes turned out to be
- * @throws ApiError if they are too large, too big in pixels, or not an image this pipeline prints
+ * @throws ApiError if they are too large, too big in pixels, or not a format this install currently
+ *         accepts
  */
 async function measured(bytes: Buffer): Promise<DecodedImage> {
 	await requireWithinByteCap(bytes.length);
 	requireDecodableSize(bytes);
 
+	// The configured `assets.acceptedFormats`, not the pipeline's full baseline: this is the one
+	// gate every new upload or import passes, so it is where narrowing the setting to PNG-only
+	// actually bites. `ditherToRaster` (`derive`, below) re-renders bytes that already passed this
+	// gate once and deliberately does not re-check it — see FORMAT_MIME_TYPES's doc comment.
+	const acceptedFormats = FORMAT_MIME_TYPES[await enumSetting<AcceptedFormatsSetting>("assets.acceptedFormats")];
+
 	let decoded: DecodedImage;
 	try {
-		decoded = await decodeImage(bytes);
+		decoded = await decodeImage(bytes, acceptedFormats);
 	} catch (thrown) {
 		if (thrown instanceof ImageDecodeError) {
 			// The decoder's message is already written for whoever chose the file. Re-raised as an

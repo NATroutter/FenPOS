@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { remoteLimitLead, remoteLimitTrail } from "@/app/(panel)/docs/prose";
+import {
+	acceptedImageFormatsClause,
+	allowedHostsClause,
+	remoteLimitLead,
+	remoteLimitTrail,
+	schemeClause,
+} from "@/app/(panel)/docs/prose";
 
 /**
  * Tests for the markup docs page's remote-image sentence, at the boundary that matters and the two
@@ -36,5 +42,41 @@ describe("remoteLimitTrail", () => {
 	it("notes stored images are uncounted otherwise", () => {
 		expect(remoteLimitTrail(1)).toMatch(/not counted/i);
 		expect(remoteLimitTrail(12)).toMatch(/not counted/i);
+	});
+});
+
+describe("schemeClause", () => {
+	it("names both schemes when plain http is allowed", () => {
+		expect(schemeClause(true)).toBe("http or https only");
+	});
+
+	it("names only https once plain http is switched off", () => {
+		expect(schemeClause(false)).toBe("https only");
+	});
+});
+
+describe("allowedHostsClause", () => {
+	it("adds nothing when the allowlist is empty, meaning any host", () => {
+		expect(allowedHostsClause("")).toBe("");
+	});
+
+	it("adds nothing for a value that is only whitespace", () => {
+		expect(allowedHostsClause("   ")).toBe("");
+	});
+
+	it("names the configured hosts when the allowlist is not empty", () => {
+		expect(allowedHostsClause("cdn.example.com, images.example.com")).toBe(
+			", and only from cdn.example.com, images.example.com",
+		);
+	});
+});
+
+describe("acceptedImageFormatsClause", () => {
+	it("names both formats when both are accepted", () => {
+		expect(acceptedImageFormatsClause("png+jpeg")).toBe("a PNG or a JPEG");
+	});
+
+	it("names only PNG when JPEG is turned off", () => {
+		expect(acceptedImageFormatsClause("png")).toBe("a PNG");
 	});
 });
