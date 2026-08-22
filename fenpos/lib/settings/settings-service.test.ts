@@ -15,6 +15,7 @@ import {
 	clearSetting,
 	DEFAULT_LIMITS,
 	enumSetting,
+	globalAgentSettings,
 	globalJobSettings,
 	globalLimits,
 	globalLogIngestSettings,
@@ -130,6 +131,16 @@ describe("settings", () => {
 		});
 	});
 
+	it("reads agent timing settings as one object, honouring overrides", async () => {
+		await prisma.setting.create({ data: { key: "agent.queuePollMs", value: "250" } });
+
+		expect(await globalAgentSettings()).toEqual({
+			statusIntervalSeconds: 30,
+			evictionIntervalSeconds: 60,
+			queuePollMs: 250,
+		});
+	});
+
 	it("reads log ingestion settings as one object, honouring overrides", async () => {
 		await prisma.setting.create({ data: { key: "logs.maxRecords", value: "5000" } });
 
@@ -220,6 +231,9 @@ describe("setting definitions", () => {
 			"link.handshakeTimeoutSeconds": "integer",
 			"link.commandTimeoutSeconds": "integer",
 			"link.scanTimeoutSeconds": "integer",
+			"link.statusIntervalSeconds": "integer",
+			"agent.evictionIntervalSeconds": "integer",
+			"agent.queuePollMs": "integer",
 			"panel.jobPageSize": "integer",
 			"panel.logPageSize": "integer",
 			"panel.dashboardWindowHours": "integer",

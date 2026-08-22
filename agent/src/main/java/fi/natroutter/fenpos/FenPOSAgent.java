@@ -33,6 +33,7 @@ import fi.natroutter.fenpos.pair.EnvironmentPairing;
 import fi.natroutter.fenpos.pair.PairingClient;
 import fi.natroutter.fenpos.pair.PairingService;
 import fi.natroutter.fenpos.print.JobSettings;
+import fi.natroutter.fenpos.print.PrintQueue;
 import fi.natroutter.fenpos.print.PrintService;
 import fi.natroutter.fenpos.serial.DeviceConnectionManager;
 import fi.natroutter.fenpos.store.AgentStore;
@@ -49,6 +50,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -67,18 +69,6 @@ import java.util.concurrent.TimeUnit;
  * otherwise restart-loop with the reason buried in the logs.
  */
 public class FenPOSAgent extends FoxLib {
-
-    /** How often expired job records are swept. */
-    private static final Duration EVICTION_INTERVAL = Duration.ofMinutes(1);
-
-    /**
-     * How often device state is pushed even when nothing changed.
-     * <p>
-     * A backstop, not the main channel: every state change reports itself immediately. This
-     * catches the ones nothing observes, chiefly a background reconnect finding its printer
-     * again, which would otherwise show as offline in the panel until someone touched it.
-     */
-    private static final Duration STATUS_INTERVAL = Duration.ofSeconds(30);
 
     /** Where the local store lives, relative to the working directory. */
     private static final Path STORE_FILE = Path.of("data", "agent.db");
@@ -119,7 +109,27 @@ public class FenPOSAgent extends FoxLib {
     @Getter
     private static LinkClient link;
 
+    /** Runs both the status report sweep and the job eviction sweep. */
     private static ScheduledExecutorService janitor;
+
+    /**
+     * The recurring status report task, kept so {@link #rescheduleStatusReports} can arm it again
+     * at a new interval without recreating it.
+     */
+    private static Runnable statusReportTask;
+
+    /**
+     * The recurring job eviction task, kept so {@link #rescheduleJanitor} can arm it again at a
+     * new interval without recreating it.
+     */
+    private static Runnable janitorTask;
+
+    /** The currently scheduled status report sweep, so it can be cancelled before rescheduling. */
+    private static volatile ScheduledFuture<?> statusReportsFuture;
+
+    /** The currently scheduled job eviction sweep, so it can be cancelled before rescheduling. */
+    private static volatile ScheduledFuture<?> janitorFuture;
+
     private static ConsoleOutput consoleOutput;
     private static ConsoleManager console;
     /** Follows the server's setting once a config.sync arrives; the built-in until then. */
@@ -155,7 +165,7 @@ public class FenPOSAgent extends FoxLib {
                 devices, jobSettings, connections::port, Clock.systemUTC(), logger);
 
         printService.start();
-        startJanitor();
+        startJanitor(AgentSettings.DEFAULTS.evictionInterval());
 
         AgentInfo info = AgentInfo.of(VERSION);
         pairing = new PairingService(store, new PairingClient(), info);
@@ -164,7 +174,7 @@ public class FenPOSAgent extends FoxLib {
                 new LinkDispatcher(devices, printService, connections, FenPOSAgent::applyConfig, logger);
         link = new LinkClient(info, dispatcher, logger);
         dispatcher.attach(link::send);
-        startStatusReports(dispatcher);
+        startStatusReports(dispatcher, AgentSettings.DEFAULTS.statusInterval());
 
         Runtime.getRuntime().addShutdownHook(new Thread(FenPOSAgent::shutdown, "fenpos-agent-shutdown"));
 
@@ -177,17 +187,26 @@ public class FenPOSAgent extends FoxLib {
     }
 
     /**
-     * Adopts a device set and the job settings the server pushed.
+     * Adopts a device set, the job settings and the agent's own timing settings the server
+     * pushed.
      * <p>
      * The single entry point for {@code config.sync}, so the layers that care are always updated
      * together and in the right order: the serial layer first, because a print queue is built
-     * around the port that layer owns; the job settings last, because they change what the print
-     * service does with the queues rather than which queues exist.
+     * around the port that layer owns; the job settings next, because they change what the print
+     * service does with the queues rather than which queues exist; the agent's own timing last,
+     * because it governs schedules that do not depend on either.
+     * <p>
+     * The status and eviction sweeps are cancelled and rescheduled at their new interval rather
+     * than left to pick it up next run, so a value tightened to catch a problem takes effect
+     * immediately rather than after up to one more sweep at the old, wider interval. The queue
+     * poll interval needs no such ceremony: {@link PrintQueue#setPollInterval} only writes a
+     * volatile field that every queue's worker loop already re-reads each time it loops.
      *
-     * @param wire the devices as the server described them
-     * @param jobs retention and shutdown settings as the server has them configured
+     * @param wire  the devices as the server described them
+     * @param jobs  retention and shutdown settings as the server has them configured
+     * @param agent status, eviction and queue-poll timing as the server has them configured
      */
-    public static synchronized void applyConfig(List<Frames.DeviceConfig> wire, JobSettings jobs) {
+    public static synchronized void applyConfig(List<Frames.DeviceConfig> wire, JobSettings jobs, AgentSettings agent) {
         if (shuttingDown) {
             return;
         }
@@ -196,6 +215,11 @@ public class FenPOSAgent extends FoxLib {
         printService.applyDevices();
         printService.settings(jobs);
         shutdownGrace = jobs.shutdownGrace();
+
+        rescheduleStatusReports(agent.statusInterval());
+        rescheduleJanitor(agent.evictionInterval());
+        PrintQueue.setPollInterval(agent.queuePoll());
+
         logger.info("Configuration applied: " + devices.size() + " device(s)");
     }
 
@@ -246,43 +270,83 @@ public class FenPOSAgent extends FoxLib {
         }
     }
 
-    /** Starts the slow backstop that pushes device state when nothing else has. */
-    private static void startStatusReports(LinkDispatcher dispatcher) {
-        janitor.scheduleAtFixedRate(
-                () -> {
-                    try {
-                        dispatcher.reportStatus();
-                    } catch (RuntimeException e) {
-                        // A failed report must not kill the scheduled task, which would stop all
-                        // future reports and leave the panel frozen on the last one.
-                        logger.error("Status report failed", e);
-                    }
-                },
-                STATUS_INTERVAL.toSeconds(),
-                STATUS_INTERVAL.toSeconds(),
-                TimeUnit.SECONDS);
+    /**
+     * Starts the slow backstop that pushes device state when nothing else has.
+     * <p>
+     * A backstop, not the main channel: every state change reports itself immediately. This
+     * catches the ones nothing observes, chiefly a background reconnect finding its printer
+     * again, which would otherwise show as offline in the panel until someone touched it.
+     *
+     * @param dispatcher the dispatcher to report through
+     * @param interval   how often to report; the server's push, or {@link AgentSettings#DEFAULTS}
+     *                   before the first one arrives
+     */
+    private static void startStatusReports(LinkDispatcher dispatcher, Duration interval) {
+        statusReportTask = () -> {
+            try {
+                dispatcher.reportStatus();
+            } catch (RuntimeException e) {
+                // A failed report must not kill the scheduled task, which would stop all
+                // future reports and leave the panel frozen on the last one.
+                logger.error("Status report failed", e);
+            }
+        };
+        rescheduleStatusReports(interval);
     }
 
-    /** Starts the background sweep that discards job records past their retention. */
-    private static void startJanitor() {
+    /**
+     * Cancels the running status report sweep, if any, and arms a fresh one at {@code interval}.
+     * <p>
+     * Cancel-and-reschedule rather than leaving the running sweep to pick up a new interval on
+     * its own next run: a value tightened to catch a problem must take effect at once, not after
+     * up to one more sweep at the old, wider interval.
+     *
+     * @param interval how often the sweep should run from now on
+     */
+    private static void rescheduleStatusReports(Duration interval) {
+        if (statusReportsFuture != null) {
+            statusReportsFuture.cancel(false);
+        }
+        statusReportsFuture = janitor.scheduleAtFixedRate(
+                statusReportTask, interval.toSeconds(), interval.toSeconds(), TimeUnit.SECONDS);
+    }
+
+    /**
+     * Starts the executor the status and eviction sweeps share, and arms the eviction sweep.
+     *
+     * @param interval how often to sweep; the server's push, or {@link AgentSettings#DEFAULTS}
+     *                 before the first one arrives
+     */
+    private static void startJanitor(Duration interval) {
         janitor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "fenpos-agent-job-janitor");
             thread.setDaemon(true);
             return thread;
         });
-        janitor.scheduleAtFixedRate(
-                () -> {
-                    try {
-                        printService.evictExpiredJobs();
-                    } catch (RuntimeException e) {
-                        // A sweep failure must not kill the scheduled task, which would
-                        // silently stop all future eviction and leak job records.
-                        logger.error("Job eviction failed", e);
-                    }
-                },
-                EVICTION_INTERVAL.toSeconds(),
-                EVICTION_INTERVAL.toSeconds(),
-                TimeUnit.SECONDS);
+        janitorTask = () -> {
+            try {
+                printService.evictExpiredJobs();
+            } catch (RuntimeException e) {
+                // A sweep failure must not kill the scheduled task, which would
+                // silently stop all future eviction and leak job records.
+                logger.error("Job eviction failed", e);
+            }
+        };
+        rescheduleJanitor(interval);
+    }
+
+    /**
+     * Cancels the running job eviction sweep, if any, and arms a fresh one at {@code interval}.
+     * Same reasoning as {@link #rescheduleStatusReports}.
+     *
+     * @param interval how often the sweep should run from now on
+     */
+    private static void rescheduleJanitor(Duration interval) {
+        if (janitorFuture != null) {
+            janitorFuture.cancel(false);
+        }
+        janitorFuture = janitor.scheduleAtFixedRate(
+                janitorTask, interval.toSeconds(), interval.toSeconds(), TimeUnit.SECONDS);
     }
 
     /**

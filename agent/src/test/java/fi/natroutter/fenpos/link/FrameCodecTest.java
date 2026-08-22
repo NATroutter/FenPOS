@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.link;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import fi.natroutter.fenpos.AgentSettings;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.CutMode;
@@ -371,6 +372,45 @@ class FrameCodecTest {
         String json = """
                 {"type":"config.sync","devices":[],"assets":[],
                  "jobs":{"retentionMinutes":0,"maxRecords":10000,"shutdownGraceSeconds":30}}
+                """;
+
+        assertThrows(ProtocolException.class, () -> codec.read(json));
+    }
+
+    // -----------------------------------------------------------------
+    // Reading: agent settings
+    // -----------------------------------------------------------------
+
+    @Test
+    void readsAgentSettingsFromConfigSync() throws Exception {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],
+                 "agent":{"statusIntervalSeconds":45,"evictionIntervalSeconds":120,"queuePollMs":250}}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(Duration.ofSeconds(45), sync.agent().statusInterval());
+        assertEquals(Duration.ofSeconds(120), sync.agent().evictionInterval());
+        assertEquals(Duration.ofMillis(250), sync.agent().queuePoll());
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncOmitsAgentSettings() throws Exception {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[]}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(AgentSettings.DEFAULTS, sync.agent());
+    }
+
+    @Test
+    void refusesAgentSettingsOutsideTheirBounds() {
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],
+                 "agent":{"statusIntervalSeconds":4,"evictionIntervalSeconds":120,"queuePollMs":250}}
                 """;
 
         assertThrows(ProtocolException.class, () -> codec.read(json));

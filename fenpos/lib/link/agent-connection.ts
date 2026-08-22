@@ -19,7 +19,7 @@ import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLin
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
-import { globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
+import { globalAgentSettings, globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * One agent's connection, from the opening handshake to close.
@@ -513,6 +513,7 @@ export async function pushDeviceConfig(link: AgentLink, agentId: string): Promis
 			devices,
 			assets: await rastersFor(devices, agentId),
 			jobs: await globalJobSettings(),
+			agent: await globalAgentSettings(),
 		});
 	} catch (error) {
 		logger.error("Could not push device configuration", error, { agentId });

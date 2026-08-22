@@ -1,5 +1,6 @@
 package fi.natroutter.fenpos.link;
 
+import fi.natroutter.fenpos.AgentSettings;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
@@ -146,8 +147,8 @@ public final class Frames {
     }
 
     /**
-     * The authoritative device set, the images behind it, and the job settings that govern how
-     * long its results are kept.
+     * The authoritative device set, the images behind it, the job settings that govern how long
+     * its results are kept, and the agent's own operational timing.
      *
      * <p>Always a whole snapshot, never a delta. That makes it idempotent, so an agent that
      * missed changes while disconnected converges on reconnect without either side tracking
@@ -159,18 +160,28 @@ public final class Frames {
      * link once. The cost of the snapshot being whole is that they are re-sent on every
      * reconnect rather than only when they change.
      *
+     * <p>{@code agent} carries the status report interval, the job eviction sweep interval and
+     * the print queue's idle poll interval — three values that used to be fixed constants and
+     * are now pushed the same way {@code jobs} is, for the same reason: re-sending them on every
+     * reconnect costs nothing worth tracking a delta to avoid.
+     *
      * @param devices every device configured behind this agent
      * @param assets  one raster per stored image per distinct paper width behind this agent
      * @param jobs    retention and shutdown settings; never null — {@link JobSettings#DEFAULTS}
      *                when the server omitted them, which is what an older server does
+     * @param agent   status, eviction and queue-poll timing; never null —
+     *                {@link AgentSettings#DEFAULTS} when the server omitted them, which is what
+     *                an older server does
      */
-    public record ConfigSync(List<DeviceConfig> devices, List<AssetRaster> assets, JobSettings jobs)
+    public record ConfigSync(
+            List<DeviceConfig> devices, List<AssetRaster> assets, JobSettings jobs, AgentSettings agent)
             implements ServerFrame {
 
         public ConfigSync {
             devices = List.copyOf(devices);
             assets = List.copyOf(assets);
             jobs = jobs == null ? JobSettings.DEFAULTS : jobs;
+            agent = agent == null ? AgentSettings.DEFAULTS : agent;
         }
 
         @Override

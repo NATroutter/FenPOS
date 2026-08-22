@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { type AuthenticatedAgent, handleAgentConnection, pushDeviceConfig } from "@/lib/link/agent-connection";
 import { PROTOCOL_VERSION, type ServerFrame } from "@/lib/link/protocol";
 import type { AgentLink } from "@/lib/link/registry";
-import { globalJobSettings, setSetting } from "@/lib/settings/settings-service";
+import { globalAgentSettings, globalJobSettings, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the configuration pushed to an agent on connect.
@@ -62,6 +62,30 @@ describe("pushDeviceConfig", () => {
 			throw new Error("expected a config.sync frame");
 		}
 		expect(frame.jobs).toEqual(await globalJobSettings());
+	});
+
+	it("carries the configured agent timing settings", async () => {
+		await setSetting("agent.queuePollMs", 250);
+
+		const link = fakeLink("agent-1");
+		await pushDeviceConfig(link, "agent-1");
+
+		const [frame] = link.frames;
+		if (frame?.type !== "config.sync") {
+			throw new Error("expected a config.sync frame");
+		}
+		expect(frame.agent).toEqual(await globalAgentSettings());
+	});
+
+	it("carries the built-in agent timing settings when nothing is stored", async () => {
+		const link = fakeLink("agent-1");
+		await pushDeviceConfig(link, "agent-1");
+
+		const [frame] = link.frames;
+		if (frame?.type !== "config.sync") {
+			throw new Error("expected a config.sync frame");
+		}
+		expect(frame.agent).toEqual(await globalAgentSettings());
 	});
 });
 

@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import fi.natroutter.fenpos.AgentSettings;
 import fi.natroutter.fenpos.enums.Align;
 import fi.natroutter.fenpos.enums.BarcodeSystem;
 import fi.natroutter.fenpos.enums.Codepage;
@@ -222,7 +223,10 @@ public final class FrameCodec {
         JsonObject jobsObject = root.getAsJsonObject("jobs");
         JobSettings jobs = jobsObject == null ? JobSettings.DEFAULTS : readJobSettings(jobsObject);
 
-        return new ConfigSync(devices, assets, jobs);
+        JsonObject agentObject = root.getAsJsonObject("agent");
+        AgentSettings agent = agentObject == null ? AgentSettings.DEFAULTS : readAgentSettings(agentObject);
+
+        return new ConfigSync(devices, assets, jobs, agent);
     }
 
     /**
@@ -242,6 +246,26 @@ public final class FrameCodec {
                 Duration.ofMinutes(requireBoundedInt(jobs, "retentionMinutes", 1, 40_320)),
                 requireBoundedInt(jobs, "maxRecords", 100, 1_000_000),
                 Duration.ofSeconds(requireBoundedInt(jobs, "shutdownGraceSeconds", 1, 300)));
+    }
+
+    /**
+     * Reads the agent-side timing settings a {@code config.sync} carries, restating the
+     * server's own bounds.
+     *
+     * <p>The object is optional on the wire — {@link #readConfigSync} supplies
+     * {@link AgentSettings#DEFAULTS} when it is absent — but once present every field within it
+     * is required and bounded the same way every other field on this frame is: a receiver that
+     * trusts the sender's validation has not validated anything.
+     *
+     * @param agent the {@code agent} object of a {@code config.sync} frame
+     * @return the settings it describes
+     * @throws ProtocolException when a field is missing or out of range
+     */
+    private static AgentSettings readAgentSettings(JsonObject agent) throws ProtocolException {
+        return new AgentSettings(
+                Duration.ofSeconds(requireBoundedInt(agent, "statusIntervalSeconds", 5, 300)),
+                Duration.ofSeconds(requireBoundedInt(agent, "evictionIntervalSeconds", 10, 3_600)),
+                Duration.ofMillis(requireBoundedInt(agent, "queuePollMs", 20, 2_000)));
     }
 
     /**

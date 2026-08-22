@@ -203,6 +203,9 @@ export const SETTING_KEYS = [
 	"link.handshakeTimeoutSeconds",
 	"link.commandTimeoutSeconds",
 	"link.scanTimeoutSeconds",
+	"link.statusIntervalSeconds",
+	"agent.evictionIntervalSeconds",
+	"agent.queuePollMs",
 	"panel.jobPageSize",
 	"panel.logPageSize",
 	"panel.dashboardWindowHours",
@@ -548,6 +551,40 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "seconds",
 	},
 	{
+		key: "link.statusIntervalSeconds",
+		label: "Device status interval",
+		description:
+			"How often an agent reports device state when nothing has changed. Lower it on a site where a reconnecting printer reads as offline for too long. Pushed to every agent.",
+		category: "connections",
+		type: "integer",
+		min: 5,
+		max: 300,
+		fallback: 30,
+		unit: "seconds",
+	},
+	{
+		key: "agent.evictionIntervalSeconds",
+		label: "Agent janitor interval",
+		description: "How often an agent sweeps its own expired job records.",
+		category: "connections",
+		type: "integer",
+		min: 10,
+		max: 3_600,
+		fallback: 60,
+		unit: "seconds",
+	},
+	{
+		key: "agent.queuePollMs",
+		label: "Print queue poll",
+		description: "How often an idle print queue checks for work. Lower is more responsive, higher is less idle CPU.",
+		category: "connections",
+		type: "integer",
+		min: 20,
+		max: 2_000,
+		fallback: 100,
+		unit: "ms",
+	},
+	{
 		key: "panel.jobPageSize",
 		label: "Jobs per page",
 		description: "Rows in the Jobs table before it pages.",
@@ -777,6 +814,37 @@ export async function globalJobSettings(): Promise<GlobalJobSettings> {
 		retentionMinutes: value("jobs.retentionMinutes"),
 		maxRecords: value("jobs.maxRecords"),
 		shutdownGraceSeconds: value("jobs.shutdownGraceSeconds"),
+	};
+}
+
+/** Agent-side timing knobs as configured, in the shape `config.sync`'s `agent` field carries. */
+export interface GlobalAgentSettings {
+	statusIntervalSeconds: number;
+	evictionIntervalSeconds: number;
+	queuePollMs: number;
+}
+
+/**
+ * Reads the agent-side timing settings pushed to every agent.
+ *
+ * Separate from {@link globalJobSettings} for the same reason that one is separate from
+ * {@link globalLimits}: these three govern the agent's own schedules — status reporting, job
+ * eviction, print queue polling — rather than a job's retention or its shutdown grace, even though
+ * both objects cross on the same `config.sync` frame.
+ *
+ * @returns the agent timing settings in effect install-wide
+ */
+export async function globalAgentSettings(): Promise<GlobalAgentSettings> {
+	const settings = await listSettings();
+	// Every key named below is declared `type: "integer"`, asserted by the test that walks
+	// SETTINGS. A mismatch here is a definition that changed type without its readers being
+	// updated, which is a programming error rather than a stored value.
+	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
+
+	return {
+		statusIntervalSeconds: value("link.statusIntervalSeconds"),
+		evictionIntervalSeconds: value("agent.evictionIntervalSeconds"),
+		queuePollMs: value("agent.queuePollMs"),
 	};
 }
 

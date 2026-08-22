@@ -1,5 +1,6 @@
 package fi.natroutter.fenpos.console.commands;
 
+import fi.natroutter.fenpos.AgentSettings;
 import fi.natroutter.fenpos.console.Command;
 import fi.natroutter.fenpos.console.ConsoleOutput;
 import fi.natroutter.fenpos.link.LinkClient;
@@ -32,9 +33,10 @@ public class UnpairCommand implements Command {
      * @param out     output sink
      * @param pairing the shared pairing implementation
      * @param link    the connection to stop
-     * @param applyConfig adopts a device set and job settings; given an empty device set and
-     *                    {@link JobSettings#DEFAULTS} to release the printers that belonged to the
-     *                    server being left and stop following settings that server pushed
+     * @param applyConfig adopts a device set, job settings and agent settings; given an empty
+     *                    device set, {@link JobSettings#DEFAULTS} and {@link AgentSettings#DEFAULTS}
+     *                    to release the printers that belonged to the server being left and stop
+     *                    following settings that server pushed
      */
     public UnpairCommand(ConsoleOutput out,
                          PairingService pairing,
@@ -67,10 +69,10 @@ public class UnpairCommand implements Command {
 
             link.stop("unpaired at the agent console");
             // Through the same seam a config.sync takes, so the ports close and the queues
-            // drain exactly as they would if the server had removed every device. Job settings
-            // reset to the defaults too: with no server left to push them, this agent is
-            // unconfigured again exactly as it was before its first config.sync.
-            applyConfig.accept(List.of(), JobSettings.DEFAULTS);
+            // drain exactly as they would if the server had removed every device. Job and agent
+            // settings reset to their defaults too: with no server left to push them, this agent
+            // is unconfigured again exactly as it was before its first config.sync.
+            applyConfig.accept(List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS);
 
             out.println("Unpaired from " + cleared.get().serverUrl() + ".");
             out.println("The server still lists this agent; remove it there too, under Agents.");

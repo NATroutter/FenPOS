@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.link;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.AgentSettings;
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.device.DeviceRegistry;
 import fi.natroutter.fenpos.enums.JobState;
@@ -64,20 +65,22 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private final FoxLogger logger;
 
     /**
-     * Adopts a device set and the job settings the server pushed, together.
+     * Adopts a device set, the job settings and the agent's own timing settings the server
+     * pushed, together.
      * <p>
-     * One method taking both rather than two separate callbacks, because both arrive in the same
-     * {@code config.sync} frame and the receiving side must apply them as a single update — the
-     * job settings only make sense read alongside the devices they now govern.
+     * One method taking all three rather than separate callbacks, because they all arrive in the
+     * same {@code config.sync} frame and the receiving side must apply them as a single update —
+     * the job and agent settings only make sense read alongside the devices they now govern.
      */
     @FunctionalInterface
     public interface ConfigListener {
 
         /**
-         * @param wire the devices as the server described them
-         * @param jobs retention and shutdown settings as the server has them configured
+         * @param wire  the devices as the server described them
+         * @param jobs  retention and shutdown settings as the server has them configured
+         * @param agent status, eviction and queue-poll timing as the server has them configured
          */
-        void accept(List<Frames.DeviceConfig> wire, JobSettings jobs);
+        void accept(List<Frames.DeviceConfig> wire, JobSettings jobs, AgentSettings agent);
     }
 
     /**
@@ -169,7 +172,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      */
     private void onConfigSync(Frames.ConfigSync sync) {
         devices.applyRasters(sync.assets());
-        applyConfig.accept(sync.devices(), sync.jobs());
+        applyConfig.accept(sync.devices(), sync.jobs(), sync.agent());
         reportStatus();
     }
 

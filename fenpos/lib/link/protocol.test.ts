@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+	agentSettingsSchema,
 	configSyncSchema,
 	directiveSchema,
 	FrameTooLargeError,
@@ -349,43 +350,77 @@ describe("configSyncSchema", () => {
 			}),
 		).toThrow();
 	});
+
+	it("carries agent settings when the server sends them", () => {
+		const parsed = configSyncSchema.parse({
+			type: "config.sync",
+			devices: [],
+			assets: [],
+			agent: { statusIntervalSeconds: 45, evictionIntervalSeconds: 120, queuePollMs: 250 },
+		});
+
+		expect(parsed.agent).toEqual({ statusIntervalSeconds: 45, evictionIntervalSeconds: 120, queuePollMs: 250 });
+	});
+
+	it("accepts a frame with no agent settings, so an older server still parses", () => {
+		const parsed = configSyncSchema.parse({ type: "config.sync", devices: [], assets: [] });
+
+		expect(parsed.agent).toBeUndefined();
+	});
+
+	it("refuses agent settings outside their bounds", () => {
+		expect(() =>
+			configSyncSchema.parse({
+				type: "config.sync",
+				devices: [],
+				assets: [],
+				agent: { statusIntervalSeconds: 4, evictionIntervalSeconds: 120, queuePollMs: 250 },
+			}),
+		).toThrow();
+	});
 });
 
 /**
- * Guards `jobSettingsSchema` against the bounds `FrameCodec.readJobSettings` restates on the
- * agent.
+ * Guards `jobSettingsSchema` and `agentSettingsSchema` against the bounds `FrameCodec`'s
+ * `readJobSettings` and `readAgentSettings` restate on the agent.
  *
  * The duplication is deliberate — a receiver that trusted the sender's own validation would not
- * have validated anything — but it means the same three names and six numbers exist in two
- * languages with nothing keeping them in sync. A bound edited on one side only produces a job
- * settings value the server accepts and the agent silently reinterprets, or refuses outright, so
- * the Java source is parsed and compared directly rather than trusting the two files to agree by
- * inspection. Mirrors the approach `lib/domain/enums.test.ts` takes against the Java enums.
+ * have validated anything — but it means the same names and numbers exist in two languages with
+ * nothing keeping them in sync. A bound edited on one side only produces a settings value the
+ * server accepts and the agent silently reinterprets, or refuses outright, so the Java source is
+ * parsed and compared directly rather than trusting the two files to agree by inspection. Mirrors
+ * the approach `lib/domain/enums.test.ts` takes against the Java enums.
  */
 const FRAME_CODEC_DIR = fileURLToPath(
 	new URL("../../../agent/src/main/java/fi/natroutter/fenpos/link/", import.meta.url),
 );
 
-interface JobSettingsBound {
+interface RestatedBound {
 	min: number;
 	max: number;
 }
 
 /**
- * Extracts the field names and bounds `FrameCodec.readJobSettings` restates from
- * `jobSettingsSchema`.
+ * Extracts the field names and bounds a private `FrameCodec` reader method restates from its
+ * schema counterpart.
  *
  * Scoped to the method body rather than the whole file, so a `requireBoundedInt` call anywhere
- * else in `FrameCodec.java` cannot be mistaken for one of this method's three fields.
+ * else in `FrameCodec.java` — including the other reader this same file guards — cannot be
+ * mistaken for one of this method's fields. Shared by the `jobSettingsSchema` and
+ * `agentSettingsSchema` parity checks below, parameterised on the method's name and the name of
+ * the `JsonObject` parameter its `requireBoundedInt` calls read from.
+ *
+ * @param methodName    the private static method to read, e.g. `readJobSettings`
+ * @param parameterName the `JsonObject` parameter name that method's `requireBoundedInt` calls use
  */
-function javaJobSettingsBounds(): Record<string, JobSettingsBound> {
+function javaRestatedBounds(methodName: string, parameterName: string): Record<string, RestatedBound> {
 	const source = readFileSync(join(FRAME_CODEC_DIR, "FrameCodec.java"), "utf8")
 		.replace(/\/\*[\s\S]*?\*\//g, "")
 		.replace(/\/\/.*$/gm, "");
 
-	const signature = source.search(/private static JobSettings readJobSettings\(/);
+	const signature = source.search(new RegExp(`private static \\w+ ${methodName}\\(`));
 	if (signature === -1) {
-		throw new Error("readJobSettings not found in FrameCodec.java");
+		throw new Error(`${methodName} not found in FrameCodec.java`);
 	}
 
 	const bodyStart = source.indexOf("{", signature);
@@ -402,12 +437,16 @@ function javaJobSettingsBounds(): Record<string, JobSettingsBound> {
 		}
 	}
 	if (bodyEnd === -1) {
-		throw new Error("readJobSettings has no closing brace");
+		throw new Error(`${methodName} has no closing brace`);
 	}
 	const body = source.slice(bodyStart, bodyEnd);
 
-	const bounds: Record<string, JobSettingsBound> = {};
-	for (const match of body.matchAll(/requireBoundedInt\(\s*jobs,\s*"(\w+)",\s*([\d_]+),\s*([\d_]+)\s*\)/g)) {
+	const bounds: Record<string, RestatedBound> = {};
+	const pattern = new RegExp(
+		`requireBoundedInt\\(\\s*${parameterName},\\s*"(\\w+)",\\s*([\\d_]+),\\s*([\\d_]+)\\s*\\)`,
+		"g",
+	);
+	for (const match of body.matchAll(pattern)) {
 		const [, field, min, max] = match;
 		bounds[field] = { min: Number(min.replace(/_/g, "")), max: Number(max.replace(/_/g, "")) };
 	}
@@ -415,7 +454,7 @@ function javaJobSettingsBounds(): Record<string, JobSettingsBound> {
 }
 
 describe("job settings bounds match FrameCodec.readJobSettings", () => {
-	const javaBounds = javaJobSettingsBounds();
+	const javaBounds = javaRestatedBounds("readJobSettings", "jobs");
 	const tsFields = jobSettingsSchema.shape;
 
 	it("restates exactly the three fields jobSettingsSchema declares", () => {
@@ -442,6 +481,42 @@ describe("job settings bounds match FrameCodec.readJobSettings", () => {
 			retentionMinutes: { min: 1, max: 40_320 },
 			maxRecords: { min: 100, max: 1_000_000 },
 			shutdownGraceSeconds: { min: 1, max: 300 },
+		});
+	});
+});
+
+/**
+ * Guards `agentSettingsSchema` against the bounds `FrameCodec.readAgentSettings` restates on the
+ * agent — the same parity check as above, applied to the three settings that ride the same frame.
+ */
+describe("agent settings bounds match FrameCodec.readAgentSettings", () => {
+	const javaBounds = javaRestatedBounds("readAgentSettings", "agent");
+	const tsFields = agentSettingsSchema.shape;
+
+	it("restates exactly the three fields agentSettingsSchema declares", () => {
+		expect(Object.keys(javaBounds).sort()).toEqual(Object.keys(tsFields).sort());
+	});
+
+	it.each(Object.keys(tsFields))("%s's bounds match between the schema and FrameCodec", (field) => {
+		const tsField = tsFields[field as keyof typeof tsFields];
+		const javaBound = javaBounds[field];
+
+		expect(javaBound, `FrameCodec.readAgentSettings does not restate "${field}"`).toBeDefined();
+		expect(javaBound.min, `min for "${field}": schema says ${tsField.minValue}, FrameCodec says ${javaBound.min}`).toBe(
+			tsField.minValue,
+		);
+		expect(javaBound.max, `max for "${field}": schema says ${tsField.maxValue}, FrameCodec says ${javaBound.max}`).toBe(
+			tsField.maxValue,
+		);
+	});
+
+	it("parses the known method correctly, so an empty result cannot pass silently", () => {
+		// Without this, a regex that matched nothing would make the checks above vacuously pass
+		// against an equally empty set.
+		expect(javaBounds).toEqual({
+			statusIntervalSeconds: { min: 5, max: 300 },
+			evictionIntervalSeconds: { min: 10, max: 3_600 },
+			queuePollMs: { min: 20, max: 2_000 },
 		});
 	});
 });

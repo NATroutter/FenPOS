@@ -348,6 +348,24 @@ export const jobSettingsSchema = z.object({
 });
 
 /**
+ * Agent-side timing knobs, as the server has them configured.
+ *
+ * A sibling of {@link jobSettingsSchema} rather than fields added to it: these three govern the
+ * agent's own status-report cadence, job-eviction sweep and print-queue poll, not job retention or
+ * shutdown, and folding unrelated knobs into `jobs` would make that object mean "everything the
+ * agent needs" rather than "what governs a job's life on the agent" — the same wire cost is paid
+ * either way, since both cross on the same `config.sync` frame, but the shape stays honest about
+ * what each field is for. Bounds are restated here, and again in `FrameCodec.readAgentSettings` on
+ * the agent, for the same reason `jobSettingsSchema`'s are: a receiver validates what crosses this
+ * wire regardless of who sent it.
+ */
+export const agentSettingsSchema = z.object({
+	statusIntervalSeconds: z.number().int().min(5).max(300),
+	evictionIntervalSeconds: z.number().int().min(10).max(3_600),
+	queuePollMs: z.number().int().min(20).max(2_000),
+});
+
+/**
  * Server to agent: the authoritative device set.
  *
  * Sent whole rather than as a delta. A full snapshot is idempotent, so a agent that missed an
@@ -364,6 +382,11 @@ export const jobSettingsSchema = z.object({
  * It carries the job settings by the same argument again: an agent needs its retention, record
  * cap, and shutdown grace before any job arrives, and re-sending them on every reconnect costs
  * nothing worth tracking a delta to avoid.
+ *
+ * It carries the agent's own timing settings for the same reason once more: the status report
+ * interval, the job eviction interval and the print queue poll interval were each a fixed constant
+ * on the agent until they crossed this wire, and re-sending them here rather than opening a second
+ * frame just for them is the same trade `jobs` already makes.
  */
 export const configSyncSchema = z.object({
 	type: z.literal("config.sync"),
@@ -376,6 +399,8 @@ export const configSyncSchema = z.object({
 	 * them do.
 	 */
 	jobs: jobSettingsSchema.optional(),
+	/** Optional for the same bidirectional-compatibility reason `jobs` is. */
+	agent: agentSettingsSchema.optional(),
 });
 
 /** Server to agent: print this. */

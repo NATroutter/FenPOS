@@ -37,8 +37,27 @@ public class PrintQueue {
      * <p>
      * Bounded rather than indefinite so pausing and shutdown are noticed promptly without
      * needing to interrupt a thread that may be mid-write.
+     * <p>
+     * Shared by every queue on the agent and re-read on each iteration of {@link #drain()} and
+     * {@link #awaitResume()} rather than captured into a local, so a value pushed by
+     * {@code config.sync} — see {@link #setPollInterval} — takes effect for a queue already
+     * running without restarting its worker thread.
      */
-    private static final Duration POLL_INTERVAL = Duration.ofMillis(100);
+    private static volatile Duration POLL_INTERVAL = Duration.ofMillis(100);
+
+    /**
+     * Sets how long an idle queue waits before checking for work again, for every queue on this
+     * agent.
+     * <p>
+     * A single static setting rather than one per queue: the server pushes one value for the
+     * whole agent, and nothing about a printer's own identity would justify a different idle
+     * poll rate from its neighbour's.
+     *
+     * @param interval the new poll interval
+     */
+    public static void setPollInterval(Duration interval) {
+        POLL_INTERVAL = Objects.requireNonNull(interval, "interval");
+    }
 
     private final PrinterPort port;
     private final BlockingQueue<PrintJob> pending;
