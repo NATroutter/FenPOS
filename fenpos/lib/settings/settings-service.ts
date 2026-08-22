@@ -59,10 +59,11 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 		summary: "Counted on the request as received, before markup is interpreted.",
 	},
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
+	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
 	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
-	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 	{ id: "connections", title: "Connections", summary: "Timeouts on the links to agents and to this panel." },
+	{ id: "panel", title: "Panel", summary: "How this interface displays things." },
 ];
 
 /** What every setting carries, whatever its type. */
@@ -184,6 +185,10 @@ export const SETTING_KEYS = [
 	"link.handshakeTimeoutSeconds",
 	"link.commandTimeoutSeconds",
 	"link.scanTimeoutSeconds",
+	"panel.jobPageSize",
+	"panel.logPageSize",
+	"panel.dashboardWindowHours",
+	"panel.dashboardTailLines",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -481,6 +486,52 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 180,
 		fallback: 20,
 		unit: "seconds",
+	},
+	{
+		key: "panel.jobPageSize",
+		label: "Jobs per page",
+		description: "Rows in the Jobs table before it pages.",
+		category: "panel",
+		type: "integer",
+		min: 10,
+		max: 500,
+		fallback: 50,
+		unit: "rows",
+	},
+	{
+		key: "panel.logPageSize",
+		label: "Log lines per page",
+		description: "Rows in the Logs table before it pages.",
+		category: "panel",
+		type: "integer",
+		min: 10,
+		max: 500,
+		fallback: 100,
+		unit: "rows",
+	},
+	{
+		key: "panel.dashboardWindowHours",
+		label: "Dashboard window",
+		description:
+			"How far back the Dashboard's job counts reach. The two headline figures name this number in their labels.",
+		category: "panel",
+		type: "integer",
+		min: 1,
+		max: 720,
+		fallback: 24,
+		unit: "hours",
+	},
+	{
+		key: "panel.dashboardTailLines",
+		label: "Dashboard log tail",
+		description:
+			"Lines in the Dashboard's recent-log panel. Enough to see what just happened, not enough to become the Logs tab.",
+		category: "panel",
+		type: "integer",
+		min: 3,
+		max: 100,
+		fallback: 12,
+		unit: "lines",
 	},
 ];
 

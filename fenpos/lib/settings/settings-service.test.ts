@@ -165,6 +165,24 @@ describe("setting definitions", () => {
 		}
 	});
 
+	/**
+	 * Pins down the rail's order (spec §3), which drifted once already: each earlier task inserted
+	 * its category relative to the previous one, but `logs` was already present, so every
+	 * insertion landed in front of it rather than where the spec puts it.
+	 */
+	it("lists categories in the order the spec's §3 table specifies", () => {
+		expect(CATEGORIES.map((category) => category.id)).toEqual([
+			"general",
+			"limits",
+			"jobs",
+			"logs",
+			"media",
+			"security",
+			"connections",
+			"panel",
+		]);
+	});
+
 	it("declares the type every setting is documented to have", () => {
 		// A key→type map rather than a blanket "every setting is an integer" (which stopped being
 		// true the moment `logs.minimumLevel`, the first enum, joined them): this must fail if ANY
@@ -197,6 +215,10 @@ describe("setting definitions", () => {
 			"link.handshakeTimeoutSeconds": "integer",
 			"link.commandTimeoutSeconds": "integer",
 			"link.scanTimeoutSeconds": "integer",
+			"panel.jobPageSize": "integer",
+			"panel.logPageSize": "integer",
+			"panel.dashboardWindowHours": "integer",
+			"panel.dashboardTailLines": "integer",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in

@@ -1,5 +1,6 @@
 import { Activity, AlertTriangle, Printer, Server } from "lucide-react";
 import Link from "next/link";
+import { dashboardStatLabel } from "@/app/(panel)/dashboard/prose";
 import { FollowProvider } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
 import { LiveRefresh } from "@/components/panel/live-refresh";
@@ -10,17 +11,12 @@ import { countJobsByStatus } from "@/lib/jobs/job-service";
 import { getAgentStatus } from "@/lib/link/device-status";
 import { isConnected } from "@/lib/link/registry";
 import { listLogs } from "@/lib/logs/log-service";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Dashboard" };
 
 /** Never cached: everything on this page changes without a request causing it. */
 export const dynamic = "force-dynamic";
-
-/** How far back the job counts reach. */
-const WINDOW_HOURS = 24;
-
-/** Lines shown in the tail. Enough to see what just happened, not enough to become the Logs tab. */
-const TAIL_LINES = 12;
 
 /**
  * The Dashboard.
@@ -35,7 +31,11 @@ const TAIL_LINES = 12;
  * failure worth avoiding here.
  */
 export default async function DashboardPage() {
-	const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000);
+	const [windowHours, tailLines] = await Promise.all([
+		integerSetting("panel.dashboardWindowHours"),
+		integerSetting("panel.dashboardTailLines"),
+	]);
+	const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
 
 	const [agents, devices, counts, tail] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -44,7 +44,7 @@ export default async function DashboardPage() {
 			select: { id: true, name: true, agentId: true, paused: true, agent: { select: { name: true } } },
 		}),
 		countJobsByStatus(since),
-		listLogs({ take: TAIL_LINES }),
+		listLogs({ take: tailLines }),
 	]);
 
 	const online = agents.filter((agent) => isConnected(agent.id));
@@ -86,10 +86,14 @@ export default async function DashboardPage() {
 					href="/devices"
 					warn={troubled.length > 0}
 				/>
-				<Stat label={`Printed (${WINDOW_HOURS}h)`} value={String(counts.COMPLETED)} href="/jobs?status=COMPLETED" />
+				<Stat
+					label={dashboardStatLabel("Printed", windowHours)}
+					value={String(counts.COMPLETED)}
+					href="/jobs?status=COMPLETED"
+				/>
 				<Stat
 					icon={counts.FAILED > 0 ? <AlertTriangle className="size-3.5" /> : undefined}
-					label={`Failed (${WINDOW_HOURS}h)`}
+					label={dashboardStatLabel("Failed", windowHours)}
 					value={String(counts.FAILED)}
 					href="/jobs?status=FAILED"
 					warn={counts.FAILED > 0}

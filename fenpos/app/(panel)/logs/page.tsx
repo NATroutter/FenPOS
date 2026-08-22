@@ -4,8 +4,9 @@ import { FollowProvider, FollowToggle } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
 import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/db";
-import { FILTERABLE_LEVELS, isFilterableLevel, LOG_PAGE_SIZE, listLogs } from "@/lib/logs/log-service";
+import { FILTERABLE_LEVELS, isFilterableLevel, listLogs } from "@/lib/logs/log-service";
 import { isLogSortColumn } from "@/lib/logs/log-sort";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Logs" };
 
@@ -33,9 +34,11 @@ export default async function LogsPage({
 	const sort = params.sort && isLogSortColumn(params.sort) ? params.sort : undefined;
 	const desc = params.dir ? params.dir !== "asc" : undefined;
 
+	const pageSize = await integerSetting("panel.logPageSize");
+
 	const [agents, page] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-		listLogs({ agentId: params.agent, level, skip, sort, desc }),
+		listLogs({ agentId: params.agent, level, skip, sort, desc, take: pageSize }),
 	]);
 
 	// The live stream is paused whenever a filter, a page or a sort is in play. A filter or a page
@@ -97,17 +100,13 @@ export default async function LogsPage({
 							<Button
 								variant="outline"
 								size="sm"
-								render={<Link href={query({ skip: String(Math.max(0, skip - LOG_PAGE_SIZE)) })} />}
+								render={<Link href={query({ skip: String(Math.max(0, skip - pageSize)) })} />}
 							>
 								Newer
 							</Button>
 						) : null}
 						{page.more ? (
-							<Button
-								variant="outline"
-								size="sm"
-								render={<Link href={query({ skip: String(skip + LOG_PAGE_SIZE) })} />}
-							>
+							<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + pageSize) })} />}>
 								Older
 							</Button>
 						) : null}

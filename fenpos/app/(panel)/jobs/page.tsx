@@ -4,8 +4,9 @@ import { JobTable } from "@/app/(panel)/jobs/job-table";
 import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
-import { JOB_PAGE_SIZE, listJobs } from "@/lib/jobs/job-service";
+import { listJobs } from "@/lib/jobs/job-service";
 import { isJobSortColumn } from "@/lib/jobs/job-sort";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Print jobs" };
 
@@ -39,13 +40,15 @@ export default async function JobsPage({
 	const sort = params.sort && isJobSortColumn(params.sort) ? params.sort : undefined;
 	const desc = params.dir ? params.dir !== "asc" : undefined;
 
+	const pageSize = await integerSetting("panel.jobPageSize");
+
 	const [agents, devices, page] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
 		prisma.device.findMany({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
-		listJobs({ agentId: params.agent, deviceId: params.device, status, skip, sort, desc }),
+		listJobs({ agentId: params.agent, deviceId: params.device, status, skip, sort, desc, take: pageSize }),
 	]);
 
 	const query = (next: Record<string, string | undefined>): string => {
@@ -95,13 +98,13 @@ export default async function JobsPage({
 						<Button
 							variant="outline"
 							size="sm"
-							render={<Link href={query({ skip: String(Math.max(0, skip - JOB_PAGE_SIZE)) })} />}
+							render={<Link href={query({ skip: String(Math.max(0, skip - pageSize)) })} />}
 						>
 							Newer
 						</Button>
 					) : null}
 					{page.more ? (
-						<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + JOB_PAGE_SIZE) })} />}>
+						<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + pageSize) })} />}>
 							Older
 						</Button>
 					) : null}

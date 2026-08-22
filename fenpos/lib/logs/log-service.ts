@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
+import { integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -11,9 +12,6 @@ import type { SortDirection } from "@/lib/table/sort";
  * An operator reading forward from an hour ago is doing archaeology; an operator reading down
  * from the top is watching a printer misbehave right now.
  */
-
-/** How many lines one page holds. */
-export const LOG_PAGE_SIZE = 100;
 
 /** One recorded line. */
 export interface LogLine {
@@ -31,6 +29,7 @@ export interface LogFilter {
 	/** Minimum severity: this level and anything above it. */
 	level?: LogLevel;
 	skip?: number;
+	/** How many rows to return. Defaults to the configured `panel.logPageSize`. */
 	take?: number;
 	/** Which column to order by. Defaults to {@link LOG_DEFAULT_SORT}. */
 	sort?: LogSortColumn;
@@ -90,7 +89,7 @@ export function isFilterableLevel(value: string): value is LogLevel {
  * @returns the page of lines and whether more follow
  */
 export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine[]; more: boolean }> {
-	const take = filter.take ?? LOG_PAGE_SIZE;
+	const take = filter.take ?? (await integerSetting("panel.logPageSize"));
 
 	const direction: SortDirection = (filter.desc ?? LOG_DEFAULT_SORT.desc) ? "desc" : "asc";
 	const chosen = LOG_ORDER[filter.sort ?? LOG_DEFAULT_SORT.column](direction);

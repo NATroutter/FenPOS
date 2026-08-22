@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/errors";
 import { JOB_DEFAULT_SORT, type JobSortColumn } from "@/lib/jobs/job-sort";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
+import { integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -14,9 +15,6 @@ import type { SortDirection } from "@/lib/table/sort";
  * point of the two surfaces: a key is a machine with one job to do, an administrator is a person
  * trying to work out why a printer is quiet.
  */
-
-/** How many jobs one page of the list holds. */
-export const JOB_PAGE_SIZE = 50;
 
 /** A job as the Jobs tab displays it. */
 export interface JobSummary {
@@ -60,6 +58,8 @@ export interface JobFilter {
 	sort?: JobSortColumn;
 	/** Which way that ordering runs. Defaults to {@link JOB_DEFAULT_SORT}. */
 	desc?: boolean;
+	/** How many rows to return. Defaults to the configured `panel.jobPageSize`. */
+	take?: number;
 }
 
 /**
@@ -82,13 +82,15 @@ export async function listJobs(filter: JobFilter = {}): Promise<{ jobs: JobSumma
 	// shows a row twice and hides another.
 	const orderBy = [...(Array.isArray(chosen) ? chosen : [chosen]), { submittedAt: "desc" as const }];
 
+	const take = filter.take ?? (await integerSetting("panel.jobPageSize"));
+
 	// One extra row is fetched rather than counting the whole table, which on a busy install is a
 	// scan run on every page view to answer a question worth one boolean.
 	const rows = await prisma.job.findMany({
 		where,
 		orderBy,
 		skip: filter.skip ?? 0,
-		take: JOB_PAGE_SIZE + 1,
+		take: take + 1,
 		include: {
 			agent: { select: { name: true } },
 			device: { select: { name: true } },
@@ -96,10 +98,10 @@ export async function listJobs(filter: JobFilter = {}): Promise<{ jobs: JobSumma
 		},
 	});
 
-	const page = rows.slice(0, JOB_PAGE_SIZE);
+	const page = rows.slice(0, take);
 
 	return {
-		more: rows.length > JOB_PAGE_SIZE,
+		more: rows.length > take,
 		jobs: page.map((row) => ({
 			id: row.id,
 			status: (JobStatusSet.is(row.status) ? row.status : "FAILED") as JobStatus,
