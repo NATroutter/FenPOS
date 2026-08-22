@@ -73,16 +73,16 @@ describe("deliverDue", () => {
 
 	it("signs what it sends, verifiably", async () => {
 		await queue({ payload: '{"event":"job.settled","jobId":"job-9"}' });
-		let seen: { body: string; signature: string } | null = null;
+		const seen: { body: string; signature: string }[] = [];
 		const send = vi.fn(async (_url: string, body: string, signature: string) => {
-			seen = { body, signature };
+			seen.push({ body, signature });
 			return { status: 200 };
 		});
 
 		await deliverDue(new Date(), send);
 
-		expect(seen).not.toBeNull();
-		expect(verifySignature(SECRET, seen!.body, seen!.signature)).toBe(true);
+		expect(seen).toHaveLength(1);
+		expect(verifySignature(SECRET, seen[0].body, seen[0].signature)).toBe(true);
 	});
 
 	it("retries a 500 with a backoff, rather than giving up", async () => {
