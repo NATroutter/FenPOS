@@ -412,6 +412,11 @@ export default async function ApiDocsPage() {
 								<Mono>print</Mono> — a key granted control of a printer it may not print to must not be able to make it
 								print by another name.
 							</P>
+
+							<P>
+								<Mono>message</Mono> is <Mono>null</Mono> when the agent's reply carries none of its own, which a
+								successful action is free to do.
+							</P>
 						</Col>
 
 						<Col>

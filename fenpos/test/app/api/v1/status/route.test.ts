@@ -14,6 +14,7 @@ import { recordStatus } from "@/lib/link/device-status";
  */
 
 let token: string;
+let keyId: string;
 let onlineAgentId: string;
 let otherAgentName: string;
 
@@ -47,6 +48,7 @@ beforeEach(async () => {
 			devices: { create: [{ deviceId: kitchen.id }] },
 		},
 	});
+	keyId = key.id;
 	apiReadLimiter.reset(key.id);
 });
 
@@ -83,10 +85,23 @@ describe("GET /api/v1/status", () => {
 	});
 
 	it("refuses a key holding devices:read but not status:read", async () => {
-		await prisma.apiKeyPermission.updateMany({ data: { permission: "devices:read" } });
+		await prisma.apiKeyPermission.updateMany({ where: { apiKeyId: keyId }, data: { permission: "devices:read" } });
 
 		const response = await GET(requestWith());
 
 		expect(response.status).toBe(403);
+	});
+
+	// The agent query is `where: { id: { in: [...granted agent ids] } }`. An empty grant set must
+	// produce an empty `in` list that matches nothing, not a filter that silently drops out and
+	// returns every agent in the install.
+	it("returns no agents for a key with the permission but no device grants", async () => {
+		await prisma.apiKeyDevice.deleteMany({ where: { apiKeyId: keyId } });
+
+		const response = await GET(requestWith());
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(body.agents).toEqual([]);
 	});
 });
