@@ -176,6 +176,8 @@ export const SETTING_KEYS = [
 	"logs.maxMessageChars",
 	"pairing.codeMinutes",
 	"auth.sessionHours",
+	"auth.signInAttemptsPerMinute",
+	"auth.minimumPasswordLength",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -380,6 +382,30 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 720,
 		fallback: 12,
 		unit: "hours",
+	},
+	{
+		key: "auth.signInAttemptsPerMinute",
+		label: "Sign-in attempts per minute",
+		description:
+			"Failed sign-ins allowed before the panel refuses to try. The floor is the built-in value — this can be tightened, never loosened.",
+		category: "security",
+		type: "integer",
+		min: 3,
+		max: 60,
+		fallback: 5,
+		unit: "attempts/min",
+	},
+	{
+		key: "auth.minimumPasswordLength",
+		label: "Minimum password length",
+		description:
+			"Shortest acceptable administrator password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed.",
+		category: "security",
+		type: "integer",
+		min: 12,
+		max: 128,
+		fallback: 12,
+		unit: "characters",
 	},
 ];
 

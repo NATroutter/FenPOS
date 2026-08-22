@@ -2,27 +2,38 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { hashPassword, MINIMUM_PASSWORD_LENGTH, passwordSchema, verifyPassword } from "@/lib/auth/password";
+import { hashPassword, passwordSchema, verifyPassword } from "@/lib/auth/password";
+import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { prisma } from "@/lib/db";
+import { integerSetting, setSetting } from "@/lib/settings/settings-service";
 
 const SERVER_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
+/**
+ * `passwordSchema` takes the minimum as a parameter rather than baking one in — see its doc
+ * comment in `password.ts` for why. These tests build it with `MINIMUM_PASSWORD_LENGTH`, the
+ * built-in floor, throughout; the block below confirms a caller that reads the configured
+ * `auth.minimumPasswordLength` instead gets a schema that actually enforces it.
+ */
 describe("passwordSchema", () => {
 	it("accepts a password at the minimum length", () => {
-		expect(passwordSchema.safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH)).success).toBe(true);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH)).success).toBe(true);
 	});
 
 	it("rejects a password one character short", () => {
-		expect(passwordSchema.safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH - 1)).success).toBe(false);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH - 1)).success).toBe(
+			false,
+		);
 	});
 
 	it("rejects an absurdly long password rather than hashing it", () => {
 		// Argon2 cost scales with input, so an unbounded password is a cheap way to make the
 		// server do expensive work on every sign-in attempt.
-		expect(passwordSchema.safeParse("a".repeat(1025)).success).toBe(false);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(1025)).success).toBe(false);
 	});
 
 	it("does not impose composition rules", () => {
-		expect(passwordSchema.safeParse("correct horse battery staple").success).toBe(true);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("correct horse battery staple").success).toBe(true);
 	});
 
 	it("accepts any printable character, including other scripts, emoji and symbols", () => {
@@ -32,19 +43,19 @@ describe("passwordSchema", () => {
 			"'; DROP TABLE admin_auth;--",
 			"«»½¬{}[]|~`\\!@#$%^&*()",
 		]) {
-			expect(passwordSchema.safeParse(password).success, JSON.stringify(password)).toBe(true);
+			expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(password).success, JSON.stringify(password)).toBe(true);
 		}
 	});
 
 	it("allows interior spaces, because passphrases are the point", () => {
-		expect(passwordSchema.safeParse("correct horse battery staple").success).toBe(true);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("correct horse battery staple").success).toBe(true);
 	});
 
 	it("rejects control characters", () => {
 		// A tab or newline arrives from a copied line and cannot be retyped at a login form,
 		// so accepting one sets a password its owner cannot enter again.
 		for (const password of ["twelve chars\there", "twelve chars\nhere", "twelve chars\0here"]) {
-			expect(passwordSchema.safeParse(password).success, JSON.stringify(password)).toBe(false);
+			expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(password).success, JSON.stringify(password)).toBe(false);
 		}
 	});
 
@@ -52,8 +63,27 @@ describe("passwordSchema", () => {
 		// Worth pinning because it is surprising: six emoji satisfy a twelve-character minimum
 		// while five do not, and a twelve-letter Japanese phrase carries far more entropy than
 		// a twelve-letter English one. The limit is a floor on effort, not on entropy.
-		expect(passwordSchema.safeParse("🔑".repeat(6)).success).toBe(true);
-		expect(passwordSchema.safeParse("🔑".repeat(5)).success).toBe(false);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("🔑".repeat(6)).success).toBe(true);
+		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("🔑".repeat(5)).success).toBe(false);
+	});
+});
+
+/**
+ * `auth.minimumPasswordLength` — the setting that makes the minimum above configurable. What is
+ * worth pinning down is that a caller reading the *configured* value gets a schema that actually
+ * enforces it, not that the setting stores: `settings-service.test.ts` already covers storage,
+ * and the floor itself (never lower than the built-in `MINIMUM_PASSWORD_LENGTH`) is pinned down
+ * there too, as a `setSetting` rejection.
+ */
+describe("passwordSchema with a configured minimum", () => {
+	it("enforces the configured minimum rather than the built-in floor", async () => {
+		await prisma.setting.deleteMany();
+		await setSetting("auth.minimumPasswordLength", 20);
+
+		const configuredMinimum = await integerSetting("auth.minimumPasswordLength");
+
+		expect(passwordSchema(configuredMinimum).safeParse("a".repeat(16)).success).toBe(false);
+		expect(passwordSchema(configuredMinimum).safeParse("a".repeat(20)).success).toBe(true);
 	});
 });
 
@@ -124,7 +154,9 @@ describe("what counts as the same password", () => {
 	});
 
 	it("counts length after trimming, so padding cannot pad out the minimum", async () => {
-		expect(passwordSchema.safeParse(`   ${"a".repeat(MINIMUM_PASSWORD_LENGTH - 1)}   `).success).toBe(false);
+		expect(
+			passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(`   ${"a".repeat(MINIMUM_PASSWORD_LENGTH - 1)}   `).success,
+		).toBe(false);
 	});
 
 	it("does not normalise unicode, so composed and decomposed forms differ", async () => {

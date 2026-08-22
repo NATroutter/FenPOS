@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { verifyAdminPassword } from "@/lib/auth/admin";
-import { signInLimiter } from "@/lib/auth/rate-limit";
+import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { createSession } from "@/lib/auth/session";
 import { setSessionCookie } from "@/lib/auth/session-cookie";
 import { logger } from "@/lib/logger";
@@ -42,7 +42,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 
 	// Consumed before the password is examined, so that attempts are counted whether or not
 	// the submission is well-formed.
-	const limit = signInLimiter.consume(address);
+	const limit = await consumeSignInAttempt(address);
 	if (!limit.allowed) {
 		const seconds = Math.ceil(limit.retryAfterMs / 1000);
 		logger.warn("Sign-in rate limit engaged", { address, retryAfterSeconds: seconds });

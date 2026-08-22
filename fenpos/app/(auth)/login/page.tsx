@@ -4,6 +4,7 @@ import { LoginForm } from "@/app/(auth)/login/login-form";
 import { BrandMark } from "@/components/brand-mark";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAdminConfigured } from "@/lib/auth/admin";
+import { signInThrottlePhrase } from "@/lib/auth/rate-limit";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 import { integerSetting } from "@/lib/settings/settings-service";
 
@@ -31,6 +32,7 @@ export default async function LoginPage() {
 
 	const configured = await isAdminConfigured();
 	const sessionHours = await integerSetting("auth.sessionHours");
+	const signInAttemptsPerMinute = await integerSetting("auth.signInAttemptsPerMinute");
 
 	return (
 		<main className="flex min-h-screen items-center justify-center p-6">
@@ -66,7 +68,8 @@ export default async function LoginPage() {
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
-					Session cookie, {sessionHours} {sessionHours === 1 ? "hour" : "hours"}, HttpOnly · five attempts per minute
+					Session cookie, {sessionHours} {sessionHours === 1 ? "hour" : "hours"}, HttpOnly ·{" "}
+					{signInThrottlePhrase(signInAttemptsPerMinute)}
 				</p>
 			</div>
 		</main>

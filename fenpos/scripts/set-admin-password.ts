@@ -3,6 +3,7 @@ import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
 import { writeOperatorPassword } from "../lib/auth/admin-credential";
 import { hashPassword, passwordSchema } from "../lib/auth/password";
+import { MINIMUM_PASSWORD_LENGTH } from "../lib/auth/password-policy";
 
 /**
  * Sets the administrator password from the command line.
@@ -27,7 +28,11 @@ import { hashPassword, passwordSchema } from "../lib/auth/password";
  */
 
 async function main(): Promise<void> {
-	const parsed = passwordSchema.safeParse(process.argv[2] ?? "");
+	// Validated against the built-in floor, not the configured `auth.minimumPasswordLength` — this
+	// script opens its own connection below rather than reaching `settings-service.ts`, and has no
+	// route to that setting. See `password-policy.ts`'s doc comment for why that is an accepted
+	// gap rather than an oversight.
+	const parsed = passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(process.argv[2] ?? "");
 	if (!parsed.success) {
 		throw new Error(parsed.error.issues[0]?.message ?? 'Usage: pnpm admin:set-password "<password>"');
 	}

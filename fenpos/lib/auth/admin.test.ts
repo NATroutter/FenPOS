@@ -10,6 +10,7 @@ import {
 	verifyAdminPassword,
 } from "@/lib/auth/admin";
 import { passwordSchema } from "@/lib/auth/password";
+import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { createSession, resolveSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 
@@ -134,7 +135,7 @@ describe("administrator credential", () => {
 		it("generates a password long enough to satisfy the policy", async () => {
 			const generated = await ensureAdminPassword();
 
-			expect(passwordSchema.safeParse(generated).success).toBe(true);
+			expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(generated).success).toBe(true);
 		});
 
 		it("generates a different password each time", async () => {

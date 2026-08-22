@@ -9,7 +9,7 @@ import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/profile";
 import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { clearSetting, setSetting } from "@/lib/settings/settings-service";
+import { clearSetting, integerSetting, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Server actions behind the Settings tab.
@@ -133,7 +133,8 @@ export async function changePassword(current: string, next: string): Promise<Act
 		// empty field, which stops a slip but not a direct call to this action — and a server
 		// action is a public endpoint, so anything reachable only through the browser's
 		// cooperation is not enforced at all.
-		const parsed = passwordSchema.safeParse(next);
+		const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
+		const parsed = passwordSchema(minimumPasswordLength).safeParse(next);
 		if (!parsed.success) {
 			throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 		}

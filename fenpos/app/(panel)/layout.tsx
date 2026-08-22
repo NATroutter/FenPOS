@@ -6,10 +6,10 @@ import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getAdminProfile, isPasswordGenerated } from "@/lib/auth/admin";
 import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
-import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Never prerendered: every render depends on the request's session cookie.
@@ -58,13 +58,14 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// Read here rather than in the sidebar: the footer is part of this layout, and a client
 	// component cannot reach the database anyway.
 	const profile = await getAdminProfile();
+	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
 
 	return (
 		<SidebarProvider>
 			<AppSidebar
 				version={APP_VERSION}
 				signOutAction={signOut}
-				minimumPasswordLength={MINIMUM_PASSWORD_LENGTH}
+				minimumPasswordLength={minimumPasswordLength}
 				displayName={profile.displayName}
 				email={profile.email}
 				avatarUrl={gravatarUrl(profile.email)}

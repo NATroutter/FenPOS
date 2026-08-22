@@ -189,6 +189,8 @@ describe("setting definitions", () => {
 			"logs.maxMessageChars": "integer",
 			"pairing.codeMinutes": "integer",
 			"auth.sessionHours": "integer",
+			"auth.signInAttemptsPerMinute": "integer",
+			"auth.minimumPasswordLength": "integer",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in
@@ -432,6 +434,42 @@ describe("server.publicUrl", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "server.publicUrl" } });
 		expect(row?.value).toBe(JSON.stringify("https://fenpos.example.com"));
 		expect(row?.value).toBe('"https://fenpos.example.com"');
+	});
+});
+
+/**
+ * `auth.signInAttemptsPerMinute` and `auth.minimumPasswordLength` are safe to expose as settings
+ * only because their declared `min` is today's built-in value — they can be tightened, never
+ * loosened. These two tests are what actually enforces that: they must never be weakened, and
+ * neither `min` may ever be lowered.
+ */
+describe("security setting floors", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("refuses to weaken the sign-in throttle below the built-in floor", async () => {
+		await expect(setSetting("auth.signInAttemptsPerMinute", 2)).rejects.toThrow(ApiError);
+	});
+
+	it("refuses to weaken the minimum password length below the built-in floor", async () => {
+		await expect(setSetting("auth.minimumPasswordLength", 11)).rejects.toThrow(ApiError);
+	});
+
+	it("accepts a value at exactly the floor", async () => {
+		await setSetting("auth.signInAttemptsPerMinute", 3);
+		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(3);
+
+		await setSetting("auth.minimumPasswordLength", 12);
+		expect(await integerSetting("auth.minimumPasswordLength")).toBe(12);
+	});
+
+	it("accepts a value tightened above the floor", async () => {
+		await setSetting("auth.signInAttemptsPerMinute", 10);
+		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(10);
+
+		await setSetting("auth.minimumPasswordLength", 24);
+		expect(await integerSetting("auth.minimumPasswordLength")).toBe(24);
 	});
 });
 

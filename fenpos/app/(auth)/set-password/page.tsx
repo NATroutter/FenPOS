@@ -4,8 +4,9 @@ import { SetPasswordForm } from "@/app/(auth)/set-password/set-password-form";
 import { BrandMark } from "@/components/brand-mark";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isPasswordGenerated } from "@/lib/auth/admin";
-import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password";
+import { minimumLengthPhrase } from "@/lib/auth/password-policy";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata: Metadata = {
 	title: "Set a password",
@@ -35,6 +36,8 @@ export default async function SetPasswordPage() {
 		redirect("/dashboard");
 	}
 
+	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
+
 	return (
 		<main className="flex min-h-screen items-center justify-center p-6">
 			<div className="w-full max-w-[392px]">
@@ -54,7 +57,7 @@ export default async function SetPasswordPage() {
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
-					At least {MINIMUM_PASSWORD_LENGTH} characters · the generated password stops working once this is set
+					At least {minimumLengthPhrase(minimumPasswordLength)} · the generated password stops working once this is set
 				</p>
 			</div>
 		</main>

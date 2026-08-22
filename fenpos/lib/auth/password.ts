@@ -1,5 +1,6 @@
 import { hash, verify } from "@node-rs/argon2";
 import { z } from "zod";
+import { minimumLengthPhrase } from "@/lib/auth/password-policy";
 
 /**
  * Administrator password hashing.
@@ -36,9 +37,6 @@ const ARGON2_OPTIONS = {
 	parallelism: 1,
 } as const;
 
-/** Shortest password accepted. Matches the minimum stated in the admin panel. */
-export const MINIMUM_PASSWORD_LENGTH = 12;
-
 /** Longest password accepted. Argon2's cost scales with input, so this is a work bound. */
 export const MAXIMUM_PASSWORD_LENGTH = 1024;
 
@@ -69,11 +67,19 @@ export function normalizePassword(plaintext: string): string {
 }
 
 /**
- * Validates a candidate administrator password.
+ * Builds the schema that validates a candidate administrator password.
  *
- * Length, surrounding whitespace and control characters. No composition rules — requiring a
- * digit, a symbol or mixed case measurably pushes people toward predictable patterns without
- * adding real entropy, and length is the property that matters.
+ * A function rather than a fixed schema, because `auth.minimumPasswordLength` is a stored
+ * setting, read asynchronously — and this module is imported everywhere a password is checked,
+ * including a `"use server"` action and a bare `tsx` script, so it cannot hold a database
+ * connection open to fetch that setting itself. Every caller reads the minimum it cares about
+ * first (the configured value where one is reachable, `MINIMUM_PASSWORD_LENGTH` where it is not —
+ * see `password-policy.ts`) and builds its own schema from it; nothing here reads a stale minimum
+ * while the setting appears to work, because nothing here reads the minimum at all.
+ *
+ * Length aside, there are no composition rules — requiring a digit, a symbol or mixed case
+ * measurably pushes people toward predictable patterns without adding real entropy, and length is
+ * the property that matters.
  *
  * **Interior spaces are allowed on purpose.** They are what makes a passphrase possible, and
  * `correct horse battery staple` is both far stronger and far more memorable than anything a
@@ -81,20 +87,25 @@ export function normalizePassword(plaintext: string): string {
  * passwords into shell commands unquoted; nothing here does that, and the guidance that once
  * recommended it now says the opposite. What is worth removing is whitespace nobody can see,
  * which normalizePassword handles.
+ *
+ * @param minimumLength shortest password to accept, in characters
+ * @returns a schema validating length, and control characters
  */
-export const passwordSchema = z
-	.string()
-	.transform(normalizePassword)
-	.pipe(
-		z
-			.string()
-			.min(MINIMUM_PASSWORD_LENGTH, `Password must be at least ${MINIMUM_PASSWORD_LENGTH} characters.`)
-			.max(MAXIMUM_PASSWORD_LENGTH, `Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`)
-			.refine(
-				(value) => !CONTROL_CHARACTERS.test(value),
-				"Password must not contain tabs, newlines or control characters.",
-			),
-	);
+export function passwordSchema(minimumLength: number) {
+	return z
+		.string()
+		.transform(normalizePassword)
+		.pipe(
+			z
+				.string()
+				.min(minimumLength, `Password must be at least ${minimumLengthPhrase(minimumLength)}.`)
+				.max(MAXIMUM_PASSWORD_LENGTH, `Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`)
+				.refine(
+					(value) => !CONTROL_CHARACTERS.test(value),
+					"Password must not contain tabs, newlines or control characters.",
+				),
+		);
+}
 
 /**
  * Hashes an administrator password for storage.

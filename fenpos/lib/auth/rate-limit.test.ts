@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { RateLimiter } from "@/lib/auth/rate-limit";
+import { beforeEach, describe, expect, it } from "vitest";
+import { consumeSignInAttempt, RateLimiter, signInThrottlePhrase } from "@/lib/auth/rate-limit";
+import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Time is injected into every call rather than advanced with timers, so these tests contain
@@ -84,5 +86,85 @@ describe("RateLimiter", () => {
 		const limiter = new RateLimiter({ limit: 1, windowMs: 1_000 });
 		expect(limiter.consume("key", 0).allowed).toBe(true);
 		expect(limiter.consume("key", 0).allowed).toBe(false);
+	});
+
+	describe("limitOverride", () => {
+		it("throttles at the override rather than the limiter's constructed limit", () => {
+			const limiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
+			for (let attempt = 0; attempt < 2; attempt += 1) {
+				expect(limiter.consume("key", 1_000, 2).allowed).toBe(true);
+			}
+			expect(limiter.consume("key", 1_000, 2).allowed).toBe(false);
+		});
+
+		it("applies within the same window as soon as it changes, without waiting for a reset", () => {
+			const limiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
+			for (let attempt = 0; attempt < 2; attempt += 1) {
+				limiter.consume("key", 1_000, 2);
+			}
+			expect(limiter.consume("key", 1_000, 2).allowed).toBe(false);
+
+			// Same window (no time has passed), but a higher override now covers the count already
+			// recorded against this key.
+			expect(limiter.consume("key", 1_000, 10).allowed).toBe(true);
+		});
+
+		it("falls back to the constructed limit when no override is given", () => {
+			const limiter = new RateLimiter({ limit: 2, windowMs: 60_000 });
+			expect(limiter.consume("key", 1_000).allowed).toBe(true);
+			expect(limiter.consume("key", 1_000).allowed).toBe(true);
+			expect(limiter.consume("key", 1_000).allowed).toBe(false);
+		});
+	});
+});
+
+/**
+ * `consumeSignInAttempt` is what `signIn` (`app/(auth)/login/actions.ts`) actually calls. The
+ * behaviour worth pinning here is that the configured `auth.signInAttemptsPerMinute` reaches it —
+ * not that the setting stores, which `settings-service.test.ts` already covers, including the
+ * floor itself as a `setSetting` rejection.
+ */
+describe("consumeSignInAttempt", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("throttles sign-in at the configured rate", async () => {
+		await setSetting("auth.signInAttemptsPerMinute", 3);
+
+		const address = "203.0.113.10";
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			expect((await consumeSignInAttempt(address, 1_000)).allowed).toBe(true);
+		}
+		expect((await consumeSignInAttempt(address, 1_000)).allowed).toBe(false);
+	});
+
+	it("reads the setting fresh on every call, so a change applies immediately", async () => {
+		const address = "203.0.113.11";
+		await setSetting("auth.signInAttemptsPerMinute", 3);
+
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			await consumeSignInAttempt(address, 1_000);
+		}
+		expect((await consumeSignInAttempt(address, 1_000)).allowed).toBe(false);
+
+		// Same window, but the limit was raised on the Settings tab — the next attempt should not
+		// have to wait for the window to expire or the server to restart.
+		await setSetting("auth.signInAttemptsPerMinute", 10);
+		expect((await consumeSignInAttempt(address, 1_000)).allowed).toBe(true);
+	});
+});
+
+describe("signInThrottlePhrase", () => {
+	it("uses the singular at exactly one", () => {
+		expect(signInThrottlePhrase(1)).toBe("1 attempt per minute");
+	});
+
+	it("uses the plural at the setting's minimum", () => {
+		expect(signInThrottlePhrase(3)).toBe("3 attempts per minute");
+	});
+
+	it("uses the plural at the setting's maximum", () => {
+		expect(signInThrottlePhrase(60)).toBe("60 attempts per minute");
 	});
 });

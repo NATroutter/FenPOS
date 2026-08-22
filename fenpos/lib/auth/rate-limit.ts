@@ -1,3 +1,5 @@
+import { integerSetting } from "@/lib/settings/settings-service";
+
 /**
  * Attempt limiting for credential endpoints.
  *
@@ -63,25 +65,31 @@ export class RateLimiter {
 	 *
 	 * @param key the caller identity to limit on, typically a client IP address
 	 * @param now current time; injectable so tests need no sleeps
+	 * @param limitOverride replaces the limiter's own constructed limit for this call only,
+	 *   without changing it for any other key or any later call. Exists so a limit read from a
+	 *   stored setting — necessarily read asynchronously — can still govern a plain synchronous
+	 *   call here: the caller awaits the setting first and passes the result in, rather than this
+	 *   class awaiting anything itself. See `consumeSignInAttempt` for the caller that does this.
 	 * @returns whether the attempt is permitted, and when capacity returns
 	 */
-	consume(key: string, now: number = Date.now()): RateLimitResult {
+	consume(key: string, now: number = Date.now(), limitOverride?: number): RateLimitResult {
+		const limit = limitOverride ?? this.#limit;
 		this.#evictExpired(now);
 
 		const existing = this.#windows.get(key);
 		if (!existing || existing.resetAt <= now) {
 			this.#windows.set(key, { count: 1, resetAt: now + this.#windowMs });
-			return { allowed: true, remaining: this.#limit - 1, retryAfterMs: 0 };
+			return { allowed: true, remaining: limit - 1, retryAfterMs: 0 };
 		}
 
-		if (existing.count >= this.#limit) {
+		if (existing.count >= limit) {
 			return { allowed: false, remaining: 0, retryAfterMs: existing.resetAt - now };
 		}
 
 		existing.count += 1;
 		return {
 			allowed: true,
-			remaining: this.#limit - existing.count,
+			remaining: limit - existing.count,
 			retryAfterMs: 0,
 		};
 	}
@@ -116,13 +124,56 @@ export class RateLimiter {
 	}
 }
 
-/** Sign-in limiter: five attempts per minute, as stated in the admin panel. */
+/**
+ * Sign-in limiter.
+ *
+ * The constructed limit here is only the fallback a caller sees if it never supplies an
+ * override — every production call goes through {@link consumeSignInAttempt}, which reads
+ * `auth.signInAttemptsPerMinute` and passes it in, so this constant matches that setting's own
+ * `fallback` rather than mattering on its own.
+ */
 export const signInLimiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
+
+/**
+ * Consumes a sign-in attempt at the currently configured throttle.
+ *
+ * Reads `auth.signInAttemptsPerMinute` fresh on every call rather than once at startup, so a
+ * limit tightened on the Settings tab applies to the very next attempt rather than waiting for a
+ * restart or for the current window to expire. `signIn` (`app/(auth)/login/actions.ts`) is the
+ * only production caller; exported under its own name so the setting's effect on throttling can
+ * be verified directly, rather than only asserting that the setting stores.
+ *
+ * @param address the caller's client address, used as the limiter's key
+ * @param now current time; injectable so tests need no sleeps
+ * @returns whether the attempt is permitted, and when capacity returns
+ */
+export async function consumeSignInAttempt(address: string, now: number = Date.now()): Promise<RateLimitResult> {
+	const limit = await integerSetting("auth.signInAttemptsPerMinute");
+	return signInLimiter.consume(address, now, limit);
+}
+
+/**
+ * Phrases the configured sign-in throttle for the note on the sign-in page footer, pluralising
+ * "attempt" only where the count requires it.
+ *
+ * Extracted because this project has broken exactly this kind of sentence at a boundary three
+ * times already — "0 MB", "1 distinct URLs", "1 hours" — and a hardcoded "five attempts per
+ * minute" was itself already one boundary bug waiting to happen the day this setting became
+ * configurable.
+ *
+ * @param limit the configured `auth.signInAttemptsPerMinute`
+ * @returns e.g. "5 attempts per minute" or, at a limit of one, "1 attempt per minute"
+ */
+export function signInThrottlePhrase(limit: number): string {
+	return `${limit} ${limit === 1 ? "attempt" : "attempts"} per minute`;
+}
 
 /**
  * Pairing limiter, keyed by client address.
  *
  * Tighter than sign-in because a pairing attempt is a guess at a code rather than at a
- * password an operator might genuinely mistype.
+ * password an operator might genuinely mistype. Deliberately not a setting: the pairing code's
+ * entropy budget assumes guessing is slow, and loosening this limit would weaken that assumption
+ * invisibly — unlike the sign-in throttle, there is no floor here that is safe to expose.
  */
 export const pairingLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });

@@ -7,6 +7,7 @@ import { createSession } from "@/lib/auth/session";
 import { getCurrentSession, setSessionCookie } from "@/lib/auth/session-cookie";
 import { logger } from "@/lib/logger";
 import { getClientAddress, getUserAgent } from "@/lib/request-context";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Replacing the generated password, which is the only thing a session can do until it has.
@@ -48,7 +49,8 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 	const password = formData.get("password");
 	const confirm = formData.get("confirm");
 
-	const parsed = passwordSchema.safeParse(password);
+	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
+	const parsed = passwordSchema(minimumPasswordLength).safeParse(password);
 	if (!parsed.success) {
 		return { error: parsed.error.issues[0]?.message ?? "That password is not acceptable." };
 	}
