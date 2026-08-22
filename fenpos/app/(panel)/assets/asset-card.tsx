@@ -1,9 +1,13 @@
 "use client";
 
-import { Check, Copy, Image as ImageIcon, Trash2 } from "lucide-react";
+import { Check, Copy, Image as ImageIcon, Pencil, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { removeAsset } from "@/app/(panel)/assets/actions";
+import { PreviewDialog } from "@/app/(panel)/assets/preview-dialog";
+import type { AcceptedFormats } from "@/app/(panel)/assets/prose";
+import { RenameDialog } from "@/app/(panel)/assets/rename-dialog";
+import { ReplaceDialog } from "@/app/(panel)/assets/replace-dialog";
 import { DitheredImage } from "@/components/panel/dithered-image";
 import {
 	AlertDialog,
@@ -54,7 +58,17 @@ const COPIED_TICK_MS = 2000;
  * between two logos is choosing between two pictures, and the only picture worth showing is the
  * dithered one — the smooth original is a promise a thermal head cannot keep.
  */
-export function AssetCard({ asset }: { asset: AssetCardData }) {
+export function AssetCard({
+	asset,
+	maxBytes,
+	acceptedFormats,
+}: {
+	asset: AssetCardData;
+	/** The configured upload cap, needed by the replace dialog this card owns. */
+	maxBytes: number;
+	/** The configured `assets.acceptedFormats`, read server-side and passed down as a plain prop. */
+	acceptedFormats: AcceptedFormats;
+}) {
 	const [pending, startTransition] = useTransition();
 	const [copied, setCopied] = useState(false);
 
@@ -97,23 +111,37 @@ export function AssetCard({ asset }: { asset: AssetCardData }) {
 
 			<CardContent className="flex flex-1 flex-col gap-4 pt-4">
 				{asset.preview ? (
-					// White because this is paper, not panel: the dots that are not inked are the ones
-					// the printer leaves blank, and showing them as the card's own dark surface would
-					// invert the image an operator is being asked to judge. Same surface the Tools
-					// tab's sheet is drawn on — a hairline ring rather than a border, because a
-					// dark border around white paper reads as a frame around the picture instead.
-					<div className="flex items-center justify-center overflow-hidden rounded-sm bg-white p-2 shadow-sm ring-1 ring-black/10">
-						{/* The resampling is chosen from the drawn size rather than fixed, because neither
-					    answer is right at both. This card is usually narrower than the paper, where
-					    averaging the dots is what shows the tone the paper shows — but a small stored
-					    image is stretched up to the card instead, and there the dots are the subject.
-					    See `ditherFilterFor`. */}
-						<DitheredImage
-							src={asset.preview}
-							alt={`${asset.name}, dithered as it will print`}
-							className="max-h-64 w-full object-contain"
-						/>
-					</div>
+					<PreviewDialog
+						name={asset.name}
+						preview={asset.preview}
+						previewDots={asset.previewDots}
+						trigger={
+							// A button rather than a div with a click handler, so the preview is reachable by
+							// keyboard and announced as something that does something. White because this is
+							// paper, not panel: the dots that are not inked are the ones the printer leaves
+							// blank, and showing them as the card's own dark surface would invert the image an
+							// operator is being asked to judge. Same surface the Tools tab's sheet is drawn on —
+							// a hairline ring rather than a border, because a dark border around white paper
+							// reads as a frame around the picture instead.
+							<button
+								type="button"
+								title={`Show ${asset.name} at full size`}
+								aria-label={`Show ${asset.name} at full size`}
+								className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-sm bg-white p-2 shadow-sm ring-1 ring-black/10 transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+							>
+								{/* The resampling is chosen from the drawn size rather than fixed, because neither
+							    answer is right at both. This card is usually narrower than the paper, where
+							    averaging the dots is what shows the tone the paper shows — but a small stored
+							    image is stretched up to the card instead, and there the dots are the subject.
+							    See `ditherFilterFor`. */}
+								<DitheredImage
+									src={asset.preview}
+									alt={`${asset.name}, dithered as it will print`}
+									className="max-h-64 w-full object-contain"
+								/>
+							</button>
+						}
+					/>
 				) : (
 					<p className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-subtle-foreground">
 						This image could not be rendered. It is still stored, and still printable if the failure was temporary.
@@ -146,6 +174,46 @@ export function AssetCard({ asset }: { asset: AssetCardData }) {
 					</Button>
 
 					<div className="flex-1" />
+
+					{/* Ordered by how much they change and how recoverable they are: rename moves the
+					    reference, replace moves the picture, delete takes both away. The destructive one
+					    is last and set apart by colour, so the two ordinary edits are not sitting next to
+					    it looking equally final. */}
+					<RenameDialog
+						assetId={asset.id}
+						assetName={asset.name}
+						trigger={
+							<Button
+								variant="outline"
+								size="icon"
+								className="size-8"
+								title="Rename"
+								aria-label={`Rename ${asset.name}`}
+								disabled={pending}
+							>
+								<Pencil className="size-3.5" />
+							</Button>
+						}
+					/>
+
+					<ReplaceDialog
+						assetId={asset.id}
+						assetName={asset.name}
+						maxBytes={maxBytes}
+						acceptedFormats={acceptedFormats}
+						trigger={
+							<Button
+								variant="outline"
+								size="icon"
+								className="size-8"
+								title="Replace the image"
+								aria-label={`Replace the image for ${asset.name}`}
+								disabled={pending}
+							>
+								<Upload className="size-3.5" />
+							</Button>
+						}
+					/>
 
 					<AlertDialog>
 						<AlertDialogTrigger

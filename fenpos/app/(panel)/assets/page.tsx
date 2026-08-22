@@ -101,7 +101,7 @@ export default async function AssetsPage() {
 			) : (
 				<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] items-stretch gap-4">
 					{cards.map((asset) => (
-						<AssetCard key={asset.id} asset={asset} />
+						<AssetCard key={asset.id} asset={asset} maxBytes={uploadCap} acceptedFormats={acceptedFormats} />
 					))}
 				</div>
 			)}

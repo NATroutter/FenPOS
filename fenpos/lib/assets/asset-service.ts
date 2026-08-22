@@ -237,6 +237,196 @@ export async function importAssetFromUrl(name: string, url: string): Promise<Ass
 }
 
 /**
+ * Renames a stored asset.
+ *
+ * **The name is the reference, not a label on it.** Receipts are written against it, so this has the
+ * same consequence a delete does: anything saying `<image>old</image>` is refused from the moment
+ * this lands, until it is edited or an image of the old name is stored again. Nothing here looks for
+ * references first, for the reason {@link deleteAsset} gives — the panel says so in its confirmation,
+ * and a refusal raised here would be one the operator cannot act on from the Assets tab.
+ *
+ * Everything else survives untouched: the bytes, the dimensions, the provenance, the row's identity.
+ * The stored rasters survive too, and correctly — they are keyed by the row's id and `updatedAt`, and
+ * this image is still the same picture, so the memoised dots are still the right dots for it.
+ *
+ * Renaming to the name it already has is accepted rather than refused as a clash. That is what a
+ * dialog opened and submitted without an edit sends, and "there is already an image called logo" is
+ * a true and useless thing to say about the row being renamed.
+ *
+ * @param id the asset to rename
+ * @param rawName the new name as supplied
+ * @returns the renamed asset
+ * @throws ApiError if there is no such asset, or the name is unusable or taken by another image
+ */
+export async function renameAsset(id: string, rawName: string): Promise<AssetSummary> {
+	const name = parseName(rawName);
+
+	const existing = await prisma.asset.findUnique({ where: { id }, select: { id: true, name: true } });
+	if (!existing) {
+		throw new ApiError("unknown_asset", "That image no longer exists.");
+	}
+
+	if (existing.name === name) {
+		return summarise(await readRow(id));
+	}
+
+	await requireNameFree(name);
+
+	let row: AssetRow;
+	try {
+		row = await prisma.asset.update({ where: { id }, data: { name }, select: SUMMARY_COLUMNS });
+	} catch (thrown) {
+		// The same two-statement race `store` guards: the check above and this update are separate, so
+		// two operators renaming to one name can both pass it. The constraint keeps that correct; this
+		// is only about which sentence the loser reads.
+		if (isPrismaCode(thrown, "P2002")) {
+			throw nameTaken(name, thrown);
+		}
+		if (isPrismaCode(thrown, "P2025")) {
+			throw new ApiError("unknown_asset", "That image no longer exists.", {}, { cause: thrown });
+		}
+		throw thrown;
+	}
+
+	logger.info("Asset renamed", { assetId: id, from: existing.name, to: name });
+
+	return summarise(row);
+}
+
+/**
+ * Replaces a stored asset's bytes, keeping its name.
+ *
+ * The counterpart of {@link renameAsset}: there, the picture stays and the reference moves; here the
+ * reference stays and the picture changes. This is what a redrawn logo needs — every receipt printing
+ * it goes on printing it, with no edit anywhere, because the name they name is untouched.
+ *
+ * **The memoised rasters have to stop being served, and they do.** `rasterFor` keys its cache on
+ * `${id}:${updatedAt}:${dots}`, and Prisma's `@updatedAt` moves the second of those on any write —
+ * so the old dots become unreachable rather than stale, without this function knowing anything about
+ * the cache. That coupling is quiet enough to be worth stating: the test for it in
+ * `asset-service.test.ts` is what would notice if `updatedAt` ever stopped being touched here.
+ *
+ * `sourceUrl` is cleared, because it is a record of where these bytes came from and these are not
+ * those bytes. Leaving it would attribute an uploaded image to a URL it was never fetched from.
+ *
+ * @param id the asset to replace
+ * @param bytes the new image
+ * @returns the replaced asset
+ * @throws ApiError if there is no such asset, or the bytes are not an image this pipeline prints
+ */
+export async function replaceAsset(id: string, bytes: Buffer): Promise<AssetSummary> {
+	return await put(id, bytes, null);
+}
+
+/**
+ * Fetches an image by URL and replaces a stored asset's bytes with it.
+ *
+ * The row is checked before the fetch, for the reason {@link importAssetFromUrl} settles its name
+ * first: a mistake that costs a round trip to a host somebody else runs is one worth catching on this
+ * side of it.
+ *
+ * The raw URL is fetched and the redacted one stored, exactly as an import does — see
+ * {@link importAssetFromUrl} for why the two differ.
+ *
+ * @param id the asset to replace
+ * @param url where to fetch the new image from
+ * @returns the replaced asset, carrying the URL — minus any credentials — for provenance
+ * @throws ApiError if there is no such asset, the fetch is refused, or the image is unusable
+ */
+export async function replaceAssetFromUrl(id: string, url: string): Promise<AssetSummary> {
+	await requireAsset(id);
+
+	const bytes = await fetchRemoteImage(url);
+
+	return await put(id, bytes, safeUrl(url));
+}
+
+/**
+ * The one way a stored asset's bytes are replaced.
+ *
+ * The measure happens before the write, so an image this pipeline will not print leaves the stored
+ * one exactly as it was. That ordering is the whole reason this is not two statements at the call
+ * site: a replace that failed halfway would leave a row whose dimensions describe a picture it is not
+ * holding, and nothing downstream could tell.
+ *
+ * @param id the asset to replace
+ * @param bytes the new image
+ * @param sourceUrl where it was fetched from, or null when uploaded
+ * @returns the replaced asset
+ * @throws ApiError if there is no such asset, or on any refusal of the bytes
+ */
+async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise<AssetSummary> {
+	const existing = await requireAsset(id);
+
+	const decoded = await measured(bytes);
+
+	let row: AssetRow;
+	try {
+		row = await prisma.asset.update({
+			where: { id },
+			data: {
+				// Copied into a plain `Uint8Array` for the reason `store` gives: Prisma's `Bytes` will
+				// not take a `Buffer`, whose backing store is typed as possibly shared.
+				data: new Uint8Array(bytes),
+				mimeType: decoded.mimeType,
+				width: decoded.width,
+				height: decoded.height,
+				sourceUrl,
+			},
+			select: SUMMARY_COLUMNS,
+		});
+	} catch (thrown) {
+		// Deleted between the check and the write, by a second operator on the same tab.
+		if (isPrismaCode(thrown, "P2025")) {
+			throw new ApiError("unknown_asset", "That image no longer exists.", {}, { cause: thrown });
+		}
+		throw thrown;
+	}
+
+	logger.info("Asset replaced", {
+		assetId: id,
+		name: existing.name,
+		mimeType: decoded.mimeType,
+		width: decoded.width,
+		height: decoded.height,
+		bytes: bytes.length,
+		sourceUrl,
+	});
+
+	return summarise(row);
+}
+
+/**
+ * Resolves an asset id to the row behind it.
+ *
+ * @param id the asset
+ * @returns its id and name
+ * @throws ApiError if there is no such asset
+ */
+async function requireAsset(id: string): Promise<{ id: string; name: string }> {
+	const existing = await prisma.asset.findUnique({ where: { id }, select: { id: true, name: true } });
+	if (!existing) {
+		throw new ApiError("unknown_asset", "That image no longer exists.");
+	}
+	return existing;
+}
+
+/**
+ * Reads a stored asset's summary columns.
+ *
+ * @param id the asset
+ * @returns the row
+ * @throws ApiError if it has gone since it was last read
+ */
+async function readRow(id: string): Promise<AssetRow> {
+	const row = await prisma.asset.findUnique({ where: { id }, select: SUMMARY_COLUMNS });
+	if (!row) {
+		throw new ApiError("unknown_asset", "That image no longer exists.");
+	}
+	return row;
+}
+
+/**
  * Deletes an asset.
  *
  * Nothing checks whether markup still references it. A receipt naming a deleted asset fails at

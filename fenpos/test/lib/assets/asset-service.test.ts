@@ -66,6 +66,9 @@ const {
 	maxAssetBytes,
 	rasterCacheStats,
 	rasterFor,
+	renameAsset,
+	replaceAsset,
+	replaceAssetFromUrl,
 } = await import("@/lib/assets/asset-service");
 
 /**
@@ -907,5 +910,192 @@ describe("rasterFor", () => {
 			ditherToRaster.mockImplementation(real.ditherToRaster);
 			forgetRasters();
 		}
+	});
+});
+
+/**
+ * Renaming a stored image.
+ *
+ * The name is not a label on the image — it *is* the reference, the thing receipts are written
+ * against. A rename therefore has a consequence identical to a delete's: every receipt saying
+ * `<image>old</image>` stops compiling the moment it lands. This module deliberately does not look
+ * for references first, for the same reason `deleteAsset` does not: the panel says so in the
+ * confirmation, and a refusal here would be one an operator cannot act on from the Assets tab.
+ *
+ * What these pin is that everything else survives — the bytes, the dimensions, the provenance, the
+ * identity of the row. A rename that quietly re-derived the image would turn a typo correction into
+ * a re-upload.
+ */
+describe("renameAsset", () => {
+	it("renames the image, leaving its bytes and provenance alone", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+		const original = await importAssetFromUrl("old-logo", "https://cdn.example/logo.png");
+
+		const renamed = await renameAsset(original.id, "new-logo");
+
+		expect(renamed.name).toBe("new-logo");
+		expect(renamed.id).toBe(original.id);
+		expect(renamed.width).toBe(original.width);
+		expect(renamed.height).toBe(original.height);
+		expect(renamed.sourceUrl).toBe(original.sourceUrl);
+	});
+
+	it("makes the image reachable by its new name and not its old one", async () => {
+		const original = await createAsset("old-logo", PNG);
+
+		await renameAsset(original.id, "new-logo");
+
+		expect((await rasterFor("new-logo", 384)).widthDots).toBe(384);
+		await expect(rasterFor("old-logo", 384)).rejects.toMatchObject({ code: "unknown_asset" });
+	});
+
+	it("frees the old name for something else", async () => {
+		const original = await createAsset("logo", PNG);
+		await renameAsset(original.id, "logo-v2");
+
+		await expect(createAsset("logo", PNG)).resolves.toMatchObject({ name: "logo" });
+	});
+
+	it("refuses a name another image already has", async () => {
+		await createAsset("taken", PNG);
+		const original = await createAsset("logo", PNG);
+
+		const error = await refusal(() => renameAsset(original.id, "taken"));
+
+		expect(error.code).toBe("name_taken");
+		expect((await listAssets()).map((asset) => asset.name).sort()).toEqual(["logo", "taken"]);
+	});
+
+	it("accepts renaming an image to the name it already has", async () => {
+		// A dialog opened and submitted without an edit. Refusing that as a clash would be technically
+		// true and useless: the name is taken by this very row.
+		const original = await createAsset("logo", PNG);
+
+		await expect(renameAsset(original.id, "logo")).resolves.toMatchObject({ name: "logo" });
+	});
+
+	it("refuses a name that is not slug-shaped", async () => {
+		const original = await createAsset("logo", PNG);
+
+		expect((await refusal(() => renameAsset(original.id, "Not A Slug!"))).code).toBe("invalid_type");
+	});
+
+	it("refuses the name reserved for the application's own logo", async () => {
+		const original = await createAsset("logo", PNG);
+
+		expect((await refusal(() => renameAsset(original.id, RESERVED_ASSET_NAME))).code).toBe("invalid_type");
+	});
+
+	it("reports an image that is no longer there", async () => {
+		expect((await refusal(() => renameAsset("no-such-id", "anything"))).code).toBe("unknown_asset");
+	});
+});
+
+/**
+ * Replacing a stored image's bytes.
+ *
+ * The counterpart of a rename: the reference survives and the picture changes. This is what an
+ * operator wants when a logo is redrawn — the receipts printing it should not have to be edited, and
+ * they do not, because the name they name is untouched.
+ *
+ * The cache test is what earns this a function of its own rather than a delete-and-recreate. A
+ * raster is memoised under `${id}:${updatedAt}:${dots}`, so replacing the bytes has to move
+ * `updatedAt` or every agent and every preview goes on being served dots from the picture that is
+ * gone. Prisma's `@updatedAt` does that; this asserts it, because the day it stops being true
+ * nothing else in the suite would notice.
+ */
+describe("replaceAsset", () => {
+	it("keeps the name and identity, and takes the new picture's dimensions", async () => {
+		const original = await createAsset("logo", PNG);
+		const wider = await solidPng(200, 50);
+
+		const replaced = await replaceAsset(original.id, wider);
+
+		expect(replaced.id).toBe(original.id);
+		expect(replaced.name).toBe("logo");
+		expect(replaced.width).toBe(200);
+		expect(replaced.height).toBe(50);
+	});
+
+	it("serves the new dots rather than the remembered ones", async () => {
+		const original = await createAsset("logo", PNG);
+		forgetRasters();
+		const before = await rasterFor("logo", 384);
+
+		await replaceAsset(original.id, await solidPng(200, 50));
+		const after = await rasterFor("logo", 384);
+
+		// Same paper width, so the dot count across matches; the picture behind it does not. A stale
+		// cache hit would return the earlier raster, whose height came from a differently shaped image.
+		expect(after.heightDots).not.toBe(before.heightDots);
+	});
+
+	it("clears the recorded source, because the bytes no longer came from there", async () => {
+		fetchRemoteImage.mockResolvedValue(PNG);
+		const original = await importAssetFromUrl("logo", "https://cdn.example/logo.png");
+		expect(original.sourceUrl).not.toBeNull();
+
+		expect((await replaceAsset(original.id, await solidPng(64, 64))).sourceUrl).toBeNull();
+	});
+
+	it("refuses bytes that are not an image this pipeline prints", async () => {
+		const original = await createAsset("logo", PNG);
+
+		expect((await refusal(() => replaceAsset(original.id, Buffer.from("not an image")))).code).toBe("invalid_image");
+	});
+
+	it("refuses an image too large in pixels, from its header", async () => {
+		const original = await createAsset("logo", PNG);
+
+		const error = await refusal(() => replaceAsset(original.id, headerClaiming(MAX_IMAGE_DIMENSION + 1, 10)));
+
+		expect(error.code).toBe("image_too_large");
+	});
+
+	it("leaves the stored image untouched when the replacement is refused", async () => {
+		const original = await createAsset("logo", PNG);
+
+		await refusal(() => replaceAsset(original.id, Buffer.from("not an image")));
+
+		const still = (await listAssets()).find((asset) => asset.id === original.id);
+		expect(still?.width).toBe(original.width);
+		expect(still?.height).toBe(original.height);
+	});
+
+	it("reports an image that is no longer there", async () => {
+		expect((await refusal(() => replaceAsset("no-such-id", PNG))).code).toBe("unknown_asset");
+	});
+});
+
+describe("replaceAssetFromUrl", () => {
+	it("fetches the replacement and records where it came from", async () => {
+		const original = await createAsset("logo", PNG);
+		fetchRemoteImage.mockResolvedValue(await solidPng(200, 50));
+
+		const replaced = await replaceAssetFromUrl(original.id, "https://cdn.example/new.png");
+
+		expect(replaced.name).toBe("logo");
+		expect(replaced.width).toBe(200);
+		expect(replaced.sourceUrl).toBe("https://cdn.example/new.png");
+	});
+
+	it("strips credentials from the recorded address, as an import does", async () => {
+		const original = await createAsset("logo", PNG);
+		fetchRemoteImage.mockResolvedValue(PNG);
+
+		const replaced = await replaceAssetFromUrl(original.id, "https://alice:hunter2@cdn.example/new.png");
+
+		expect(replaced.sourceUrl).not.toContain("hunter2");
+		expect(replaced.sourceUrl).toContain("cdn.example");
+	});
+
+	it("does not fetch anything for an image that is no longer there", async () => {
+		// The row is checked before the network, for the same reason `importAssetFromUrl` settles the
+		// name first: a mistake that costs a round trip to somebody else's host is one worth catching
+		// on this side of it.
+		expect((await refusal(() => replaceAssetFromUrl("no-such-id", "https://cdn.example/new.png"))).code).toBe(
+			"unknown_asset",
+		);
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 });

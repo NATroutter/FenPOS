@@ -3,7 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { createAsset, deleteAsset, importAssetFromUrl, requireWithinByteCap } from "@/lib/assets/asset-service";
+import {
+	createAsset,
+	deleteAsset,
+	importAssetFromUrl,
+	// Aliased so the actions below can carry the plain names the client imports. The service's own
+	// names say what they do to storage; an action's say what the operator pressed.
+	renameAsset as renameStoredAsset,
+	replaceAsset as replaceStoredAsset,
+	replaceAssetFromUrl as replaceStoredAssetFromUrl,
+	requireWithinByteCap,
+} from "@/lib/assets/asset-service";
 import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { pushConfigToEveryAgent } from "@/lib/link/agent-connection";
@@ -110,6 +120,60 @@ export async function uploadAsset(formData: FormData): Promise<ActionState> {
 export async function importAsset(name: string, url: string): Promise<ActionState> {
 	return run("import", async () => {
 		await importAssetFromUrl(name, url);
+	});
+}
+
+/**
+ * Renames an image.
+ *
+ * Every receipt that names the old one is refused from here on, which is the operator's decision to
+ * make and is why the panel asks for it in a dialog that says so. Like the two above, this goes
+ * through `run`, so the agents are re-pushed: each holds its copy of the library keyed by name, and
+ * one that was not told would go on offering the old name and refusing the new one.
+ *
+ * @param id the asset to rename
+ * @param name the new name
+ * @returns the state to render
+ */
+export async function renameAsset(id: string, name: string): Promise<ActionState> {
+	return run("rename", async () => {
+		await renameStoredAsset(id, name);
+	});
+}
+
+/**
+ * Replaces an image's bytes with an uploaded file, keeping its name.
+ *
+ * The size is checked from the browser's declared figure before this reads the bytes, for exactly
+ * the reason {@link uploadAsset} gives — and it is checked again inside the service against what
+ * actually arrived.
+ *
+ * @param formData an `id` and a `file`
+ * @returns the state to render
+ */
+export async function replaceAsset(formData: FormData): Promise<ActionState> {
+	return run("replace", async () => {
+		const file = formData.get("file");
+		if (!(file instanceof File) || file.size === 0) {
+			throw new ApiError("missing_field", "Choose an image to upload.");
+		}
+		await requireWithinByteCap(file.size);
+
+		const id = formData.get("id");
+		await replaceStoredAsset(typeof id === "string" ? id : "", Buffer.from(await file.arrayBuffer()));
+	});
+}
+
+/**
+ * Replaces an image's bytes with one fetched from a URL, keeping its name.
+ *
+ * @param id the asset to replace
+ * @param url where to fetch the new image from
+ * @returns the state to render
+ */
+export async function replaceAssetFromUrl(id: string, url: string): Promise<ActionState> {
+	return run("replace from url", async () => {
+		await replaceStoredAssetFromUrl(id, url);
 	});
 }
 
