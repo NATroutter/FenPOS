@@ -157,11 +157,16 @@ describe("every versioned endpoint is documented", () => {
 	/**
 	 * Every path the page declares, as the suffix it writes after `API_BASE`.
 	 *
-	 * Read out of the `SECTIONS` array rather than searched for anywhere in the file, so this can
-	 * only be satisfied by a section a reader actually sees — the same anchoring the tag table uses
-	 * on `syntax:` below. The page never writes the version prefix literally, so neither does this:
-	 * a route is checked against what `SECTIONS` declares after `API_BASE`, not against a
-	 * hardcoded `/api/v1`.
+	 * The regex scans the whole page rather than the text of `SECTIONS` specifically — the pattern
+	 * `path: \`${API_BASE}...\`` is anchored on the field name, not on which array it sits in, so
+	 * this can only be satisfied by a `path` field a reader actually sees, the same anchoring the
+	 * tag table uses on `syntax:` below. The page never writes the version prefix literally, so
+	 * neither does this: a route is checked against what the page declares after `API_BASE`, not
+	 * against a hardcoded `/api/v1`.
+	 *
+	 * This makes the check below one-directional: it fails a route file that has no matching
+	 * `path:`, but a `path:` naming a route that does not exist under `app/api/v1` would pass
+	 * silently. Nothing here reads the two lists as sets and diffs them both ways.
 	 *
 	 * @returns the declared paths, e.g. `/devices/{agent}/{device}`
 	 */

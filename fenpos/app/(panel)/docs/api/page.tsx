@@ -235,6 +235,15 @@ export default async function ApiDocsPage() {
 								as a printer that does not exist. That is intentional: distinguishing the two would let a caller
 								enumerate every printer in the install by probing names.
 							</Aside>
+
+							<P>
+								Listing devices, reading one, and status are throttled per key by <Mono>api.readsPerMinute</Mono>, a
+								limit an operator sets on the Settings tab. A key over budget gets <ErrorRef code="rate_limited" />
+								carrying <Mono>retryAfterSeconds</Mono> in the body — there is no <Mono>Retry-After</Mono> header, so
+								the wait lives in the same JSON envelope every other refusal uses rather than a second place to look.
+								Submitting a job is deliberately not counted here: a receipt already costs a compile and a device round
+								trip, and throttling a till is an operator's decision rather than a default this API makes for them.
+							</P>
 						</Col>
 
 						<div className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border">
