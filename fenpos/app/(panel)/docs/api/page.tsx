@@ -229,8 +229,8 @@ export default async function ApiDocsPage() {
 							<P>
 								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The device and status
 								grants are the newest of them: <Mono>devices:read</Mono> and <Mono>devices:control</Mono> back the
-								device endpoints below, and <Mono>status:read</Mono> backs Status. Whatever a key is granted here, there
-								is a request it unlocks.
+								device endpoints below, and <Mono>status:read</Mono> backs the status endpoint beside them. Whatever a
+								key is granted here, there is a request it unlocks.
 							</P>
 
 							<P>
