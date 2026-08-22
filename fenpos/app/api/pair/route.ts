@@ -5,6 +5,7 @@ import { ApiError, toErrorResponse } from "@/lib/errors";
 import { PROTOCOL_VERSION } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
+import { booleanSetting } from "@/lib/settings/settings-service";
 
 /**
  * `POST /api/pair` — exchanges a pairing code for a agent credential.
@@ -17,6 +18,9 @@ import { getClientAddress } from "@/lib/request-context";
  *   "already used" would let a caller map the code space by probing for near-misses. The
  *   server log records which it was.
  * - The body is bounded and fully validated before anything touches the database.
+ * - `pairing.enabled` is checked first, before the body is even read, and off answers with
+ *   this same {@link REJECTION} rather than a distinct message — otherwise the endpoint would
+ *   be a probe telling a caller whether pairing is worth attacking at all.
  */
 
 /** Largest pairing request accepted. The body is four short strings. */
@@ -43,6 +47,14 @@ export async function POST(request: Request): Promise<Response> {
 	const address = await getClientAddress();
 
 	try {
+		// Checked before anything else — cheaper than the rate limiter, let alone the body —
+		// and answered with the exact same rejection a wrong code gets, so a caller cannot tell
+		// "pairing is off" from "that guess was wrong".
+		if (!(await booleanSetting("pairing.enabled"))) {
+			logger.warn("Pairing refused: pairing is switched off", { address });
+			return Response.json(REJECTION, { status: 401 });
+		}
+
 		// Consumed before the body is read, so a flood of malformed requests is throttled
 		// just as a flood of well-formed guesses would be.
 		const limit = pairingLimiter.consume(address);

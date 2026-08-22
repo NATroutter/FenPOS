@@ -209,6 +209,7 @@ describe("setting definitions", () => {
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
 			"logs.maxMessageChars": "integer",
+			"pairing.enabled": "boolean",
 			"pairing.codeMinutes": "integer",
 			"auth.sessionHours": "integer",
 			"auth.signInAttemptsPerMinute": "integer",
@@ -704,6 +705,45 @@ describe("images.allowPlainHttp", () => {
 		// silently reverting the setting to its default on the very next read.
 		await setSetting("images.allowPlainHttp", false);
 		const row = await prisma.setting.findUnique({ where: { key: "images.allowPlainHttp" } });
+		expect(row?.value).toBe("false");
+		expect(row?.value).toBe(JSON.stringify(false));
+	});
+});
+
+/**
+ * `pairing.enabled` — the kill switch for `/api/pair`, the one unauthenticated write in the
+ * system. What it actually does to the route belongs to `route.test.ts`; what belongs here is
+ * the store boundary and the raw text it writes, the same split every other setting's test file
+ * follows.
+ *
+ * The raw-storage assertion matters more here than for most booleans: this setting is read by
+ * `route.ts` on every single pairing attempt, so a write path that silently reverted to quoting
+ * the value (`"false"`, a JSON string) rather than writing it bare (`false`, a JSON boolean)
+ * would make `parseStored` refuse it and `listSettings` fall back to the default — quietly
+ * leaving pairing switched on no matter what the operator saved.
+ */
+describe("pairing.enabled", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+	});
+
+	it("defaults to true", async () => {
+		expect(await booleanSetting("pairing.enabled")).toBe(true);
+	});
+
+	it("stores and reads back false", async () => {
+		await setSetting("pairing.enabled", false);
+		expect(await booleanSetting("pairing.enabled")).toBe(false);
+	});
+
+	it("refuses a non-boolean value", async () => {
+		await expect(setSetting("pairing.enabled", "false")).rejects.toThrow(ApiError);
+		await expect(setSetting("pairing.enabled", 0)).rejects.toThrow(ApiError);
+	});
+
+	it("stores the value as bare JSON, not as a quoted string", async () => {
+		await setSetting("pairing.enabled", false);
+		const row = await prisma.setting.findUnique({ where: { key: "pairing.enabled" } });
 		expect(row?.value).toBe("false");
 		expect(row?.value).toBe(JSON.stringify(false));
 	});

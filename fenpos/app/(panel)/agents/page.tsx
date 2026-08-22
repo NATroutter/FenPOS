@@ -6,6 +6,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { listAgents } from "@/lib/agents/agent-service";
 import { isConnected } from "@/lib/link/registry";
 import { getPublicAddress } from "@/lib/public-url";
+import { booleanSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Agents" };
 
@@ -24,7 +25,11 @@ export const dynamic = "force-dynamic";
  * is the failure worth avoiding here.
  */
 export default async function AgentsPage() {
-	const [agents, address] = await Promise.all([listAgents(), getPublicAddress()]);
+	const [agents, address, pairingEnabled] = await Promise.all([
+		listAgents(),
+		getPublicAddress(),
+		booleanSetting("pairing.enabled"),
+	]);
 
 	const cards: AgentCardData[] = agents.map((agent) => ({
 		id: agent.id,
@@ -68,6 +73,7 @@ export default async function AgentsPage() {
 							agent={agent}
 							serverAddress={address.url}
 							addressIsInferred={address.source === "request"}
+							pairingEnabled={pairingEnabled}
 						/>
 					))}
 				</div>

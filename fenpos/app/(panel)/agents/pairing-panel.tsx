@@ -14,6 +14,17 @@ import { Spinner } from "@/components/ui/spinner";
  * Both values are shown in full and are copyable. They are read off this screen and typed
  * into a terminal in another room, which is why the code is large, monospace, and drawn from
  * an alphabet with no ambiguous characters.
+ *
+ * `pairingEnabled` arrives as a plain boolean prop rather than being read here: `settings-service.ts`
+ * is `server-only` and this is a Client Component, so the value has to be resolved on the server
+ * (`AgentsPage`) and threaded down through `AgentCard` — reading the setting directly from this
+ * module would fail to build, and a module-level cache of it would not be visible to this component
+ * regardless, since Next bundles Client Components into a separate module layer from the one that
+ * cache would live in.
+ *
+ * When pairing is switched off, redeeming the code shown here would always be refused — the
+ * endpoint cannot tell a stale code from a disabled one — so this shows a plain notice instead of
+ * a code nobody could use.
  */
 export function PairingPanel({
 	agentId,
@@ -22,6 +33,7 @@ export function PairingPanel({
 	expiresAt,
 	serverAddress,
 	addressIsInferred,
+	pairingEnabled,
 }: {
 	agentId: string;
 	agentName: string;
@@ -30,6 +42,8 @@ export function PairingPanel({
 	serverAddress: string;
 	/** Whether the address was derived from this request rather than configured. */
 	addressIsInferred: boolean;
+	/** Whether `/api/pair` currently accepts codes at all. */
+	pairingEnabled: boolean;
 }) {
 	const [pending, startTransition] = useTransition();
 
@@ -46,38 +60,47 @@ export function PairingPanel({
 				) : null}
 			</div>
 
-			<div className="flex flex-col gap-1.5">
-				<span className="text-[11px] font-medium text-subtle-foreground">Pairing code</span>
-				<CopyableValue value={code} label="Pairing code" large />
-				<Countdown expiresAt={expiresAt} />
-			</div>
+			{pairingEnabled ? (
+				<>
+					<div className="flex flex-col gap-1.5">
+						<span className="text-[11px] font-medium text-subtle-foreground">Pairing code</span>
+						<CopyableValue value={code} label="Pairing code" large />
+						<Countdown expiresAt={expiresAt} />
+					</div>
 
-			<div className="rounded-md border border-border bg-background p-3">
-				<p className="text-[11px] font-medium text-subtle-foreground">Run on the agent</p>
-				<code className="mt-1.5 block overflow-x-auto font-mono text-xs whitespace-nowrap text-foreground">
-					pair {serverAddress} {code}
-				</code>
-			</div>
+					<div className="rounded-md border border-border bg-background p-3">
+						<p className="text-[11px] font-medium text-subtle-foreground">Run on the agent</p>
+						<code className="mt-1.5 block overflow-x-auto font-mono text-xs whitespace-nowrap text-foreground">
+							pair {serverAddress} {code}
+						</code>
+					</div>
 
-			<Button
-				type="button"
-				variant="outline"
-				size="sm"
-				disabled={pending}
-				onClick={() =>
-					startTransition(async () => {
-						const result = await refreshPairingCode(agentId);
-						if (result.error) {
-							toast.error(result.error);
-						} else {
-							toast.success(`New pairing code issued for ${agentName}.`);
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={pending}
+						onClick={() =>
+							startTransition(async () => {
+								const result = await refreshPairingCode(agentId);
+								if (result.error) {
+									toast.error(result.error);
+								} else {
+									toast.success(`New pairing code issued for ${agentName}.`);
+								}
+							})
 						}
-					})
-				}
-			>
-				{pending ? <Spinner /> : <RefreshCw className="size-3.5" />}
-				New code
-			</Button>
+					>
+						{pending ? <Spinner /> : <RefreshCw className="size-3.5" />}
+						New code
+					</Button>
+				</>
+			) : (
+				<p className="text-[11px] leading-relaxed text-subtle-foreground">
+					Pairing is switched off, so this code cannot be redeemed. Turn it back on under{" "}
+					<span className="font-medium">Settings → Security</span>.
+				</p>
+			)}
 		</div>
 	);
 }

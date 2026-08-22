@@ -55,10 +55,13 @@ export function AgentCard({
 	agent,
 	serverAddress,
 	addressIsInferred,
+	pairingEnabled,
 }: {
 	agent: AgentCardData;
 	serverAddress: string;
 	addressIsInferred: boolean;
+	/** Whether `/api/pair` currently accepts codes at all. Passed through to {@link PairingPanel}. */
+	pairingEnabled: boolean;
 }) {
 	const [pending, startTransition] = useTransition();
 	const status = STATUS_STYLE[agent.status];
@@ -82,6 +85,7 @@ export function AgentCard({
 						expiresAt={agent.pairing.expiresAt}
 						serverAddress={serverAddress}
 						addressIsInferred={addressIsInferred}
+						pairingEnabled={pairingEnabled}
 					/>
 				) : (
 					<Details agent={agent} />

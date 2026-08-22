@@ -192,6 +192,7 @@ export const SETTING_KEYS = [
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
 	"logs.maxMessageChars",
+	"pairing.enabled",
 	"pairing.codeMinutes",
 	"auth.sessionHours",
 	"auth.signInAttemptsPerMinute",
@@ -419,6 +420,15 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 8_000,
 		fallback: 1_000,
 		unit: "characters",
+	},
+	{
+		key: "pairing.enabled",
+		label: "Allow pairing",
+		description:
+			"Whether new agents may pair. Switch it off once every agent is paired — the endpoint then refuses every code, including valid ones.",
+		category: "security",
+		type: "boolean",
+		fallback: true,
 	},
 	{
 		key: "pairing.codeMinutes",
