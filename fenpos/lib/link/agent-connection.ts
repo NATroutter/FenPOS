@@ -383,9 +383,13 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 	/**
 	 * Starts the liveness probe.
 	 *
-	 * Each interval sends a ping and arms a deadline. If the pong does not arrive before the
-	 * deadline, the socket is terminated rather than closed: a half-open connection will not
-	 * complete a closing handshake, so waiting for one would hang.
+	 * Each interval sends a ping; the first one with no deadline already outstanding also arms
+	 * one. If the pong does not arrive before the deadline, the socket is terminated rather than
+	 * closed: a half-open connection will not complete a closing handshake, so waiting for one
+	 * would hang. At most one deadline is ever outstanding at a time — see the comment on
+	 * `pongDeadline` inside the interval below for why arming a second one on top of an existing
+	 * one is wrong regardless of how `link.heartbeatSeconds` and `link.heartbeatTimeoutSeconds`
+	 * relate.
 	 *
 	 * Reads `link.heartbeatSeconds` and `link.heartbeatTimeoutSeconds` once, here, rather than once
 	 * per ping — a connection lives far longer than a single interval, so this is a read per
@@ -408,12 +412,26 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			alive = false;
 			socket.ping();
 
-			pongDeadline = setTimeout(() => {
-				if (!alive) {
-					logger.warn("Agent stopped answering heartbeats", { agentId: agent.id });
-					socket.terminate();
-				}
-			}, heartbeatTimeoutMs);
+			// A deadline from an earlier tick can still be outstanding here whenever
+			// `link.heartbeatTimeoutSeconds` is configured above `link.heartbeatSeconds` — nothing
+			// stops an operator setting it that way, since the two settings' bounds overlap and
+			// this store validates one value at a time. Arming a second deadline on top of it
+			// would leak the first: overwriting `pongDeadline` would drop the only reference able
+			// to cancel it, so it fires later regardless of what happened since, against whatever
+			// `alive` is by then. Clearing the old one and arming a fresh one instead of skipping
+			// would stop the leak but trade it for a worse bug — an agent that never answers a
+			// single ping would never be caught, because every tick would keep deferring the
+			// deadline before it could ever elapse. Leaving the existing deadline alone until it
+			// either fires or a pong clears it keeps exactly one outstanding no matter how the two
+			// settings relate, and it still fires at the time the first unanswered ping promised.
+			if (!pongDeadline) {
+				pongDeadline = setTimeout(() => {
+					if (!alive) {
+						logger.warn("Agent stopped answering heartbeats", { agentId: agent.id });
+						socket.terminate();
+					}
+				}, heartbeatTimeoutMs);
+			}
 		}, heartbeatIntervalMs);
 	}
 }
