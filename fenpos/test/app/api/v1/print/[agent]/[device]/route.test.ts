@@ -31,29 +31,32 @@ let token: string;
 let agentName: string;
 let agentId: string;
 let deviceId: string;
+let keyId: string;
 
 /**
  * Builds a print request and its route context.
  *
  * @param body the JSON body to send
  * @param idempotencyKey the header to present, if any
+ * @param deviceName the device to address, defaulting to the one the key is granted for
  * @returns the arguments to spread into `POST`
  */
 function call(
 	body: unknown,
 	idempotencyKey?: string,
+	deviceName = "kitchen",
 ): [Request, { params: Promise<{ agent: string; device: string }> }] {
 	const headers: Record<string, string> = { authorization: `Bearer ${token}` };
 	if (idempotencyKey !== undefined) {
 		headers["idempotency-key"] = idempotencyKey;
 	}
 	return [
-		new Request(`https://fenpos.test/api/v1/print/${agentName}/kitchen`, {
+		new Request(`https://fenpos.test/api/v1/print/${agentName}/${deviceName}`, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(body),
 		}),
-		{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
+		{ params: Promise.resolve({ agent: agentName, device: deviceName }) },
 	];
 }
 
@@ -74,7 +77,7 @@ beforeEach(async () => {
 	deviceId = device.id;
 
 	token = `fp_${Date.now()}_${Math.random()}`;
-	await prisma.apiKey.create({
+	const key = await prisma.apiKey.create({
 		data: {
 			name: "till",
 			keyHash: hashSecret(token),
@@ -83,24 +86,29 @@ beforeEach(async () => {
 			devices: { create: [{ deviceId: device.id }] },
 		},
 	});
+	keyId = key.id;
 
 	// Cleared, not just re-implemented: the mock is a module-level singleton shared across every
 	// `it` in this file, so a call count carried over from the previous test would make an
 	// unrelated test's assertion pass or fail for the wrong reason.
 	vi.mocked(submitJob).mockClear();
 
-	// Stands in for a real dispatch: writes the row the replay path will read back.
-	vi.mocked(submitJob).mockImplementation(async (_deviceId, _body, apiKeyId, idempotency) => {
+	// Stands in for a real dispatch: writes the row the replay path will read back. Mirrors
+	// `submitJob`'s own two-step write — the row is created before the line count is known, and
+	// updated once compilation reports it, see `lib/jobs/dispatch.ts` — rather than writing `lines`
+	// in the initial `create`, so a broken replay that skipped that second write would leave
+	// `lines: null` on the row for the replay tests below to catch.
+	vi.mocked(submitJob).mockImplementation(async (targetDeviceId, _body, apiKeyId, idempotency) => {
 		const job = await prisma.job.create({
 			data: {
 				agentId,
-				deviceId,
+				deviceId: targetDeviceId,
 				apiKeyId: apiKeyId ?? null,
 				status: "QUEUED",
-				lines: 4,
 				...(idempotency ? { idempotencyKey: idempotency.key, idempotencyHash: idempotency.hash } : {}),
 			},
 		});
+		await prisma.job.update({ where: { id: job.id }, data: { lines: 4 } });
 		return { id: job.id, deviceName: "kitchen", lines: 4 };
 	});
 });
@@ -118,7 +126,10 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 		const second = await POST(...call({ data: ["hello"] }, "order-1"));
 
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(1);
-		expect(await second.json()).toMatchObject({ jobId: (await first.json()).jobId });
+		// Full equality, not just the jobId: the replay must reproduce the original 202 exactly —
+		// the same "QUEUED" and the same compiled line count — not the row's live status or a
+		// `lines` that was never recorded. See the `IdempotentReplay` doc comment.
+		expect(await second.json()).toEqual(await first.json());
 		expect(await prisma.job.count()).toBe(1);
 	});
 
@@ -172,6 +183,36 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 		expect(vi.mocked(submitJob)).not.toHaveBeenCalled();
 	});
 
+	it("refuses an empty or whitespace-only Idempotency-Key rather than treating it as absent", async () => {
+		const response = await POST(...call({ data: ["hello"] }, "   "));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_type");
+		expect(vi.mocked(submitJob)).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * A key granted more than one printer can be reused unmodified against a second one with the
+	 * exact same body — a kitchen ticket and a bar ticket both reading "order 1041". The body hash
+	 * matches, so only a device check catches this; without it, the second request would get a
+	 * silent 202 and the bar printer would never see the job.
+	 */
+	it("refuses a key reused for a different device, even with an identical body", async () => {
+		const bar = await prisma.device.create({
+			data: { agentId, name: "bar", port: "COM4", columns: 42 },
+		});
+		await prisma.apiKeyDevice.create({ data: { apiKeyId: keyId, deviceId: bar.id } });
+
+		const kitchen = await POST(...call({ data: ["order 1041"] }, "order-1041"));
+		expect(kitchen.status).toBe(202);
+
+		const barResponse = await POST(...call({ data: ["order 1041"] }, "order-1041", "bar"));
+
+		expect(barResponse.status).toBe(409);
+		expect((await barResponse.json()).error).toBe("idempotency_conflict");
+		expect(await prisma.job.count()).toBe(1);
+	});
+
 	it("does not record a key for a request that never became a job", async () => {
 		vi.mocked(submitJob).mockRejectedValueOnce(new Error("compile failed"));
 
@@ -223,7 +264,7 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 			POST(...call({ data: ["goodbye"] }, "order-1")),
 		]);
 
-		const statuses = [first.status, second.status].sort();
+		const statuses = [first.status, second.status].sort((a, b) => a - b);
 		expect(statuses).toEqual([202, 409]);
 
 		const conflict = first.status === 409 ? first : second;

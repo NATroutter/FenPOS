@@ -130,9 +130,17 @@ export async function submitJob(
 	let compiled: ReturnType<typeof compile>;
 	try {
 		compiled = compile(job.id, device.name, request, limits, settings);
+		// Recorded now rather than left for the agent's eventual report. The count is real the
+		// moment compilation succeeds — it is the same number this call is about to hand back in
+		// the 202 — and a caller who retries before anything has rendered still needs a replay
+		// that reproduces that number, not a `lines: null` that contradicts the receipt they were
+		// already given. A second write rather than folded into the row's own `create` because
+		// `compile` needs the job's id, which only exists once that row does.
+		await prisma.job.update({ where: { id: job.id }, data: { lines: compiled.lines.length } });
 	} catch (error) {
-		// Only the post-wrap limit can fail here; everything cheaper was checked before the row
-		// existed. The row is settled rather than deleted so the failure is visible in the panel.
+		// Only the post-wrap limit, or the write above, can fail here; everything cheaper was
+		// checked before the row existed. The row is settled rather than deleted so the failure is
+		// visible in the panel.
 		await fail(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
 		throw error;
 	}
@@ -201,6 +209,15 @@ export async function submitJob(
 /**
  * Marks a job failed without waiting for an agent to report it.
  *
+ * Every caller of this function is settling a job that never reached an agent — a compile
+ * failure, a send failure, or a socket that closed before the frame went out — so the
+ * idempotency key, if any, is cleared here too. Whether a refused submit frees its key must not
+ * depend on which side of `job.create` the refusal fell on: a request rejected before the row
+ * existed already left the key free for a corrected retry, and one rejected here needs to leave
+ * it exactly as free, or a caller who fixes an oversized body and resubmits gets an
+ * `idempotency_conflict` for a job that never happened, and a caller who retries the identical
+ * body unmodified gets a replayed `202 QUEUED` for a job that will never print.
+ *
  * @param jobId the job to settle
  * @param errorCode stable code recorded on the row
  * @param errorMessage what to show the operator
@@ -209,7 +226,14 @@ async function fail(jobId: string, errorCode: string, errorMessage: string): Pro
 	try {
 		await prisma.job.update({
 			where: { id: jobId },
-			data: { status: "FAILED", finishedAt: new Date(), errorCode, errorMessage },
+			data: {
+				status: "FAILED",
+				finishedAt: new Date(),
+				errorCode,
+				errorMessage,
+				idempotencyKey: null,
+				idempotencyHash: null,
+			},
 		});
 	} catch (error) {
 		logger.error("Could not record a job as failed", error, { jobId });

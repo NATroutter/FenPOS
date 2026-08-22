@@ -15,7 +15,13 @@ import { ApiError } from "@/lib/errors";
  * outlive the job it describes and answer a retry about a job that is no longer here.
  */
 
-/** The original job, as the replayed response describes it. */
+/**
+ * The original job, as the replayed response describes it.
+ *
+ * `status` is always `"QUEUED"` — what the original `202` said, not what the row has become
+ * since. A replay answers "what did I tell you before", not "what is true now"; a caller wanting
+ * the latter has `GET /api/v1/jobs/{id}`.
+ */
 export interface IdempotentReplay {
 	jobId: string;
 	status: string;
@@ -41,18 +47,32 @@ export function bodyHash(raw: string): string {
 /**
  * Decides what a presented idempotency key means for this request.
  *
+ * The device is checked as well as the body, deliberately, and checked first. A key granted more
+ * than one printer can be reused unmodified against a second one with the exact same body — a
+ * kitchen ticket and a bar ticket both reading "order 1041" — and a hash taken over the body alone
+ * cannot see that, because the body genuinely is identical. Reusing one key for two different
+ * requests is a caller error; refusing it is what keeps the second printer from silently never
+ * seeing the job at all.
+ *
  * @param apiKeyId the authenticated key, which scopes the idempotency key
  * @param key the caller's `Idempotency-Key` header
  * @param hash the current body's {@link bodyHash}
+ * @param deviceId the device this request is addressed to
  * @returns the original job to replay, or null when this key has not been used before
- * @throws ApiError `idempotency_conflict` when the key was used with a different body
+ * @throws ApiError `idempotency_conflict` when the key was used for a different device, or with a
+ *   different body
  */
-export async function findReplay(apiKeyId: string, key: string, hash: string): Promise<IdempotentReplay | null> {
+export async function findReplay(
+	apiKeyId: string,
+	key: string,
+	hash: string,
+	deviceId: string,
+): Promise<IdempotentReplay | null> {
 	const existing = await prisma.job.findFirst({
 		where: { apiKeyId, idempotencyKey: key },
 		select: {
 			id: true,
-			status: true,
+			deviceId: true,
 			lines: true,
 			idempotencyHash: true,
 			device: { select: { name: true } },
@@ -61,6 +81,14 @@ export async function findReplay(apiKeyId: string, key: string, hash: string): P
 
 	if (!existing) {
 		return null;
+	}
+
+	if (existing.deviceId !== deviceId) {
+		throw new ApiError(
+			"idempotency_conflict",
+			`Idempotency-Key '${key}' was already used to print to a different printer. Use a new key for a different receipt.`,
+			{ jobId: existing.id },
+		);
 	}
 
 	if (existing.idempotencyHash !== hash) {
@@ -73,7 +101,8 @@ export async function findReplay(apiKeyId: string, key: string, hash: string): P
 
 	return {
 		jobId: existing.id,
-		status: existing.status,
+		// Hardcoded rather than read from the row: see the note on IdempotentReplay.
+		status: "QUEUED",
 		deviceName: existing.device.name,
 		lines: existing.lines,
 	};

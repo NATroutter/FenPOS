@@ -100,6 +100,20 @@ describe("submitJob", () => {
 		expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "QUEUED" });
 	});
 
+	/**
+	 * `lines` is written onto the row itself, not only handed back in the return value — a replay
+	 * reads the row (see `lib/jobs/idempotency.ts`), and a retry arriving after a timeout but before
+	 * the agent has rendered anything still needs to see the real count rather than `null`.
+	 */
+	it("records the compiled line count on the row, not only in the response", async () => {
+		const { deviceId } = await connectedDevice();
+
+		const job = await submitJob(deviceId, { data: ["Kahvi 2.50", "Toinen rivi"] });
+
+		const row = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+		expect(row.lines).toBe(job.lines);
+	});
+
 	it("refuses a receipt too large to send, and settles the job rather than leaving it queued", async () => {
 		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
 
@@ -119,6 +133,28 @@ describe("submitJob", () => {
 
 		const [job] = await prisma.job.findMany();
 		expect(job).toMatchObject({ status: "FAILED", errorCode: "job_too_large" });
+	});
+
+	/**
+	 * A job that never reaches an agent must not keep its caller's key locked up: a retry with the
+	 * identical body should re-validate and dispatch fresh rather than replay a `202 QUEUED` for a
+	 * job that will never print, and a retry with a corrected body should not be told it conflicts
+	 * with a submission that never happened.
+	 */
+	it("frees the idempotency key when a job fails before reaching the agent", async () => {
+		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
+		const data = Array.from({ length: 700 }, () => "x".repeat(500));
+
+		await submitJob(deviceId, { data }, null, { key: "order-1", hash: "hash-a" }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(sent).toHaveLength(0);
+		const [job] = await prisma.job.findMany();
+		expect(job.status).toBe("FAILED");
+		expect(job.idempotencyKey).toBeNull();
+		expect(job.idempotencyHash).toBeNull();
 	});
 
 	/**
