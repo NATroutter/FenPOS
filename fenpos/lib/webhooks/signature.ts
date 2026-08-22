@@ -10,6 +10,12 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
  * delivery captured once could be replayed a week later and the receiver, checking only the digest,
  * would act on a stale event. Signing the moment means a replay must either carry its original
  * timestamp — which a receiver rejects as too old — or alter it, which breaks the digest.
+ *
+ * The header parser is stricter than most conventional verifiers: it anchors the whole string and
+ * accepts only `t` and `v1`, so a future `t=…,v1=…,v2=…` would be refused rather than silently
+ * accepted. That is deliberate — fail-closed is the right default for an unrecognised parameter —
+ * but it means introducing a `v2` scheme later means versioning this parser too, not just adding a
+ * field.
  */
 
 /** How far a delivery's timestamp may be from the receiver's clock, by default, in seconds. */
@@ -21,7 +27,12 @@ const DEFAULT_TOLERANCE_SECONDS = 300;
  * Prefixed so that a secret found in a receiver's configuration is recognisable for what it is —
  * the same reason API keys carry a prefix.
  *
- * @returns a new secret, shown once and never recoverable from this server afterwards in any other form
+ * Unlike a password, this is stored in plaintext: this server is the *sender*, and has to hold the
+ * secret to sign with it, so hashing it would make signing impossible. That makes it a live
+ * credential at rest, not an at-rest artifact that only needs to survive a comparison — it deserves
+ * the handling of a plaintext secret everywhere it is stored, logged, and displayed.
+ *
+ * @returns a new secret
  */
 export function newWebhookSecret(): string {
 	return `whsec_${randomBytes(32).toString("hex")}`;
@@ -61,13 +72,30 @@ export function verifySignature(
 	now: Date = new Date(),
 	toleranceSeconds: number = DEFAULT_TOLERANCE_SECONDS,
 ): boolean {
+	// This is the reference implementation an integrator copies, and their `header` is commonly
+	// `req.headers["x-fenpos-signature"]` — `undefined` when the delivery carries no signature at
+	// all. TypeScript guarantees a string at every call site in this codebase, but a copied verifier
+	// running in plain JS would crash on `.trim()` here instead of correctly returning false.
+	if (typeof header !== "string") {
+		return false;
+	}
+
 	const match = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(header.trim());
 	if (!match) {
 		return false;
 	}
 
 	const t = Number(match[1]);
-	if (Math.abs(Math.floor(now.getTime() / 1000) - t) > toleranceSeconds) {
+	const nowSeconds = Math.floor(now.getTime() / 1000);
+	// An invalid `now` or a non-finite tolerance must reject, not silently pass: `NaN > n` and
+	// `n > NaN` are both `false`, so without this guard a bad clock would disable the one check that
+	// stops a replay, while the digest comparison below kept running as if nothing were wrong. An
+	// attacker never controls `now` — only the header and body — but this is still the module's only
+	// comparison that fails open, and it is the anti-replay one.
+	if (!Number.isFinite(nowSeconds) || !Number.isFinite(toleranceSeconds)) {
+		return false;
+	}
+	if (Math.abs(nowSeconds - t) > toleranceSeconds) {
 		return false;
 	}
 

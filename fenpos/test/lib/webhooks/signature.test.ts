@@ -66,6 +66,22 @@ describe("verifySignature", () => {
 		expect(verifySignature(SECRET, BODY, header, muchLater, 300)).toBe(false);
 	});
 
+	it("rejects a captured header whose timestamp is rewritten to the present, keeping the original digest", () => {
+		// This is the test that fails if the timestamp ever leaves the signed material — e.g. if
+		// `digest` were changed to hash the body alone. Verifying at `freshNow` (rather than at
+		// `signedAt`) takes the tolerance check out of the picture entirely: `freshT` is always within
+		// tolerance of `freshNow` by construction, so the only thing left that can reject this rewritten
+		// header is the digest binding `t` to `v1`.
+		const signedAt = new Date("2026-08-22T10:00:00.000Z");
+		const header = signPayload(SECRET, BODY, signedAt);
+
+		const freshNow = new Date("2026-08-25T00:00:00.000Z");
+		const freshT = Math.floor(freshNow.getTime() / 1000);
+		const replayed = header.replace(/^t=\d+/, `t=${freshT}`);
+
+		expect(verifySignature(SECRET, BODY, replayed, freshNow)).toBe(false);
+	});
+
 	it("rejects a malformed header rather than throwing", () => {
 		expect(verifySignature(SECRET, BODY, "nonsense")).toBe(false);
 		expect(verifySignature(SECRET, BODY, "t=abc,v1=zz")).toBe(false);
