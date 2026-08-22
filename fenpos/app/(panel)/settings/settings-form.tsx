@@ -374,15 +374,31 @@ function Control({ field, value, saving, onStage }: ControlProps<SettingFieldDat
 }
 
 /**
+ * Past this many values, an enum's bounds line names the count rather than listing every member.
+ *
+ * Every enum this project shipped before `panel.timezone` fits comfortably under this with room to
+ * spare (`logs.minimumLevel`'s four severities is the longest) — `panel.timezone`'s ~400 IANA zones
+ * is the outlier that made a fixed threshold necessary at all. The dropdown itself still lists every
+ * value; this line is a one-glance summary, not the only way to see the options.
+ */
+const ENUM_BOUNDS_LIST_LIMIT = 8;
+
+/**
  * The bounds line under a setting's description: what a value must satisfy, phrased for reading
  * rather than for validation. `null` for a boolean, which has no bounds beyond on/off.
+ *
+ * An enum lists its values only up to {@link ENUM_BOUNDS_LIST_LIMIT} — past that, `values.join(", ")`
+ * stops being a summary and becomes the whole page's worth of text `panel.timezone` produced, with
+ * its own reset link pushed to the far end of it. Named by count instead, whatever setting causes it.
  */
 function bounds(definition: ClientSettingDefinition): ReactNode {
 	switch (definition.type) {
 		case "integer":
 			return `${definition.unit}, ${definition.min}–${definition.max}`;
 		case "enum":
-			return definition.values.join(", ");
+			return definition.values.length > ENUM_BOUNDS_LIST_LIMIT
+				? `one of ${definition.values.length} options`
+				: definition.values.join(", ");
 		case "string":
 			return `at most ${definition.maxLength} characters`;
 		case "boolean":

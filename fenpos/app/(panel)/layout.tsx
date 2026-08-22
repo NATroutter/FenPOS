@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/panel/app-sidebar";
 import { EventStreamProvider } from "@/components/panel/event-stream";
+import { FormatProvider } from "@/components/panel/format-provider";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -9,7 +10,7 @@ import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { integerSetting, panelFormatting } from "@/lib/settings/settings-service";
 
 /**
  * Never prerendered: every render depends on the request's session cookie.
@@ -59,27 +60,35 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// component cannot reach the database anyway.
 	const profile = await getAdminProfile();
 	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
+	const formatting = await panelFormatting();
 
 	return (
-		<SidebarProvider>
-			<AppSidebar
-				version={APP_VERSION}
-				signOutAction={signOut}
-				minimumPasswordLength={minimumPasswordLength}
-				displayName={profile.displayName}
-				email={profile.email}
-				avatarUrl={gravatarUrl(profile.email)}
-				initial={avatarInitial(profile.displayName)}
-			/>
-			<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
-				{/* Wraps the header as well as the pages, because the chip that governs the stream
-				    lives in the header while everything consuming it is below. */}
-				<EventStreamProvider>
-					<SessionExpiry expiresAt={session.expiresAt.getTime()} />
-					<PanelHeader startedAt={SERVER_STARTED_AT} />
-					<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
-				</EventStreamProvider>
-			</SidebarInset>
-		</SidebarProvider>
+		// Outermost, so every descendant — including the sidebar, not just the pages below the
+		// header — renders after FormatProvider has pushed the current locale/clock/timezone into
+		// the Client Component layer's datetime.ts. See that component's doc comment for why this
+		// push, not just applyPushedSettings, is what actually reaches formatDate/formatDateTime's
+		// real callers.
+		<FormatProvider locale={formatting.locale} hour12={formatting.hour12} timeZone={formatting.timeZone}>
+			<SidebarProvider>
+				<AppSidebar
+					version={APP_VERSION}
+					signOutAction={signOut}
+					minimumPasswordLength={minimumPasswordLength}
+					displayName={profile.displayName}
+					email={profile.email}
+					avatarUrl={gravatarUrl(profile.email)}
+					initial={avatarInitial(profile.displayName)}
+				/>
+				<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
+					{/* Wraps the header as well as the pages, because the chip that governs the stream
+					    lives in the header while everything consuming it is below. */}
+					<EventStreamProvider>
+						<SessionExpiry expiresAt={session.expiresAt.getTime()} />
+						<PanelHeader startedAt={SERVER_STARTED_AT} />
+						<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
+					</EventStreamProvider>
+				</SidebarInset>
+			</SidebarProvider>
+		</FormatProvider>
 	);
 }

@@ -935,15 +935,61 @@ export async function applyPushedSettings(): Promise<void> {
 		if (!locale?.overridden && !timeFormat?.overridden && !timezone?.overridden) {
 			resetFormatting();
 		} else {
-			setFormatting({
-				locale: (locale?.overridden ? locale.value : locale?.definition.fallback) as string,
-				hour12: ((timeFormat?.overridden ? timeFormat.value : timeFormat?.definition.fallback) as string) === "12h",
-				timeZone: resolveTimeZone((timezone?.overridden ? timezone.value : timezone?.definition.fallback) as string),
-			});
+			setFormatting(formattingFromSettings(settings));
 		}
 	} catch (error) {
 		logger.error("Could not apply pushed settings", error);
 	}
+}
+
+/**
+ * Resolves `panel.locale`, `panel.timeFormat` and `panel.timezone` out of an already-loaded
+ * settings list into the shape `setFormatting` (`datetime.ts`) accepts — each field taken from its
+ * stored value where overridden, and its declared fallback otherwise.
+ *
+ * Shared by {@link applyPushedSettings} (which separately decides whether to call
+ * `resetFormatting()` instead, when none of the three are overridden — see that function's doc
+ * comment) and {@link panelFormatting} (which always wants a concrete value to hand to a Client
+ * Component, and for which "fallback" and "built-in" are indistinguishable in practice since the
+ * three fallbacks — `en-US`, `12h`, `system` — are exactly `datetime.ts`'s own built-ins).
+ *
+ * @param settings every setting, as returned by `listSettings`
+ * @returns the locale, clock and timezone to format with
+ */
+function formattingFromSettings(settings: SettingValue[]): {
+	locale: string;
+	hour12: boolean;
+	timeZone: string | undefined;
+} {
+	const locale = settings.find((setting) => setting.definition.key === "panel.locale");
+	const timeFormat = settings.find((setting) => setting.definition.key === "panel.timeFormat");
+	const timezone = settings.find((setting) => setting.definition.key === "panel.timezone");
+
+	return {
+		locale: (locale?.overridden ? locale.value : locale?.definition.fallback) as string,
+		hour12: ((timeFormat?.overridden ? timeFormat.value : timeFormat?.definition.fallback) as string) === "12h",
+		timeZone: resolveTimeZone((timezone?.overridden ? timezone.value : timezone?.definition.fallback) as string),
+	};
+}
+
+/**
+ * The panel's current locale, clock and timezone, resolved to what `datetime.ts`'s `setFormatting`
+ * accepts.
+ *
+ * `applyPushedSettings` alone cannot make `panel.locale`/`panel.timeFormat`/`panel.timezone` reach
+ * `formatDate`/`formatDateTime`'s actual callers: every one of them — `job-table.tsx`,
+ * `log-stream.tsx`, `agent-card.tsx`, `asset-card.tsx`, `key-row.tsx` — is a Client Component, and
+ * Next.js bundles Client Components into a module layer separate from the Server Component/Server
+ * Action layer this module runs in, so `applyPushedSettings`'s push only ever reaches a
+ * `datetime.ts` instance nothing in that layer reads. `app/(panel)/layout.tsx` calls this function
+ * and hands the result to `FormatProvider` (`components/panel/format-provider.tsx`), a Client
+ * Component whose own call to `setFormatting` lands in the instance that layer actually uses — see
+ * that component's doc comment for the rest of the mechanism.
+ *
+ * @returns the locale, clock and timezone to format with
+ */
+export async function panelFormatting(): Promise<{ locale: string; hour12: boolean; timeZone: string | undefined }> {
+	return formattingFromSettings(await listSettings());
 }
 
 /**
