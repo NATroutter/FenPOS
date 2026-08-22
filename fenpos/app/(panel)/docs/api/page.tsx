@@ -30,13 +30,6 @@ export const dynamic = "force-dynamic";
  *
  * The contents rail and the sections themselves both read this, so a heading cannot be renamed
  * into a rail entry that no longer matches it or an anchor that goes nowhere.
- *
- * Every `path` below is built from `API_BASE` rather than typed as `/api/v1/…`, so a version bump
- * does not leave this page pointing at a prefix the server has stopped serving. The coverage test
- * beside this page cannot see through that interpolation — it reads this file as text, unrendered
- * — so the full paths are named once, in prose, for it to find: `/api/v1/print/{agent}/{device}`,
- * `/api/v1/jobs/{id}`, `/api/v1/devices`, `/api/v1/devices/{agent}/{device}`,
- * `/api/v1/devices/{agent}/{device}/actions`, and `/api/v1/status`.
  */
 const SECTIONS = [
 	{ id: "authentication", title: "Authentication", note: "Bearer keys, permissions and device grants" },
@@ -90,10 +83,9 @@ const SECTIONS = [
  *
  * `PERMISSIONS` is the whole vocabulary, and every one of its entries gates a request now. The
  * device and status grants used to be the exception — capabilities the panel had and the API did
- * not expose — until the endpoints under `/api/v1/devices` and `/api/v1/status` closed that gap.
- * Named here rather than derived, because nothing in the code registers "which permissions a
- * route requires"; the test beside this page reads the routes and fails if this list stops
- * matching them.
+ * not expose — until the endpoints documented below closed that gap. Named here rather than
+ * derived, because nothing in the code registers "which permissions a route requires"; the test
+ * beside this page reads the routes and fails if this list stops matching them.
  */
 const ENFORCED: readonly Permission[] = [
 	"print",

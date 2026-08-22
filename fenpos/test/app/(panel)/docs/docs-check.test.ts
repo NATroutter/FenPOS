@@ -155,29 +155,48 @@ describe("the API page's enforced permissions", () => {
 
 describe("every versioned endpoint is documented", () => {
 	/**
-	 * A route file's directory, as a path an integrator would call.
+	 * Every path the page declares, as the suffix it writes after `API_BASE`.
+	 *
+	 * Read out of the `SECTIONS` array rather than searched for anywhere in the file, so this can
+	 * only be satisfied by a section a reader actually sees — the same anchoring the tag table uses
+	 * on `syntax:` below. The page never writes the version prefix literally, so neither does this:
+	 * a route is checked against what `SECTIONS` declares after `API_BASE`, not against a
+	 * hardcoded `/api/v1`.
+	 *
+	 * @returns the declared paths, e.g. `/devices/{agent}/{device}`
+	 */
+	function declaredPaths(): string[] {
+		const paths = [...API_PAGE.matchAll(/path: `\$\{API_BASE\}([^`]*)`/g)].map((match) => match[1]);
+		expect(paths.length, "no section paths were found — has SECTIONS changed shape?").toBeGreaterThan(0);
+		return paths;
+	}
+
+	/**
+	 * A route file's directory under `app/api/v1`, as the suffix an integrator calls after
+	 * `API_BASE`.
 	 *
 	 * Next's bracket segments are turned back into the `{name}` form the docs page writes, so the
 	 * comparison is against what a reader sees rather than against a filesystem detail.
 	 *
-	 * @param routeFile a path under `app/api`, e.g. `v1/devices/[agent]/[device]/route.ts`
-	 * @returns the documented path, e.g. `/api/v1/devices/{agent}/{device}`
+	 * @param routeFile a path under `app/api/v1`, e.g. `devices/[agent]/[device]/route.ts`
+	 * @returns the suffix after `API_BASE`, e.g. `/devices/{agent}/{device}`
 	 */
-	function documentedPath(routeFile: string): string {
+	function routeSuffix(routeFile: string): string {
 		const directory = routeFile.replace(/[\\/]route\.ts$/, "");
-		return `/api/${directory.replaceAll("\\", "/").replace(/\[(\.\.\.)?([^\]]+)\]/g, "{$2}")}`;
+		return `/${directory.replaceAll("\\", "/").replace(/\[(\.\.\.)?([^\]]+)\]/g, "{$2}")}`;
 	}
 
-	it("mentions every route under /api/v1 on the API page", () => {
+	it("declares every route under /api/v1 in SECTIONS", () => {
 		const routes = readdirSync("app/api/v1", { recursive: true, encoding: "utf8" }).filter((entry) =>
 			/route\.ts$/.test(entry),
 		);
 
 		expect(routes.length).toBeGreaterThan(0);
 
+		const declared = declaredPaths();
 		for (const route of routes) {
-			const path = documentedPath(`v1/${route}`);
-			expect(API_PAGE, `${path} is not documented on the API page`).toContain(path);
+			const suffix = routeSuffix(route);
+			expect(declared, `/api/v1${suffix} is not declared in SECTIONS`).toContain(suffix);
 		}
 	});
 });
