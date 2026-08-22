@@ -36,6 +36,14 @@ export const API_ERROR_STATUS = {
 	invalid_type: 400,
 	invalid_linefeed: 400,
 	unknown_field: 400,
+	/**
+	 * A query parameter is not the shape the endpoint accepts.
+	 *
+	 * Sits with the envelope errors rather than the content ones for the same reason `invalid_json`
+	 * does: nothing was interpreted as a receipt, so there is no line or column to name. The caller
+	 * fixes their request, not their markup.
+	 */
+	invalid_query: 400,
 
 	// --- 401: the caller is not identified ---
 	missing_key: 401,
@@ -72,6 +80,15 @@ export const API_ERROR_STATUS = {
 	name_taken: 409,
 	/** Reissuing a pairing code for a agent that already holds a credential. */
 	agent_already_paired: 409,
+	/**
+	 * An `Idempotency-Key` reused with a different body.
+	 *
+	 * A conflict rather than a validation failure, because both requests are individually valid and
+	 * the problem is that they disagree. Replaying the first would print something the caller did not
+	 * ask for on this attempt; accepting the second would make the key meaningless. Refusing is the
+	 * only answer that keeps the guarantee the header exists to give.
+	 */
+	idempotency_conflict: 409,
 
 	/**
 	 * 413: there is too much of it.
@@ -196,6 +213,14 @@ export const API_ERROR_STATUS = {
 	device_unavailable: 503,
 	device_paused: 503,
 	queue_full: 503,
+	/**
+	 * A webhook target that could not be validated when it was registered.
+	 *
+	 * Registration-time only. A delivery that fails later is retried and recorded against the
+	 * subscription rather than reported to anyone synchronously, because by then there is no request
+	 * left to answer.
+	 */
+	webhook_unreachable: 503,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_STATUS;
