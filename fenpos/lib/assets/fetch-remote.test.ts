@@ -307,11 +307,19 @@ describe("fetchRemoteImage", () => {
  * implementation would let through, and is precisely the bug that makes an allowlist worthless.
  */
 describe("fetchRemoteImage configurable gates", () => {
+	/**
+	 * `.rejects.toThrow(ApiError)` alone does not discriminate here: `neverCalled` throws a plain
+	 * `Error` if it is ever reached, and `transportRefusal` (this module) converts *any* thrown value
+	 * into an `ApiError` in every one of its branches. So a guard that failed to refuse at all —
+	 * execution falling through to the transport — would still reject with an `ApiError`, and an
+	 * `instanceof`-only assertion would not notice. Every test below therefore asserts on the
+	 * refusal's own message, which only this guard's own throw can produce.
+	 */
 	it("refuses a plain-http image when plain http is switched off", async () => {
 		await setSetting("images.allowPlainHttp", false);
 		await expect(
 			fetchRemoteImage("http://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/plain http/i);
 	});
 
 	it("still allows https when plain http is switched off", async () => {
@@ -322,13 +330,20 @@ describe("fetchRemoteImage configurable gates", () => {
 		).resolves.toBeInstanceOf(Buffer);
 	});
 
-	/** The scheme bound has to hold on every hop, or a plain-http redirect defeats it. */
+	/**
+	 * The scheme bound has to hold on every hop, or a plain-http redirect defeats it. Asserting the
+	 * message alone would not prove the *second* hop was ever guarded — a stub that always answers
+	 * the same redirect would still throw the same message from a guard that only checked the first
+	 * hop and then looped forever some other way. `stub.asked.length` pins that the transport was
+	 * dispatched for the first hop and never for the second.
+	 */
 	it("refuses a plain-http redirect target even when the first hop was https", async () => {
 		await setSetting("images.allowPlainHttp", false);
 		const stub = stubTransport(() => ({ status: 302, location: "http://images.example.net/logo.png" }));
 		await expect(
 			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/plain http/i);
+		expect(stub.asked).toEqual(["https://cdn.example.com/logo.png"]);
 	});
 
 	it("allows any host when the allowlist is empty", async () => {
@@ -343,7 +358,7 @@ describe("fetchRemoteImage configurable gates", () => {
 		await setSetting("images.allowedRemoteHosts", "cdn.example.com, images.example.com");
 		await expect(
 			fetchRemoteImage("https://elsewhere.example/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/elsewhere\.example is not on this install's list of allowed image hosts/i);
 	});
 
 	it("matches an allowlisted host case-insensitively", async () => {
@@ -360,24 +375,38 @@ describe("fetchRemoteImage configurable gates", () => {
 	 * is exactly the bug that makes an allowlist worthless: any attacker-registered domain merely
 	 * ending in an allowed name, or any subdomain of one, would then pass. Array membership
 	 * (`includes`) is what this module actually checks with, and it is immune to both.
+	 *
+	 * The message assertions are what actually pin this down: under `endsWith`, `requireHostAllowed`
+	 * would not throw at all for either hostname, so execution would reach `neverCalled`, which
+	 * throws — and that throw is caught and reworded by `transportRefusal`'s generic fallback
+	 * ("notexample.com could not be reached for this image."), which is still an `ApiError` but does
+	 * not match either regex below. Verified by temporarily changing `includes` to an
+	 * `endsWith`-based check and confirming this test — and no other — fails with exactly that
+	 * message, then reverting.
 	 */
 	it("does not treat an allowlist entry as a suffix match", async () => {
 		await setSetting("images.allowedRemoteHosts", "example.com");
 		await expect(
 			fetchRemoteImage("https://notexample.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/notexample\.com is not on this install's list of allowed image hosts/i);
 		await expect(
 			fetchRemoteImage("https://sub.example.com/logo.png", { resolve: alwaysPublic, transport: neverCalled }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/sub\.example\.com is not on this install's list of allowed image hosts/i);
 	});
 
-	/** The allowlist bound has to hold on every hop too, or a redirect defeats it the same way. */
+	/**
+	 * The allowlist bound has to hold on every hop too, or a redirect defeats it the same way. As
+	 * with the plain-http redirect case above, `stub.asked` proves the second hop's transport was
+	 * never dispatched — the message alone would not distinguish "refused before connecting" from
+	 * "connected and failed for some other reason that happens to share wording".
+	 */
 	it("refuses a redirect to a host outside the allowlist", async () => {
 		await setSetting("images.allowedRemoteHosts", "cdn.example.com");
 		const stub = stubTransport(() => ({ status: 302, location: "https://images.example.net/logo.png" }));
 		await expect(
 			fetchRemoteImage("https://cdn.example.com/logo.png", { resolve: alwaysPublic, transport: stub.transport }),
-		).rejects.toThrow(ApiError);
+		).rejects.toThrow(/images\.example\.net is not on this install's list of allowed image hosts/i);
+		expect(stub.asked).toEqual(["https://cdn.example.com/logo.png"]);
 	});
 });
 

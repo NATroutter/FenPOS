@@ -328,7 +328,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "assets.acceptedFormats",
 		label: "Accepted image formats",
 		description:
-			"Which formats may be uploaded. JPEG is the more expensive decode; a site that only uploads logos can turn it off.",
+			"Which formats are accepted, uploaded or fetched — including a live URL a receipt names. JPEG is the more expensive decode; turning it off also means a receipt naming a JPEG by URL fails to compile at all, not just that one image.",
 		category: "media",
 		type: "enum",
 		values: ["png+jpeg", "png"] as const,
