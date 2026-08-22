@@ -264,7 +264,10 @@ describe("preview", () => {
 		const result = await preview(deviceId, "<image>https://x.test/logo.png</image>");
 
 		expect(result.errors).toEqual([]);
-		expect(fetchRemoteImage).toHaveBeenCalledWith("https://x.test/logo.png");
+		expect(fetchRemoteImage).toHaveBeenCalledWith(
+			"https://x.test/logo.png",
+			expect.objectContaining({ settings: expect.any(Object) }),
+		);
 		// The same bytes as the stored copy, so the same dots: what is pinned here is that the
 		// preview draws the fetched image rather than reaching for a stored one of that name.
 		expect(result.lines?.[0].blocks[0]).toMatchObject({

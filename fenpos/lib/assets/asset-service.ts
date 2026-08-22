@@ -10,7 +10,7 @@ import {
 	type ImageRaster,
 	projectedHeightDots,
 } from "@/lib/assets/dither";
-import { fetchRemoteImage, safeUrl } from "@/lib/assets/fetch-remote";
+import { fetchRemoteImage, type RemoteFetchSettings, safeUrl } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { AssetKind } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
@@ -546,11 +546,13 @@ export interface RemoteImage {
  * pre-pass's own resolve window rather than by how many URLs a receipt names.
  *
  * @param url the URL, exactly as it was written between the tags
+ * @param settings pre-read, from `readRemoteFetchSettings`, so a caller resolving several images
+ *        for one request need not have each call re-read the same settings; omit to read fresh
  * @returns the image's size in pixels and the bytes it was read from
  * @throws ApiError if the fetch is refused, or the bytes are not an image this pipeline prints
  */
-export async function remoteImage(url: string): Promise<RemoteImage> {
-	const bytes = await fetchRemoteImage(url);
+export async function remoteImage(url: string, settings?: RemoteFetchSettings): Promise<RemoteImage> {
+	const bytes = await fetchRemoteImage(url, settings ? { settings } : undefined);
 	const decoded = await measured(bytes);
 	return { width: decoded.width, height: decoded.height, bytes };
 }

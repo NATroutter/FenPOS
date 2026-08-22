@@ -326,7 +326,7 @@ describe("createAsset", () => {
 	it("refuses an upload above the configured size", async () => {
 		await setSetting("assets.maxUploadMb", 1);
 
-		await expect(createAsset("big", Buffer.alloc(1_200 * 1024))).rejects.toThrow(ApiError);
+		expect((await refusal(() => createAsset("big", Buffer.alloc(1_200 * 1024)))).code).toBe("body_too_large");
 	});
 
 	/**

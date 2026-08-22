@@ -9,7 +9,16 @@ import {
 	sessionLifetimePhrase,
 } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { setSetting } from "@/lib/settings/settings-service";
+import { SETTINGS, setSetting } from "@/lib/settings/settings-service";
+
+/** `auth.lastSeenRefreshMinutes`'s declared minimum, read from the setting rather than restated. */
+const lastSeenRefreshMinutesDefinition = SETTINGS.find(
+	(definition) => definition.key === "auth.lastSeenRefreshMinutes",
+);
+if (lastSeenRefreshMinutesDefinition?.type !== "integer") {
+	throw new Error("expected auth.lastSeenRefreshMinutes to be an integer setting");
+}
+const LAST_SEEN_REFRESH_FLOOR_MINUTES = lastSeenRefreshMinutesDefinition.min;
 
 /**
  * Exercises the session lifecycle against a real database.
@@ -181,19 +190,22 @@ describe("session lifecycle", () => {
 	 * The floor and the setting's own declared minimum have to agree exactly, or one of two bugs
 	 * appears: set below floor, an operator's fastest configured refresh would never fire; set
 	 * above it, sessions would refresh sooner than any configuration allows. Configuring the
-	 * setting to its minimum (1 minute) and checking exactly at that boundary is what proves the
-	 * two numbers actually match rather than merely both looking like "a minute" in code.
+	 * setting to its declared minimum and checking exactly at that boundary is what proves the two
+	 * numbers actually match rather than merely both looking like "a minute" in code — reading
+	 * `LAST_SEEN_REFRESH_FLOOR_MINUTES` from `SETTINGS` rather than hardcoding it is what lets this
+	 * catch `MIN_LAST_SEEN_REFRESH_MS` (`session.ts`) drifting from the setting's `min`.
 	 */
 	it("refreshes right at the floor when the setting is configured to its own minimum", async () => {
-		await setSetting("auth.lastSeenRefreshMinutes", 1);
+		await setSetting("auth.lastSeenRefreshMinutes", LAST_SEEN_REFRESH_FLOOR_MINUTES);
 		const { token } = await createSession({}, now);
 
-		const atFloor = new Date(now.getTime() + 60_000);
+		const floorMs = LAST_SEEN_REFRESH_FLOOR_MINUTES * 60_000;
+		const atFloor = new Date(now.getTime() + floorMs);
 		await resolveSession(token, atFloor);
 		const unchanged = await prisma.session.findFirst({ select: { lastSeenAt: true } });
 		expect(unchanged?.lastSeenAt.toISOString()).toBe(now.toISOString());
 
-		const justPastFloor = new Date(now.getTime() + 60_001);
+		const justPastFloor = new Date(now.getTime() + floorMs + 1);
 		await resolveSession(token, justPastFloor);
 		const refreshed = await prisma.session.findFirst({ select: { lastSeenAt: true } });
 		expect(refreshed?.lastSeenAt.toISOString()).toBe(justPastFloor.toISOString());

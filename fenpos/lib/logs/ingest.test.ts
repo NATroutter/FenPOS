@@ -237,9 +237,12 @@ describe("log ingestion", () => {
 			// sweepLogsNow. That call is fire-and-forget (ingestLog does not await it), so the
 			// deletion this proves may still be in flight the instant the loop above returns; wait
 			// for it rather than asserting immediately.
-			await vi.waitFor(async () => {
-				expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
-			});
+			await vi.waitFor(
+				async () => {
+					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+				},
+				{ timeout: 5000 },
+			);
 		});
 
 		/**
@@ -278,9 +281,12 @@ describe("log ingestion", () => {
 			// The counter reset to 0 above and exactly 50 accepted writes below land it on exactly
 			// the configured sweepEvery, so the real gate fires once, on the last of these calls —
 			// which the built-in 500 would not have reached with only 50 writes.
-			await vi.waitFor(async () => {
-				expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
-			});
+			await vi.waitFor(
+				async () => {
+					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+				},
+				{ timeout: 5000 },
+			);
 		});
 	});
 });

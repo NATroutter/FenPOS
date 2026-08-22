@@ -107,6 +107,23 @@ export class RateLimiter {
 	}
 
 	/**
+	 * Milliseconds until `key`'s current window resets, or zero if it has none right now.
+	 * Read-only — does not advance state. Lets a caller that already consumed once against a
+	 * provisional limit compute an accurate `retryAfterMs` if it then rejects that same attempt
+	 * against a stricter limit, without consuming a second time. See `consumeSignInAttempt`.
+	 *
+	 * @param key the caller identity to inspect
+	 * @param now current time; injectable so tests need no sleeps
+	 */
+	peekRetryAfterMs(key: string, now: number = Date.now()): number {
+		const existing = this.#windows.get(key);
+		if (!existing || existing.resetAt <= now) {
+			return 0;
+		}
+		return existing.resetAt - now;
+	}
+
+	/**
 	 * Drops windows that have expired.
 	 *
 	 * Runs on every call rather than on a timer, so the limiter owns no background work and
@@ -125,17 +142,38 @@ export class RateLimiter {
 }
 
 /**
+ * `auth.signInAttemptsPerMinute`'s declared `max` (settings-service.ts) — the setting can only
+ * ever be configured at or below this. Used both as `signInLimiter`'s constructed default and as
+ * the provisional ceiling {@link consumeSignInAttempt} gates on before it knows the configured
+ * value.
+ */
+const SIGN_IN_BUILT_IN_CEILING = 5;
+
+/**
  * Sign-in limiter.
  *
  * The constructed limit here is only the fallback a caller sees if it never supplies an
  * override — every production call goes through {@link consumeSignInAttempt}, which reads
  * `auth.signInAttemptsPerMinute` and passes it in, so this constant matches that setting's own
- * `fallback` rather than mattering on its own.
+ * `fallback` (and, not incidentally, its `max`) rather than mattering on its own.
  */
-export const signInLimiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
+export const signInLimiter = new RateLimiter({ limit: SIGN_IN_BUILT_IN_CEILING, windowMs: 60_000 });
 
 /**
  * Consumes a sign-in attempt at the currently configured throttle.
+ *
+ * Consumes against {@link SIGN_IN_BUILT_IN_CEILING} first, synchronously, before reading
+ * `auth.signInAttemptsPerMinute` — the inverse of the naive order (read the setting, then
+ * consume) would run a full `listSettings()` query on every unauthenticated sign-in attempt,
+ * ahead of any throttling. `app/api/pair/route.ts` establishes the same ordering for its own
+ * limiter, for the same reason ("Do not 'optimise' this back."); this one cannot consume first
+ * *unconditionally* the way pairing does, because the limit itself is a setting, not a constant —
+ * but because the setting can never be configured above the built-in ceiling, a caller already
+ * over that ceiling is over the configured limit too, whatever it is, and is rejected here without
+ * ever touching the database. Only a caller still within the ceiling causes the settings read, and
+ * only when the configured limit is tighter than the ceiling does this then re-evaluate the same
+ * attempt against it — using `remaining` from the first consume to recover the count, so the
+ * attempt is never counted twice.
  *
  * Reads `auth.signInAttemptsPerMinute` fresh on every call rather than once at startup, so a
  * limit tightened on the Settings tab applies to the very next attempt rather than waiting for a
@@ -148,8 +186,21 @@ export const signInLimiter = new RateLimiter({ limit: 5, windowMs: 60_000 });
  * @returns whether the attempt is permitted, and when capacity returns
  */
 export async function consumeSignInAttempt(address: string, now: number = Date.now()): Promise<RateLimitResult> {
+	const provisional = signInLimiter.consume(address, now);
+	if (!provisional.allowed) {
+		return provisional;
+	}
+
 	const limit = await integerSetting("auth.signInAttemptsPerMinute");
-	return signInLimiter.consume(address, now, limit);
+	if (limit >= SIGN_IN_BUILT_IN_CEILING) {
+		return provisional;
+	}
+
+	const count = SIGN_IN_BUILT_IN_CEILING - provisional.remaining;
+	if (count <= limit) {
+		return { allowed: true, remaining: limit - count, retryAfterMs: 0 };
+	}
+	return { allowed: false, remaining: 0, retryAfterMs: signInLimiter.peekRetryAfterMs(address, now) };
 }
 
 /**

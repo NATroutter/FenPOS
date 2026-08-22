@@ -150,7 +150,7 @@ describe("consumeSignInAttempt", () => {
 
 		// Same window, but the limit was raised on the Settings tab — the next attempt should not
 		// have to wait for the window to expire or the server to restart.
-		await setSetting("auth.signInAttemptsPerMinute", 10);
+		await setSetting("auth.signInAttemptsPerMinute", 5);
 		expect((await consumeSignInAttempt(address, 1_000)).allowed).toBe(true);
 	});
 });
@@ -165,6 +165,6 @@ describe("signInThrottlePhrase", () => {
 	});
 
 	it("uses the plural at the setting's maximum", () => {
-		expect(signInThrottlePhrase(60)).toBe("60 attempts per minute");
+		expect(signInThrottlePhrase(5)).toBe("5 attempts per minute");
 	});
 });

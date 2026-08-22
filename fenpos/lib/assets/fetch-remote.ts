@@ -163,13 +163,48 @@ export interface RemoteFetchOptions {
 	transport?: RemoteTransport;
 	/** Overrides {@link remoteFetchTimeoutMs}. Tests use a few milliseconds so the suite stays fast. */
 	timeoutMs?: number;
+	/**
+	 * Pre-read settings, from {@link readRemoteFetchSettings}, so a caller fetching several images
+	 * for one request need not have this function read `listSettings()` again for each one. Omit
+	 * it to have this call read them fresh — the right choice for a single fetch such as
+	 * `importAssetFromUrl`, which has no loop to hoist the read out of.
+	 */
+	settings?: RemoteFetchSettings;
+}
+
+/** The settings {@link fetchRemoteImage} needs, resolved once by {@link readRemoteFetchSettings}. */
+export interface RemoteFetchSettings {
+	allowPlainHttp: boolean;
+	/** Already parsed by {@link parseAllowedHosts}. */
+	allowedHosts: readonly string[];
+	timeoutMs: number;
+}
+
+/**
+ * Reads the settings {@link fetchRemoteImage} needs, once.
+ *
+ * `resolveImages` (`lib/markup/resolve-images.ts`) resolves several remote images concurrently for
+ * one request and calls this once, up front, passing the result to every
+ * {@link fetchRemoteImage} call it makes — rather than each of those independently running a full
+ * `listSettings()` query over this module's own settings. A request naming a dozen distinct URL
+ * images would otherwise cost three settings reads per image instead of three for the request.
+ *
+ * @returns the settings {@link fetchRemoteImage} needs
+ */
+export async function readRemoteFetchSettings(): Promise<RemoteFetchSettings> {
+	const [allowPlainHttp, allowedHostsRaw, timeoutMs] = await Promise.all([
+		booleanSetting("images.allowPlainHttp"),
+		stringSetting("images.allowedRemoteHosts"),
+		remoteFetchTimeoutMs(),
+	]);
+	return { allowPlainHttp, allowedHosts: parseAllowedHosts(allowedHostsRaw), timeoutMs };
 }
 
 /**
  * Fetches an image named by a receipt, or refuses to.
  *
  * @param url the URL from the `<image>` tag, exactly as the caller wrote it
- * @param options test seams; omit them
+ * @param options test seams, and pre-read settings; omit for both
  * @returns the response body, at most {@link MAX_REMOTE_IMAGE_BYTES} of it
  * @throws ApiError if the URL, the address behind it, any redirect hop, the size or the time
  *         taken is outside what this system will fetch
@@ -177,11 +212,14 @@ export interface RemoteFetchOptions {
 export async function fetchRemoteImage(url: string, options: RemoteFetchOptions = {}): Promise<Buffer> {
 	const resolve = options.resolve ?? systemResolver;
 	const transport = options.transport ?? pinnedTransport;
-	// Read before the deadline starts, so resolving these two settings never eats into the budget
+	// Read before the deadline starts, so resolving these settings never eats into the budget
 	// that governs the fetch itself.
-	const allowPlainHttp = await booleanSetting("images.allowPlainHttp");
-	const allowedHosts = parseAllowedHosts(await stringSetting("images.allowedRemoteHosts"));
-	const budget = options.timeoutMs ?? (await remoteFetchTimeoutMs());
+	const {
+		allowPlainHttp,
+		allowedHosts,
+		timeoutMs: settingsTimeoutMs,
+	} = options.settings ?? (await readRemoteFetchSettings());
+	const budget = options.timeoutMs ?? settingsTimeoutMs;
 	const signal = AbortSignal.timeout(budget);
 
 	let target = parseTarget(url);

@@ -10,7 +10,7 @@ import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
 import { destroySession } from "@/lib/auth/session";
 import { clearSessionCookie, getCurrentSession, readSessionCookie } from "@/lib/auth/session-cookie";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
-import { integerSetting, panelFormatting } from "@/lib/settings/settings-service";
+import { panelLayoutSettings } from "@/lib/settings/settings-service";
 
 /**
  * Never prerendered: every render depends on the request's session cookie.
@@ -57,10 +57,10 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	}
 
 	// Read here rather than in the sidebar: the footer is part of this layout, and a client
-	// component cannot reach the database anyway.
+	// component cannot reach the database anyway. One settings read rather than two — see
+	// `panelLayoutSettings`.
 	const profile = await getAdminProfile();
-	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-	const formatting = await panelFormatting();
+	const { minimumPasswordLength, formatting } = await panelLayoutSettings();
 
 	return (
 		// Outermost, so every descendant — including the sidebar, not just the pages below the

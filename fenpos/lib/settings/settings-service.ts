@@ -1,9 +1,10 @@
 import "server-only";
+import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting, setFormatting } from "@/lib/format/datetime";
-import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 
@@ -145,29 +146,29 @@ export function toClientDefinition(definition: SettingDefinition): ClientSetting
 }
 
 /**
- * Reads the min and max a `jobSettingsSchema` field declares, so a `jobs.*` setting's bounds are
- * derived rather than restated.
+ * Reads the min and max a {@link jobSettingsSchema} or {@link agentSettingsSchema} field declares,
+ * so a `jobs.*` or `agent.*` setting's bounds are derived rather than restated.
  *
- * The two fields share one number in three places already — this schema, the agent's
- * `FrameCodec.readJobSettings`, and (until this function existed) a literal copy here — and a
- * bound widened in `SETTINGS` without a matching widening in `jobSettingsSchema` is exactly how
- * `limits.maxOutputLines` used to fail: a setting the panel accepts that `serialiseServerFrame`
- * then refuses, caught only by `pushDeviceConfig`'s catch-and-log, so the agent silently never
- * receives the change. Deriving from the schema instead means widening it here is the only edit
- * `jobs.*` bounds ever need.
+ * The fields share one number in three places already — the relevant protocol.ts schema, the
+ * agent's `FrameCodec` (`readJobSettings` / `readAgentSettings`), and (until this function existed)
+ * a literal copy here — and a bound widened in `SETTINGS` without a matching widening in the schema
+ * is exactly how `limits.maxOutputLines` used to fail: a setting the panel accepts that
+ * `serialiseServerFrame` then refuses, caught only by `pushDeviceConfig`'s catch-and-log, so the
+ * agent silently never receives the change. Deriving from the schema instead means widening it
+ * there is the only edit these bounds ever need.
  *
  * `.minValue`/`.maxValue` type as `number | null` because a Zod number schema need not declare
- * either; every `jobSettingsSchema` field does, and `setting definitions` (settings-service.test.ts)
- * asserts as much, so the throw below is unreachable in practice rather than a case this module
- * has to recover from.
+ * either; every field these two schemas declare does, and `setting definitions`
+ * (settings-service.test.ts) asserts as much, so the throw below is unreachable in practice rather
+ * than a case this module has to recover from.
  *
- * @param field a field of {@link jobSettingsSchema}
+ * @param field a field of {@link jobSettingsSchema} or {@link agentSettingsSchema}
  * @returns that field's declared bounds
  * @throws Error when the field declares no min or no max
  */
 function jobBound(field: { minValue: number | null; maxValue: number | null }): { min: number; max: number } {
 	if (field.minValue === null || field.maxValue === null) {
-		throw new Error("jobSettingsSchema field declares no bound to derive from");
+		throw new Error("schema field declares no bound to derive from");
 	}
 	return { min: field.minValue, max: field.maxValue };
 }
@@ -335,7 +336,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "assets.maxUploadMb",
 		label: "Maximum upload size",
 		description:
-			"Largest image accepted, uploaded or fetched. The decode is bounded separately by a fixed pixel limit, so this is about storage rather than safety.",
+			"Largest image accepted from a direct upload. An image fetched from a URL — whether imported to storage on the Assets tab or referenced live in a receipt — is also capped at a fixed 2 MiB by the fetch itself, regardless of this setting. The decode is bounded separately too, by a fixed pixel limit, so this is about storage rather than safety.",
 		category: "media",
 		type: "integer",
 		min: 1,
@@ -368,7 +369,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "images.maxRemoteReferences",
 		label: "Remote images per job",
-		description: "Distinct URLs one job may fetch. Set it to 0 to switch off outbound image fetching entirely.",
+		description:
+			"Distinct URLs one job may fetch. Set it to 0 to switch off images fetched by URL from a receipt — importing an asset from a URL on the Assets tab is unaffected.",
 		category: "media",
 		type: "integer",
 		min: 0,
@@ -499,11 +501,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.signInAttemptsPerMinute",
 		label: "Sign-in attempts per minute",
 		description:
-			"Failed sign-ins allowed before the panel refuses to try. The floor is the built-in value — this can be tightened, never loosened.",
+			"Failed sign-ins allowed before the panel refuses to try. The ceiling is the built-in value — this can be tightened, never loosened.",
 		category: "security",
 		type: "integer",
 		min: 3,
-		max: 60,
+		max: 5,
 		fallback: 5,
 		unit: "attempts/min",
 	},
@@ -514,9 +516,9 @@ export const SETTINGS: readonly SettingDefinition[] = [
 			"Shortest acceptable administrator password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed. The pnpm admin:set-password recovery command enforces only the built-in floor, not this setting.",
 		category: "security",
 		type: "integer",
-		min: 12,
+		min: MINIMUM_PASSWORD_LENGTH,
 		max: 128,
-		fallback: 12,
+		fallback: MINIMUM_PASSWORD_LENGTH,
 		unit: "characters",
 	},
 	{
@@ -606,8 +608,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 			"How often an agent reports device state when nothing has changed. Lower it on a site where a reconnecting printer reads as offline for too long. Pushed to every agent.",
 		category: "connections",
 		type: "integer",
-		min: 5,
-		max: 300,
+		...jobBound(agentSettingsSchema.shape.statusIntervalSeconds),
 		fallback: 30,
 		unit: "seconds",
 	},
@@ -617,8 +618,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		description: "How often an agent sweeps its own expired job records.",
 		category: "connections",
 		type: "integer",
-		min: 10,
-		max: 3_600,
+		...jobBound(agentSettingsSchema.shape.evictionIntervalSeconds),
 		fallback: 60,
 		unit: "seconds",
 	},
@@ -628,8 +628,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		description: "How often an idle print queue checks for work. Lower is more responsive, higher is less idle CPU.",
 		category: "connections",
 		type: "integer",
-		min: 20,
-		max: 2_000,
+		...jobBound(agentSettingsSchema.shape.queuePollMs),
 		fallback: 100,
 		unit: "ms",
 	},
@@ -1153,6 +1152,28 @@ function formattingFromSettings(settings: SettingValue[]): {
  */
 export async function panelFormatting(): Promise<{ locale: string; hour12: boolean; timeZone: string | undefined }> {
 	return formattingFromSettings(await listSettings());
+}
+
+/**
+ * Everything `app/(panel)/layout.tsx` needs from settings, read once rather than twice.
+ *
+ * That layout renders on every panel navigation (`export const dynamic = "force-dynamic"`), so a
+ * second `listSettings()` call there — one for `auth.minimumPasswordLength`, a second inside
+ * {@link panelFormatting} — doubles a 43-key query already paid on every page in the panel. Same
+ * shape as {@link globalLimits}: read once, narrow several values out of it.
+ *
+ * @returns `auth.minimumPasswordLength`'s current value, and what {@link panelFormatting} would
+ *          have derived from the same read
+ */
+export async function panelLayoutSettings(): Promise<{
+	minimumPasswordLength: number;
+	formatting: { locale: string; hour12: boolean; timeZone: string | undefined };
+}> {
+	const settings = await listSettings();
+	return {
+		minimumPasswordLength: narrow(settings, "auth.minimumPasswordLength", "integer") as number,
+		formatting: formattingFromSettings(settings),
+	};
 }
 
 /**

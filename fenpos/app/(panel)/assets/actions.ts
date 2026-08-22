@@ -76,11 +76,13 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 /**
  * Stores an uploaded image.
  *
- * The size is checked here, from what the browser declared, before the file is pulled into memory —
- * and checked again inside `createAsset` against the bytes that actually arrived, because a declared
- * size is a claim. `next.config.ts` sets the framework's own body limit deliberately higher than
- * this, so that the limit this product enforces is the one written in code rather than one inherited
- * from a default nobody would find.
+ * The size is checked here, from what the browser declared, before this action reads the file's
+ * bytes into a second, its own copy — Next has already buffered the whole request body to build
+ * this `FormData` by the time any server action code runs, so this check saves only that second
+ * `arrayBuffer()` copy, not the first. It is checked again inside `createAsset` against the bytes
+ * that actually arrived, because a declared size is a claim. `next.config.ts` sets the framework's
+ * own body limit deliberately higher than this, so that the limit this product enforces is the one
+ * written in code rather than one inherited from a default nobody would find.
  *
  * @param formData a `name` and a `file`
  * @returns the state to render

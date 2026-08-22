@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting } from "@/lib/format/datetime";
-import { JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel } from "@/lib/logger";
 
 import type { SettingKey, SettingType } from "@/lib/settings/settings-service";
@@ -494,34 +494,36 @@ describe("server.publicUrl", () => {
 
 /**
  * `auth.signInAttemptsPerMinute` and `auth.minimumPasswordLength` are safe to expose as settings
- * only because their declared `min` is today's built-in value — they can be tightened, never
- * loosened. These two tests are what actually enforces that: they must never be weakened, and
- * neither `min` may ever be lowered.
+ * only because their declared range cannot cross the built-in value in the direction that would
+ * weaken security. For password length, higher is stronger, so the declared `min` (12) equals the
+ * built-in floor — it can only be raised. For sign-in attempts, lower is stronger, so the declared
+ * `max` (5) equals the built-in ceiling — it can only be lowered. These tests enforce that: neither
+ * bound may ever move past the built-in value toward the weaker direction.
  */
-describe("security setting floors", () => {
+describe("security setting bounds", () => {
 	beforeEach(async () => {
 		await prisma.setting.deleteMany();
 	});
 
-	it("refuses to weaken the sign-in throttle below the built-in floor", async () => {
-		await expect(setSetting("auth.signInAttemptsPerMinute", 2)).rejects.toThrow(ApiError);
+	it("refuses to loosen the sign-in throttle above the built-in ceiling", async () => {
+		await expect(setSetting("auth.signInAttemptsPerMinute", 6)).rejects.toThrow(ApiError);
 	});
 
 	it("refuses to weaken the minimum password length below the built-in floor", async () => {
 		await expect(setSetting("auth.minimumPasswordLength", 11)).rejects.toThrow(ApiError);
 	});
 
-	it("accepts a value at exactly the floor", async () => {
-		await setSetting("auth.signInAttemptsPerMinute", 3);
-		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(3);
+	it("accepts a value at exactly the built-in bound", async () => {
+		await setSetting("auth.signInAttemptsPerMinute", 5);
+		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(5);
 
 		await setSetting("auth.minimumPasswordLength", 12);
 		expect(await integerSetting("auth.minimumPasswordLength")).toBe(12);
 	});
 
-	it("accepts a value tightened above the floor", async () => {
-		await setSetting("auth.signInAttemptsPerMinute", 10);
-		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(10);
+	it("accepts a value tightened past the built-in bound", async () => {
+		await setSetting("auth.signInAttemptsPerMinute", 3);
+		expect(await integerSetting("auth.signInAttemptsPerMinute")).toBe(3);
 
 		await setSetting("auth.minimumPasswordLength", 24);
 		expect(await integerSetting("auth.minimumPasswordLength")).toBe(24);
@@ -571,6 +573,34 @@ describe("jobs.* bounds", () => {
 				throw new Error(`expected ${settingKey} to be an integer setting`);
 			}
 			const field = jobSettingsSchema.shape[schemaField];
+			expect(definition.min, settingKey).toBe(field.minValue);
+			expect(definition.max, settingKey).toBe(field.maxValue);
+		}
+	});
+});
+
+/**
+ * `link.statusIntervalSeconds`, `agent.evictionIntervalSeconds` and `agent.queuePollMs` derive
+ * their bounds from `agentSettingsSchema` (`lib/link/protocol.ts`) for the same reason `jobs.*`
+ * derives from `jobSettingsSchema`, above: a bound widened in `SETTINGS` without a matching
+ * widening in the wire schema is a setting the panel accepts that `serialiseServerFrame` then
+ * refuses, which `pushDeviceConfig` only catches and logs — the agent silently never receives the
+ * change.
+ */
+describe("agent.* bounds", () => {
+	it("match agentSettingsSchema's own declared bounds", () => {
+		const cases: readonly [SettingKey, "statusIntervalSeconds" | "evictionIntervalSeconds" | "queuePollMs"][] = [
+			["link.statusIntervalSeconds", "statusIntervalSeconds"],
+			["agent.evictionIntervalSeconds", "evictionIntervalSeconds"],
+			["agent.queuePollMs", "queuePollMs"],
+		];
+
+		for (const [settingKey, schemaField] of cases) {
+			const definition = SETTINGS.find((setting) => setting.key === settingKey);
+			if (definition?.type !== "integer") {
+				throw new Error(`expected ${settingKey} to be an integer setting`);
+			}
+			const field = agentSettingsSchema.shape[schemaField];
 			expect(definition.min, settingKey).toBe(field.minValue);
 			expect(definition.max, settingKey).toBe(field.maxValue);
 		}

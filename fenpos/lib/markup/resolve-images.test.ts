@@ -153,7 +153,10 @@ describe("resolveImages", () => {
 
 		const images = await resolve(["<image=50>https://x.test/l.png?v=2</image>"]);
 
-		expect(fetchRemoteImage).toHaveBeenCalledWith("https://x.test/l.png?v=2");
+		expect(fetchRemoteImage).toHaveBeenCalledWith(
+			"https://x.test/l.png?v=2",
+			expect.objectContaining({ settings: expect.any(Object) }),
+		);
 		expect(images.get("https://x.test/l.png?v=2")).toMatchObject({ width: 128, height: 40 });
 	});
 
@@ -338,7 +341,10 @@ describe("resolveImages", () => {
 
 		await refusal(["<image>ftp://x.test/l.png</image>"]);
 
-		expect(fetchRemoteImage).toHaveBeenCalledWith("ftp://x.test/l.png");
+		expect(fetchRemoteImage).toHaveBeenCalledWith(
+			"ftp://x.test/l.png",
+			expect.objectContaining({ settings: expect.any(Object) }),
+		);
 	});
 
 	it("fetches nothing for markup that does not parse, which the compile will refuse anyway", async () => {

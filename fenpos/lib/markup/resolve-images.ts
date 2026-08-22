@@ -2,6 +2,7 @@ import "server-only";
 import { rasterFor, remoteImage, storedImageSize } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_NAME, bundledLogoRaster, bundledLogoSize, isBundledLogo } from "@/lib/assets/bundled-logo";
 import { ditherToRaster, type ImageRaster } from "@/lib/assets/dither";
+import { type RemoteFetchSettings, readRemoteFetchSettings } from "@/lib/assets/fetch-remote";
 import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
@@ -146,6 +147,13 @@ export async function resolveImages(data: readonly string[], columns: number): P
 	const queue = [...collect(data, columns)];
 	await requireWithinRemoteLimit(queue);
 
+	// Read once per request rather than once per remote reference: `fetchRemoteImage` needs three
+	// settings, and without this every worker's `resolveRemote` call would read them again. Read
+	// only when the receipt actually names a remote reference, for the same reason
+	// `requireWithinRemoteLimit` reads `images.maxRemoteReferences` conditionally — most jobs name
+	// none, and there is no reason for those to pay for a settings read that would go unused.
+	const remoteSettings = queue.some(([reference]) => isRemote(reference)) ? await readRemoteFetchSettings() : undefined;
+
 	const sized = new Map<string, ImageSource>();
 	const budget = { spent: 0 };
 
@@ -156,7 +164,7 @@ export async function resolveImages(data: readonly string[], columns: number): P
 		for (let entry = queue.shift(); entry !== undefined && !refused; entry = queue.shift()) {
 			const [reference, use] = entry;
 			try {
-				sized.set(reference, await resolveOne(reference, use, columns, budget));
+				sized.set(reference, await resolveOne(reference, use, columns, budget, remoteSettings));
 			} catch (thrown) {
 				// The whole request is going to be refused for this, so the rest of the receipt is
 				// work nobody will read. Stopping matters most for the case that matters most: a
@@ -320,6 +328,9 @@ async function requireWithinRemoteLimit(references: readonly (readonly [string, 
  * @param reference the text between the tags
  * @param use the element it was written on and the widths the request prints it at
  * @param columns the target device's width in printer columns
+ * @param remoteSettings pre-read remote-fetch settings, from `resolveImages`; only ever undefined
+ *        when `reference` is not remote, since `resolveImages` reads them whenever the queue holds
+ *        at least one remote reference
  * @returns the image's own pixel dimensions, and any dots that must travel inside the job
  * @throws ApiError carrying the element, so a caller can find the tag that failed
  */
@@ -328,10 +339,11 @@ async function resolveOne(
 	use: ImageUse,
 	columns: number,
 	budget: InlineBudget,
+	remoteSettings: RemoteFetchSettings | undefined,
 ): Promise<ImageSource> {
 	try {
 		if (isRemote(reference)) {
-			return await resolveRemote(reference, use.widths, budget);
+			return await resolveRemote(reference, use.widths, budget, remoteSettings);
 		}
 		// Before the asset lookup, and that order is the guarantee rather than a convenience. The
 		// name is refused at creation, so no row should exist under it — but one committed before
@@ -439,12 +451,18 @@ function charge(reference: string, raster: ImageRaster, budget: InlineBudget): v
  * @param url the URL, exactly as it was written between the tags
  * @param widths every printed width, in dots, this request needs
  * @param budget what the request has spent of its inline allowance
+ * @param remoteSettings pre-read remote-fetch settings, from `resolveImages`
  * @returns the image's own dimensions and a raster per width
  * @throws ApiError if the fetch is refused, the bytes are not an image this pipeline prints, or the
  *         dots take the request past {@link MAX_INLINE_IMAGE_CHARS}
  */
-async function resolveRemote(url: string, widths: ReadonlySet<number>, budget: InlineBudget): Promise<ImageSource> {
-	const fetched = await remoteImage(url);
+async function resolveRemote(
+	url: string,
+	widths: ReadonlySet<number>,
+	budget: InlineBudget,
+	remoteSettings: RemoteFetchSettings | undefined,
+): Promise<ImageSource> {
+	const fetched = await remoteImage(url, remoteSettings);
 
 	const inline = new Map<number, ImageRaster>();
 	for (const width of widths) {
