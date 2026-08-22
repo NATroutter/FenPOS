@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
  * proves the mechanism works end to end; see the task report for that evidence.
  */
 describe("FormatProvider", () => {
-	const source = readFileSync(new URL("./format-provider.tsx", import.meta.url), "utf8");
+	const source = readFileSync(new URL("../../../components/panel/format-provider.tsx", import.meta.url), "utf8");
 
 	it("is a Client Component", () => {
 		// Must be the first statement — a "use client" directive anywhere else in the file is not

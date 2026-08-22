@@ -15,7 +15,7 @@ import { ApiError } from "@/lib/errors";
  *
  * So this decodes the committed files and compares them against what this module resolves. It is
  * also the staleness guard: change the logo, forget to re-run the bundler, and this fails rather
- * than the two sides quietly drifting apart. `scripts/bundle-logo-rasters.test.ts` makes the same
+ * than the two sides quietly drifting apart. `test/scripts/bundle-logo-rasters.test.ts` makes the same
  * comparison one step earlier, against `ditherToRaster` directly; this one is about the path the
  * panel actually takes to those dots, including its cache.
  */

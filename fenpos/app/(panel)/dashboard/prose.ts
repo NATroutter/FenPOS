@@ -2,7 +2,7 @@
  * The small pieces of text the Dashboard composes from a configured setting.
  *
  * Split from `page.tsx` because `page.tsx` is a React server component and this project's
- * vitest config deliberately excludes React (`include: ["**\/*.test.ts"]`, `vitest.config.mts`)
+ * vitest config deliberately excludes React (`include: ["test/**\/*.test.ts"]`, `vitest.config.mts`)
  * — a plain `.ts` module is what stays testable.
  */
 

@@ -7,10 +7,11 @@ import { TAGS } from "@/lib/markup/tags";
 /**
  * What the docs pages claim, checked against what the code does.
  *
- * Neither page can be rendered here — vitest runs in a Node environment and takes `**\/*.test.ts`
- * only, because everything else under test in this project is server-side logic. So the pages are
- * read as text and the parts of them that are *data* are checked against the modules that own that
- * data: the tag table against `TAGS`, and the worked examples against the compiler itself.
+ * Neither page can be rendered here — vitest runs in a Node environment and takes
+ * `test/**\/*.test.ts` only, because everything else under test in this project is server-side
+ * logic. So the pages are read as text and the parts of them that are *data* are checked against
+ * the modules that own that data: the tag table against `TAGS`, and the worked examples against
+ * the compiler itself.
  *
  * The examples matter most. A reference whose sample is markup the language would refuse is worse
  * than one with no sample, because the reader trusts it and pastes it. Both examples are therefore

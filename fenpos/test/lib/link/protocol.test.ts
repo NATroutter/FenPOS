@@ -389,10 +389,10 @@ describe("configSyncSchema", () => {
  * nothing keeping them in sync. A bound edited on one side only produces a settings value the
  * server accepts and the agent silently reinterprets, or refuses outright, so the Java source is
  * parsed and compared directly rather than trusting the two files to agree by inspection. Mirrors
- * the approach `lib/domain/enums.test.ts` takes against the Java enums.
+ * the approach `test/lib/domain/enums.test.ts` takes against the Java enums.
  */
 const FRAME_CODEC_DIR = fileURLToPath(
-	new URL("../../../agent/src/main/java/fi/natroutter/fenpos/link/", import.meta.url),
+	new URL("../../../../agent/src/main/java/fi/natroutter/fenpos/link/", import.meta.url),
 );
 
 interface RestatedBound {

@@ -3,7 +3,8 @@
  *
  * Split from `upload-dialog.tsx` for the same reason `dashboard/prose.ts` is split from that tab's
  * `page.tsx`: this project's vitest config deliberately excludes React
- * (`include: ["**\/*.test.ts"]`, `vitest.config.mts`) — a plain `.ts` module is what stays testable.
+ * (`include: ["test/**\/*.test.ts"]`, `vitest.config.mts`) — a plain `.ts` module is what stays
+ * testable.
  *
  * There is a second reason this cannot simply import `lib/assets/dither.ts`'s equivalent pieces:
  * `upload-dialog.tsx` is a Client Component, and `dither.ts` pulls in `jimp` — a decoder nobody

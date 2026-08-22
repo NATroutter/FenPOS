@@ -24,7 +24,7 @@ import {
  * sources are parsed and compared directly.
  */
 
-const ENUM_DIR = fileURLToPath(new URL("../../../agent/src/main/java/fi/natroutter/fenpos/enums/", import.meta.url));
+const ENUM_DIR = fileURLToPath(new URL("../../../../agent/src/main/java/fi/natroutter/fenpos/enums/", import.meta.url));
 
 /**
  * Extracts the constant names declared by a Java enum.

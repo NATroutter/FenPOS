@@ -4,8 +4,8 @@ import { dashboardStatLabel } from "@/app/(panel)/dashboard/prose";
 /**
  * Boundary tests for the Dashboard's headline labels, at `panel.dashboardWindowHours`'s declared
  * `min` and `max` (`settings-service.ts`), and at the setting's fallback — mirroring
- * `sessionLifetimePhrase`'s tests (`lib/auth/session.test.ts`) and `signInThrottlePhrase`'s
- * (`lib/auth/rate-limit.test.ts`).
+ * `sessionLifetimePhrase`'s tests (`test/lib/auth/session.test.ts`) and `signInThrottlePhrase`'s
+ * (`test/lib/auth/rate-limit.test.ts`).
  */
 describe("dashboardStatLabel", () => {
 	it("names the setting's minimum", () => {

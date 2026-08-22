@@ -7,7 +7,7 @@ import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { integerSetting, setSetting } from "@/lib/settings/settings-service";
 
-const SERVER_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const SERVER_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /**
  * `passwordSchema` takes the minimum as a parameter rather than baking one in — see its doc

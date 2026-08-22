@@ -21,7 +21,11 @@ export default defineConfig({
 	},
 	test: {
 		environment: "node",
-		include: ["**/*.test.ts"],
+		// Tests live under `test/`, mirroring the tree of the module each one covers, rather than
+		// beside their subject: the source directories stay readable as a list of what the app is
+		// made of. Anchoring the glob here is what keeps that true — a stray colocated test simply
+		// does not run, instead of quietly re-establishing the old layout.
+		include: ["test/**/*.test.ts"],
 		exclude: ["node_modules/**", ".next/**", "generated/**"],
 		// Migrating the fixture database costs a few seconds on a cold run.
 		hookTimeout: 60_000,
