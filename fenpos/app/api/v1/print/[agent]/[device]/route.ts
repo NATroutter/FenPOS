@@ -1,5 +1,6 @@
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
+import { bodyHash, findReplay, type IdempotentReplay, isIdempotencyKeyRace } from "@/lib/jobs/idempotency";
 import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
@@ -21,10 +22,19 @@ import { getClientAddress } from "@/lib/request-context";
  * `errorMessage` on the job's own GET. That the request itself is fully settled synchronously is
  * still the whole point of compiling on the server, and it is what makes the error contract worth
  * reading.
+ *
+ * **An `Idempotency-Key` header makes a retry safe.** A repeated key with the same body replays the
+ * original answer and prints nothing; with a different body it is refused as a conflict. The key is
+ * replayable for as long as the job row survives retention — see `lib/jobs/idempotency.ts`. A
+ * request that failed validation never became a job and so recorded no key: retrying it validates
+ * again, which is right, because the caller changed something.
  */
 
 /** Largest body accepted. Bounded before parsing, so an oversized request costs nothing. */
 const MAX_BODY_BYTES = 64 * 1024;
+
+/** Largest `Idempotency-Key` accepted. Long enough for a UUID or an order reference, and bounded. */
+const MAX_IDEMPOTENCY_KEY_CHARS = 255;
 
 export async function POST(
 	request: Request,
@@ -41,8 +51,49 @@ export async function POST(
 		// without the server doing any parsing work on their behalf.
 		const target = await requireGrantedDevice(key, agent, device);
 
-		const body = await readBody(request);
-		const job = await submitJob(target.id, body, key.id);
+		const idempotencyKey = readIdempotencyKey(request);
+		const { body, raw } = await readBody(request);
+
+		// Checked after the body is read, because the answer depends on the body: a repeated key
+		// with different content is a conflict rather than a replay, and that cannot be known until
+		// there is something to fingerprint.
+		const idempotency = idempotencyKey === null ? undefined : { key: idempotencyKey, hash: bodyHash(raw) };
+		if (idempotency) {
+			const replay = await findReplay(key.id, idempotency.key, idempotency.hash);
+			if (replay) {
+				logger.info("Replayed an idempotent submit", {
+					jobId: replay.jobId,
+					keyId: key.id,
+					idempotencyKey: idempotency.key,
+				});
+				return replayResponse(replay);
+			}
+		}
+
+		let job: Awaited<ReturnType<typeof submitJob>>;
+		try {
+			job = await submitJob(target.id, body, key.id, idempotency);
+		} catch (error) {
+			// Two requests can carry the same key at once — a double-tap, or a client retrying the
+			// instant it times out. Both reach here finding nothing to replay, and both insert; the
+			// loser hits the unique constraint that makes a *sequential* retry safe. Answered by
+			// re-running the same lookup rather than left to surface as an opaque fault: by now the
+			// winner's row exists, so this resolves exactly as a retry arriving a moment later would
+			// — same hash replays it, different hash raises `idempotency_conflict` — and the caller
+			// can never tell which way it fell.
+			if (idempotency && isIdempotencyKeyRace(error)) {
+				const replay = await findReplay(key.id, idempotency.key, idempotency.hash);
+				if (replay) {
+					logger.info("Replayed an idempotent submit after losing a concurrent race", {
+						jobId: replay.jobId,
+						keyId: key.id,
+						idempotencyKey: idempotency.key,
+					});
+					return replayResponse(replay);
+				}
+			}
+			throw error;
+		}
 
 		logger.info("Job accepted", {
 			jobId: job.id,
@@ -65,16 +116,62 @@ export async function POST(
 }
 
 /**
- * Reads and parses the request body.
+ * Builds the response for a replayed submit, sequential or raced.
  *
- * Size is checked on the raw text before parsing, because parsing is the work an oversized body
- * is trying to provoke.
+ * One function for both callers of it, so the two places that can decide "this is a replay" — the
+ * lookup made before dispatching, and the one re-run after losing an insert race — can never drift
+ * into answering the same situation two different ways.
+ *
+ * @param replay the original job, as {@link findReplay} resolved it
+ * @returns the 202 response carrying the original job and the replay marker
+ */
+function replayResponse(replay: IdempotentReplay): Response {
+	return Response.json(
+		{ jobId: replay.jobId, status: replay.status, device: replay.deviceName, lines: replay.lines },
+		{
+			status: 202,
+			// A caller reconciling their own records needs to know nothing new was printed.
+			// A header rather than a body field, so the body stays byte-identical to the
+			// original answer and a client comparing responses sees no difference.
+			headers: { "Idempotent-Replay": "true" },
+		},
+	);
+}
+
+/**
+ * Reads the caller's idempotency key, if they sent one.
+ *
+ * Bounded, because it is stored and indexed. An unbounded header would let a caller write arbitrary
+ * strings into the job table one request at a time.
  *
  * @param request the incoming request
- * @returns the parsed body
+ * @returns the key, or null when the header is absent or empty
+ * @throws ApiError when the key is longer than {@link MAX_IDEMPOTENCY_KEY_CHARS}
+ */
+function readIdempotencyKey(request: Request): string | null {
+	const raw = request.headers.get("idempotency-key")?.trim();
+	if (!raw) {
+		return null;
+	}
+	if (raw.length > MAX_IDEMPOTENCY_KEY_CHARS) {
+		throw new ApiError("invalid_type", `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_CHARS} characters.`);
+	}
+	return raw;
+}
+
+/**
+ * Reads and parses the request body, keeping the raw text.
+ *
+ * Size is checked on the raw text before parsing, because parsing is the work an oversized body
+ * is trying to provoke. The text is returned alongside the parsed value because the idempotency
+ * fingerprint is taken over the bytes as they arrived rather than over a re-serialised object —
+ * see `bodyHash`.
+ *
+ * @param request the incoming request
+ * @returns the parsed body and the text it was parsed from
  * @throws ApiError when the body is too large or not JSON
  */
-async function readBody(request: Request): Promise<unknown> {
+async function readBody(request: Request): Promise<{ body: unknown; raw: string }> {
 	const raw = await request.text();
 
 	if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
@@ -82,7 +179,7 @@ async function readBody(request: Request): Promise<unknown> {
 	}
 
 	try {
-		return JSON.parse(raw);
+		return { body: JSON.parse(raw), raw };
 	} catch {
 		throw new ApiError("invalid_json", "Body is not valid JSON");
 	}

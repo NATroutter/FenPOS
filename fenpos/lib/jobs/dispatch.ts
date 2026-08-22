@@ -46,6 +46,8 @@ export interface SubmittedJob {
  * @param deviceId the device to print on
  * @param body the request body, as parsed JSON
  * @param apiKeyId the key that submitted it, or null when it came from the panel
+ * @param idempotency the caller's key and body fingerprint, recorded on the row so a retry can be
+ *   recognised. Omitted by the panel and by callers that sent no header.
  * @returns the recorded job
  * @throws ApiError when the body cannot be printed, or the agent is not connected
  */
@@ -53,6 +55,7 @@ export async function submitJob(
 	deviceId: string,
 	body: unknown,
 	apiKeyId: string | null = null,
+	idempotency?: { key: string; hash: string },
 ): Promise<SubmittedJob> {
 	const device = await prisma.device.findUnique({ where: { id: deviceId } });
 
@@ -116,6 +119,10 @@ export async function submitJob(
 			apiKeyId,
 			status: "QUEUED",
 			queuedAt: new Date(),
+			// Written with the row rather than after it. A key recorded in a second statement could
+			// be lost to a crash between the two, and the retry that followed would print a second
+			// receipt — the exact failure the key exists to prevent.
+			...(idempotency ? { idempotencyKey: idempotency.key, idempotencyHash: idempotency.hash } : {}),
 		},
 		select: { id: true },
 	});
