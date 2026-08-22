@@ -33,20 +33,7 @@ export async function GET(
 			});
 		}
 
-		let target: { id: string; name: string; agentId: string };
-		try {
-			target = await requireGrantedDevice(key, agent, device);
-		} catch (error) {
-			// `requireGrantedDevice`'s message names the requested device so a caller can tell what
-			// they asked for. That is fine at one name at a time, but this endpoint is compared
-			// across two different names by design (see the test), and a message naming each would
-			// make two `unknown_device` answers distinguishable by their body even though their code
-			// agrees. Flattened to one fixed message so the answer is identical for any name.
-			if (error instanceof ApiError && error.code === "unknown_device") {
-				throw new ApiError("unknown_device", "No such device.");
-			}
-			throw error;
-		}
+		const target = await requireGrantedDevice(key, agent, device);
 
 		// `requireGrantedDevice` returns the minimum the print path needs and is deliberately not
 		// widened for this endpoint's benefit. The second read is affordable here and not there.
@@ -69,7 +56,7 @@ export async function GET(
 		if (!row) {
 			// Deleted between the grant check and this read. Reported as unknown rather than as a
 			// fault, because from the caller's side that is exactly what it is.
-			throw new ApiError("unknown_device", "That printer no longer exists.");
+			throw new ApiError("unknown_device", `No device '${device}' on agent '${agent}'.`);
 		}
 
 		return Response.json(

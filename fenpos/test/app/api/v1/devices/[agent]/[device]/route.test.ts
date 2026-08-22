@@ -7,9 +7,9 @@ import { prisma } from "@/lib/db";
 /**
  * `GET /api/v1/devices/{agent}/{device}` — one printer.
  *
- * The pair of tests at the bottom is the point of this file: a device that does not exist and a
- * device that exists but is not granted must be indistinguishable, down to the code and the
- * message. Anything less and a caller can map the install by watching which 404 it gets.
+ * The last test is the point of this file: the same device name must answer the same way whether
+ * the device is ungranted or gone entirely, down to the code and the message. Anything less and a
+ * caller can map the install by probing one name and watching which 404 it gets.
  */
 
 let token: string;
@@ -70,12 +70,19 @@ describe("GET /api/v1/devices/{agent}/{device}", () => {
 		expect(body.columns).toBe(42);
 	});
 
-	it("answers identically for a device that does not exist and one that is not granted", async () => {
-		const missing = await GET(...call(agentName, "nowhere"));
-		const forbidden = await GET(...call(agentName, "bar"));
+	it("answers the same way whether a device is ungranted or gone, so a name cannot be probed", async () => {
+		// The same name asked twice: once while 'bar' exists but is not granted, once after it is
+		// gone. A caller that could tell those apart could map every printer in the install by
+		// probing names and watching which answer came back.
+		const ungranted = await GET(...call(agentName, "bar"));
+		const ungrantedBody = await ungranted.json();
 
-		expect(missing.status).toBe(404);
-		expect(forbidden.status).toBe(404);
-		expect(await missing.json()).toEqual(await forbidden.json());
+		await prisma.device.deleteMany({ where: { name: "bar" } });
+
+		const gone = await GET(...call(agentName, "bar"));
+
+		expect(ungranted.status).toBe(404);
+		expect(gone.status).toBe(404);
+		expect(await gone.json()).toEqual(ungrantedBody);
 	});
 });
