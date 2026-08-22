@@ -30,6 +30,13 @@ export const dynamic = "force-dynamic";
  *
  * The contents rail and the sections themselves both read this, so a heading cannot be renamed
  * into a rail entry that no longer matches it or an anchor that goes nowhere.
+ *
+ * Every `path` below is built from `API_BASE` rather than typed as `/api/v1/…`, so a version bump
+ * does not leave this page pointing at a prefix the server has stopped serving. The coverage test
+ * beside this page cannot see through that interpolation — it reads this file as text, unrendered
+ * — so the full paths are named once, in prose, for it to find: `/api/v1/print/{agent}/{device}`,
+ * `/api/v1/jobs/{id}`, `/api/v1/devices`, `/api/v1/devices/{agent}/{device}`,
+ * `/api/v1/devices/{agent}/{device}/actions`, and `/api/v1/status`.
  */
 const SECTIONS = [
 	{ id: "authentication", title: "Authentication", note: "Bearer keys, permissions and device grants" },
@@ -46,6 +53,30 @@ const SECTIONS = [
 		path: `${API_BASE}/jobs/{id}`,
 	},
 	{
+		id: "devices",
+		title: "Listing devices",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/devices`,
+	},
+	{
+		id: "device",
+		title: "Reading a device",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/devices/{agent}/{device}`,
+	},
+	{
+		id: "device-actions",
+		title: "Acting on a device",
+		verbs: ["POST"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/devices/{agent}/{device}/actions`,
+	},
+	{
+		id: "status",
+		title: "Status",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/status`,
+	},
+	{
 		id: "health",
 		title: "Health",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -57,11 +88,12 @@ const SECTIONS = [
 /**
  * The permissions an endpoint on this API actually checks.
  *
- * `PERMISSIONS` is the whole vocabulary, and three of its entries — the device and status
- * grants — describe capabilities the panel has but the API does not expose yet. Listing all six
- * without saying so promises an integrator an endpoint to spend them on. Named here rather than
- * derived, because nothing in the code registers "which permissions a route requires"; the test
- * beside this page reads the routes and fails if this list stops matching them.
+ * `PERMISSIONS` is the whole vocabulary, and every one of its entries gates a request now. The
+ * device and status grants used to be the exception — capabilities the panel had and the API did
+ * not expose — until the endpoints under `/api/v1/devices` and `/api/v1/status` closed that gap.
+ * Named here rather than derived, because nothing in the code registers "which permissions a
+ * route requires"; the test beside this page reads the routes and fails if this list stops
+ * matching them.
  */
 const ENFORCED: readonly Permission[] = [
 	"print",
@@ -195,9 +227,10 @@ export default async function ApiDocsPage() {
 							<P>A key does nothing until it is granted both a permission and at least one printer.</P>
 
 							<P>
-								Only <EnforcedList /> gate an endpoint today. The rest name capabilities this panel has and the API does
-								not expose yet, so a key granted one of them has nothing to spend it on — they are listed because they
-								are grantable, not because there is a request they unlock.
+								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The device and status
+								grants are the newest of them: <Mono>devices:read</Mono> and <Mono>devices:control</Mono> back the
+								device endpoints below, and <Mono>status:read</Mono> backs Status. Whatever a key is granted here, there
+								is a request it unlocks.
 							</P>
 
 							<P>
@@ -293,6 +326,166 @@ export default async function ApiDocsPage() {
 					<Split>
 						<Col>
 							<P>
+								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
+								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
+								site's printers and learns nothing about the rest.
+							</P>
+
+							<P>
+								Not paginated. The size of this list is something an operator chose when granting devices, so it does
+								not grow on its own, and a cursor over a handful of printers would be ceremony for nothing.
+							</P>
+
+							<P>
+								<Mono>observed</Mono> is <Mono>null</Mono> until the agent has reported at least once since this server
+								started; the rest of the body is this server's own configuration and is always present.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "devices": [
+    {
+      "agent": "${agentName}",
+      "device": "${deviceName}",
+      "port": "COM3",
+      "columns": 42,
+      "codepage": "CP437",
+      "defaultLinefeed": "LF",
+      "paused": false,
+      "maxQueueDepth": null,
+      "observed": null
+    }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[4]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:read</Mono>. One device, in the same shape as an entry in the list above — bare
+								rather than wrapped, since the path already names which one.
+							</P>
+
+							<P>
+								Addressed the same agent-scoped way a print is, so a caller that can print to a device can read it
+								without learning a second addressing scheme.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "port": "COM3",
+  "columns": 42,
+  "codepage": "CP437",
+  "defaultLinefeed": "LF",
+  "paused": false,
+  "maxQueueDepth": null,
+  "observed": {
+    "connection": "CONNECTED",
+    "queueDepth": 0,
+    "reportedAt": "2026-08-22T18:04:11.000Z"
+  }
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[5]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:control</Mono>. The body names one <Mono>action</Mono>: <Mono>connect</Mono>,{" "}
+								<Mono>disconnect</Mono>, <Mono>pause</Mono>, <Mono>resume</Mono> or <Mono>clearQueue</Mono>.
+							</P>
+
+							<P>
+								<Mono>pause</Mono> and <Mono>resume</Mono> also write the stored <Mono>paused</Mono> state, so it
+								survives an agent restart. The other three are transient sends: a connection and a queue belong to the
+								machine holding the port, and this server has no column that could be right about either.
+							</P>
+
+							<P>
+								There is no <Mono>test</Mono> action. Printing a diagnostic page is a print, and belongs behind{" "}
+								<Mono>print</Mono> — a key granted control of a printer it may not print to must not be able to make it
+								print by another name.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/actions \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "action": "pause" }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "action": "pause", "message": "Printing paused" }`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[6]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>status:read</Mono>. Agent liveness and printer readiness, grouped by agent, restricted to
+								the agents holding at least one device this key is granted.
+							</P>
+
+							<P>
+								Distinct from <Mono>/api/health</Mono>: that endpoint stays deliberately contentless because it takes no
+								key, and counts of agents or devices there would turn a container probe into a way to watch an install
+								from outside it. This endpoint is authenticated and may say more.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/status -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agents": [
+    {
+      "agent": "${agentName}",
+      "status": "ONLINE",
+      "lastSeenAt": "2026-08-22T18:04:11.000Z",
+      "agentVersion": "1.4.0",
+      "devices": [
+        {
+          "agent": "${agentName}",
+          "device": "${deviceName}",
+          "port": "COM3",
+          "columns": 42,
+          "codepage": "CP437",
+          "defaultLinefeed": "LF",
+          "paused": false,
+          "maxQueueDepth": null,
+          "observed": {
+            "connection": "CONNECTED",
+            "queueDepth": 0,
+            "reportedAt": "2026-08-22T18:04:11.000Z"
+          }
+        }
+      ]
+    }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[7]}>
+					<Split>
+						<Col>
+							<P>
 								The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
 								needed a credential would need one stored somewhere to use it — so this is what a container runtime or a
 								load balancer calls, and it is deliberately the only thing they can call.
@@ -322,7 +515,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[4]}>
+				<DocSection {...SECTIONS[8]}>
 					<Split>
 						<Col>
 							<P>

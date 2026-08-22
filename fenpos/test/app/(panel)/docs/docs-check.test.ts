@@ -153,6 +153,35 @@ describe("the API page's enforced permissions", () => {
 	});
 });
 
+describe("every versioned endpoint is documented", () => {
+	/**
+	 * A route file's directory, as a path an integrator would call.
+	 *
+	 * Next's bracket segments are turned back into the `{name}` form the docs page writes, so the
+	 * comparison is against what a reader sees rather than against a filesystem detail.
+	 *
+	 * @param routeFile a path under `app/api`, e.g. `v1/devices/[agent]/[device]/route.ts`
+	 * @returns the documented path, e.g. `/api/v1/devices/{agent}/{device}`
+	 */
+	function documentedPath(routeFile: string): string {
+		const directory = routeFile.replace(/[\\/]route\.ts$/, "");
+		return `/api/${directory.replaceAll("\\", "/").replace(/\[(\.\.\.)?([^\]]+)\]/g, "{$2}")}`;
+	}
+
+	it("mentions every route under /api/v1 on the API page", () => {
+		const routes = readdirSync("app/api/v1", { recursive: true, encoding: "utf8" }).filter((entry) =>
+			/route\.ts$/.test(entry),
+		);
+
+		expect(routes.length).toBeGreaterThan(0);
+
+		for (const route of routes) {
+			const path = documentedPath(`v1/${route}`);
+			expect(API_PAGE, `${path} is not documented on the API page`).toContain(path);
+		}
+	});
+});
+
 describe("the markup page's tag table", () => {
 	it("has a row for every tag the language defines", () => {
 		const names = Object.keys(TAGS);
