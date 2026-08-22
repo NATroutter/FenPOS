@@ -1,4 +1,4 @@
-import { apiActionSchema, commandFor, PERSISTS_PAUSE } from "@/lib/api/device-actions";
+import { type ApiDeviceAction, apiActionSchema, commandFor, PERSISTS_PAUSE } from "@/lib/api/device-actions";
 import { setDevicePaused } from "@/lib/devices/device-service";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
@@ -20,6 +20,14 @@ import { logger } from "@/lib/logger";
  * Connect, disconnect and clear-queue persist nothing. A connection and a queue belong to the
  * machine holding the port, and this server has no column that could be right about either.
  */
+
+/**
+ * Largest body accepted. An action body is `{ "action": "clearQueue" }` — the longest action name
+ * plus its field — which is under 40 bytes; this leaves headroom for whitespace and an integrator's
+ * formatting without moving off the same order of magnitude as the payload the endpoint actually
+ * reads.
+ */
+const MAX_BODY_BYTES = 256;
 
 export async function POST(
 	request: Request,
@@ -57,19 +65,35 @@ export async function POST(
 /**
  * Reads the requested action from the body.
  *
+ * Size is checked on the raw text before parsing, the same discipline `readBody` in the print route
+ * uses and for the same reason: parsing is the work an oversized body is trying to provoke, so the
+ * check has to happen before `JSON.parse` ever sees the bytes.
+ *
  * @param request the incoming request
  * @returns the validated action
- * @throws ApiError when the body is not JSON, or names an action this API does not define
+ * @throws ApiError when the body is too large, not JSON, missing `action`, or names an action this
+ *   API does not define
  */
-async function readAction(request: Request): Promise<ReturnType<typeof apiActionSchema.parse>> {
+async function readAction(request: Request): Promise<ApiDeviceAction> {
+	const raw = await request.text();
+
+	if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
+		throw new ApiError("body_too_large", `Request body must be under ${MAX_BODY_BYTES} bytes.`);
+	}
+
 	let body: unknown;
 	try {
-		body = await request.json();
+		body = JSON.parse(raw);
 	} catch {
 		throw new ApiError("invalid_json", "Body is not valid JSON");
 	}
 
-	const parsed = apiActionSchema.safeParse((body as { action?: unknown })?.action);
+	const action = (body as { action?: unknown })?.action;
+	if (action === undefined || action === null) {
+		throw new ApiError("missing_field", "'action' is required");
+	}
+
+	const parsed = apiActionSchema.safeParse(action);
 	if (!parsed.success) {
 		throw new ApiError("invalid_type", "'action' must be one of connect, disconnect, pause, resume, clearQueue.");
 	}

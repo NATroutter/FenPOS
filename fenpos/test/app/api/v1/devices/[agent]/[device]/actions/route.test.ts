@@ -106,6 +106,40 @@ describe("POST /api/v1/devices/{agent}/{device}/actions", () => {
 		expect(vi.mocked(sendDeviceCommand)).not.toHaveBeenCalled();
 	});
 
+	it("refuses a body naming no action, rather than blaming its type", async () => {
+		const response = await POST(
+			new Request(`https://fenpos.test/api/v1/devices/${agentName}/kitchen/actions`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body: JSON.stringify({}),
+			}),
+			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
+		);
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("missing_field");
+		expect(vi.mocked(sendDeviceCommand)).not.toHaveBeenCalled();
+	});
+
+	it("refuses an oversized body before it is parsed, and never reaches the agent", async () => {
+		// Large enough to clear MAX_BODY_BYTES (256) while still being valid JSON, so a failure
+		// here can only be the size check — a parse failure would prove nothing about ordering.
+		const oversized = JSON.stringify({ action: "pause", padding: "x".repeat(1024) });
+
+		const response = await POST(
+			new Request(`https://fenpos.test/api/v1/devices/${agentName}/kitchen/actions`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body: oversized,
+			}),
+			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
+		);
+
+		expect(response.status).toBe(413);
+		expect((await response.json()).error).toBe("body_too_large");
+		expect(vi.mocked(sendDeviceCommand)).not.toHaveBeenCalled();
+	});
+
 	it("refuses the test print, which belongs behind 'print'", async () => {
 		const response = await POST(...call("test"));
 
@@ -120,6 +154,15 @@ describe("POST /api/v1/devices/{agent}/{device}/actions", () => {
 
 		expect(response.status).toBe(403);
 		expect(vi.mocked(sendDeviceCommand)).not.toHaveBeenCalled();
+	});
+
+	it("reports message as null when the agent's reply carries none", async () => {
+		vi.mocked(sendDeviceCommand).mockResolvedValueOnce(undefined);
+
+		const response = await POST(...call("clearQueue"));
+
+		expect(response.status).toBe(200);
+		expect((await response.json()).message).toBeNull();
 	});
 
 	it("reports an ungranted device as unknown, and never touches the agent", async () => {

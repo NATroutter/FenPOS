@@ -40,11 +40,18 @@ const COMMANDS = {
  * agent owns, and this server has no column that could be right about it.
  *
  * `undefined` means "sends only", and is distinct from `false`, which means "persist not-paused".
+ * Every action is listed explicitly and the object is `satisfies Record<ApiDeviceAction, …>`, the
+ * same discipline `COMMANDS` above uses, so a new action fails to compile here too until someone
+ * decides `undefined` or a boolean for it — `Partial` let a sixth action compile silently with no
+ * persistence decision made at all, which is exactly the gap `COMMANDS`' own `satisfies` closes.
  */
-export const PERSISTS_PAUSE: Partial<Record<ApiDeviceAction, boolean>> = {
+export const PERSISTS_PAUSE = {
+	connect: undefined,
+	disconnect: undefined,
 	pause: true,
 	resume: false,
-};
+	clearQueue: undefined,
+} as const satisfies Record<ApiDeviceAction, boolean | undefined>;
 
 /**
  * The wire command one public action sends.
