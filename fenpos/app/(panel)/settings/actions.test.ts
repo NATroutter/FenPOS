@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_DISPLAY_NAME, getAdminProfile, setAdminPassword } from "@/lib/auth/admin";
+import { DEFAULT_DISPLAY_NAME, getAdminProfile, setAdminPassword, verifyAdminPassword } from "@/lib/auth/admin";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the profile action.
@@ -23,6 +24,9 @@ const { changePassword, updateProfile } = await import("@/app/(panel)/settings/a
 beforeEach(async () => {
 	await prisma.session.deleteMany({});
 	await prisma.adminAuth.deleteMany({});
+	// So a minimum raised by one test cannot leak into the next — the settings table is one
+	// file per worker process (test/setup-database.ts), not reset between test files.
+	await prisma.setting.deleteMany({ where: { key: "auth.minimumPasswordLength" } });
 	await setAdminPassword("correct horse battery staple");
 	revalidatePath.mockClear();
 });
@@ -45,6 +49,23 @@ describe("run's default revalidation", () => {
 
 		expect(result.error).toBeNull();
 		expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+	});
+});
+
+/**
+ * `changePassword` must honour the *configured* `auth.minimumPasswordLength`, not the built-in
+ * floor `passwordSchema` defaults to elsewhere. Reverting the call site to a literal
+ * `passwordSchema(12)` — the built-in floor — must make this test fail: a 16-character password
+ * satisfies that floor, so only actually reading the setting refuses it.
+ */
+describe("changePassword with a configured minimum", () => {
+	it("refuses a new password that satisfies the built-in floor but not a raised configured minimum", async () => {
+		await setSetting("auth.minimumPasswordLength", 20);
+
+		const result = await changePassword("correct horse battery staple", "a".repeat(16));
+
+		expect(result.error).not.toBeNull();
+		await expect(verifyAdminPassword("correct horse battery staple")).resolves.toBe(true);
 	});
 });
 

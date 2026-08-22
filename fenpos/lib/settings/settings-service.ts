@@ -399,7 +399,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.minimumPasswordLength",
 		label: "Minimum password length",
 		description:
-			"Shortest acceptable administrator password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed.",
+			"Shortest acceptable administrator password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed. The pnpm admin:set-password recovery command enforces only the built-in floor, not this setting.",
 		category: "security",
 		type: "integer",
 		min: 12,

@@ -5,6 +5,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAdminConfigured } from "@/lib/auth/admin";
 import { signInThrottlePhrase } from "@/lib/auth/rate-limit";
+import { sessionLifetimePhrase } from "@/lib/auth/session";
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 import { integerSetting } from "@/lib/settings/settings-service";
 
@@ -68,7 +69,7 @@ export default async function LoginPage() {
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
-					Session cookie, {sessionHours} {sessionHours === 1 ? "hour" : "hours"}, HttpOnly ·{" "}
+					Session cookie, {sessionLifetimePhrase(sessionHours)}, HttpOnly ·{" "}
 					{signInThrottlePhrase(signInAttemptsPerMinute)}
 				</p>
 			</div>

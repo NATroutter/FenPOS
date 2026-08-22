@@ -6,6 +6,7 @@ import {
 	destroySession,
 	purgeExpiredSessions,
 	resolveSession,
+	sessionLifetimePhrase,
 } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -142,5 +143,25 @@ describe("session lifecycle", () => {
 
 		await expect(resolveSession(live.token, now)).resolves.not.toBeNull();
 		await expect(resolveSession(stale.token, now)).resolves.toBeNull();
+	});
+});
+
+/**
+ * Boundary tests for the sign-in page footer's session-lifetime sentence, at `auth.sessionHours`'s
+ * declared `min` and `max` (`settings-service.ts`), and 1 — the count whose grammar the format
+ * string could get wrong. Mirrors `signInThrottlePhrase`'s tests (`rate-limit.test.ts`) and
+ * `minimumLengthPhrase`'s (`password-policy.test.ts`).
+ */
+describe("sessionLifetimePhrase", () => {
+	it("uses the singular at exactly one", () => {
+		expect(sessionLifetimePhrase(1)).toBe("1 hour");
+	});
+
+	it("uses the plural at the setting's fallback", () => {
+		expect(sessionLifetimePhrase(12)).toBe("12 hours");
+	});
+
+	it("uses the plural at the setting's maximum", () => {
+		expect(sessionLifetimePhrase(720)).toBe("720 hours");
 	});
 });

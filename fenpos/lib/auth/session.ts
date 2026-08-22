@@ -36,6 +36,23 @@ async function sessionTtlMs(): Promise<number> {
 }
 
 /**
+ * Phrases the configured session lifetime for the note on the sign-in page footer, pluralising
+ * "hour" only where the count requires it.
+ *
+ * Extracted for the same reason `signInThrottlePhrase` (`rate-limit.ts`) and
+ * `minimumLengthPhrase` (`password-policy.ts`) were: this project has broken exactly this kind
+ * of sentence at a boundary three times already — "0 MB", "1 distinct URLs", "1 hours" — and an
+ * inline ternary at the one call site was the fourth chance to do it again, sitting right next
+ * to the extracted version of the sentence beside it.
+ *
+ * @param hours the configured `auth.sessionHours`
+ * @returns e.g. "12 hours" or, at a lifetime of one hour, "1 hour"
+ */
+export function sessionLifetimePhrase(hours: number): string {
+	return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+}
+
+/**
  * How stale `lastSeenAt` may become before it is rewritten.
  *
  * Updating on every request would add a write to every page load for a field only used to

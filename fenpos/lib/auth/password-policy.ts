@@ -9,14 +9,16 @@
  */
 
 /**
- * The floor `auth.minimumPasswordLength` can never fall below, and what the standalone recovery
- * scripts enforce.
+ * The floor `auth.minimumPasswordLength` can never fall below, and what
+ * `scripts/set-admin-password.ts` enforces instead of that setting.
  *
- * The scripts (`scripts/set-admin-password.ts`, `scripts/reset-admin-password.ts`) run as one-shot
- * `tsx` processes outside the running server, with their own ad hoc Prisma connection — they never
- * reach `settings-service.ts` and so never see an administrator-raised minimum. That is an accepted
- * gap rather than an oversight: they are a break-glass recovery path, and this floor is still a
- * real one, never the silent zero a missing check would leave behind.
+ * That script (not `scripts/reset-admin-password.ts`, which deletes the credential and validates
+ * no password at all) runs as a one-shot `tsx` process outside the running server, with its own
+ * ad hoc Prisma connection — it never reaches `settings-service.ts` and so never sees an
+ * administrator-raised minimum. That is an accepted gap rather than an oversight: it is a
+ * break-glass recovery path, not a privilege boundary — anyone able to run it can already delete
+ * the setting row, wipe the credential, or write an arbitrary hash directly — and this floor is
+ * still a real one, never the silent zero a missing check would leave behind.
  */
 export const MINIMUM_PASSWORD_LENGTH = 12;
 
