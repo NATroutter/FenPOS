@@ -202,5 +202,75 @@ export async function grantedDevices(key: AuthenticatedKey): Promise<GrantedDevi
 			paused: grant.device.paused,
 			maxQueueDepth: grant.device.maxQueueDepth,
 		}))
-		.sort((a, b) => a.agentName.localeCompare(b.agentName) || a.name.localeCompare(b.name));
+		.sort(
+			// "en" pinned explicitly rather than left to the platform default: ICU collation
+			// varies by host locale, and this order is promised as stable in the JSDoc above —
+			// stable has to mean the same order on every machine that runs this, not just within
+			// one run of it.
+			(a, b) => a.agentName.localeCompare(b.agentName, "en") || a.name.localeCompare(b.name, "en"),
+		);
+}
+
+/**
+ * Resolves one device to the full shape {@link grantedDevices} returns for each of its entries.
+ *
+ * Built on {@link requireGrantedDevice} rather than reimplementing the grant check, so this
+ * inherits its security property exactly: a device the key has no grant for and a device that
+ * does not exist raise the identical `unknown_device` message, and the ungranted case logs the
+ * same warning `requireGrantedDevice` does. That indistinguishability is what stops a caller
+ * mapping the install's printers by probing names, and it has to hold here too, not just on the
+ * path this is built from.
+ *
+ * `requireGrantedDevice` itself stays narrow on purpose — it is on the print hot path and returns
+ * only what dispatch needs — so the wider row this endpoint wants is read here, as a second query
+ * against the id it already resolved.
+ *
+ * @param key the authenticated caller
+ * @param agentName the agent named in the path
+ * @param deviceName the device named in the path
+ * @returns the device in the shared `GrantedDevice` shape
+ * @throws ApiError `unknown_device` when it does not exist, is not granted, or was deleted between
+ *   the grant check and this read
+ */
+export async function grantedDevice(
+	key: AuthenticatedKey,
+	agentName: string,
+	deviceName: string,
+): Promise<GrantedDevice> {
+	const target = await requireGrantedDevice(key, agentName, deviceName);
+
+	const row = await prisma.device.findUnique({
+		where: { id: target.id },
+		select: {
+			id: true,
+			name: true,
+			agentId: true,
+			port: true,
+			columns: true,
+			codepage: true,
+			defaultLinefeed: true,
+			paused: true,
+			maxQueueDepth: true,
+			agent: { select: { name: true } },
+		},
+	});
+
+	if (!row) {
+		// Deleted between the grant check and this read. Reported as unknown rather than as a
+		// fault, because from the caller's side that is exactly what it is.
+		throw new ApiError("unknown_device", `No device '${deviceName}' on agent '${agentName}'.`);
+	}
+
+	return {
+		id: row.id,
+		name: row.name,
+		agentId: row.agentId,
+		agentName: row.agent.name,
+		port: row.port,
+		columns: row.columns,
+		codepage: row.codepage,
+		defaultLinefeed: row.defaultLinefeed,
+		paused: row.paused,
+		maxQueueDepth: row.maxQueueDepth,
+	};
 }

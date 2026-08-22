@@ -1,6 +1,6 @@
 import { deviceView } from "@/lib/api/device-view";
-import { consumeApiRead } from "@/lib/auth/rate-limit";
-import { ApiError, toErrorResponse } from "@/lib/errors";
+import { requireApiRead } from "@/lib/auth/rate-limit";
+import { toErrorResponse } from "@/lib/errors";
 import { authenticateKey, grantedDevices, requirePermission } from "@/lib/keys/authenticate";
 import { getDeviceStatus } from "@/lib/link/device-status";
 
@@ -24,12 +24,7 @@ export async function GET(request: Request): Promise<Response> {
 		const key = await authenticateKey(request);
 		requirePermission(key, "devices:read");
 
-		const limit = await consumeApiRead(key.id);
-		if (!limit.allowed) {
-			throw new ApiError("rate_limited", "Too many requests from this key. Try again shortly.", {
-				retryAfterSeconds: Math.ceil(limit.retryAfterMs / 1000),
-			});
-		}
+		await requireApiRead(key.id);
 
 		const devices = await grantedDevices(key);
 

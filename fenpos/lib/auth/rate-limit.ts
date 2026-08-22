@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/errors";
 import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -260,4 +261,25 @@ export const apiReadLimiter = new RateLimiter({ limit: API_READ_CEILING, windowM
 export async function consumeApiRead(keyId: string, now: number = Date.now()): Promise<RateLimitResult> {
 	const limit = await integerSetting("api.readsPerMinute");
 	return apiReadLimiter.consume(keyId, now, limit);
+}
+
+/**
+ * Consumes one read against a key's budget, throwing the API's standard refusal when it is spent.
+ *
+ * Every read endpoint behind `api.readsPerMinute` used to carry its own three-line "consume, check
+ * `allowed`, raise `rate_limited`" block. That was tolerable at three call sites and stops being so
+ * once the endpoint count grows, so the block moves here once and each route calls this instead.
+ * `consumeApiRead` stays exported and unchanged beside it — it is the primitive its own tests
+ * exercise, and it is what this function is built on rather than a copy of its logic.
+ *
+ * @param keyId the authenticated key's id, used as the limiter's key
+ * @throws ApiError `rate_limited` when the key is over budget, carrying `retryAfterSeconds`
+ */
+export async function requireApiRead(keyId: string): Promise<void> {
+	const result = await consumeApiRead(keyId);
+	if (!result.allowed) {
+		throw new ApiError("rate_limited", "Too many requests from this key. Try again shortly.", {
+			retryAfterSeconds: Math.ceil(result.retryAfterMs / 1000),
+		});
+	}
 }

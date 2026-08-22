@@ -1,15 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import {
 	type AuthenticatedKey,
 	authenticateKey,
 	bearerToken,
+	grantedDevice,
 	grantedDevices,
 	requireGrantedDevice,
 	requirePermission,
 } from "@/lib/keys/authenticate";
 import { createApiKey, rerollApiKey, revokeApiKey } from "@/lib/keys/key-service";
+import { logger } from "@/lib/logger";
 
 /**
  * Tests for the public API's authorisation boundary.
@@ -295,5 +297,119 @@ describe("grantedDevices", () => {
 		});
 
 		expect(await grantedDevices({ id: key.id, name: key.name, permissions: [] })).toEqual([]);
+	});
+});
+
+describe("grantedDevice", () => {
+	let agentId: string;
+	let agentName: string;
+	let kitchenId: string;
+
+	beforeEach(async () => {
+		await prisma.apiKey.deleteMany();
+		await prisma.device.deleteMany();
+		await prisma.agent.deleteMany();
+
+		agentName = `site-${Date.now()}`;
+		const agent = await prisma.agent.create({ data: { name: agentName }, select: { id: true } });
+		agentId = agent.id;
+
+		kitchenId = (
+			await prisma.device.create({
+				data: { agentId, name: "kitchen", port: "COM3", columns: 42 },
+				select: { id: true },
+			})
+		).id;
+		await prisma.device.create({ data: { agentId, name: "bar", port: "COM4" } });
+	});
+
+	/** Runs a call and returns the error, failing the test if it succeeded. */
+	const refusal = async (work: () => Promise<unknown>): Promise<ApiError> => {
+		try {
+			await work();
+		} catch (thrown) {
+			if (thrown instanceof ApiError) {
+				return thrown;
+			}
+			throw thrown;
+		}
+		throw new Error("expected the call to be refused");
+	};
+
+	it("resolves the full row for a granted device", async () => {
+		const key = await prisma.apiKey.create({
+			data: {
+				name: "till",
+				keyHash: `hash-${Date.now()}`,
+				maskedHint: "abcd",
+				devices: { create: [{ deviceId: kitchenId }] },
+			},
+		});
+		const authenticated: AuthenticatedKey = { id: key.id, name: key.name, permissions: [] };
+
+		const device = await grantedDevice(authenticated, agentName, "kitchen");
+
+		expect(device.id).toBe(kitchenId);
+		expect(device.agentId).toBe(agentId);
+		expect(device.agentName).toBe(agentName);
+		expect(device.columns).toBe(42);
+	});
+
+	it("reports an ungranted device the same way requireGrantedDevice does, and logs the same warning", async () => {
+		const key = await prisma.apiKey.create({
+			data: { name: "till", keyHash: `hash-${Date.now()}-b`, maskedHint: "abcd" },
+		});
+		const authenticated: AuthenticatedKey = { id: key.id, name: key.name, permissions: [] };
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const fromGrantedDevice = await refusal(() => grantedDevice(authenticated, agentName, "kitchen"));
+		const warnCallsAfterGrantedDevice = warnSpy.mock.calls.length;
+		const fromRequireGrantedDevice = await refusal(() => requireGrantedDevice(authenticated, agentName, "kitchen"));
+
+		// Indistinguishable answers are the whole point: a caller must not be able to tell an
+		// ungranted device from one that does not exist by which helper answered.
+		expect(fromGrantedDevice.code).toBe("unknown_device");
+		expect(fromGrantedDevice.message).toBe(fromRequireGrantedDevice.message);
+		expect(warnCallsAfterGrantedDevice).toBe(1);
+		expect(warnSpy.mock.calls.length).toBe(2);
+
+		warnSpy.mockRestore();
+	});
+
+	it("reports an absent device the same way as an ungranted one", async () => {
+		const key = await prisma.apiKey.create({
+			data: {
+				name: "till",
+				keyHash: `hash-${Date.now()}-c`,
+				maskedHint: "abcd",
+				devices: { create: [{ deviceId: kitchenId }] },
+			},
+		});
+		const authenticated: AuthenticatedKey = { id: key.id, name: key.name, permissions: [] };
+
+		const missing = await refusal(() => grantedDevice(authenticated, agentName, "nowhere"));
+
+		expect(missing.code).toBe("unknown_device");
+	});
+
+	it("reports unknown_device rather than a fault when the row is gone by the second read", async () => {
+		const key = await prisma.apiKey.create({
+			data: {
+				name: "till",
+				keyHash: `hash-${Date.now()}-d`,
+				maskedHint: "abcd",
+				devices: { create: [{ deviceId: kitchenId }] },
+			},
+		});
+		const authenticated: AuthenticatedKey = { id: key.id, name: key.name, permissions: [] };
+
+		// Simulates the device being deleted between the grant check and this read: the grant
+		// check still finds it, but the wider read that follows comes back empty.
+		const findUniqueSpy = vi.spyOn(prisma.device, "findUnique").mockResolvedValueOnce(null);
+
+		const thrown = await refusal(() => grantedDevice(authenticated, agentName, "kitchen"));
+
+		expect(thrown.code).toBe("unknown_device");
+		findUniqueSpy.mockRestore();
 	});
 });

@@ -4,9 +4,11 @@ import {
 	consumeApiRead,
 	consumeSignInAttempt,
 	RateLimiter,
+	requireApiRead,
 	signInThrottlePhrase,
 } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
+import { ApiError } from "@/lib/errors";
 import { setSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -205,5 +207,35 @@ describe("consumeApiRead", () => {
 
 		expect(refused.allowed).toBe(false);
 		expect(refused.retryAfterMs).toBe(30_000);
+	});
+});
+
+describe("requireApiRead", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+		apiReadLimiter.reset("key-1");
+	});
+
+	it("resolves without throwing while the key is within budget", async () => {
+		await setSetting("api.readsPerMinute", 2);
+
+		await expect(requireApiRead("key-1")).resolves.toBeUndefined();
+		await expect(requireApiRead("key-1")).resolves.toBeUndefined();
+	});
+
+	it("throws rate_limited with retryAfterSeconds once the budget is spent", async () => {
+		await setSetting("api.readsPerMinute", 1);
+
+		await requireApiRead("key-1");
+
+		try {
+			await requireApiRead("key-1");
+			throw new Error("expected a refusal");
+		} catch (error) {
+			expect(error).toBeInstanceOf(ApiError);
+			const apiError = error as ApiError;
+			expect(apiError.code).toBe("rate_limited");
+			expect(apiError.details.retryAfterSeconds).toBe(60);
+		}
 	});
 });

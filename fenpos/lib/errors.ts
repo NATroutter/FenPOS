@@ -185,7 +185,7 @@ export const API_ERROR_STATUS = {
 	 */
 	unbundled_logo_width: 422,
 
-	/** 429: too many attempts. Applied to sign-in and to agent pairing. */
+	/** 429: too many attempts. Applied to sign-in, to agent pairing, and to API reads. */
 	rate_limited: 429,
 
 	/** 500: an unexpected server fault. Details are logged, never returned. */
