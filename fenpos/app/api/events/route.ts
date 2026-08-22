@@ -1,6 +1,7 @@
 import { getCurrentSession } from "@/lib/auth/session-cookie";
 import { type PanelEvent, subscribe } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * `GET /api/events` — the panel's live stream.
@@ -17,19 +18,16 @@ import { logger } from "@/lib/logger";
 /** Never cached and never prerendered: the whole point is that it does not end. */
 export const dynamic = "force-dynamic";
 
-/**
- * How often a comment is written to an idle stream.
- *
- * Proxies and load balancers close a connection that has been silent for a while, and the browser
- * would reconnect every time — a reconnect storm on an install that is simply quiet. A comment
- * line costs nothing and is ignored by the client.
- */
-const KEEPALIVE_MS = 25_000;
-
 export async function GET(request: Request): Promise<Response> {
 	if (!(await getCurrentSession())) {
 		return Response.json({ error: "missing_key", message: "Not signed in." }, { status: 401 });
 	}
+
+	// Proxies and load balancers close a connection that has been silent for a while, and the
+	// browser would reconnect every time — a reconnect storm on an install that is simply quiet.
+	// A comment line costs nothing and is ignored by the client. Read once per opened stream,
+	// not per line written to it, so a saved change reaches only streams opened after it.
+	const keepaliveMs = (await integerSetting("events.keepaliveSeconds")) * 1000;
 
 	const encoder = new TextEncoder();
 
@@ -56,7 +54,7 @@ export async function GET(request: Request): Promise<Response> {
 				write(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
 			});
 
-			const keepalive = setInterval(() => write(": keepalive\n\n"), KEEPALIVE_MS);
+			const keepalive = setInterval(() => write(": keepalive\n\n"), keepaliveMs);
 
 			const close = (): void => {
 				if (!open) {

@@ -14,10 +14,12 @@ import { randomUUID } from "node:crypto";
  *
  * Held on `globalThis` so a development hot reload does not strand in-flight requests in an
  * unreachable map while new ones accumulate in a fresh one.
+ *
+ * There is no built-in default timeout: every caller passes one explicitly, sourced from whichever
+ * setting governs its own kind of request (`link.commandTimeoutSeconds` for a device command,
+ * `link.scanTimeoutSeconds` for a port scan) — the one constant this module used to carry of its
+ * own, `DEFAULT_TIMEOUT_MS`, would otherwise have been a second, uncoordinated knob on top of those.
  */
-
-/** How long any request waits before it is treated as unanswered. */
-const DEFAULT_TIMEOUT_MS = 15_000;
 
 interface Pending {
 	resolve: (value: unknown) => void;
@@ -35,10 +37,26 @@ if (!globalForRequests.fenposPendingRequests) {
 
 const pending: Map<string, Pending> = globalForRequests.fenposPendingRequests;
 
+/**
+ * Phrases how long a request waited, for {@link RequestTimeoutError}'s message.
+ *
+ * Extracted rather than inlined for the same reason `signInThrottlePhrase` (`lib/auth/rate-limit.ts`)
+ * and `sessionLifetimePhrase` (`lib/auth/session.ts`) were: a sentence built from a value an
+ * operator configures is a sentence that can only be checked by pulling it out of the template
+ * literal it would otherwise be buried in. `timeoutMs` now traces back to `link.commandTimeoutSeconds`
+ * or `link.scanTimeoutSeconds`, so this is the one place their bounds meet the words shown for them.
+ *
+ * @param timeoutMs how long the request was allowed to take
+ * @returns e.g. "15s"
+ */
+export function requestTimeoutPhrase(timeoutMs: number): string {
+	return `${Math.round(timeoutMs / 1000)}s`;
+}
+
 /** Raised when an agent does not answer within the timeout. */
 export class RequestTimeoutError extends Error {
 	constructor(requestId: string, timeoutMs: number) {
-		super(`The agent did not answer within ${Math.round(timeoutMs / 1000)}s.`);
+		super(`The agent did not answer within ${requestTimeoutPhrase(timeoutMs)}.`);
 		this.name = "RequestTimeoutError";
 		this.requestId = requestId;
 	}
@@ -58,12 +76,15 @@ export function newRequestId(): string {
 /**
  * Waits for the reply to a request.
  *
+ * `timeoutMs` has no built-in default — see the module doc comment above — so every caller states
+ * it, typically read moments earlier from the setting that governs that caller's kind of request.
+ *
  * @param requestId the identifier sent with the request
  * @param timeoutMs how long to wait before giving up
  * @returns the reply frame
  * @throws RequestTimeoutError when nothing answers in time
  */
-export function awaitReply<T>(requestId: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
+export function awaitReply<T>(requestId: string, timeoutMs: number): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			pending.delete(requestId);

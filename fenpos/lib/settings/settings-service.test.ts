@@ -191,6 +191,12 @@ describe("setting definitions", () => {
 			"auth.sessionHours": "integer",
 			"auth.signInAttemptsPerMinute": "integer",
 			"auth.minimumPasswordLength": "integer",
+			"events.keepaliveSeconds": "integer",
+			"link.heartbeatSeconds": "integer",
+			"link.heartbeatTimeoutSeconds": "integer",
+			"link.handshakeTimeoutSeconds": "integer",
+			"link.commandTimeoutSeconds": "integer",
+			"link.scanTimeoutSeconds": "integer",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in

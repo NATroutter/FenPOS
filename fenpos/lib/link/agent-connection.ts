@@ -19,7 +19,7 @@ import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLin
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
-import { globalJobSettings } from "@/lib/settings/settings-service";
+import { globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * One agent's connection, from the opening handshake to close.
@@ -29,26 +29,6 @@ import { globalJobSettings } from "@/lib/settings/settings-service";
  * once, authorisation happens per frame. A agent may only ever affect its own resources, and
  * every handler re-establishes that rather than assuming it.
  */
-
-/**
- * How often the server pings an idle connection.
- *
- * Native WebSocket pings, not application frames — the transport already does this correctly
- * and Java's client answers automatically.
- */
-const HEARTBEAT_INTERVAL_MS = 30_000;
-
-/**
- * How long a agent has to answer a ping before the connection is considered dead.
- *
- * A silent half-open socket is the failure this catches: TCP will happily hold a connection
- * open for many minutes after the peer has gone, during which the server would believe a
- * printer was reachable and queue jobs into nothing.
- */
-const HEARTBEAT_TIMEOUT_MS = 10_000;
-
-/** How long a agent has to send `hello` before the connection is dropped. */
-const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /**
  * Queue depth applied when a device has no override.
@@ -88,8 +68,10 @@ export interface AuthenticatedAgent {
 export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAgent, address: string): void {
 	let helloReceived = false;
 	let alive = true;
+	let closed = false;
 	let heartbeat: NodeJS.Timeout | undefined;
 	let pongDeadline: NodeJS.Timeout | undefined;
+	let handshakeTimer: NodeJS.Timeout | undefined;
 
 	const link: AgentLink = {
 		agentId: agent.id,
@@ -115,12 +97,27 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 		pongDeadline = undefined;
 	};
 
-	const handshakeTimer = setTimeout(() => {
-		if (!helloReceived) {
-			logger.warn("Agent did not complete the handshake", { agentId: agent.id, address });
-			socket.close(CLOSE.handshakeTimeout, "hello not received");
+	/**
+	 * Arms the handshake timeout once its configured length is known.
+	 *
+	 * The setting is read asynchronously, so this races the socket itself: `hello` can arrive, or
+	 * the socket can close, before the read settles. Both are checked here rather than only at the
+	 * handler that armed the timer, since a timer armed after either has already happened would
+	 * otherwise fire — or leak — regardless.
+	 */
+	async function armHandshakeTimeout(): Promise<void> {
+		const handshakeTimeoutMs = (await integerSetting("link.handshakeTimeoutSeconds")) * 1000;
+		if (helloReceived || closed) {
+			return;
 		}
-	}, HANDSHAKE_TIMEOUT_MS);
+		handshakeTimer = setTimeout(() => {
+			if (!helloReceived) {
+				logger.warn("Agent did not complete the handshake", { agentId: agent.id, address });
+				socket.close(CLOSE.handshakeTimeout, "hello not received");
+			}
+		}, handshakeTimeoutMs);
+	}
+	void armHandshakeTimeout();
 
 	socket.on("message", (data, isBinary) => {
 		// The protocol is text. A binary frame is either a different protocol or a probe, and
@@ -154,7 +151,9 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 				return;
 			}
 			helloReceived = true;
-			clearTimeout(handshakeTimer);
+			if (handshakeTimer) {
+				clearTimeout(handshakeTimer);
+			}
 			void onHello(parsed.frame);
 			return;
 		}
@@ -213,7 +212,10 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 	});
 
 	socket.on("close", (code, reason) => {
-		clearTimeout(handshakeTimer);
+		closed = true;
+		if (handshakeTimer) {
+			clearTimeout(handshakeTimer);
+		}
 		clearTimers();
 
 		// Only mark the agent offline if this connection is still the registered one. A late
@@ -300,7 +302,7 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 
 		await pushDeviceConfig(link, agent.id);
 
-		startHeartbeat();
+		void startHeartbeat();
 
 		publish({
 			kind: "agent",
@@ -384,8 +386,20 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 	 * Each interval sends a ping and arms a deadline. If the pong does not arrive before the
 	 * deadline, the socket is terminated rather than closed: a half-open connection will not
 	 * complete a closing handshake, so waiting for one would hang.
+	 *
+	 * Reads `link.heartbeatSeconds` and `link.heartbeatTimeoutSeconds` once, here, rather than once
+	 * per ping — a connection lives far longer than a single interval, so this is a read per
+	 * connection rather than a read per heartbeat. The setting is read asynchronously, so — as with
+	 * {@link armHandshakeTimeout} — a socket that has already closed by the time it resolves must not
+	 * still start pinging it.
 	 */
-	function startHeartbeat(): void {
+	async function startHeartbeat(): Promise<void> {
+		const heartbeatIntervalMs = (await integerSetting("link.heartbeatSeconds")) * 1000;
+		const heartbeatTimeoutMs = (await integerSetting("link.heartbeatTimeoutSeconds")) * 1000;
+		if (closed) {
+			return;
+		}
+
 		heartbeat = setInterval(() => {
 			if (socket.readyState !== socket.OPEN) {
 				return;
@@ -399,8 +413,8 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 					logger.warn("Agent stopped answering heartbeats", { agentId: agent.id });
 					socket.terminate();
 				}
-			}, HEARTBEAT_TIMEOUT_MS);
-		}, HEARTBEAT_INTERVAL_MS);
+			}, heartbeatTimeoutMs);
+		}, heartbeatIntervalMs);
 	}
 }
 

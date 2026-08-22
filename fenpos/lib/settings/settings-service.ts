@@ -49,8 +49,7 @@ export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" |
  * The categories in the order the panel lists them.
  *
  * Only the categories with at least one setting appear here — an entry with nothing under it
- * would be a dead spot in the nav. `connections` and `panel` join as the settings that belong
- * to them are added.
+ * would be a dead spot in the nav. `panel` joins as the settings that belong to it are added.
  */
 export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
 	{ id: "general", title: "General", summary: "How this install identifies itself." },
@@ -63,6 +62,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
 	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
 	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
+	{ id: "connections", title: "Connections", summary: "Timeouts on the links to agents and to this panel." },
 ];
 
 /** What every setting carries, whatever its type. */
@@ -178,6 +178,12 @@ export const SETTING_KEYS = [
 	"auth.sessionHours",
 	"auth.signInAttemptsPerMinute",
 	"auth.minimumPasswordLength",
+	"events.keepaliveSeconds",
+	"link.heartbeatSeconds",
+	"link.heartbeatTimeoutSeconds",
+	"link.handshakeTimeoutSeconds",
+	"link.commandTimeoutSeconds",
+	"link.scanTimeoutSeconds",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -406,6 +412,75 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 128,
 		fallback: 12,
 		unit: "characters",
+	},
+	{
+		key: "events.keepaliveSeconds",
+		label: "Live-stream keepalive",
+		description:
+			"How often the panel's live stream sends a comment to keep the connection open. Lower it if a proxy closes idle connections sooner than this.",
+		category: "connections",
+		type: "integer",
+		min: 5,
+		max: 120,
+		fallback: 25,
+		unit: "seconds",
+	},
+	{
+		key: "link.heartbeatSeconds",
+		label: "Agent heartbeat interval",
+		description:
+			"How often the server pings a connected agent. These are native WebSocket pings, answered automatically.",
+		category: "connections",
+		type: "integer",
+		min: 5,
+		max: 300,
+		fallback: 30,
+		unit: "seconds",
+	},
+	{
+		key: "link.heartbeatTimeoutSeconds",
+		label: "Heartbeat grace",
+		description:
+			"How long a silent agent has to answer a ping before the server drops it. Keep it below the heartbeat interval.",
+		category: "connections",
+		type: "integer",
+		min: 3,
+		max: 120,
+		fallback: 10,
+		unit: "seconds",
+	},
+	{
+		key: "link.handshakeTimeoutSeconds",
+		label: "Handshake timeout",
+		description: "How long an agent has to finish its handshake after connecting.",
+		category: "connections",
+		type: "integer",
+		min: 3,
+		max: 120,
+		fallback: 10,
+		unit: "seconds",
+	},
+	{
+		key: "link.commandTimeoutSeconds",
+		label: "Command timeout",
+		description: "How long the panel waits for an agent to answer a device command.",
+		category: "connections",
+		type: "integer",
+		min: 5,
+		max: 120,
+		fallback: 15,
+		unit: "seconds",
+	},
+	{
+		key: "link.scanTimeoutSeconds",
+		label: "Port scan timeout",
+		description: "How long the panel waits for a port scan. A machine with many serial ports needs longer.",
+		category: "connections",
+		type: "integer",
+		min: 5,
+		max: 180,
+		fallback: 20,
+		unit: "seconds",
 	},
 ];
 

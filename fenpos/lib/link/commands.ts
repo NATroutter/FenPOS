@@ -4,6 +4,7 @@ import type { CommandResultFrame, DeviceCommand, PortsResultFrame, SerialPortInf
 import { getLink } from "@/lib/link/registry";
 import { awaitReply, newRequestId, RequestTimeoutError } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Asking an agent to do something, and waiting for the answer.
@@ -13,11 +14,29 @@ import { logger } from "@/lib/logger";
  * they press it again, and now two of whatever it was are in flight.
  */
 
-/** How long a serial scan may take. Enumerating ports touches hardware and is not instant. */
-const SCAN_TIMEOUT_MS = 20_000;
+/**
+ * How long a serial scan may take, in milliseconds. Enumerating ports touches hardware and is not
+ * instant — a machine with many COM ports needs longer, which is why this is `link.scanTimeoutSeconds`
+ * rather than a constant.
+ *
+ * @returns the configured timeout, converted from the setting's seconds to the milliseconds `awaitReply` wants
+ */
+async function scanTimeoutMs(): Promise<number> {
+	return (await integerSetting("link.scanTimeoutSeconds")) * 1000;
+}
 
-/** How long a device action may take. Opening a port is the slowest of them. */
-const COMMAND_TIMEOUT_MS = 15_000;
+/**
+ * How long a device action may take, in milliseconds. Opening a port is the slowest of them.
+ *
+ * Shared by {@link sendDeviceCommand} and {@link sendRawWrite} — one setting,
+ * `link.commandTimeoutSeconds`, read at each call site rather than once at module load, so a change
+ * saved mid-request takes effect on the next one rather than requiring a restart.
+ *
+ * @returns the configured timeout, converted from the setting's seconds to the milliseconds `awaitReply` wants
+ */
+async function commandTimeoutMs(): Promise<number> {
+	return (await integerSetting("link.commandTimeoutSeconds")) * 1000;
+}
 
 /**
  * Asks an agent what serial ports it can see.
@@ -38,7 +57,7 @@ export async function scanPorts(agentId: string): Promise<SerialPortInfo[]> {
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<PortsResultFrame>(requestId, SCAN_TIMEOUT_MS);
+	const waiting = awaitReply<PortsResultFrame>(requestId, await scanTimeoutMs());
 
 	if (!link.send({ type: "ports.scan", requestId })) {
 		throw new ApiError("agent_offline", "That agent disconnected before the scan was sent.");
@@ -78,7 +97,7 @@ export async function sendDeviceCommand(
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<CommandResultFrame>(requestId, COMMAND_TIMEOUT_MS);
+	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
 
 	if (!link.send({ type: command, requestId, device: deviceName })) {
 		throw new ApiError("agent_offline", "That agent disconnected before the command was sent.");
@@ -136,7 +155,7 @@ export async function sendRawWrite(agentId: string, deviceName: string, bytes: s
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<CommandResultFrame>(requestId, COMMAND_TIMEOUT_MS);
+	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
 
 	if (!link.send({ type: "raw.write", requestId, device: deviceName, bytes })) {
 		throw new ApiError("agent_offline", "That agent disconnected before the bytes were sent.");

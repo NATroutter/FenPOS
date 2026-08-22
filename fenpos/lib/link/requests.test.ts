@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitReply, failRequests, newRequestId, RequestTimeoutError, settleReply } from "@/lib/link/requests";
+import {
+	awaitReply,
+	failRequests,
+	newRequestId,
+	RequestTimeoutError,
+	requestTimeoutPhrase,
+	settleReply,
+} from "@/lib/link/requests";
 
 /**
  * Tests for request correlation.
@@ -25,7 +32,7 @@ describe("request correlation", () => {
 
 	it("delivers a reply to the waiter that asked for it", async () => {
 		const id = newRequestId();
-		const waiting = awaitReply<{ ok: boolean }>(id);
+		const waiting = awaitReply<{ ok: boolean }>(id, 5000);
 
 		expect(settleReply(id, { ok: true })).toBe(true);
 
@@ -35,8 +42,8 @@ describe("request correlation", () => {
 	it("keeps two concurrent requests apart", async () => {
 		const first = newRequestId();
 		const second = newRequestId();
-		const waitingFirst = awaitReply<string>(first);
-		const waitingSecond = awaitReply<string>(second);
+		const waitingFirst = awaitReply<string>(first, 5000);
+		const waitingSecond = awaitReply<string>(second, 5000);
 
 		// Answered out of order on purpose: two operators scanning at once is the case this
 		// exists for, and whichever agent replies first must not settle the other's request.
@@ -81,7 +88,7 @@ describe("request correlation", () => {
 
 	it("fails outstanding requests when their agent goes away", async () => {
 		const id = newRequestId();
-		const waiting = awaitReply(id);
+		const waiting = awaitReply(id, 5000);
 
 		expect(failRequests([id], "The agent disconnected.")).toBe(1);
 
@@ -96,11 +103,32 @@ describe("request correlation", () => {
 
 	it("settles a request only once", async () => {
 		const id = newRequestId();
-		const waiting = awaitReply<string>(id);
+		const waiting = awaitReply<string>(id, 5000);
 
 		expect(settleReply(id, "first")).toBe(true);
 		expect(settleReply(id, "second")).toBe(false);
 
 		await expect(waiting).resolves.toBe("first");
+	});
+});
+
+/**
+ * `requestTimeoutPhrase` feeds `RequestTimeoutError`'s message with a value that traces back to
+ * `link.commandTimeoutSeconds` (5–120) or `link.scanTimeoutSeconds` (5–180) — an operator-configured
+ * number reaching a sentence, the exact shape that has broken at a boundary elsewhere in this
+ * project ("0 MB", "1 distinct URLs", "1 hours"). Tested at 1 second and at both settings' widest
+ * bound, independently of `RequestTimeoutError` itself.
+ */
+describe("requestTimeoutPhrase", () => {
+	it("renders one second correctly", () => {
+		expect(requestTimeoutPhrase(1_000)).toBe("1s");
+	});
+
+	it("renders the widest configurable bound correctly", () => {
+		expect(requestTimeoutPhrase(180_000)).toBe("180s");
+	});
+
+	it("rounds rather than truncating a fractional second", () => {
+		expect(requestTimeoutPhrase(4_600)).toBe("5s");
 	});
 });
