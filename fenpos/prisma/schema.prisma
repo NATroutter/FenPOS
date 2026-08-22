@@ -408,5 +408,11 @@ model WebhookDelivery {
 
   @@index([status, nextAttemptAt])
   @@index([webhookId])
+  /// The settle paths that queue a delivery are not exactly-once — an agent can report a terminal
+  /// status twice, and nothing serialises frame processing between them. This constraint is what
+  /// turns "one settle, one delivery" from a race the application code hopes to win into a fact the
+  /// database enforces: whichever of two concurrent inserts for the same job arrives second is
+  /// refused, not silently duplicated.
+  @@unique([webhookId, jobId])
   @@map("webhook_deliveries")
 }

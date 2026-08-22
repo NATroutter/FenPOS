@@ -69,13 +69,17 @@ describe("queueJobSettled", () => {
 		expect(deliveries[0].jobId).toBe(jobId);
 
 		const payload = JSON.parse(deliveries[0].payload);
-		expect(payload).toMatchObject({
+		expect(payload).toEqual({
 			event: "job.settled",
 			jobId,
 			status: "COMPLETED",
+			agent: expect.any(String),
 			device: "kitchen",
 			lines: 12,
 			bytes: 480,
+			error: null,
+			errorMessage: null,
+			at: "2026-08-22T10:00:00.000Z",
 		});
 	});
 
@@ -116,6 +120,23 @@ describe("queueJobSettled", () => {
 
 		await queueJobSettled(jobId);
 		await queueJobSettled(jobId);
+
+		expect(await prisma.webhookDelivery.count()).toBe(1);
+	});
+
+	/**
+	 * The same guarantee, but raced rather than sequential. Nothing serialises frame processing on
+	 * the link (`agent-connection.ts` dispatches `onJobUpdate` fire-and-forget), so two terminal
+	 * reports for the same job — the reconnect re-report this module's doc comment names — can both
+	 * pass the cheap `findFirst` check before either `create` lands. This exercises the real race
+	 * rather than a stand-in for it: both calls hit the actual database, and it is the
+	 * `@@unique([webhookId, jobId])` constraint, not application logic, that keeps the loser from
+	 * producing a second row.
+	 */
+	it("resolves two concurrent settle reports for the same job to one delivery", async () => {
+		await subscribe();
+
+		await Promise.all([queueJobSettled(jobId), queueJobSettled(jobId)]);
 
 		expect(await prisma.webhookDelivery.count()).toBe(1);
 	});
