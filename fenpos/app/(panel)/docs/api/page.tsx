@@ -46,6 +46,12 @@ const SECTIONS = [
 		path: `${API_BASE}/jobs/{id}`,
 	},
 	{
+		id: "job-history",
+		title: "Listing jobs",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/jobs`,
+	},
+	{
 		id: "devices",
 		title: "Listing devices",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -327,6 +333,62 @@ export default async function ApiDocsPage() {
 					<Split>
 						<Col>
 							<P>
+								Needs <Mono>jobs:read</Mono>. The caller's own job history, newest first — what recovers a{" "}
+								<Mono>jobId</Mono> a dropped connection lost: a submit that never returned its <Status>202</Status>{" "}
+								still left a job behind, and this is how a caller finds it again without ever learning about anyone
+								else's.
+							</P>
+
+							<P>
+								Cursor-paginated with <Mono>limit</Mono> and <Mono>cursor</Mono>. A response carries{" "}
+								<Mono>nextCursor</Mono>, which is <Mono>null</Mono> on the last page and otherwise the value to send
+								back as <Mono>cursor</Mono> for the next one — never an offset, so a job swept by retention between two
+								requests cannot shift the page boundary under a caller still walking it.
+							</P>
+
+							<P>
+								<Mono>status</Mono>, <Mono>agent</Mono> and <Mono>device</Mono> narrow by name; <Mono>since</Mono> (an
+								ISO 8601 timestamp) narrows to jobs submitted at or after it. Every filter composes with the key's own
+								scope rather than replacing it — a filter can only narrow what a key already sees, never widen it.
+							</P>
+
+							<P>
+								Each entry is the same shape <Mono>{`GET ${API_BASE}/jobs/{id}`}</Mono> returns, so a caller has one
+								body to parse whether it arrived in a list or on its own.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl "${base}${API_BASE}/jobs?status=FAILED&limit=20" \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "jobs": [
+    {
+      "jobId": "clx…",
+      "status": "FAILED",
+      "agent": "${agentName}",
+      "device": "${deviceName}",
+      "submittedAt": "2026-08-22T18:04:09.000Z",
+      "queuedAt": "2026-08-22T18:04:09.100Z",
+      "startedAt": "2026-08-22T18:04:09.400Z",
+      "finishedAt": "2026-08-22T18:04:09.900Z",
+      "lines": 8,
+      "bytes": 512,
+      "error": "agent_offline",
+      "errorMessage": "The agent disconnected mid-print."
+    }
+  ],
+  "nextCursor": null
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[4]}>
+					<Split>
+						<Col>
+							<P>
 								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
 								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
 								site's printers and learns nothing about the rest.
@@ -365,7 +427,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[4]}>
+				<DocSection {...SECTIONS[5]}>
 					<Split>
 						<Col>
 							<P>
@@ -402,7 +464,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[5]}>
+				<DocSection {...SECTIONS[6]}>
 					<Split>
 						<Col>
 							<P>
@@ -439,7 +501,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[6]}>
+				<DocSection {...SECTIONS[7]}>
 					<Split>
 						<Col>
 							<P>
@@ -488,7 +550,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[7]}>
+				<DocSection {...SECTIONS[8]}>
 					<Split>
 						<Col>
 							<P>
@@ -521,7 +583,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[8]}>
+				<DocSection {...SECTIONS[9]}>
 					<Split>
 						<Col>
 							<P>
