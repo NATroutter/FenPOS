@@ -230,6 +230,7 @@ describe("setting definitions", () => {
 			"auth.signInAttemptsPerMinute": "integer",
 			"auth.minimumPasswordLength": "integer",
 			"auth.lastSeenRefreshMinutes": "integer",
+			"api.readsPerMinute": "integer",
 			"events.keepaliveSeconds": "integer",
 			"link.heartbeatSeconds": "integer",
 			"link.heartbeatTimeoutSeconds": "integer",

@@ -202,6 +202,7 @@ export const SETTING_KEYS = [
 	"auth.signInAttemptsPerMinute",
 	"auth.minimumPasswordLength",
 	"auth.lastSeenRefreshMinutes",
+	"api.readsPerMinute",
 	"events.keepaliveSeconds",
 	"link.heartbeatSeconds",
 	"link.heartbeatTimeoutSeconds",
@@ -531,6 +532,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 120,
 		fallback: 5,
 		unit: "minutes",
+	},
+	{
+		key: "api.readsPerMinute",
+		label: "API reads per minute",
+		description:
+			"How many listing and status requests one API key may make each minute. Printing is not counted: a receipt already costs a compile and a device round trip, and throttling a till is an operator's decision rather than a default.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 10_000,
+		fallback: 120,
+		unit: "requests",
 	},
 	{
 		key: "events.keepaliveSeconds",

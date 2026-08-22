@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { consumeSignInAttempt, RateLimiter, signInThrottlePhrase } from "@/lib/auth/rate-limit";
+import {
+	apiReadLimiter,
+	consumeApiRead,
+	consumeSignInAttempt,
+	RateLimiter,
+	signInThrottlePhrase,
+} from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -166,5 +172,38 @@ describe("signInThrottlePhrase", () => {
 
 	it("uses the plural at the setting's maximum", () => {
 		expect(signInThrottlePhrase(5)).toBe("5 attempts per minute");
+	});
+});
+
+describe("consumeApiRead", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany();
+		apiReadLimiter.reset("key-1");
+		apiReadLimiter.reset("key-2");
+	});
+
+	it("allows reads up to the configured limit and refuses the next one", async () => {
+		await setSetting("api.readsPerMinute", 2);
+
+		expect((await consumeApiRead("key-1")).allowed).toBe(true);
+		expect((await consumeApiRead("key-1")).allowed).toBe(true);
+		expect((await consumeApiRead("key-1")).allowed).toBe(false);
+	});
+
+	it("counts each key separately, so one busy till cannot throttle another", async () => {
+		await setSetting("api.readsPerMinute", 1);
+
+		expect((await consumeApiRead("key-1")).allowed).toBe(true);
+		expect((await consumeApiRead("key-2")).allowed).toBe(true);
+	});
+
+	it("reports when capacity returns, so the caller can be told", async () => {
+		await setSetting("api.readsPerMinute", 1);
+
+		await consumeApiRead("key-1", 0);
+		const refused = await consumeApiRead("key-1", 30_000);
+
+		expect(refused.allowed).toBe(false);
+		expect(refused.retryAfterMs).toBe(30_000);
 	});
 });

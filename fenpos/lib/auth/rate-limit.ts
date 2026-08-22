@@ -228,3 +228,36 @@ export function signInThrottlePhrase(limit: number): string {
  * invisibly — unlike the sign-in throttle, there is no floor here that is safe to expose.
  */
 export const pairingLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });
+
+/**
+ * The ceiling `api.readsPerMinute` may be configured to, and this limiter's constructed default.
+ *
+ * Matches the setting's declared `max`. Unlike the sign-in limiter, no provisional consume against
+ * this ceiling is needed: the caller here is already authenticated, so reading the setting first
+ * costs a query on a request that has done a key lookup anyway.
+ */
+const API_READ_CEILING = 10_000;
+
+/**
+ * Read throttle for API key callers, keyed by key id rather than by address.
+ *
+ * Keyed by the credential and not the caller's IP on purpose. Several tills behind one shop's NAT
+ * share an address and must not share a budget, and a key used from two addresses is one integrator
+ * either way.
+ */
+export const apiReadLimiter = new RateLimiter({ limit: API_READ_CEILING, windowMs: 60_000 });
+
+/**
+ * Consumes one read against a key's current budget.
+ *
+ * Reads `api.readsPerMinute` fresh on each call, so a limit tightened on the Settings tab governs
+ * the next request rather than waiting for a restart.
+ *
+ * @param keyId the authenticated key's id, used as the limiter's key
+ * @param now current time; injectable so tests need no sleeps
+ * @returns whether the read is permitted, and when capacity returns
+ */
+export async function consumeApiRead(keyId: string, now: number = Date.now()): Promise<RateLimitResult> {
+	const limit = await integerSetting("api.readsPerMinute");
+	return apiReadLimiter.consume(keyId, now, limit);
+}
