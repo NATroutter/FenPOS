@@ -499,6 +499,8 @@ export default async function ApiDocsPage() {
 							<CodeBlock label="Verifying it (Node.js)">{`import { createHmac, timingSafeEqual } from "node:crypto";
 
 function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
+  if (typeof header !== "string") return false;
+
   const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(header.trim());
   if (!match) return false;
 

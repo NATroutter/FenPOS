@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { pageOf, readPageParams } from "@/lib/api/pagination";
+import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -54,6 +54,28 @@ describe("readPageParams", () => {
 	it("passes a cursor through, and reports its absence as null", async () => {
 		expect((await readPageParams(urlWith("cursor=job-7"))).cursor).toBe("job-7");
 		expect((await readPageParams(urlWith(""))).cursor).toBeNull();
+	});
+});
+
+describe("assertCursorInFilter", () => {
+	it("resolves without throwing when the cursor names a row the caller's own filter would find", async () => {
+		await expect(assertCursorInFilter("job-7", async () => ({ id: "job-7" }))).resolves.toBeUndefined();
+	});
+
+	it("refuses invalid_query when the resolver finds nothing", async () => {
+		await expect(assertCursorInFilter("job-7", async () => null)).rejects.toMatchObject({
+			code: "invalid_query",
+		});
+	});
+
+	it("does not run a query of its own — the resolver is entirely the caller's", async () => {
+		let calls = 0;
+		await assertCursorInFilter("job-7", async () => {
+			calls += 1;
+			return { id: "job-7" };
+		});
+
+		expect(calls).toBe(1);
 	});
 });
 

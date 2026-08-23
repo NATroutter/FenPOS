@@ -137,18 +137,41 @@ describe("GET /api/v1/jobs", () => {
 		expect((await (await GET(requestWith("agent=nowhere"))).json()).jobs).toHaveLength(0);
 	});
 
-	// The `apiKeyId` filter is unconditional in the route, so this is correct by construction — but
-	// it is a security property, and nothing else in this file pins it. A cursor naming a row this
-	// key cannot see must not become a way to page into whoever else's jobs that row belongs to.
-	it("does not let a cursor naming another key's job page into that key's jobs", async () => {
-		const body = await (await GET(requestWith(`cursor=${theirsJobId}`))).json();
+	// A cursor naming a row outside the caller's own filter is refused outright rather than silently
+	// mishandled — see assertCursorInFilter. `apiKeyId` is unconditional in the route regardless, so
+	// no version of this ever leaked another key's jobs; what changed is that a mistake like this now
+	// gets a clear 400 instead of a page whose boundary quietly does not mean what it looks like it
+	// means.
+	it("refuses a cursor naming another key's job rather than silently paging around it", async () => {
+		const response = await GET(requestWith(`cursor=${theirsJobId}`));
 
-		expect(body.jobs.length).toBeGreaterThan(0);
-		const mine = await prisma.job.findMany({ where: { apiKeyId: mineId }, select: { id: true } });
-		const mineIds = new Set(mine.map((job) => job.id));
-		for (const job of body.jobs as { jobId: string }[]) {
-			expect(mineIds.has(job.jobId)).toBe(true);
-		}
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_query");
+	});
+
+	it("refuses a cursor naming no job at all", async () => {
+		const response = await GET(requestWith("cursor=does-not-exist"));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_query");
+	});
+
+	// The cursor is checked against the *same* where the page query itself will use — a cursor that
+	// names one of the caller's own jobs, but one this request's own status/agent/device/since filter
+	// excludes, is exactly as wrong as one naming no row at all: Prisma would still resolve its
+	// ordering position and silently skip past a row the caller never asked to exclude.
+	it("refuses a cursor naming a job of the caller's own that this request's filter excludes", async () => {
+		const completed = await prisma.job.findFirstOrThrow({ where: { apiKeyId: mineId, status: "COMPLETED" } });
+
+		const response = await GET(requestWith(`status=FAILED&cursor=${completed.id}`));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_query");
+	});
+
+	it("treats an empty agent or device filter as absent rather than matching nothing", async () => {
+		expect((await (await GET(requestWith("agent="))).json()).jobs).toHaveLength(3);
+		expect((await (await GET(requestWith("device="))).json()).jobs).toHaveLength(3);
 	});
 
 	it("filters by submission time", async () => {

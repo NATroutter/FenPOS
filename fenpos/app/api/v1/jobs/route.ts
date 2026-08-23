@@ -1,4 +1,4 @@
-import { pageOf, readPageParams } from "@/lib/api/pagination";
+import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
@@ -34,13 +34,24 @@ export async function GET(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const { take, cursor } = await readPageParams(url);
 
+		const where = {
+			apiKeyId: key.id,
+			...statusFilter(url),
+			...nameFilters(url),
+			...sinceFilter(url),
+		};
+
+		// A cursor naming a row Prisma would resolve regardless of `where` (another key's job, one
+		// this page's status/agent/device/since filter excludes, or nothing at all) must be refused
+		// rather than silently mishandled — see assertCursorInFilter's own doc comment for why.
+		if (cursor !== null) {
+			await assertCursorInFilter(cursor, () =>
+				prisma.job.findFirst({ where: { ...where, id: cursor }, select: { id: true } }),
+			);
+		}
+
 		const rows = await prisma.job.findMany({
-			where: {
-				apiKeyId: key.id,
-				...statusFilter(url),
-				...nameFilters(url),
-				...sinceFilter(url),
-			},
+			where,
 			orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
 			take: take + 1,
 			...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -113,6 +124,11 @@ function statusFilter(url: URL): { status?: string } {
  * install-specific, so there is no closed set to check it against and no way to tell a typo from a
  * printer this key cannot see.
  *
+ * An empty value (`?agent=`) is treated the same as the parameter's absence, not as a filter on the
+ * empty string: a device is never named `""`, so a literal reading would always return nothing,
+ * silently, for a caller whose only mistake was a template that left the parameter blank rather than
+ * omitting it.
+ *
  * @param url the request URL
  * @returns a `where` fragment, empty when neither was asked for
  */
@@ -120,8 +136,8 @@ function nameFilters(url: URL): { agent?: { name: string }; device?: { name: str
 	const agent = url.searchParams.get("agent");
 	const device = url.searchParams.get("device");
 	return {
-		...(agent === null ? {} : { agent: { name: agent } }),
-		...(device === null ? {} : { device: { name: device } }),
+		...(agent ? { agent: { name: agent } } : {}),
+		...(device ? { device: { name: device } } : {}),
 	};
 }
 

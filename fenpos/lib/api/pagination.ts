@@ -45,6 +45,34 @@ export async function readPageParams(url: URL): Promise<{ take: number; cursor: 
 }
 
 /**
+ * Refuses a cursor that does not resolve to a row inside the caller's own filter.
+ *
+ * Prisma resolves a cursor's ordering values by id alone, without applying the caller's `where` —
+ * so a cursor naming a row that exists but falls outside the current filter silently loses whatever
+ * legitimate row that ordering position would have named, and a cursor naming no row at all yields
+ * an empty page with `nextCursor: null`, which reads to a caller as "no more records" rather than
+ * "this cursor is wrong". Both are silently wrong answers to a caller's own mistake; this turns
+ * either into a clear `invalid_query` instead, on the endpoint whose whole purpose is recovering a
+ * record the caller lost.
+ *
+ * Deliberately does not run a query itself: the caller already knows its own model and its own
+ * `where`, and threading a Prisma delegate type through here would tie this shared module to a
+ * particular model's shape for no reason another listing (a future assets listing, say) would ever
+ * need. `resolve` is that caller's own existence check, run only when a cursor was actually given.
+ *
+ * @param cursor the caller's cursor, already known non-null
+ * @param resolve looks up whether the cursor names a row inside the caller's own filter — typically
+ *   `() => prisma.<model>.findFirst({ where: { ...filter, id: cursor }, select: { id: true } })`
+ * @throws ApiError `invalid_query` when `resolve` finds nothing
+ */
+export async function assertCursorInFilter(cursor: string, resolve: () => Promise<unknown>): Promise<void> {
+	const found = await resolve();
+	if (!found) {
+		throw new ApiError("invalid_query", "'cursor' does not name a record visible to this request.", { cursor });
+	}
+}
+
+/**
  * Splits an over-fetched result into a page and the cursor that continues it.
  *
  * The caller fetches `take + 1` rows; the extra one is never returned and exists only to answer
