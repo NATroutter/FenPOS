@@ -16,6 +16,7 @@ import { prisma } from "@/lib/db";
 let token: string;
 let mineId: string;
 let agentName: string;
+let theirsJobId: string;
 
 beforeEach(async () => {
 	await prisma.job.deleteMany();
@@ -62,9 +63,10 @@ beforeEach(async () => {
 			},
 		});
 	}
-	await prisma.job.create({
+	const theirsJob = await prisma.job.create({
 		data: { agentId: agent.id, deviceId: device.id, apiKeyId: theirs.id, status: "COMPLETED" },
 	});
+	theirsJobId = theirsJob.id;
 });
 
 /**
@@ -128,6 +130,25 @@ describe("GET /api/v1/jobs", () => {
 	it("filters by device", async () => {
 		expect((await (await GET(requestWith("device=kitchen"))).json()).jobs).toHaveLength(3);
 		expect((await (await GET(requestWith("device=nowhere"))).json()).jobs).toHaveLength(0);
+	});
+
+	it("filters by agent", async () => {
+		expect((await (await GET(requestWith(`agent=${agentName}`))).json()).jobs).toHaveLength(3);
+		expect((await (await GET(requestWith("agent=nowhere"))).json()).jobs).toHaveLength(0);
+	});
+
+	// The `apiKeyId` filter is unconditional in the route, so this is correct by construction — but
+	// it is a security property, and nothing else in this file pins it. A cursor naming a row this
+	// key cannot see must not become a way to page into whoever else's jobs that row belongs to.
+	it("does not let a cursor naming another key's job page into that key's jobs", async () => {
+		const body = await (await GET(requestWith(`cursor=${theirsJobId}`))).json();
+
+		expect(body.jobs.length).toBeGreaterThan(0);
+		const mine = await prisma.job.findMany({ where: { apiKeyId: mineId }, select: { id: true } });
+		const mineIds = new Set(mine.map((job) => job.id));
+		for (const job of body.jobs as { jobId: string }[]) {
+			expect(mineIds.has(job.jobId)).toBe(true);
+		}
 	});
 
 	it("filters by submission time", async () => {

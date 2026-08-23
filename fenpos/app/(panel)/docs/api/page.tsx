@@ -483,7 +483,7 @@ export default async function ApiDocsPage() {
 						</Col>
 
 						<Col>
-							<CodeBlock label="POST to the registered URL">{`X-FenPOS-Signature: t=1755892800,v1=5f2b1e…
+							<CodeBlock label="POST to the registered URL">{`X-FenPOS-Signature: t=1787421849,v1=5f2b1e…
 
 {
   "event": "job.settled",

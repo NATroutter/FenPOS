@@ -83,6 +83,20 @@ describe("queueJobSettled", () => {
 		});
 	});
 
+	it("falls back to the current time for 'at' when the job carries no finishedAt", async () => {
+		await subscribe();
+		await prisma.job.update({ where: { id: jobId }, data: { finishedAt: null } });
+
+		const before = Date.now();
+		await queueJobSettled(jobId);
+		const after = Date.now();
+
+		const payload = JSON.parse((await prisma.webhookDelivery.findFirstOrThrow()).payload);
+		const at = new Date(payload.at).getTime();
+		expect(at).toBeGreaterThanOrEqual(before);
+		expect(at).toBeLessThanOrEqual(after);
+	});
+
 	it("queues nothing when the key has no subscription", async () => {
 		await queueJobSettled(jobId);
 
