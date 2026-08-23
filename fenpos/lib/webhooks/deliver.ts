@@ -195,11 +195,20 @@ async function processDelivery(
 		try {
 			await assertDeliverable(delivery.webhook.url);
 		} catch (error) {
-			// Not retried. The target is wrong rather than unavailable, and no number of attempts
-			// will make an address this server must not reach into one it may.
+			// Most refusals are permanent — the target is wrong rather than unavailable, and no number
+			// of attempts will make an address this server must not reach into one it may. The one
+			// exception is a resolution timeout, which targetRefusal marks non-permanent because it is
+			// a transient fact about this attempt, not about the hostname. `permanent` is threaded
+			// through recordFailure the same way a status code's is, rather than a mechanism of its own.
 			const reason = error instanceof ApiError ? error.message : String(error);
-			await settleFailed(delivery.id, attempts, reason);
-			logger.warn("Refused to deliver a webhook", { deliveryId: delivery.id, reason });
+			const permanent = !(error instanceof ApiError && error.details.permanent === false);
+			await recordFailure(delivery.id, attempts, reason, {
+				now,
+				maxAttempts: settings.maxAttempts,
+				backoffSeconds: settings.backoffSeconds,
+				permanent,
+			});
+			logger.warn("Refused to deliver a webhook", { deliveryId: delivery.id, reason, permanent });
 			return true;
 		}
 
@@ -263,6 +272,11 @@ async function processDelivery(
  * path already pays for a `listSettings()` round trip per setting it reads (see the module's own
  * settings reads in {@link deliverDue}), so one more here costs it nothing structurally new.
  *
+ * `details.permanent` on the thrown error is what {@link processDelivery} reads to decide whether a
+ * refusal is worth retrying — see {@link targetRefusal}. `setWebhook` in `app/(panel)/keys/actions.ts`,
+ * this function's other caller, ignores it and reads only `message`, which is fine: registration has
+ * no retry loop to feed the distinction into.
+ *
  * @param url the candidate target
  * @throws ApiError with code `webhook_unreachable` when the target must not be delivered to
  */
@@ -271,10 +285,22 @@ export async function assertDeliverable(url: string): Promise<void> {
 		booleanSetting("webhooks.allowPlainHttp"),
 		integerSetting("webhooks.timeoutMs"),
 	]);
-	const reason = await targetRefusal(url, allowPlainHttp, timeoutMs);
-	if (reason !== null) {
-		throw new ApiError("webhook_unreachable", reason);
+	const refusal = await targetRefusal(url, allowPlainHttp, timeoutMs);
+	if (refusal !== null) {
+		throw new ApiError("webhook_unreachable", refusal.reason, { permanent: refusal.permanent });
 	}
+}
+
+/** Why a target must not be delivered to, and whether that is ever going to change. */
+interface Refusal {
+	reason: string;
+	/**
+	 * Whether retrying can never help. True for everything except a resolution timeout: a bad
+	 * scheme, a blocked address, or a genuine "no such host" answer are facts about the target that
+	 * the next attempt will find just as true, while a timeout is a fact about this attempt — see
+	 * {@link resolveHostname}.
+	 */
+	permanent: boolean;
 }
 
 /**
@@ -283,41 +309,52 @@ export async function assertDeliverable(url: string): Promise<void> {
  * @param url the registered target
  * @param allowPlainHttp whether the install permits http
  * @param timeoutMs how long address resolution may take — see {@link resolveHostname}
- * @returns the reason to refuse, or null when the target is acceptable
+ * @returns the refusal, or null when the target is acceptable
  */
-async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: number): Promise<string | null> {
+async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: number): Promise<Refusal | null> {
 	let target: URL;
 	try {
 		target = new URL(url);
 	} catch {
-		return "the URL could not be parsed";
+		return { reason: "the URL could not be parsed", permanent: true };
 	}
 
 	if (target.protocol !== "https:" && target.protocol !== "http:") {
-		return `${target.protocol} is not a scheme this server delivers over`;
+		return { reason: `${target.protocol} is not a scheme this server delivers over`, permanent: true };
 	}
 	if (target.protocol === "http:" && !allowPlainHttp) {
-		return "this install only delivers webhooks over https";
+		return { reason: "this install only delivers webhooks over https", permanent: true };
 	}
 
 	const hostname = target.hostname.replace(/^\[|\]$/g, "");
 	if (hostname === "") {
-		return "the URL names no host";
+		return { reason: "the URL names no host", permanent: true };
 	}
 
-	// A literal address needs no resolver; a hostname does. Both end at the same judgement.
-	const resolved = await resolveHostname(hostname, timeoutMs);
+	// A literal address needs no resolver; a hostname does. Both end at the same judgement, except a
+	// resolver that timed out: resolveHostname throws ResolutionTimeoutError for that case instead of
+	// folding it into its ordinary null return, precisely so this can tell "slow" from "no answer"
+	// apart and refuse the former as non-permanent.
+	let resolved: string[] | null;
+	try {
+		resolved = await resolveHostname(hostname, timeoutMs);
+	} catch (error) {
+		if (!(error instanceof ResolutionTimeoutError)) {
+			throw error;
+		}
+		return { reason: `resolving ${hostname} timed out`, permanent: false };
+	}
 	if (resolved === null) {
-		return `the hostname ${hostname} has no address`;
+		return { reason: `the hostname ${hostname} has no address`, permanent: true };
 	}
 	if (resolved.length === 0) {
-		return `the hostname ${hostname} did not resolve to any address`;
+		return { reason: `the hostname ${hostname} did not resolve to any address`, permanent: true };
 	}
 
 	for (const address of resolved) {
 		const why = blockedReason(address);
 		if (why !== null) {
-			return `${hostname} resolves to ${address}, which is ${why}`;
+			return { reason: `${hostname} resolves to ${address}, which is ${why}`, permanent: true };
 		}
 	}
 
@@ -335,17 +372,20 @@ async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: nu
  *
  * **Bounded by `timeoutMs`, not the OS resolver's own timeout.** `dns.lookup` carries no timeout of
  * its own — left alone it inherits whatever the platform resolver does, which can run well past the
- * `webhooks.timeoutMs` ceiling this module otherwise holds every attempt to. Raced against a timer so
- * that "DNS is slow" fails exactly like "DNS has no answer" — both become the same `null`, which
- * {@link targetRefusal} turns into the same "has no address" refusal, so there is one failure path
- * here rather than two. What this cannot do is cancel the underlying lookup: `dns.lookup` offers no
- * abort signal, so a lookup that loses the race keeps running in Node's resolver thread pool until it
- * finishes on its own — this only bounds how long the delivery *waits* for an answer, not how long
- * the lookup itself runs.
+ * `webhooks.timeoutMs` ceiling this module otherwise holds every attempt to. Raced against a timer,
+ * but unlike a genuine lookup failure the timer winning is not folded into the same `null` return: it
+ * rejects with {@link ResolutionTimeoutError}, which is rethrown rather than swallowed, so
+ * {@link targetRefusal} can tell "DNS is slow" apart from "DNS has no answer" and refuse the former as
+ * non-permanent — a receiver that is merely slow to answer deserves a retry, the way a 5xx does, not
+ * the same permanent refusal a hostname with no address at all gets. What this cannot do is cancel the
+ * underlying lookup: `dns.lookup` offers no abort signal, so a lookup that loses the race keeps
+ * running in Node's resolver thread pool until it finishes on its own — this only bounds how long the
+ * delivery *waits* for an answer, not how long the lookup itself runs.
  *
  * @param hostname the target's hostname, brackets already stripped
  * @param timeoutMs how long to wait for an answer before treating this as unresolvable
- * @returns every address it resolves to, or null when it does not resolve (or resolve in time)
+ * @returns every address it resolves to, or null when it does not resolve
+ * @throws ResolutionTimeoutError when the timer wins the race before the resolver answers
  */
 async function resolveHostname(hostname: string, timeoutMs: number): Promise<string[] | null> {
 	if (isIP(hostname) !== 0) {
@@ -355,10 +395,21 @@ async function resolveHostname(hostname: string, timeoutMs: number): Promise<str
 		const { lookup } = await import("node:dns/promises");
 		const entries = await Promise.race([lookup(hostname, { all: true }), rejectAfter(timeoutMs)]);
 		return entries.map((entry) => entry.address);
-	} catch {
+	} catch (error) {
+		if (error instanceof ResolutionTimeoutError) {
+			throw error;
+		}
 		return null;
 	}
 }
+
+/**
+ * Raised by {@link rejectAfter} when its timer wins the race. A distinct type rather than a plain
+ * `Error`, so {@link resolveHostname} can rethrow exactly this and nothing else — see its own doc
+ * comment for why that distinction is what lets {@link targetRefusal} treat a slow resolver
+ * differently from one that has genuinely answered "no such host".
+ */
+class ResolutionTimeoutError extends Error {}
 
 /**
  * Rejects after `ms`, for racing against an operation that carries no timeout of its own.
@@ -367,11 +418,11 @@ async function resolveHostname(hostname: string, timeoutMs: number): Promise<str
  * not hold it open on its own.
  *
  * @param ms how long to wait before rejecting
- * @returns a promise that never resolves, only rejects
+ * @returns a promise that never resolves, only rejects with {@link ResolutionTimeoutError}
  */
 function rejectAfter(ms: number): Promise<never> {
 	return new Promise((_resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+		const timer = setTimeout(() => reject(new ResolutionTimeoutError(`timed out after ${ms}ms`)), ms);
 		timer.unref?.();
 	});
 }

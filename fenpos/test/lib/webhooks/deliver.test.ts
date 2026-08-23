@@ -1,8 +1,17 @@
+import * as dns from "node:dns/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
 import { deliverDue } from "@/lib/webhooks/deliver";
 import { verifySignature } from "@/lib/webhooks/signature";
+
+// A named export of a built-in ESM module cannot be `vi.spyOn`'d directly — its module namespace
+// is not configurable. Mocked here instead, wrapping the real `lookup` as the default implementation
+// so every test but the one that overrides it below still resolves for real.
+vi.mock("node:dns/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:dns/promises")>();
+	return { ...actual, lookup: vi.fn(actual.lookup) };
+});
 
 /**
  * Sending queued deliveries, and deciding what a failure means.
@@ -206,6 +215,40 @@ describe("deliverDue", () => {
 		const row = await prisma.webhookDelivery.findUnique({ where: { id } });
 		expect(row?.status).toBe("FAILED");
 		expect(row?.lastError).toMatch(/loopback/i);
+	});
+
+	// --- Beyond the brief: a resolution timeout retries rather than settling permanently ---
+	//
+	// Every other refusal targetRefusal can hand back is a fact about the target — a bad scheme, a
+	// blocked address, a hostname with genuinely no address — and stays that way on the next attempt.
+	// A resolution timeout is not: the resolver merely failed to answer inside `webhooks.timeoutMs`,
+	// which is a fact about this attempt. `dns.lookup` is stubbed to outlast the timeout rather than
+	// left to the real resolver, because nothing about a real "DNS took too long" is reproducible on
+	// demand.
+	it("retries a resolution timeout rather than settling it permanently", async () => {
+		await prisma.webhook.update({ where: { id: webhookId }, data: { url: "https://slow-resolver.test/hook" } });
+		await setSetting("webhooks.timeoutMs", 250);
+		const id = await queue();
+		const send = vi.fn(async () => ({ status: 200 }));
+
+		const lookup = vi.mocked(dns.lookup);
+		lookup.mockImplementationOnce(
+			((): Promise<{ address: string; family: number }[]> =>
+				new Promise((resolve) => {
+					// Outlasts the 250ms floor comfortably, and unref'd so it cannot hold the test process
+					// open after the assertions below have already run.
+					const timer = setTimeout(() => resolve([{ address: "93.184.216.34", family: 4 }]), 2_000);
+					timer.unref?.();
+				})) as unknown as typeof dns.lookup,
+		);
+
+		await deliverDue(new Date(), send);
+
+		expect(send).not.toHaveBeenCalled();
+		const row = await prisma.webhookDelivery.findUnique({ where: { id } });
+		expect(row?.status).toBe("PENDING");
+		expect(row?.attempts).toBe(1);
+		expect(row?.lastError).toMatch(/timed out/i);
 	});
 
 	it("refuses plain http unless the install allows it", async () => {
