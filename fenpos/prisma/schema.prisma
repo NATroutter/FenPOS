@@ -389,8 +389,9 @@ model Webhook {
 model WebhookDelivery {
   id        String @id @default(cuid())
   webhookId String @map("webhook_id")
-  /// The job this delivery is about. Not a relation: the job may be swept by retention while a
-  /// delivery is still being retried, and losing the delivery record with it would hide the failure.
+  /// The job this delivery is about. Not a relation: the job row is cascade-deleted when its device
+  /// or agent is deleted, and a delivery must be able to outlive that — losing the delivery record
+  /// with it would hide the failure.
   jobId     String @map("job_id")
   /// The signed body, exactly as it will be sent. Frozen at queue time so a retry delivers what the
   /// job looked like when it settled rather than what it looks like now.

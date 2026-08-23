@@ -384,8 +384,8 @@ export default async function ApiDocsPage() {
 							<P>
 								Cursor-paginated with <Mono>limit</Mono> and <Mono>cursor</Mono>. A response carries{" "}
 								<Mono>nextCursor</Mono>, which is <Mono>null</Mono> on the last page and otherwise the value to send
-								back as <Mono>cursor</Mono> for the next one — never an offset, so a job swept by retention between two
-								requests cannot shift the page boundary under a caller still walking it.
+								back as <Mono>cursor</Mono> for the next one — never an offset, so a job removed between two requests
+								(its device or agent deleted, say) cannot shift the page boundary under a caller still walking it.
 							</P>
 
 							<P>

@@ -127,7 +127,8 @@ function statusFilter(url: URL): { status?: string } {
  * An empty value (`?agent=`) is treated the same as the parameter's absence, not as a filter on the
  * empty string: a device is never named `""`, so a literal reading would always return nothing,
  * silently, for a caller whose only mistake was a template that left the parameter blank rather than
- * omitting it.
+ * omitting it. `readPageParams` in `lib/api/pagination.ts` makes the same choice for `cursor`, for
+ * the same reason.
  *
  * @param url the request URL
  * @returns a `where` fragment, empty when neither was asked for

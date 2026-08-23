@@ -8,7 +8,9 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * between requests — a job cascades away with the device or agent that owned it, for instance — and
  * a caller paging with `skip` over a shrinking list walks past rows it has never seen, because the
  * page boundary moves under it. A cursor names a record instead of a position, so a row deleted
- * behind the caller costs them nothing.
+ * elsewhere in the list does not shift the boundary out from under the next page. A row deleted at
+ * the caller's own bookmark is a different case — `assertCursorInFilter` below turns that into an
+ * explicit `invalid_query` rather than a page that silently comes up short.
  */
 
 /**
@@ -18,6 +20,12 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * client written against a more permissive install should keep working here — one page at a time —
  * rather than failing on a number it did not choose. A `limit` that is not a positive whole number
  * is refused, because that is a bug in the client rather than a difference of configuration.
+ *
+ * An empty `?cursor=` is treated the same as the parameter's absence, not as a cursor naming the
+ * empty string: no row is ever named `""`, so a literal reading would always refuse the request with
+ * `invalid_query`, punishing a caller whose only mistake was a template that left the parameter
+ * blank rather than omitting it. `nameFilters` in `app/api/v1/jobs/route.ts` makes the same choice
+ * for `agent` and `device`, for the same reason.
  *
  * @param url the request URL
  * @returns how many records to fetch, and where to resume from
@@ -29,9 +37,11 @@ export async function readPageParams(url: URL): Promise<{ take: number; cursor: 
 		integerSetting("api.maxPageSize"),
 	]);
 
+	const cursor = url.searchParams.get("cursor") || null;
+
 	const raw = url.searchParams.get("limit");
 	if (raw === null) {
-		return { take: Math.min(fallback, ceiling), cursor: url.searchParams.get("cursor") };
+		return { take: Math.min(fallback, ceiling), cursor };
 	}
 
 	// `Number` rather than `parseInt`: `parseInt("10abc")` is 10, which would silently accept a
@@ -41,7 +51,7 @@ export async function readPageParams(url: URL): Promise<{ take: number; cursor: 
 		throw new ApiError("invalid_query", "'limit' must be a whole number of at least 1.", { limit: raw });
 	}
 
-	return { take: Math.min(asked, ceiling), cursor: url.searchParams.get("cursor") };
+	return { take: Math.min(asked, ceiling), cursor };
 }
 
 /**

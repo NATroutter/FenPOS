@@ -55,6 +55,10 @@ describe("readPageParams", () => {
 		expect((await readPageParams(urlWith("cursor=job-7"))).cursor).toBe("job-7");
 		expect((await readPageParams(urlWith(""))).cursor).toBeNull();
 	});
+
+	it("treats an empty cursor the same as its absence, rather than a cursor naming ''", async () => {
+		expect((await readPageParams(urlWith("cursor="))).cursor).toBeNull();
+	});
 });
 
 describe("assertCursorInFilter", () => {

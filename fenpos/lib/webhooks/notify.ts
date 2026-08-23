@@ -58,8 +58,9 @@ export async function queueJobSettled(jobId: string): Promise<void> {
 			},
 		});
 
-		// Swept by retention between settling and this call. Ordinary on a busy install with a short
-		// window, and not a fault: there is simply nothing left to describe.
+		// The job row can be gone by the time this runs — its device or agent was deleted between
+		// settling and this call, cascading the job away with it. Not a fault: there is simply
+		// nothing left to describe.
 		if (!job || !job.apiKeyId) {
 			return;
 		}

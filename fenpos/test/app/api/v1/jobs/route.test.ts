@@ -174,6 +174,13 @@ describe("GET /api/v1/jobs", () => {
 		expect((await (await GET(requestWith("device="))).json()).jobs).toHaveLength(3);
 	});
 
+	it("treats an empty cursor as absent rather than refusing it with invalid_query", async () => {
+		const response = await GET(requestWith("cursor="));
+
+		expect(response.status).toBe(200);
+		expect((await response.json()).jobs).toHaveLength(3);
+	});
+
 	it("filters by submission time", async () => {
 		const since = new Date(1_700_000_001_500).toISOString();
 
