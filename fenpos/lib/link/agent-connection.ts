@@ -20,6 +20,7 @@ import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
 import { globalAgentSettings, globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
+import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
  * One agent's connection, from the opening handshake to close.
@@ -375,6 +376,13 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 				deviceName: job?.device.name ?? "",
 				at: frame.at,
 			});
+
+			// After the write and after the panel's event, so a subscriber that reacts by reading the
+			// row sees the state the delivery describes. Terminal states only: a caller wants to know
+			// how a receipt ended, not that it started.
+			if (frame.status === "COMPLETED" || frame.status === "FAILED" || frame.status === "CANCELLED") {
+				await queueJobSettled(frame.jobId);
+			}
 		} catch (error) {
 			logger.error("Could not record a job update", error, { agentId: agent.id, jobId: frame.jobId });
 		}

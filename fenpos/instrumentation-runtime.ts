@@ -6,6 +6,16 @@ import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
 import { getHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
 import { applyPushedSettings } from "@/lib/settings/settings-service";
+import { deliverDue } from "@/lib/webhooks/deliver";
+
+/**
+ * How often a pass drains due webhook deliveries.
+ *
+ * `webhooks.retryBackoffSeconds` schedules retries minutes apart, so a shorter tick would only
+ * poll a table that has not changed; a longer one would add that much latency to the common case
+ * where the first attempt succeeds and there was never anything to retry.
+ */
+const DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 
 /**
  * Startup work for the Node.js runtime.
@@ -23,6 +33,7 @@ export async function registerRuntime(): Promise<void> {
 	// attempted at startup.
 	await applyPushedSettings();
 	attachLink();
+	startDeliveryDrain();
 }
 
 /**
@@ -131,4 +142,42 @@ function attachLink(): void {
 	} catch (error) {
 		logger.error("Could not attach the agent link endpoint", error);
 	}
+}
+
+/**
+ * Starts the recurring pass that sends due webhook deliveries.
+ *
+ * Guarded the way `runMaintenance` guards its own steps: never fatal, a failure logged rather than
+ * thrown, because a webhook that cannot be delivered must never stop the server from serving.
+ * `deliverDue` already promises never to throw — its own module comment covers why — but that
+ * promise is not this function's to rely on; a timer with nobody to catch a rejection needs its own
+ * guard regardless of how careful the thing it calls already is.
+ *
+ * A pass is skipped, not queued, while the previous one is still running. `deliverDue` tolerates
+ * overlapping passes by design — see the lease in `lib/webhooks/deliver.ts` — but stacking passes
+ * against a slow target wastes work and only widens the window that lease has to cover, for no
+ * benefit: the next tick five seconds later will pick up whatever the running one has not yet
+ * reached.
+ *
+ * `unref()`'d, like the DNS race timer in `lib/webhooks/deliver.ts`'s `rejectAfter`, so this
+ * interval can never by itself hold the process open at shutdown.
+ */
+function startDeliveryDrain(): void {
+	let running = false;
+
+	const timer = setInterval(() => {
+		if (running) {
+			return;
+		}
+		running = true;
+		deliverDue()
+			.catch((error) => {
+				logger.error("A webhook delivery pass could not run", error);
+			})
+			.finally(() => {
+				running = false;
+			});
+	}, DELIVERY_DRAIN_INTERVAL_MS);
+
+	timer.unref();
 }

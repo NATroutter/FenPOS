@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { prisma } from "@/lib/db";
 import { type AuthenticatedAgent, handleAgentConnection, pushDeviceConfig } from "@/lib/link/agent-connection";
-import { PROTOCOL_VERSION, type ServerFrame } from "@/lib/link/protocol";
+import { type JobUpdateFrame, PROTOCOL_VERSION, type ServerFrame } from "@/lib/link/protocol";
 import type { AgentLink } from "@/lib/link/registry";
 import { globalAgentSettings, globalJobSettings, setSetting } from "@/lib/settings/settings-service";
 
@@ -34,6 +35,10 @@ function fakeLink(agentId: string): AgentLink & { readonly frames: ServerFrame[]
 }
 
 beforeEach(async () => {
+	await prisma.webhookDelivery.deleteMany();
+	await prisma.webhook.deleteMany();
+	await prisma.job.deleteMany();
+	await prisma.apiKey.deleteMany();
 	await prisma.device.deleteMany();
 	await prisma.agent.deleteMany();
 	await prisma.setting.deleteMany();
@@ -356,5 +361,82 @@ describe("handleAgentConnection timeouts", () => {
 		socket.emit("pong");
 		expect(socket.terminated).toBe(false);
 		expect(socket.terminateCalls).toBe(0);
+	});
+});
+
+/**
+ * Tests that a terminal `job.update` fires `queueJobSettled` (see `lib/webhooks/notify.ts`) and a
+ * non-terminal one does not.
+ *
+ * `onJobUpdate` dispatches the settle check with `void queueJobSettled(...)` after its own write —
+ * fire-and-forget, same as the frame dispatch above it in `handleAgentConnection`'s `message`
+ * handler — so `handleFrame` waits out a real delay after emitting rather than only flushing
+ * microtasks: the handler chains several `await`s of its own (the job update, the job re-read,
+ * `queueJobSettled`'s own lookups and write), and a fixed number of microtask turns would either
+ * undercount that chain or need updating every time it grows. The delay mirrors the one
+ * `link-server.test.ts` uses after sending a frame over a real socket, for the same reason.
+ */
+describe("job updates and webhooks", () => {
+	let socket: FakeAgentSocket;
+
+	/**
+	 * Stands up a connected agent with one device, a job queued on it for an API key that has an
+	 * enabled webhook subscription, and drives the socket through its handshake — the state a real
+	 * agent would be in just before reporting how that job ended.
+	 *
+	 * @returns the job a `job.update` frame can be driven against
+	 */
+	async function queuedJobForSubscribedKey(): Promise<{ jobId: string }> {
+		const agentId = `agent-webhook-${Math.random().toString(36).slice(2)}`;
+		await seedAgent(agentId);
+
+		const device = await prisma.device.create({
+			data: { agentId, name: "till", port: "COM3", columns: 42 },
+			select: { id: true },
+		});
+		const key = await prisma.apiKey.create({
+			data: { name: "till", keyHash: `hash-${Math.random().toString(36).slice(2)}`, maskedHint: "abcd" },
+			select: { id: true },
+		});
+		await prisma.webhook.create({
+			data: { apiKeyId: key.id, url: "https://receiver.test/hook", secret: "whsec_x", enabled: true },
+		});
+		const job = await prisma.job.create({
+			data: { agentId, deviceId: device.id, apiKeyId: key.id, status: "QUEUED" },
+			select: { id: true },
+		});
+
+		socket = new FakeAgentSocket();
+		handleAgentConnection(socket as unknown as WebSocket, agent(agentId), "127.0.0.1");
+		socket.emit("message", helloMessage(), false);
+
+		return { jobId: job.id };
+	}
+
+	/**
+	 * Drives one frame through the connection's `message` handler, as a real agent's send would
+	 * arrive, then waits for its fire-and-forget handling to finish — see the describe block comment.
+	 *
+	 * @param frame the frame to deliver, already a well-formed `job.update`
+	 */
+	async function handleFrame(frame: JobUpdateFrame): Promise<void> {
+		socket.emit("message", JSON.stringify(frame), false);
+		await delay(100);
+	}
+
+	it("queues a delivery when a job reaches a terminal state", async () => {
+		const { jobId } = await queuedJobForSubscribedKey();
+
+		await handleFrame({ type: "job.update", jobId, status: "COMPLETED", at: new Date().toISOString() });
+
+		expect(await prisma.webhookDelivery.count()).toBe(1);
+	});
+
+	it("queues nothing for a job that has merely started printing", async () => {
+		const { jobId } = await queuedJobForSubscribedKey();
+
+		await handleFrame({ type: "job.update", jobId, status: "PRINTING", at: new Date().toISOString() });
+
+		expect(await prisma.webhookDelivery.count()).toBe(0);
 	});
 });

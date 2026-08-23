@@ -15,6 +15,7 @@ import {
 } from "@/lib/markup/compiler";
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
+import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
  * Submitting a job: validate it, compile it, record it, hand it to the agent.
@@ -235,6 +236,11 @@ async function fail(jobId: string, errorCode: string, errorMessage: string): Pro
 				idempotencyHash: null,
 			},
 		});
+
+		// A job that died before reaching an agent settles here and nowhere else — the link never
+		// sees it, so this is the only place that can announce it. Without this, exactly the failures
+		// a caller most wants to hear about are the ones no webhook ever mentions.
+		await queueJobSettled(jobId);
 	} catch (error) {
 		logger.error("Could not record a job as failed", error, { jobId });
 	}
