@@ -1,11 +1,12 @@
 "use client";
 
-import { Ban, KeyRound, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { Ban, KeyRound, RefreshCw, Settings2, Trash2, Unlink, Webhook as WebhookIcon } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { deleteKey, rerollKey, revokeKey } from "@/app/(panel)/keys/actions";
+import { deleteKey, removeWebhook, rerollKey, revokeKey } from "@/app/(panel)/keys/actions";
 import { type GrantableDevice, KeyDialog } from "@/app/(panel)/keys/key-dialog";
 import { SecretPane } from "@/app/(panel)/keys/secret-pane";
+import { WebhookDialog } from "@/app/(panel)/keys/webhook-dialog";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -41,6 +42,8 @@ export interface KeyRowData {
 	revokedAt: string | null;
 	permissions: string[];
 	devices: { id: string; name: string; agentName: string }[];
+	/** This key's webhook subscription, or null when it has none. */
+	webhook: { url: string } | null;
 }
 
 /**
@@ -160,6 +163,44 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 									</Button>
 								}
 							/>
+
+							<WebhookDialog
+								apiKeyId={apiKey.id}
+								keyName={apiKey.name}
+								initialUrl={apiKey.webhook?.url ?? null}
+								trigger={
+									<Button
+										variant="outline"
+										size="icon"
+										className="size-8"
+										title={apiKey.webhook ? "Rotate webhook" : "Register webhook"}
+										aria-label={apiKey.webhook ? "Rotate webhook" : "Register webhook"}
+									>
+										<WebhookIcon className="size-3.5" />
+									</Button>
+								}
+							/>
+
+							{apiKey.webhook ? (
+								<Confirm
+									title={`Remove ${apiKey.name}'s webhook?`}
+									description="Deliveries stop and anything still queued for it is discarded along with it. Registering again issues a new secret."
+									confirmLabel="Remove"
+									disabled={pending}
+									onConfirm={() => act("Webhook removed.", () => removeWebhookResult(apiKey.id))}
+									trigger={
+										<Button
+											variant="outline"
+											size="icon"
+											className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+											title="Remove webhook"
+											aria-label="Remove webhook"
+										>
+											<Unlink className="size-3.5" />
+										</Button>
+									}
+								/>
+							) : null}
 						</>
 					)}
 
@@ -215,6 +256,26 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 			</Dialog>
 		</Card>
 	);
+}
+
+/**
+ * Adapts {@link removeWebhook} to the `{ error }` shape {@link KeyRow}'s `act` helper expects.
+ *
+ * `removeWebhook` throws rather than returning an error — see its own doc comment — because
+ * `setWebhook`'s sibling test asserts the rejection directly. `act` is shared with every other
+ * button on this row, all of which return `{ error }`, so this is the one place that difference is
+ * absorbed rather than spreading a second error-handling shape across the component.
+ *
+ * @param apiKeyId the key whose subscription is removed
+ * @returns the state {@link act} expects
+ */
+async function removeWebhookResult(apiKeyId: string): Promise<{ error: string | null }> {
+	try {
+		await removeWebhook(apiKeyId);
+		return { error: null };
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : "Could not remove the webhook." };
+	}
 }
 
 /** One list of grants, or a plain statement that there are none. */

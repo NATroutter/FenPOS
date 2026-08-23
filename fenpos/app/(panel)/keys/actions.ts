@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { requireSession } from "@/lib/auth/require-session";
+import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import {
 	createApiKey as createApiKeyRecord,
@@ -13,6 +14,8 @@ import {
 	updateApiKeyGrants,
 } from "@/lib/keys/key-service";
 import { logger } from "@/lib/logger";
+import { assertDeliverable } from "@/lib/webhooks/deliver";
+import { newWebhookSecret } from "@/lib/webhooks/signature";
 
 /**
  * Server actions behind the Keys tab.
@@ -147,4 +150,63 @@ export async function revokeKey(keyId: string): Promise<ActionState> {
  */
 export async function deleteKey(keyId: string): Promise<ActionState> {
 	return run("delete", () => deleteApiKeyRecord(keyId));
+}
+
+/**
+ * Registers or replaces a key's webhook subscription, returning its secret once.
+ *
+ * **This is a panel action rather than an API endpoint on purpose.** A key that could point its
+ * own webhook anywhere could redirect another integrator's notifications if it leaked — aiming a
+ * webhook is a decision about where *this install's* data goes, not something a caller should be
+ * able to do to itself. So it runs behind an admin session, like every other action in this file.
+ *
+ * The target is checked with {@link assertDeliverable}, the exact function the delivery loop
+ * calls before every attempt, so a URL this accepts can never turn out to be one delivery goes on
+ * to refuse — an operator learns a target is unreachable now, not from a failed-delivery log
+ * later.
+ *
+ * **Replacing an existing subscription issues a brand new secret.** There is no "keep the current
+ * secret, just change the URL" path: rotating and re-registering are the same action here, the
+ * same way {@link rerollKey} is the only way to change a key's secret. The old secret simply stops
+ * being the one this server signs with.
+ *
+ * @param apiKeyId the key the subscription belongs to
+ * @param url the target to deliver to
+ * @returns the new secret, shown once
+ * @throws ApiError when the target is not one this server will deliver to
+ */
+export async function setWebhook(apiKeyId: string, url: string): Promise<{ secret: string }> {
+	await requireSession();
+	await assertDeliverable(url);
+
+	const secret = newWebhookSecret();
+	await prisma.webhook.upsert({
+		where: { apiKeyId },
+		create: { apiKeyId, url, secret },
+		update: { url, secret },
+	});
+
+	logger.info("Webhook registered", { apiKeyId });
+	revalidatePath("/keys");
+	return { secret };
+}
+
+/**
+ * Removes a key's webhook subscription.
+ *
+ * Deleting the row cascades to every delivery still queued for it (`onDelete: Cascade` on
+ * `WebhookDelivery.webhookId`), so removing a subscription cannot leave orphaned deliveries a
+ * disabled or deleted target will never receive.
+ *
+ * `deleteMany` rather than `delete`: a key with no subscription is not an error here, it is the
+ * common case for every key that never had one, and the operator's intent — "this key should have
+ * no webhook" — is satisfied either way.
+ *
+ * @param apiKeyId the key whose subscription is removed
+ */
+export async function removeWebhook(apiKeyId: string): Promise<void> {
+	await requireSession();
+	await prisma.webhook.deleteMany({ where: { apiKeyId } });
+	logger.info("Webhook removed", { apiKeyId });
+	revalidatePath("/keys");
 }

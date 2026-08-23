@@ -20,12 +20,13 @@ export const dynamic = "force-dynamic";
  * only safe default for a credential created before anyone has decided what it is for.
  */
 export default async function KeysPage() {
-	const [keys, devices] = await Promise.all([
+	const [keys, devices, webhooks] = await Promise.all([
 		listApiKeys(),
 		prisma.device.findMany({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
+		prisma.webhook.findMany({ select: { apiKeyId: true, url: true } }),
 	]);
 
 	const grantable = devices.map((device) => ({
@@ -33,6 +34,8 @@ export default async function KeysPage() {
 		name: device.name,
 		agentName: device.agent.name,
 	}));
+
+	const webhookByKeyId = new Map(webhooks.map((webhook) => [webhook.apiKeyId, { url: webhook.url }]));
 
 	const rows: KeyRowData[] = keys.map((key) => ({
 		id: key.id,
@@ -43,6 +46,7 @@ export default async function KeysPage() {
 		revokedAt: key.revokedAt?.toISOString() ?? null,
 		permissions: key.permissions,
 		devices: key.devices,
+		webhook: webhookByKeyId.get(key.id) ?? null,
 	}));
 
 	return (

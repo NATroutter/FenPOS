@@ -1,6 +1,7 @@
 import "server-only";
 import { isIP } from "node:net";
 import { prisma } from "@/lib/db";
+import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { blockedReason } from "@/lib/net/address-rules";
 import { booleanSetting, integerSetting } from "@/lib/settings/settings-service";
@@ -84,12 +85,18 @@ const MAX_BACKOFF_SECONDS = 24 * 60 * 60;
  */
 const LEASE_MARGIN_MS = 5_000;
 
-/** Settings read once per pass and threaded through {@link processDelivery} for every delivery in it. */
+/**
+ * Settings read once per pass and threaded through {@link processDelivery} for every delivery in
+ * it.
+ *
+ * `webhooks.allowPlainHttp` is not among them: it belongs to the target check, and that check now
+ * lives in {@link assertDeliverable}, which reads it itself — see that function's doc comment for
+ * why it is not passed in from here instead.
+ */
 interface DeliverySettings {
 	timeoutMs: number;
 	maxAttempts: number;
 	backoffSeconds: number;
-	allowPlainHttp: boolean;
 }
 
 /**
@@ -112,13 +119,12 @@ export async function deliverDue(now: Date = new Date(), send: Sender = httpSend
 			include: { webhook: { select: { url: true, secret: true, enabled: true } } },
 		});
 
-		const [timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp] = await Promise.all([
+		const [timeoutMs, maxAttempts, backoffSeconds] = await Promise.all([
 			integerSetting("webhooks.timeoutMs"),
 			integerSetting("webhooks.maxAttempts"),
 			integerSetting("webhooks.retryBackoffSeconds"),
-			booleanSetting("webhooks.allowPlainHttp"),
 		]);
-		const settings: DeliverySettings = { timeoutMs, maxAttempts, backoffSeconds, allowPlainHttp };
+		const settings: DeliverySettings = { timeoutMs, maxAttempts, backoffSeconds };
 
 		// Concurrently, not one after another — see the module comment on why a slow target must not
 		// hold up the rest of the batch. Every element resolves (never rejects; see processDelivery),
@@ -186,12 +192,14 @@ async function processDelivery(
 			return false;
 		}
 
-		const refusal = await targetRefusal(delivery.webhook.url, settings.allowPlainHttp, settings.timeoutMs);
-		if (refusal !== null) {
+		try {
+			await assertDeliverable(delivery.webhook.url);
+		} catch (error) {
 			// Not retried. The target is wrong rather than unavailable, and no number of attempts
 			// will make an address this server must not reach into one it may.
-			await settleFailed(delivery.id, attempts, refusal);
-			logger.warn("Refused to deliver a webhook", { deliveryId: delivery.id, reason: refusal });
+			const reason = error instanceof ApiError ? error.message : String(error);
+			await settleFailed(delivery.id, attempts, reason);
+			logger.warn("Refused to deliver a webhook", { deliveryId: delivery.id, reason });
 			return true;
 		}
 
@@ -234,6 +242,38 @@ async function processDelivery(
 		// tries it again rather than this one being the delivery's last recorded attempt.
 		logger.error("Unexpected error delivering a webhook", error, { deliveryId: delivery.id });
 		return false;
+	}
+}
+
+/**
+ * Validates a candidate webhook target, the same way {@link processDelivery} validates one it is
+ * about to attempt.
+ *
+ * This is the one place `webhooks.allowPlainHttp` and the address rules are applied to a URL, and
+ * it is shared by two callers with different timing: the Keys tab calls it once, at registration,
+ * so an operator learns immediately that a target is unreachable rather than discovering it in a
+ * failed-delivery log; {@link processDelivery} calls it again before every attempt, because a
+ * hostname's answer can change between registration and delivery. Sharing the function is what
+ * keeps those two moments in agreement — a target the panel accepted can never turn out to be one
+ * delivery goes on to refuse, because there is only one implementation of "acceptable" to drift.
+ *
+ * Reads `webhooks.allowPlainHttp` and `webhooks.timeoutMs` itself rather than taking them as
+ * parameters, which is what lets the signature stay a single `url` for both call sites — the
+ * registration path has no batch of settings already in hand to pass through, and the delivery
+ * path already pays for a `listSettings()` round trip per setting it reads (see the module's own
+ * settings reads in {@link deliverDue}), so one more here costs it nothing structurally new.
+ *
+ * @param url the candidate target
+ * @throws ApiError with code `webhook_unreachable` when the target must not be delivered to
+ */
+export async function assertDeliverable(url: string): Promise<void> {
+	const [allowPlainHttp, timeoutMs] = await Promise.all([
+		booleanSetting("webhooks.allowPlainHttp"),
+		integerSetting("webhooks.timeoutMs"),
+	]);
+	const reason = await targetRefusal(url, allowPlainHttp, timeoutMs);
+	if (reason !== null) {
+		throw new ApiError("webhook_unreachable", reason);
 	}
 }
 
