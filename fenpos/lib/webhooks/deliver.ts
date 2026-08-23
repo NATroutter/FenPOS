@@ -247,8 +247,10 @@ async function processDelivery(
 	} catch (error) {
 		// See the module comment: this pass must survive one delivery misbehaving in a way that is
 		// not "the target answered badly" — the two ordinary failure paths above already return
-		// normally. Left PENDING at whatever `nextAttemptAt` it already had, so the next pass simply
-		// tries it again rather than this one being the delivery's last recorded attempt.
+		// normally. The claim is a lease now, not just a compare-and-swap, so a row reaching here does
+		// not go straight back into the next pass's due set the way it once did — it stays PENDING at
+		// whatever `leaseUntil` the claim pushed `nextAttemptAt` to, and only becomes due again once
+		// that lease runs out.
 		logger.error("Unexpected error delivering a webhook", error, { deliveryId: delivery.id });
 		return false;
 	}
@@ -391,15 +393,21 @@ async function resolveHostname(hostname: string, timeoutMs: number): Promise<str
 	if (isIP(hostname) !== 0) {
 		return [hostname];
 	}
+	const timeout = rejectAfter(timeoutMs);
 	try {
 		const { lookup } = await import("node:dns/promises");
-		const entries = await Promise.race([lookup(hostname, { all: true }), rejectAfter(timeoutMs)]);
+		const entries = await Promise.race([lookup(hostname, { all: true }), timeout.promise]);
 		return entries.map((entry) => entry.address);
 	} catch (error) {
 		if (error instanceof ResolutionTimeoutError) {
 			throw error;
 		}
 		return null;
+	} finally {
+		// The lookup winning the race is the common case, and leaves this timer with nothing left to
+		// do — still pending, still unref'd, but otherwise free money not yet collected. Clearing it
+		// here collects it, rather than leaving it to fire uselessly `timeoutMs` after a race it lost.
+		timeout.cancel();
 	}
 }
 
@@ -415,16 +423,21 @@ class ResolutionTimeoutError extends Error {}
  * Rejects after `ms`, for racing against an operation that carries no timeout of its own.
  *
  * The timer is unref'd so a lookup that is still pending when the process would otherwise exit does
- * not hold it open on its own.
+ * not hold it open on its own — but that alone does not stop it from firing: an unref'd timer still
+ * runs, it just cannot keep the process alive on its own. `cancel` is for the caller to stop it
+ * outright once the race is decided, so it does not go on to reject a race nobody is still awaiting.
  *
  * @param ms how long to wait before rejecting
- * @returns a promise that never resolves, only rejects with {@link ResolutionTimeoutError}
+ * @returns a promise that never resolves, only rejects with {@link ResolutionTimeoutError}, paired
+ *   with a `cancel` to stop it from doing so
  */
-function rejectAfter(ms: number): Promise<never> {
-	return new Promise((_resolve, reject) => {
-		const timer = setTimeout(() => reject(new ResolutionTimeoutError(`timed out after ${ms}ms`)), ms);
+function rejectAfter(ms: number): { promise: Promise<never>; cancel: () => void } {
+	let timer: ReturnType<typeof setTimeout>;
+	const promise = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new ResolutionTimeoutError(`timed out after ${ms}ms`)), ms);
 		timer.unref?.();
 	});
+	return { promise, cancel: () => clearTimeout(timer) };
 }
 
 /**

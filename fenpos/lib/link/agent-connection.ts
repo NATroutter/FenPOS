@@ -381,6 +381,8 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			// row sees the state the delivery describes. Terminal states only: a caller wants to know
 			// how a receipt ended, not that it started.
 			if (frame.status === "COMPLETED" || frame.status === "FAILED" || frame.status === "CANCELLED") {
+				// Inside this try for symmetry with everything above it, not because queueJobSettled
+				// can throw — it never does, swallowing its own faults; see its doc comment.
 				await queueJobSettled(frame.jobId);
 			}
 		} catch (error) {

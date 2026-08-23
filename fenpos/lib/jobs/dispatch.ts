@@ -136,7 +136,12 @@ export async function submitJob(
 		// the 202 — and a caller who retries before anything has rendered still needs a replay
 		// that reproduces that number, not a `lines: null` that contradicts the receipt they were
 		// already given. A second write rather than folded into the row's own `create` because
-		// `compile` needs the job's id, which only exists once that row does.
+		// `compile` needs the job's id, which only exists once that row does. That does leave the row
+		// briefly visible with `lines` null between the insert above and this write, and it is not
+		// only the raced insert (`isIdempotencyKeyRace`) that can observe it: a plain in-flight retry
+		// hitting the ordinary `findReplay` lookup in that window gets the same `lines: null`. Fixing
+		// it would need the job's id generated before `create` rather than by it, which is not worth
+		// it for a window this narrow.
 		await prisma.job.update({ where: { id: job.id }, data: { lines: compiled.lines.length } });
 	} catch (error) {
 		// Only the post-wrap limit, or the write above, can fail here; everything cheaper was
@@ -239,7 +244,9 @@ async function fail(jobId: string, errorCode: string, errorMessage: string): Pro
 
 		// A job that died before reaching an agent settles here and nowhere else — the link never
 		// sees it, so this is the only place that can announce it. Without this, exactly the failures
-		// a caller most wants to hear about are the ones no webhook ever mentions.
+		// a caller most wants to hear about are the ones no webhook ever mentions. Inside this try for
+		// symmetry with the write above it, not because queueJobSettled can throw — it never does,
+		// swallowing its own faults; see its doc comment.
 		await queueJobSettled(jobId);
 	} catch (error) {
 		logger.error("Could not record a job as failed", error, { jobId });

@@ -94,10 +94,14 @@ export async function POST(
 					});
 					return replayResponse(replay);
 				}
-				// The unique constraint says a row exists, but this lookup found none — the winner's
-				// row must have been removed (e.g. by retention) in the narrow window between the
-				// failed insert and this re-check. Vanishingly unlikely, and worth a line explaining
-				// the 500 that follows rather than leaving an operator to puzzle over a bare fault.
+				// The unique constraint says a row exists, but this lookup found none. Retention could
+				// in principle sweep it in this narrow window, but the likelier cause now is `fail` in
+				// `lib/jobs/dispatch.ts`, which clears a job's idempotency key the moment it settles a
+				// job that never reached an agent — so a winner whose compile or send fails clears its
+				// own key, and this lookup finds nothing to replay. A double-tap racing an agent
+				// disconnect lands here too: one caller gets a clean `agent_offline`, and the other, us.
+				// Worth a line explaining the 500 that follows rather than leaving an operator to
+				// puzzle over a bare fault.
 				logger.warn("Lost an idempotency-key insert race but found no row to replay", {
 					keyId: key.id,
 					idempotencyKey: idempotency.key,

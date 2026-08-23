@@ -397,22 +397,22 @@ model WebhookDelivery {
   payload   String
 
   /// PENDING | DELIVERED | FAILED
-  status       String    @default("PENDING")
-  attempts     Int       @default(0)
-  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
-  lastError    String?   @map("last_error")
-  deliveredAt  DateTime? @map("delivered_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lastError     String?   @map("last_error")
+  deliveredAt   DateTime? @map("delivered_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
-  @@index([status, nextAttemptAt])
-  @@index([webhookId])
   /// The settle paths that queue a delivery are not exactly-once — an agent can report a terminal
   /// status twice, and nothing serialises frame processing between them. This constraint is what
   /// turns "one settle, one delivery" from a race the application code hopes to win into a fact the
   /// database enforces: whichever of two concurrent inserts for the same job arrives second is
   /// refused, not silently duplicated.
   @@unique([webhookId, jobId])
+  @@index([status, nextAttemptAt])
+  @@index([webhookId])
   @@map("webhook_deliveries")
 }
