@@ -4,10 +4,11 @@ import { integerSetting } from "@/lib/settings/settings-service";
 /**
  * Query parsing and cursor derivation shared by every paginated API listing.
  *
- * Cursor rather than offset, and not as a matter of taste. The job table is swept by
- * `jobs.retentionMinutes` and `jobs.maxRecords`, so a caller paging with `skip` over a shrinking
- * list walks past rows it has never seen — the page boundary moves under it between requests. A
- * cursor names a record, so a row deleted behind the caller costs them nothing.
+ * Cursor rather than offset, and not as a matter of taste. Rows in a listing like this can vanish
+ * between requests — a job cascades away with the device or agent that owned it, for instance — and
+ * a caller paging with `skip` over a shrinking list walks past rows it has never seen, because the
+ * page boundary moves under it. A cursor names a record instead of a position, so a row deleted
+ * behind the caller costs them nothing.
  */
 
 /**

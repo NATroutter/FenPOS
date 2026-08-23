@@ -11,8 +11,11 @@ import { ApiError } from "@/lib/errors";
  * An `Idempotency-Key` resolves it — the second request either replays the first's answer or is
  * refused for disagreeing with it, and in neither case does a second receipt come out.
  *
- * The job row is the record. There is no separate table with its own lifetime, so nothing can
- * outlive the job it describes and answer a retry about a job that is no longer here.
+ * The job row is the record. There is no separate table with its own lifetime, so a key can never
+ * outlive the job it describes. **What that does not mean is that a key is ever freed.** Nothing in
+ * this server sweeps the `Job` table today, so a key recorded here is retained for as long as the
+ * row is — which, in practice, is forever. Integrators are told as much on the docs page and pointed
+ * at a for-all-time-unique key (a UUID) rather than something like an order number that could recur.
  */
 
 /**

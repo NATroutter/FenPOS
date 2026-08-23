@@ -19,7 +19,6 @@ import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
-import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "API" };
 
@@ -137,13 +136,12 @@ function EnforcedList() {
  * and each explanation sits beside the call, table or list it describes rather than above it.
  */
 export default async function ApiDocsPage() {
-	const [address, device, jobRetentionMinutes] = await Promise.all([
+	const [address, device] = await Promise.all([
 		getPublicAddress(),
 		prisma.device.findFirst({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { name: true, agent: { select: { name: true } } },
 		}),
-		integerSetting("jobs.retentionMinutes"),
 	]);
 
 	const agentName = device?.agent.name ?? "kitchen-pi";
@@ -299,10 +297,11 @@ export default async function ApiDocsPage() {
 							</P>
 
 							<Aside>
-								The key is replayable for exactly as long as the job row it was recorded on survives — this install
-								currently keeps a finished job for {jobRetentionMinutes} minutes (<Mono>jobs.retentionMinutes</Mono>),
-								or until <Mono>jobs.maxRecords</Mono> evicts it sooner, whichever happens first. Once the row is swept,
-								the key is free again and an identical retry is simply a new request. Size a retry window to that.
+								This server does not currently sweep the jobs table — <Mono>jobs.retentionMinutes</Mono> and{" "}
+								<Mono>jobs.maxRecords</Mono> bound only what is pushed to each agent's own local job store, not the
+								history kept here. In practice that means a key is retained forever: it is never freed on its own. Use
+								an identifier that is unique for all time — a UUID, not an order number or another value that could
+								recur — and never reuse a key across two different receipts.
 							</Aside>
 
 							<P>
@@ -334,7 +333,7 @@ export default async function ApiDocsPage() {
 
 							<CodeBlock label="Retry, same Idempotency-Key and body">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
-  -H "Idempotency-Key: order-1041" \\
+  -H "Idempotency-Key: 5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d" \\
   -H "Content-Type: application/json" \\
   -d '{ "data": [ "…same body…" ] }'`}</CodeBlock>
 
@@ -345,7 +344,7 @@ export default async function ApiDocsPage() {
 							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict — different body, same key`}>{`{
   "jobId": "clx…",
   "error": "idempotency_conflict",
-  "message": "Idempotency-Key 'order-1041' was already used with a different request body. Use a new key for a different receipt."
+  "message": "Idempotency-Key '5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d' was already used with a different request body. Use a new key for a different receipt."
 }`}</CodeBlock>
 						</Col>
 					</Split>
@@ -451,8 +450,7 @@ export default async function ApiDocsPage() {
 
 							<P>
 								The payload is a signed <Mono>POST</Mono> of JSON, frozen at the moment the job settled — a retry
-								minutes later still describes the job as it was then, even if the row itself has since been swept by
-								retention.
+								minutes later still describes the job as it was then, not whatever it might read now.
 							</P>
 
 							<P>

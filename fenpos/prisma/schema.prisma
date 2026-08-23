@@ -266,10 +266,10 @@ model Job {
   /// jobs, and for every job the panel submits.
   ///
   /// The job row *is* the idempotency record: there is no second table with its own lifetime to
-  /// keep in step. A key is therefore replayable for exactly as long as the job survives
-  /// `jobs.retentionMinutes` and `jobs.maxRecords`, and is free again afterwards. That coupling is
-  /// deliberate — an idempotency record that outlived the job it names would answer a retry by
-  /// describing something no longer in the system.
+  /// keep in step, so a key can never outlive the job it names. Nothing sweeps this table today,
+  /// though — `jobs.retentionMinutes` and `jobs.maxRecords` bound only what is pushed to each
+  /// agent's own local job store — so in practice a key is retained forever rather than freed after
+  /// some window. Integrators are told to use a for-all-time-unique key accordingly.
   idempotencyKey  String? @map("idempotency_key")
   /// SHA-256 of the request body the key was first used with.
   ///
