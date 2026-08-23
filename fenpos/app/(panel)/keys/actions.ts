@@ -163,7 +163,11 @@ export async function deleteKey(keyId: string): Promise<ActionState> {
  * The target is checked with {@link assertDeliverable}, the exact function the delivery loop
  * calls before every attempt, so a URL this accepts can never turn out to be one delivery goes on
  * to refuse — an operator learns a target is unreachable now, not from a failed-delivery log
- * later.
+ * later. **The refusal is returned, not thrown**, and deliberately shares {@link MintedKeyResult}
+ * with {@link createKey} and {@link rerollKey} rather than rejecting: a thrown error crossing a
+ * Server Action boundary has its message redacted in a production build, which would turn "this
+ * install only delivers webhooks over https" into a generic failure the operator cannot act on —
+ * exactly the outcome validating at registration exists to avoid.
  *
  * **Replacing an existing subscription issues a brand new secret.** There is no "keep the current
  * secret, just change the URL" path: rotating and re-registering are the same action here, the
@@ -172,23 +176,31 @@ export async function deleteKey(keyId: string): Promise<ActionState> {
  *
  * @param apiKeyId the key the subscription belongs to
  * @param url the target to deliver to
- * @returns the new secret, shown once
- * @throws ApiError when the target is not one this server will deliver to
+ * @returns the new secret, or why it could not be registered
  */
-export async function setWebhook(apiKeyId: string, url: string): Promise<{ secret: string }> {
+export async function setWebhook(apiKeyId: string, url: string): Promise<MintedKeyResult> {
 	await requireSession();
-	await assertDeliverable(url);
 
-	const secret = newWebhookSecret();
-	await prisma.webhook.upsert({
-		where: { apiKeyId },
-		create: { apiKeyId, url, secret },
-		update: { url, secret },
-	});
+	try {
+		await assertDeliverable(url);
 
-	logger.info("Webhook registered", { apiKeyId });
-	revalidatePath("/keys");
-	return { secret };
+		const secret = newWebhookSecret();
+		await prisma.webhook.upsert({
+			where: { apiKeyId },
+			create: { apiKeyId, url, secret },
+			update: { url, secret },
+		});
+
+		logger.info("Webhook registered", { apiKeyId });
+		revalidatePath("/keys");
+		return { error: null, secret };
+	} catch (error) {
+		if (error instanceof ApiError) {
+			return { error: error.message, secret: null };
+		}
+		logger.error("Key action failed: setWebhook", error);
+		return { error: "Something went wrong. Check the server log.", secret: null };
+	}
 }
 
 /**
@@ -203,10 +215,11 @@ export async function setWebhook(apiKeyId: string, url: string): Promise<{ secre
  * no webhook" — is satisfied either way.
  *
  * @param apiKeyId the key whose subscription is removed
+ * @returns the state to render
  */
-export async function removeWebhook(apiKeyId: string): Promise<void> {
-	await requireSession();
-	await prisma.webhook.deleteMany({ where: { apiKeyId } });
-	logger.info("Webhook removed", { apiKeyId });
-	revalidatePath("/keys");
+export async function removeWebhook(apiKeyId: string): Promise<ActionState> {
+	return run("removeWebhook", async () => {
+		await prisma.webhook.deleteMany({ where: { apiKeyId } });
+		logger.info("Webhook removed", { apiKeyId });
+	});
 }

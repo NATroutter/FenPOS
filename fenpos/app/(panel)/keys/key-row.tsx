@@ -187,7 +187,7 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 									description="Deliveries stop and anything still queued for it is discarded along with it. Registering again issues a new secret."
 									confirmLabel="Remove"
 									disabled={pending}
-									onConfirm={() => act("Webhook removed.", () => removeWebhookResult(apiKey.id))}
+									onConfirm={() => act("Webhook removed.", () => removeWebhook(apiKey.id))}
 									trigger={
 										<Button
 											variant="outline"
@@ -256,26 +256,6 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 			</Dialog>
 		</Card>
 	);
-}
-
-/**
- * Adapts {@link removeWebhook} to the `{ error }` shape {@link KeyRow}'s `act` helper expects.
- *
- * `removeWebhook` throws rather than returning an error — see its own doc comment — because
- * `setWebhook`'s sibling test asserts the rejection directly. `act` is shared with every other
- * button on this row, all of which return `{ error }`, so this is the one place that difference is
- * absorbed rather than spreading a second error-handling shape across the component.
- *
- * @param apiKeyId the key whose subscription is removed
- * @returns the state {@link act} expects
- */
-async function removeWebhookResult(apiKeyId: string): Promise<{ error: string | null }> {
-	try {
-		await removeWebhook(apiKeyId);
-		return { error: null };
-	} catch (error) {
-		return { error: error instanceof Error ? error.message : "Could not remove the webhook." };
-	}
 }
 
 /** One list of grants, or a plain statement that there are none. */

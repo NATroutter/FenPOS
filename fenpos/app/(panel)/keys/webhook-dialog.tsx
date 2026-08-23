@@ -54,12 +54,12 @@ export function WebhookDialog({
 	const save = (): void => {
 		setError(null);
 		startSave(async () => {
-			try {
-				const result = await setWebhook(apiKeyId, url.trim());
-				setSecret(result.secret);
-			} catch (caught) {
-				setError(caught instanceof Error ? caught.message : "Could not register the webhook.");
+			const result = await setWebhook(apiKeyId, url.trim());
+			if (result.error || !result.secret) {
+				setError(result.error ?? "Could not register the webhook.");
+				return;
 			}
+			setSecret(result.secret);
 		});
 	};
 

@@ -39,8 +39,9 @@ beforeEach(async () => {
 
 describe("setWebhook", () => {
 	it("registers a target and returns a secret exactly once", async () => {
-		const { secret } = await setWebhook(keyId, "https://93.184.216.34/hook");
+		const { error, secret } = await setWebhook(keyId, "https://93.184.216.34/hook");
 
+		expect(error).toBeNull();
 		expect(secret).toMatch(/^whsec_/);
 		const stored = await prisma.webhook.findUnique({ where: { apiKeyId: keyId } });
 		expect(stored?.url).toBe("https://93.184.216.34/hook");
@@ -54,25 +55,34 @@ describe("setWebhook", () => {
 		expect((await prisma.webhook.findUnique({ where: { apiKeyId: keyId } }))?.url).toBe("https://93.184.216.34/two");
 	});
 
-	it("refuses a target this server would never deliver to", async () => {
-		await expect(setWebhook(keyId, "https://127.0.0.1/hook")).rejects.toMatchObject({
-			code: "webhook_unreachable",
-		});
-		await expect(setWebhook(keyId, "not a url")).rejects.toMatchObject({ code: "webhook_unreachable" });
+	/**
+	 * Three distinct refusals, three distinct messages — this is the property that matters. An
+	 * action returning a flat "unreachable" for all of them would be no more useful to an operator
+	 * than a thrown error whose message a production build has already redacted; the whole point of
+	 * validating at registration is that the operator learns *which* thing about their URL is wrong.
+	 */
+	it("refuses a target this server would never deliver to, naming why", async () => {
+		const badScheme = await setWebhook(keyId, "not a url");
+		expect(badScheme.error).toMatch(/could not be parsed/i);
+		expect(badScheme.secret).toBeNull();
+
+		const loopback = await setWebhook(keyId, "https://127.0.0.1/hook");
+		expect(loopback.error).toMatch(/loopback/i);
+		expect(loopback.secret).toBeNull();
+
+		const plainHttp = await setWebhook(keyId, "http://93.184.216.34/hook");
+		expect(plainHttp.error).toMatch(/only delivers webhooks over https/i);
+		expect(plainHttp.secret).toBeNull();
+
+		// Distinct from each other, not three renderings of the same string.
+		expect(badScheme.error).not.toBe(loopback.error);
+		expect(loopback.error).not.toBe(plainHttp.error);
 	});
 
 	it("stores nothing when the target is refused", async () => {
-		await expect(setWebhook(keyId, "https://127.0.0.1/hook")).rejects.toMatchObject({
-			code: "webhook_unreachable",
-		});
+		await setWebhook(keyId, "https://127.0.0.1/hook");
 
 		expect(await prisma.webhook.findUnique({ where: { apiKeyId: keyId } })).toBeNull();
-	});
-
-	it("respects webhooks.allowPlainHttp", async () => {
-		await expect(setWebhook(keyId, "http://93.184.216.34/hook")).rejects.toMatchObject({
-			code: "webhook_unreachable",
-		});
 	});
 });
 
@@ -84,13 +94,14 @@ describe("removeWebhook", () => {
 			data: { webhookId: webhook.id, jobId: "job-1", payload: "{}" },
 		});
 
-		await removeWebhook(keyId);
+		const result = await removeWebhook(keyId);
 
+		expect(result.error).toBeNull();
 		expect(await prisma.webhook.findUnique({ where: { apiKeyId: keyId } })).toBeNull();
 		expect(await prisma.webhookDelivery.count({ where: { webhookId: webhook.id } })).toBe(0);
 	});
 
-	it("does nothing, and does not throw, when there is no registration", async () => {
-		await expect(removeWebhook(keyId)).resolves.toBeUndefined();
+	it("does nothing, and reports no error, when there is no registration", async () => {
+		expect(await removeWebhook(keyId)).toEqual({ error: null });
 	});
 });
