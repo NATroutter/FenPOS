@@ -26,10 +26,11 @@ import { getClientAddress } from "@/lib/request-context";
  * **An `Idempotency-Key` header makes a retry safe.** A repeated key addressed to the same device
  * with the same body replays the original answer and prints nothing; the same body addressed to a
  * *different* device, or a different body, is refused as a conflict. The key is replayable for as
- * long as the job row survives retention — see `lib/jobs/idempotency.ts`. A request that never
- * became a genuinely queued job leaves its key free for a corrected retry — whether it failed
- * validation before any row existed, or was accepted and then failed to compile or reach the agent
- * (see `fail` in `lib/jobs/dispatch.ts`). Only a request that actually reached `202 QUEUED` can be
+ * long as the job row exists — in practice indefinitely, since nothing sweeps this table — see
+ * `lib/jobs/idempotency.ts`. A request that never became a genuinely queued job leaves its key free
+ * for a corrected retry — whether it failed validation before any row existed, or was accepted and
+ * then failed to compile or reach the agent (see `fail` in `lib/jobs/dispatch.ts`). Only a request
+ * that actually reached `202 QUEUED` can be
  * replayed.
  */
 
@@ -94,9 +95,8 @@ export async function POST(
 					});
 					return replayResponse(replay);
 				}
-				// The unique constraint says a row exists, but this lookup found none. Retention could
-				// in principle sweep it in this narrow window, but the likelier cause now is `fail` in
-				// `lib/jobs/dispatch.ts`, which clears a job's idempotency key the moment it settles a
+				// The unique constraint says a row exists, but this lookup found none. The cause is `fail`
+				// in `lib/jobs/dispatch.ts`, which clears a job's idempotency key the moment it settles a
 				// job that never reached an agent — so a winner whose compile or send fails clears its
 				// own key, and this lookup finds nothing to replay. A double-tap racing an agent
 				// disconnect lands here too: one caller gets a clean `agent_offline`, and the other, us.

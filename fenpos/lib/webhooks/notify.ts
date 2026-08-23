@@ -21,8 +21,8 @@ const DELIVERY_CONSTRAINT_COLUMNS = ["webhook_id", "job_id"];
  * was lost because the announcement threw is a receipt whose state this server no longer knows.
  *
  * The payload is frozen at queue time. A retry minutes later must describe the job as it was when
- * it settled, and by then retention may have deleted the row entirely — a payload rebuilt at each
- * attempt would eventually be a delivery about nothing.
+ * it settled, and by then the row itself may be gone — cascade-deleted along with its device or
+ * agent — so a payload rebuilt at each attempt would eventually be a delivery about nothing.
  */
 
 /**
