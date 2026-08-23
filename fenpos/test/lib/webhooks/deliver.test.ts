@@ -1,8 +1,9 @@
 import * as dns from "node:dns/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { setSetting } from "@/lib/settings/settings-service";
-import { deliverDue } from "@/lib/webhooks/deliver";
+import { deliverDue, sweepDeliveriesNow } from "@/lib/webhooks/deliver";
 import { verifySignature } from "@/lib/webhooks/signature";
 
 // A named export of a built-in ESM module cannot be `vi.spyOn`'d directly — its module namespace
@@ -384,6 +385,24 @@ describe("deliverDue", () => {
 		expect((await prisma.webhookDelivery.findUnique({ where: { id } }))?.status).toBe("PENDING");
 	});
 
+	// --- A settled-as-failed delivery must be visible somewhere an operator reads ---
+	it("warns, naming the delivery, the job, the target's host and the reason, when a delivery is given up on", async () => {
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const id = await queue({ jobId: "job-warn-test" });
+
+		await deliverDue(new Date(), async () => ({ status: 400 }));
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			"Webhook delivery failed permanently",
+			expect.objectContaining({
+				deliveryId: id,
+				jobId: "job-warn-test",
+				host: "93.184.216.34",
+				lastError: expect.stringContaining("400"),
+			}),
+		);
+	});
+
 	// --- redirect: "manual" means a 3xx is exactly as final as a 4xx ---
 	it("gives up immediately on a 3xx, which redirect: 'manual' means will never become a 2xx on its own", async () => {
 		const id = await queue();
@@ -438,5 +457,83 @@ describe("deliverDue", () => {
 		const afterFirst = await prisma.webhookDelivery.findUnique({ where: { id } });
 		expect(afterFirst?.status).toBe("DELIVERED");
 		expect(afterFirst?.attempts).toBe(2);
+	});
+});
+
+describe("sweepDeliveriesNow", () => {
+	it("sweeps the oldest settled deliveries down to the cap, and never a pending one regardless of age", async () => {
+		for (let index = 0; index < 10; index++) {
+			await prisma.webhookDelivery.create({
+				data: {
+					webhookId,
+					jobId: `settled-${index}`,
+					payload: "{}",
+					status: index % 2 === 0 ? "DELIVERED" : "FAILED",
+					createdAt: new Date(Date.now() - (10 - index) * 60_000),
+				},
+			});
+		}
+		await prisma.webhookDelivery.create({
+			data: { webhookId, jobId: "still-pending", payload: "{}", createdAt: new Date(0) },
+		});
+
+		await sweepDeliveriesNow(5);
+
+		const remaining = await prisma.webhookDelivery.findMany();
+		const settledRemaining = remaining.filter((row) => row.status !== "PENDING");
+		expect(settledRemaining).toHaveLength(5);
+		expect(settledRemaining.map((row) => row.jobId).sort()).toEqual([
+			"settled-5",
+			"settled-6",
+			"settled-7",
+			"settled-8",
+			"settled-9",
+		]);
+		expect(remaining.some((row) => row.jobId === "still-pending")).toBe(true);
+	});
+
+	it("does nothing when the settled count is already within the cap", async () => {
+		await prisma.webhookDelivery.create({ data: { webhookId, jobId: "one", payload: "{}", status: "DELIVERED" } });
+
+		await sweepDeliveriesNow(5);
+
+		expect(await prisma.webhookDelivery.count()).toBe(1);
+	});
+
+	it("sweeps settled deliveries down to the configured cap through the real deliverDue settle path", async () => {
+		// Shared across every test in this file and persists between them — see the identical reset in
+		// test/lib/logs/ingest.test.ts for the same reason: land webhooks.deliverySweepEvery's gate at a
+		// known point in this test's own loop below, not at whatever offset earlier tests left it.
+		(globalThis as unknown as { fenposWebhookSettles: number | undefined }).fenposWebhookSettles = 0;
+		await setSetting("webhooks.maxDeliveryRecords", 100);
+		// 10 is webhooks.deliverySweepEvery's declared minimum, so ten real settles below are enough to
+		// trip it once rather than needing the (much higher) built-in default.
+		await setSetting("webhooks.deliverySweepEvery", 10);
+
+		await prisma.webhookDelivery.createMany({
+			data: Array.from({ length: 100 }, (_, index) => ({
+				webhookId,
+				jobId: `backlog-${index}`,
+				payload: "{}",
+				status: "DELIVERED",
+				createdAt: new Date(Date.now() - (200 - index) * 1000),
+			})),
+		});
+		for (let index = 0; index < 10; index++) {
+			await queue({ jobId: `fresh-${index}` });
+		}
+
+		await deliverDue(new Date(), async () => ({ status: 200 }));
+
+		// The tenth of these ten real settles lands sweepDeliveriesOccasionally's counter on exactly the
+		// configured deliverySweepEvery, firing sweepDeliveriesNow — fire-and-forget from settleFailed's
+		// and the DELIVERED write's caller, so the deletion this proves may still be in flight the
+		// instant deliverDue resolves.
+		await vi.waitFor(
+			async () => {
+				expect(await prisma.webhookDelivery.count()).toBeLessThanOrEqual(100);
+			},
+			{ timeout: 5000 },
+		);
 	});
 });

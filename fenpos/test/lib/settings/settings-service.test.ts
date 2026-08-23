@@ -238,6 +238,8 @@ describe("setting definitions", () => {
 			"webhooks.timeoutMs": "integer",
 			"webhooks.maxAttempts": "integer",
 			"webhooks.retryBackoffSeconds": "integer",
+			"webhooks.maxDeliveryRecords": "integer",
+			"webhooks.deliverySweepEvery": "integer",
 			"events.keepaliveSeconds": "integer",
 			"link.heartbeatSeconds": "integer",
 			"link.heartbeatTimeoutSeconds": "integer",

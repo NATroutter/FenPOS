@@ -67,6 +67,9 @@ const BATCH = 20;
 /** Statuses that mean "try again later" despite being 4xx. */
 const RETRYABLE_CLIENT_STATUSES: readonly number[] = [408, 429];
 
+/** The two terminal `WebhookDelivery.status` values a sweep may remove. `PENDING` never is. */
+const SETTLED_DELIVERY_STATUSES: readonly string[] = ["DELIVERED", "FAILED"];
+
 /**
  * The longest a single retry may be scheduled out, in seconds.
  *
@@ -105,6 +108,10 @@ interface DeliverySettings {
 	timeoutMs: number;
 	maxAttempts: number;
 	backoffSeconds: number;
+	/** `webhooks.maxDeliveryRecords`: settled deliveries kept before the oldest are swept. */
+	maxDeliveryRecords: number;
+	/** `webhooks.deliverySweepEvery`: how many settled deliveries pass between retention sweeps. */
+	deliverySweepEvery: number;
 }
 
 /**
@@ -135,12 +142,20 @@ export async function deliverDue(now: Date = new Date(), send: Sender = httpSend
 			include: { webhook: { select: { url: true, secret: true, enabled: true } } },
 		});
 
-		const [timeoutMs, maxAttempts, backoffSeconds] = await Promise.all([
+		const [timeoutMs, maxAttempts, backoffSeconds, maxDeliveryRecords, deliverySweepEvery] = await Promise.all([
 			integerSetting("webhooks.timeoutMs"),
 			integerSetting("webhooks.maxAttempts"),
 			integerSetting("webhooks.retryBackoffSeconds"),
+			integerSetting("webhooks.maxDeliveryRecords"),
+			integerSetting("webhooks.deliverySweepEvery"),
 		]);
-		const settings: DeliverySettings = { timeoutMs, maxAttempts, backoffSeconds };
+		const settings: DeliverySettings = {
+			timeoutMs,
+			maxAttempts,
+			backoffSeconds,
+			maxDeliveryRecords,
+			deliverySweepEvery,
+		};
 
 		// Concurrently, not one after another — see the module comment on why a slow target must not
 		// hold up the rest of the batch. Every element resolves (never rejects; see processDelivery),
@@ -177,6 +192,7 @@ export async function deliverDue(now: Date = new Date(), send: Sender = httpSend
 async function processDelivery(
 	delivery: {
 		id: string;
+		jobId: string;
 		attempts: number;
 		payload: string;
 		webhook: { url: string; secret: string; enabled: boolean };
@@ -194,6 +210,16 @@ async function processDelivery(
 		}
 
 		const attempts = delivery.attempts + 1;
+		// Never the full URL — a registered target can carry credentials in its query string, and the
+		// host is what actually diagnoses a failing delivery. See the logging in settleFailed.
+		const host = hostOf(delivery.webhook.url);
+		const retryOptions = {
+			now,
+			maxAttempts: settings.maxAttempts,
+			backoffSeconds: settings.backoffSeconds,
+			maxDeliveryRecords: settings.maxDeliveryRecords,
+			deliverySweepEvery: settings.deliverySweepEvery,
+		};
 
 		// The claim is a lease, not just a compare-and-swap: matching `attempts` is what decides which
 		// of however many overlapping passes wins the row, but the same UPDATE also pushes
@@ -221,12 +247,7 @@ async function processDelivery(
 			// through recordFailure the same way a status code's is, rather than a mechanism of its own.
 			const reason = error instanceof ApiError ? error.message : String(error);
 			const permanent = !(error instanceof ApiError && error.details.permanent === false);
-			await recordFailure(delivery.id, attempts, reason, {
-				now,
-				maxAttempts: settings.maxAttempts,
-				backoffSeconds: settings.backoffSeconds,
-				permanent,
-			});
+			await recordFailure(delivery.id, delivery.jobId, host, attempts, reason, { ...retryOptions, permanent });
 			logger.warn("Refused to deliver a webhook", { deliveryId: delivery.id, reason, permanent });
 			return true;
 		}
@@ -245,10 +266,13 @@ async function processDelivery(
 				// attempt outlived its lease and a second pass already settled the row (won it, sent, and
 				// recorded an outcome), that second write already advanced `attempts` past what this call
 				// claimed, so this one matches nothing and a stale outcome cannot overwrite a real one.
-				await prisma.webhookDelivery.updateMany({
+				const settled = await prisma.webhookDelivery.updateMany({
 					where: { id: delivery.id, attempts },
 					data: { status: "DELIVERED", attempts, deliveredAt: now, lastError: null },
 				});
+				if (settled.count > 0) {
+					void sweepDeliveriesOccasionally(settings.maxDeliveryRecords, settings.deliverySweepEvery);
+				}
 				return true;
 			}
 
@@ -257,19 +281,19 @@ async function processDelivery(
 			// answered now is still a 301 on the last attempt an hour from now. Only a 5xx (the receiver's
 			// own fault, worth retrying) and 408/429 (which explicitly mean "later") are not permanent.
 			const permanent = status < 500 && !RETRYABLE_CLIENT_STATUSES.includes(status);
-			await recordFailure(delivery.id, attempts, `The receiver answered ${status}.`, {
-				now,
-				maxAttempts: settings.maxAttempts,
-				backoffSeconds: settings.backoffSeconds,
+			await recordFailure(delivery.id, delivery.jobId, host, attempts, `The receiver answered ${status}.`, {
+				...retryOptions,
 				permanent,
 			});
 		} catch (error) {
-			await recordFailure(delivery.id, attempts, String(error instanceof Error ? error.message : error), {
-				now,
-				maxAttempts: settings.maxAttempts,
-				backoffSeconds: settings.backoffSeconds,
-				permanent: false,
-			});
+			await recordFailure(
+				delivery.id,
+				delivery.jobId,
+				host,
+				attempts,
+				String(error instanceof Error ? error.message : error),
+				{ ...retryOptions, permanent: false },
+			);
 		}
 		return true;
 	} catch (error) {
@@ -472,18 +496,31 @@ function rejectAfter(ms: number): { promise: Promise<never>; cancel: () => void 
  * Records a failed attempt, retrying or giving up.
  *
  * @param id the delivery
+ * @param jobId the job this delivery is about, for {@link settleFailed}'s log line
+ * @param host the target's host, for {@link settleFailed}'s log line — never the full URL, which can
+ *   carry credentials in its query string
  * @param attempts the attempt just made, counted from one
  * @param reason what went wrong, stored for an operator to read
- * @param options the clock, the ceiling, the backoff, and whether this failure is worth retrying
+ * @param options the clock, the ceiling, the backoff, whether this failure is worth retrying, and the
+ *   sweep settings to pass on to {@link settleFailed} when it is not
  */
 async function recordFailure(
 	id: string,
+	jobId: string,
+	host: string,
 	attempts: number,
 	reason: string,
-	options: { now: Date; maxAttempts: number; backoffSeconds: number; permanent: boolean },
+	options: {
+		now: Date;
+		maxAttempts: number;
+		backoffSeconds: number;
+		permanent: boolean;
+		maxDeliveryRecords: number;
+		deliverySweepEvery: number;
+	},
 ): Promise<void> {
 	if (options.permanent || attempts >= options.maxAttempts) {
-		await settleFailed(id, attempts, reason);
+		await settleFailed(id, jobId, host, attempts, reason, options.maxDeliveryRecords, options.deliverySweepEvery);
 		return;
 	}
 
@@ -506,20 +543,130 @@ async function recordFailure(
 }
 
 /**
- * Marks a delivery as given up on.
+ * Marks a delivery as given up on, and warns about it.
+ *
+ * The warning is the one place a failing webhook otherwise had no log output at all: a receiver
+ * that answers 500 until `webhooks.maxAttempts` is exhausted, or answers a 4xx and is abandoned on
+ * the first attempt, settled here either way with nothing printed before this existed. Logged only
+ * when this call actually wins the write — see the `attempts` guard below — so a stale outcome that
+ * lost to an earlier DELIVERED does not report a failure that never happened.
  *
  * @param id the delivery
+ * @param jobId the job this delivery is about
+ * @param host the target's host — never the full URL, which can carry credentials in its query string
  * @param attempts the attempt count to record
  * @param reason what went wrong
+ * @param maxDeliveryRecords settled deliveries kept before the oldest are swept
+ * @param deliverySweepEvery how many settled deliveries pass between sweeps
  */
-async function settleFailed(id: string, attempts: number, reason: string): Promise<void> {
+async function settleFailed(
+	id: string,
+	jobId: string,
+	host: string,
+	attempts: number,
+	reason: string,
+	maxDeliveryRecords: number,
+	deliverySweepEvery: number,
+): Promise<void> {
 	// Conditioned on `attempts` for the same reason the DELIVERED write above is — see the module
 	// comment. A row this call no longer matches has already been settled by someone else, and this
 	// write correctly becomes a no-op rather than overwriting a real outcome with a stale one.
-	await prisma.webhookDelivery.updateMany({
+	const settled = await prisma.webhookDelivery.updateMany({
 		where: { id, attempts },
 		data: { status: "FAILED", attempts, lastError: reason },
 	});
+	if (settled.count === 0) {
+		return;
+	}
+
+	logger.warn("Webhook delivery failed permanently", { deliveryId: id, jobId, host, lastError: reason });
+	void sweepDeliveriesOccasionally(maxDeliveryRecords, deliverySweepEvery);
+}
+
+/**
+ * The registered target's `host` (hostname, plus port when the URL names one), for logging.
+ *
+ * Never the full URL: a target an operator registers can carry credentials in its query string, and
+ * the host is what actually diagnoses a failing delivery — see {@link settleFailed} and the module
+ * comment on `webhooks.allowPlainHttp`.
+ *
+ * @param url the webhook's registered target
+ * @returns the host, or a placeholder on the URL this cannot happen for — `assertDeliverable` has
+ *   already required the same URL to parse before any delivery reaches this function
+ */
+function hostOf(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return "(unparseable url)";
+	}
+}
+
+const globalForDeliverySweep = globalThis as unknown as {
+	fenposWebhookSettles: number | undefined;
+};
+
+/**
+ * Counts one more settled delivery and sweeps once `webhooks.deliverySweepEvery` of them have
+ * passed.
+ *
+ * The same shape `lib/logs/ingest.ts` uses for `logs.maxRecords`/`logs.sweepEvery` — counted in
+ * writes rather than scheduled on a timer, so a quiet install sweeps nothing and a busy one sweeps
+ * in proportion to what it is actually settling.
+ *
+ * @param maxRecords settled deliveries kept before the oldest are swept (`webhooks.maxDeliveryRecords`)
+ * @param sweepEvery how many settled deliveries pass between sweeps (`webhooks.deliverySweepEvery`)
+ */
+async function sweepDeliveriesOccasionally(maxRecords: number, sweepEvery: number): Promise<void> {
+	const settles = (globalForDeliverySweep.fenposWebhookSettles ?? 0) + 1;
+	globalForDeliverySweep.fenposWebhookSettles = settles;
+
+	if (settles % sweepEvery !== 0) {
+		return;
+	}
+
+	await sweepDeliveriesNow(maxRecords);
+}
+
+/**
+ * Sweeps `webhook_deliveries` down to `maxRecords`, deleting the oldest *settled* rows first.
+ *
+ * Scoped to {@link SETTLED_DELIVERY_STATUSES} only — `DELIVERED` and `FAILED` — never `PENDING`: a
+ * delivery waiting on its first attempt or sitting out a retry backoff is not a candidate no matter
+ * how old its row is, because sweeping it would silently drop a notification this server has not
+ * finished trying to send.
+ *
+ * Exported so a test can trigger a sweep directly rather than settling `webhooks.deliverySweepEvery`
+ * deliveries to reach the point at which {@link sweepDeliveriesOccasionally} would trigger it on its
+ * own — the same reason `lib/logs/ingest.ts` exports `sweepLogsNow`.
+ *
+ * @param maxRecords settled deliveries kept before the oldest are swept
+ */
+export async function sweepDeliveriesNow(maxRecords: number): Promise<void> {
+	try {
+		const total = await prisma.webhookDelivery.count({ where: { status: { in: [...SETTLED_DELIVERY_STATUSES] } } });
+		if (total <= maxRecords) {
+			return;
+		}
+
+		const cutoff = await prisma.webhookDelivery.findMany({
+			where: { status: { in: [...SETTLED_DELIVERY_STATUSES] } },
+			orderBy: { createdAt: "desc" },
+			skip: maxRecords - 1,
+			take: 1,
+			select: { createdAt: true },
+		});
+
+		if (cutoff.length > 0) {
+			const removed = await prisma.webhookDelivery.deleteMany({
+				where: { status: { in: [...SETTLED_DELIVERY_STATUSES] }, createdAt: { lt: cutoff[0].createdAt } },
+			});
+			logger.info("Swept old webhook deliveries", { removed: removed.count });
+		}
+	} catch (error) {
+		// A failed sweep is not worth failing a delivery pass over; the next settle will try again.
+		logger.warn("Could not sweep old webhook deliveries", { error: String(error) });
+	}
 }
 
 /**
