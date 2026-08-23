@@ -19,6 +19,7 @@ import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "API" };
 
@@ -51,6 +52,7 @@ const SECTIONS = [
 		verbs: ["GET"] as const satisfies readonly Verb[],
 		path: `${API_BASE}/jobs`,
 	},
+	{ id: "webhooks", title: "Webhooks", note: "Delivery, signature verification and retries for job outcomes" },
 	{
 		id: "devices",
 		title: "Listing devices",
@@ -135,12 +137,13 @@ function EnforcedList() {
  * and each explanation sits beside the call, table or list it describes rather than above it.
  */
 export default async function ApiDocsPage() {
-	const [address, device] = await Promise.all([
+	const [address, device, jobRetentionMinutes] = await Promise.all([
 		getPublicAddress(),
 		prisma.device.findFirst({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { name: true, agent: { select: { name: true } } },
 		}),
+		integerSetting("jobs.retentionMinutes"),
 	]);
 
 	const agentName = device?.agent.name ?? "kitchen-pi";
@@ -284,6 +287,30 @@ export default async function ApiDocsPage() {
 								Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
 								<Mono>&lt;nowrap&gt;</Mono>.
 							</P>
+
+							<P>
+								An optional <Mono>Idempotency-Key</Mono> header makes a retry safe. Omit it and nothing here changes.
+								Send it, and the first request records the key against the job it creates; a retry presenting the{" "}
+								<strong>same</strong> key, the same device and a byte-identical body gets back the original{" "}
+								<Status>202</Status> — with an <Mono>Idempotent-Replay: true</Mono> header — and prints nothing a second
+								time. The same key with a different body, or the same key and body aimed at a different device, is
+								refused as <ErrorRef code="idempotency_conflict" />: reusing a key for two different receipts is a
+								caller error, not something to silently paper over.
+							</P>
+
+							<Aside>
+								The key is replayable for exactly as long as the job row it was recorded on survives — this install
+								currently keeps a finished job for {jobRetentionMinutes} minutes (<Mono>jobs.retentionMinutes</Mono>),
+								or until <Mono>jobs.maxRecords</Mono> evicts it sooner, whichever happens first. Once the row is swept,
+								the key is free again and an identical retry is simply a new request. Size a retry window to that.
+							</Aside>
+
+							<P>
+								Only a request that actually reached <Status>202</Status> <Mono>QUEUED</Mono> is replayable. One that
+								failed validation before any job existed, or was accepted and then failed to compile or reach the agent,
+								never recorded a key — nothing was queued to record it against, so the key is free and a corrected retry
+								is just a new request.
+							</P>
 						</Col>
 
 						<Col>
@@ -304,6 +331,22 @@ export default async function ApiDocsPage() {
   }'`}</CodeBlock>
 
 							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
+
+							<CodeBlock label="Retry, same Idempotency-Key and body">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Idempotency-Key: order-1041" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "data": [ "…same body…" ] }'`}</CodeBlock>
+
+							<CodeBlock label="202 Accepted (replay)">{`Idempotent-Replay: true
+
+{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
+
+							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict — different body, same key`}>{`{
+  "jobId": "clx…",
+  "error": "idempotency_conflict",
+  "message": "Idempotency-Key 'order-1041' was already used with a different request body. Use a new key for a different receipt."
+}`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
@@ -389,6 +432,97 @@ export default async function ApiDocsPage() {
 					<Split>
 						<Col>
 							<P>
+								A key's job outcomes can be delivered to a URL as they settle, instead of being polled for. There is no
+								endpoint here for it: a subscription is registered from the <Mono>Keys</Mono> tab in the panel, by an
+								operator with an admin session, never through this API.
+							</P>
+
+							<Aside>
+								A key that could register its own callback could redirect another integrator's notifications somewhere
+								else if it ever leaked — the URL and secret live with the operator who grants the key, not with the key
+								itself.
+							</Aside>
+
+							<P>
+								One delivery is queued for every job that reaches a terminal state — <Mono>COMPLETED</Mono>,{" "}
+								<Mono>FAILED</Mono> or <Mono>CANCELLED</Mono> — for a key with an enabled subscription. Exactly one: a
+								job reported settled twice, e.g. by an agent reconnecting, still queues a single delivery for it.
+							</P>
+
+							<P>
+								The payload is a signed <Mono>POST</Mono> of JSON, frozen at the moment the job settled — a retry
+								minutes later still describes the job as it was then, even if the row itself has since been swept by
+								retention.
+							</P>
+
+							<P>
+								Every delivery carries <Mono>X-FenPOS-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</Mono>. <Mono>v1</Mono>{" "}
+								is an HMAC-SHA256, in hex, of the subscription's secret over the exact string{" "}
+								<Mono>
+									${"{"}t{"}"}.${"{"}body{"}"}
+								</Mono>{" "}
+								— the timestamp, a literal dot, then the request body exactly as sent. Verify by recomputing that digest
+								with the secret, comparing it to <Mono>v1</Mono> in constant time, and rejecting a <Mono>t</Mono> too
+								far from the receiver's own clock. The timestamp is part of the signed material rather than merely sent
+								alongside it, deliberately: a delivery captured once cannot be replayed later, because replaying it
+								either carries the original, now-stale <Mono>t</Mono> or a fresh one that no longer matches the digest.
+							</P>
+
+							<P>
+								A <Mono>2xx</Mono> settles the delivery. Anything else is retried with exponential backoff, doubling
+								each time, up to <Mono>webhooks.maxAttempts</Mono> — except a <Mono>4xx</Mono> other than{" "}
+								<Status>408</Status> or <Status>429</Status>, which is given up on immediately, since a target rejecting
+								the shape of a delivery will reject the same bytes again.
+							</P>
+
+							<Aside>
+								Be idempotent on <Mono>jobId</Mono>. A delivery whose <Mono>2xx</Mono> never made it back to this server
+								is retried even though the receiver already acted on it, so the same notification can arrive more than
+								once — one settled job queues exactly one delivery, not one guaranteed-once request.
+							</Aside>
+						</Col>
+
+						<Col>
+							<CodeBlock label="POST to the registered URL">{`X-FenPOS-Signature: t=1755892800,v1=5f2b1e…
+
+{
+  "event": "job.settled",
+  "jobId": "clx…",
+  "status": "COMPLETED",
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "lines": 8,
+  "bytes": 512,
+  "error": null,
+  "errorMessage": null,
+  "at": "2026-08-22T18:04:09.900Z"
+}`}</CodeBlock>
+
+							<CodeBlock label="Verifying it (Node.js)">{`import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
+  const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(header.trim());
+  if (!match) return false;
+
+  const t = Number(match[1]);
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - t) > toleranceSeconds) return false;
+
+  const expected = Buffer.from(
+    createHmac("sha256", secret).update(\`\${t}.\${body}\`, "utf8").digest("hex"),
+    "hex",
+  );
+  const presented = Buffer.from(match[2], "hex");
+  return expected.length === presented.length && timingSafeEqual(expected, presented);
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[5]}>
+					<Split>
+						<Col>
+							<P>
 								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
 								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
 								site's printers and learns nothing about the rest.
@@ -427,7 +561,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[5]}>
+				<DocSection {...SECTIONS[6]}>
 					<Split>
 						<Col>
 							<P>
@@ -464,7 +598,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[6]}>
+				<DocSection {...SECTIONS[7]}>
 					<Split>
 						<Col>
 							<P>
@@ -501,7 +635,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[7]}>
+				<DocSection {...SECTIONS[8]}>
 					<Split>
 						<Col>
 							<P>
@@ -550,7 +684,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[8]}>
+				<DocSection {...SECTIONS[9]}>
 					<Split>
 						<Col>
 							<P>
@@ -583,7 +717,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[9]}>
+				<DocSection {...SECTIONS[10]}>
 					<Split>
 						<Col>
 							<P>
