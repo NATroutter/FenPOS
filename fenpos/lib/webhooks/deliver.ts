@@ -20,8 +20,16 @@ import { signPayload } from "@/lib/webhooks/signature";
  * by an API caller, which is a materially weaker threat model than `<image>` URLs face. The address
  * check still runs before every attempt — a hostname's answer can change between registration and
  * delivery — but this deliberately stops short of the connection pinning `fetchRemoteImage` does.
- * The residual window is a DNS answer that changes between this check and the connection, exploitable
- * only by someone who can already both edit an operator's webhook URL and control that DNS.
+ *
+ * **The residual is bigger than "a DNS answer changing between this check and the connection"
+ * sounds.** `targetRefusal`'s resolution and the `fetch` that follows it are two independent
+ * lookups, not one pinned to the other, so an attacker holding a low-TTL record that alternates
+ * between a safe and an unsafe address is not threading a narrow race — each attempt is roughly a
+ * coin flip, and a delivery that fails is retried up to `webhooks.maxAttempts` times, each its own
+ * flip. It is also not a read the way `fetchRemoteImage`'s target is: this is a `POST` carrying a
+ * signed body to whatever the second lookup answered. What actually bounds this is the
+ * precondition, not the odds once it holds — reaching it requires already controlling both an
+ * operator's webhook URL and the DNS answering for it.
  *
  * **Overlapping passes must not send the same delivery twice.** Task 11 calls {@link deliverDue} on
  * a timer, so a pass that is still working through a slow batch can still be running when the next
@@ -113,7 +121,15 @@ export async function deliverDue(now: Date = new Date(), send: Sender = httpSend
 		}
 
 		const due = await prisma.webhookDelivery.findMany({
-			where: { status: "PENDING", nextAttemptAt: { lte: now } },
+			where: {
+				status: "PENDING",
+				nextAttemptAt: { lte: now },
+				// A disabled webhook, or one whose key has been revoked, must not occupy the front of this
+				// queue forever: without this filter its rows stay PENDING and due, so — oldest first —
+				// they sort ahead of every row behind them on every later pass, and BATCH of them is enough
+				// to starve delivery entirely. Filtered again inside processDelivery too; see there for why.
+				webhook: { enabled: true, apiKey: { revokedAt: null } },
+			},
 			orderBy: { nextAttemptAt: "asc" },
 			take: BATCH,
 			include: { webhook: { select: { url: true, secret: true, enabled: true } } },
@@ -171,6 +187,9 @@ async function processDelivery(
 ): Promise<boolean> {
 	try {
 		if (!delivery.webhook.enabled) {
+			// Also filtered in deliverDue's due query — see the comment there for why a row must not
+			// reach even a claim attempt once its webhook is disabled. Kept here too because a webhook
+			// can be disabled in the window between that query running and this row's claim.
 			return false;
 		}
 
@@ -221,14 +240,23 @@ async function processDelivery(
 			);
 
 			if (status >= 200 && status < 300) {
-				await prisma.webhookDelivery.update({
-					where: { id: delivery.id },
+				// Conditioned on the `attempts` this call claimed, not a plain update-by-id — see the
+				// module comment on why the claim is a lease and not a mutual-exclusion guarantee. If this
+				// attempt outlived its lease and a second pass already settled the row (won it, sent, and
+				// recorded an outcome), that second write already advanced `attempts` past what this call
+				// claimed, so this one matches nothing and a stale outcome cannot overwrite a real one.
+				await prisma.webhookDelivery.updateMany({
+					where: { id: delivery.id, attempts },
 					data: { status: "DELIVERED", attempts, deliveredAt: now, lastError: null },
 				});
 				return true;
 			}
 
-			const permanent = status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUSES.includes(status);
+			// A 3xx is exactly as permanent as a 4xx here, not merely "not yet permanent": `fetch` is
+			// called with `redirect: "manual"` (see httpSender below), so nothing ever follows it — a 301
+			// answered now is still a 301 on the last attempt an hour from now. Only a 5xx (the receiver's
+			// own fault, worth retrying) and 408/429 (which explicitly mean "later") are not permanent.
+			const permanent = status < 500 && !RETRYABLE_CLIENT_STATUSES.includes(status);
 			await recordFailure(delivery.id, attempts, `The receiver answered ${status}.`, {
 				now,
 				maxAttempts: settings.maxAttempts,
@@ -464,8 +492,11 @@ async function recordFailure(
 	// Capped at MAX_BACKOFF_SECONDS — see its own comment for why the doubling alone is not enough.
 	const waitSeconds = Math.min(options.backoffSeconds * 2 ** (attempts - 1), MAX_BACKOFF_SECONDS);
 
-	await prisma.webhookDelivery.update({
-		where: { id },
+	// Conditioned on the `attempts` this call claimed — see the module comment and the DELIVERED write
+	// above for why a plain update-by-id can clobber a second claimant's outcome, and why every outcome
+	// write here guards against it the same way.
+	await prisma.webhookDelivery.updateMany({
+		where: { id, attempts },
 		data: {
 			attempts,
 			lastError: reason,
@@ -482,8 +513,11 @@ async function recordFailure(
  * @param reason what went wrong
  */
 async function settleFailed(id: string, attempts: number, reason: string): Promise<void> {
-	await prisma.webhookDelivery.update({
-		where: { id },
+	// Conditioned on `attempts` for the same reason the DELIVERED write above is — see the module
+	// comment. A row this call no longer matches has already been settled by someone else, and this
+	// write correctly becomes a no-op rather than overwriting a real outcome with a stale one.
+	await prisma.webhookDelivery.updateMany({
+		where: { id, attempts },
 		data: { status: "FAILED", attempts, lastError: reason },
 	});
 }

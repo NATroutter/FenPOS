@@ -24,6 +24,7 @@ vi.mock("node:dns/promises", async (importOriginal) => {
 
 const SECRET = "whsec_deliver_test";
 let webhookId: string;
+let apiKeyId: string;
 
 beforeEach(async () => {
 	await prisma.webhookDelivery.deleteMany();
@@ -34,6 +35,7 @@ beforeEach(async () => {
 	const key = await prisma.apiKey.create({
 		data: { name: "till", keyHash: `hash-${Date.now()}`, maskedHint: "abcd" },
 	});
+	apiKeyId = key.id;
 	// A literal public address, not a hostname: `targetRefusal` resolves a hostname for real before
 	// checking it, and `receiver.test` — the placeholder used elsewhere in this suite, e.g.
 	// notify.test.ts, where nothing ever connects to it — is an IANA-reserved TLD guaranteed never to
@@ -341,5 +343,100 @@ describe("deliverDue", () => {
 		expect(send).not.toHaveBeenCalled();
 
 		findMany.mockRestore();
+	});
+
+	// --- A disabled webhook must not starve the queue ---
+	//
+	// processDelivery's own `enabled` check ran only after a row was already claimed, so a disabled
+	// webhook's rows stayed PENDING, still due, and — oldest first — sorted ahead of every other
+	// delivery on every later pass. Filtering the due query itself is what stops them ever reaching a
+	// claim in the first place.
+	it("does not let a disabled webhook's due deliveries block the rest of the batch", async () => {
+		const otherKey = await prisma.apiKey.create({
+			data: { name: "other", keyHash: `hash-${Date.now()}-disabled`, maskedHint: "wxyz" },
+		});
+		const disabledWebhook = await prisma.webhook.create({
+			data: { apiKeyId: otherKey.id, url: "https://93.184.216.34/hook", secret: "whsec_disabled", enabled: false },
+		});
+		await prisma.webhookDelivery.create({
+			data: { webhookId: disabledWebhook.id, jobId: "job-disabled", payload: "{}" },
+		});
+		const id = await queue();
+		const send = vi.fn(async () => ({ status: 200 }));
+
+		expect(await deliverDue(new Date(), send)).toBe(1);
+		expect(send).toHaveBeenCalledTimes(1);
+
+		expect((await prisma.webhookDelivery.findUnique({ where: { id } }))?.status).toBe("DELIVERED");
+		const disabledRow = await prisma.webhookDelivery.findFirst({ where: { webhookId: disabledWebhook.id } });
+		expect(disabledRow?.status).toBe("PENDING");
+		expect(disabledRow?.attempts).toBe(0);
+	});
+
+	// --- Revoking a key must stop its webhook ---
+	it("does not deliver to a revoked key's webhook", async () => {
+		await prisma.apiKey.update({ where: { id: apiKeyId }, data: { revokedAt: new Date() } });
+		const id = await queue();
+		const send = vi.fn(async () => ({ status: 200 }));
+
+		expect(await deliverDue(new Date(), send)).toBe(0);
+		expect(send).not.toHaveBeenCalled();
+		expect((await prisma.webhookDelivery.findUnique({ where: { id } }))?.status).toBe("PENDING");
+	});
+
+	// --- redirect: "manual" means a 3xx is exactly as final as a 4xx ---
+	it("gives up immediately on a 3xx, which redirect: 'manual' means will never become a 2xx on its own", async () => {
+		const id = await queue();
+
+		await deliverDue(new Date(), async () => ({ status: 301 }));
+
+		const row = await prisma.webhookDelivery.findUnique({ where: { id } });
+		expect(row?.status).toBe("FAILED");
+		expect(row?.attempts).toBe(1);
+	});
+
+	// --- A losing writer must not clobber a winning one ---
+	//
+	// Both processDelivery calls below claim, and race, the same row — the first's send hangs until
+	// released, so the second's due query (after the first's lease is manually expired, standing in
+	// for the real clock outlasting it) claims and settles it first. When the first's send finally
+	// resolves, its outcome write must not overwrite what the second already recorded.
+	it("does not let a lease-expired attempt's outcome clobber a second claimant's", async () => {
+		const id = await queue();
+		let releaseFirstSend: (() => void) | undefined;
+		let firstSendStarted = false;
+		const send = vi.fn(async () => {
+			if (!firstSendStarted) {
+				firstSendStarted = true;
+				await new Promise<void>((resolve) => {
+					releaseFirstSend = resolve;
+				});
+				return { status: 500 };
+			}
+			return { status: 200 };
+		});
+
+		const firstPass = deliverDue(new Date(), send);
+		await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+		// Stands in for the first pass's lease actually expiring, without waiting out webhooks.timeoutMs
+		// for real: pushes the row back into the due set for a second pass while the first is still
+		// mid-flight, the same ordering "does not resend a delivery whose earlier attempt is still in
+		// flight" above proves cannot happen on its own before a lease expires.
+		await prisma.webhookDelivery.update({ where: { id }, data: { nextAttemptAt: new Date(0) } });
+
+		expect(await deliverDue(new Date(), send)).toBe(1);
+		expect(send).toHaveBeenCalledTimes(2);
+
+		const afterSecond = await prisma.webhookDelivery.findUnique({ where: { id } });
+		expect(afterSecond?.status).toBe("DELIVERED");
+		expect(afterSecond?.attempts).toBe(2);
+
+		releaseFirstSend?.();
+		await firstPass;
+
+		const afterFirst = await prisma.webhookDelivery.findUnique({ where: { id } });
+		expect(afterFirst?.status).toBe("DELIVERED");
+		expect(afterFirst?.attempts).toBe(2);
 	});
 });

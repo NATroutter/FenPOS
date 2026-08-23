@@ -111,6 +111,17 @@ describe("queueJobSettled", () => {
 		expect(await prisma.webhookDelivery.count()).toBe(0);
 	});
 
+	// Revoking a key must stop new deliveries too, not merely already-queued ones (deliverDue's own
+	// due query excludes a revoked key's subscription separately — see lib/webhooks/deliver.ts).
+	it("queues nothing for a revoked key's subscription", async () => {
+		await subscribe();
+		await prisma.apiKey.update({ where: { id: keyId }, data: { revokedAt: new Date() } });
+
+		await queueJobSettled(jobId);
+
+		expect(await prisma.webhookDelivery.count()).toBe(0);
+	});
+
 	it("queues nothing while the install has webhooks switched off", async () => {
 		await subscribe();
 		await setSetting("webhooks.enabled", false);

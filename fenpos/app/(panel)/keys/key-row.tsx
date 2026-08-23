@@ -180,29 +180,33 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 									</Button>
 								}
 							/>
-
-							{apiKey.webhook ? (
-								<Confirm
-									title={`Remove ${apiKey.name}'s webhook?`}
-									description="Deliveries stop and anything still queued for it is discarded along with it. Registering again issues a new secret."
-									confirmLabel="Remove"
-									disabled={pending}
-									onConfirm={() => act("Webhook removed.", () => removeWebhook(apiKey.id))}
-									trigger={
-										<Button
-											variant="outline"
-											size="icon"
-											className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-											title="Remove webhook"
-											aria-label="Remove webhook"
-										>
-											<Unlink className="size-3.5" />
-										</Button>
-									}
-								/>
-							) : null}
 						</>
 					)}
+
+					{/* Shown even for a revoked key, unlike every other action above: revoking stops outbound
+					    delivery on its own (deliverDue and queueJobSettled both exclude a revoked key's
+					    subscription), but the subscription row itself survives revocation, and an operator
+					    investigating a leak needs a way to clear it without deleting the key and its history. */}
+					{apiKey.webhook ? (
+						<Confirm
+							title={`Remove ${apiKey.name}'s webhook?`}
+							description="Deliveries stop and anything still queued for it is discarded along with it. Registering again issues a new secret."
+							confirmLabel="Remove"
+							disabled={pending}
+							onConfirm={() => act("Webhook removed.", () => removeWebhook(apiKey.id))}
+							trigger={
+								<Button
+									variant="outline"
+									size="icon"
+									className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+									title="Remove webhook"
+									aria-label="Remove webhook"
+								>
+									<Unlink className="size-3.5" />
+								</Button>
+							}
+						/>
+					) : null}
 
 					<Confirm
 						title={`Delete ${apiKey.name}?`}

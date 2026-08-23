@@ -65,7 +65,11 @@ export async function queueJobSettled(jobId: string): Promise<void> {
 		}
 
 		const webhook = await prisma.webhook.findFirst({
-			where: { apiKeyId: job.apiKeyId, enabled: true },
+			// A revoked key's subscription must not queue a new delivery: the key stops working
+			// immediately on revocation, and an operator revoking a leaked key expects notifications to
+			// it to stop too, not merely new print jobs. deliverDue's due query applies the same
+			// exclusion to whatever is already queued — see its module comment.
+			where: { apiKeyId: job.apiKeyId, enabled: true, apiKey: { revokedAt: null } },
 			select: { id: true },
 		});
 
