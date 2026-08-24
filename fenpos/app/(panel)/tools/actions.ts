@@ -392,9 +392,11 @@ export async function printMarkup(
 /**
  * Writes raw bytes to a printer.
  *
- * Admin session only, and there is no permission that can grant it to a key. These bytes are the
- * printer's own language: a wrong sequence can leave a device needing a power cycle, and no
- * machine client has any business sending one.
+ * Admin session only. `devices:raw` exists to gate this for a machine client, but no endpoint
+ * checks it yet, and holding it would not be enough on its own even once one does — the
+ * install-level switch that also gates it ships off. These bytes are the printer's own language: a
+ * wrong sequence can leave a device needing a power cycle, and no machine client has any business
+ * sending one until both gates are open.
  *
  * @param deviceId the device to write to
  * @param bytes the bytes to write
