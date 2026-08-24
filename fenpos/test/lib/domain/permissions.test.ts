@@ -29,3 +29,25 @@ describe("permission set", () => {
 		expect(parseStoredPermissions(["print", "assets:read", "from-an-older-build"])).toEqual(["print", "assets:read"]);
 	});
 });
+
+describe("devices:raw", () => {
+	it("is a permission a key can hold", () => {
+		expect(PERMISSION_IDS).toContain("devices:raw");
+		expect(isPermission("devices:raw")).toBe(true);
+	});
+
+	it("has a description that says an install setting also gates it", () => {
+		// The permission alone does not grant the capability, and an operator ticking this box needs
+		// to know that from the box itself — otherwise they grant it, the endpoint keeps refusing,
+		// and the reason is in a settings page they had no cause to visit.
+		const definition = PERMISSIONS.find((permission) => permission.id === "devices:raw");
+
+		expect(definition?.description).toMatch(/setting/i);
+	});
+
+	it("is listed last, after every permission that grants less", () => {
+		// The panel renders this order. The most dangerous grant belongs at the bottom of the list,
+		// not in the middle of it where it reads as one checkbox among equals.
+		expect(PERMISSION_IDS[PERMISSION_IDS.length - 1]).toBe("devices:raw");
+	});
+});

@@ -7,9 +7,13 @@ import { z } from "zod";
  * can do nothing. That default matters: a key created but not yet configured must be inert,
  * never permissive.
  *
- * Raw ESC/POS writes are deliberately absent from this set. They hand arbitrary bytes to
- * hardware and are reachable only from an authenticated admin session, so there is no
- * permission that can grant them to a machine client.
+ * Raw ESC/POS writes are in this set, and are the one grant here that is not sufficient on its own.
+ * They hand arbitrary bytes to hardware, bypassing every content limit, codepage check and width
+ * calculation the compiler applies — so `devices:raw` is gated a second time by the install-level
+ * `link.allowRawApiWrites`, which ships off. Granting the permission on an install that has not
+ * enabled the setting grants nothing at all, which is the intended default: turning this on should
+ * take two deliberate decisions by two different kinds of thinking, "this key may" and "this
+ * install does".
  */
 
 /** One permission and the description shown beside its checkbox in the admin panel. */
@@ -35,6 +39,7 @@ export const PERMISSION_IDS = [
 	"status:read",
 	"assets:read",
 	"assets:write",
+	"devices:raw",
 ] as const;
 
 export type Permission = (typeof PERMISSION_IDS)[number];
@@ -77,6 +82,11 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
 	{
 		id: "assets:write",
 		description: "Upload, import and delete stored images. Install-wide: assets are not scoped to a key's devices.",
+	},
+	{
+		id: "devices:raw",
+		description:
+			"Send raw ESC/POS bytes straight to a printer, bypassing every content check. Also requires the 'Allow raw API writes' setting, which is off by default.",
 	},
 ];
 

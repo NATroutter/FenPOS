@@ -112,10 +112,11 @@ const SECTIONS = [
 /**
  * The permissions an endpoint on this API actually checks.
  *
- * `PERMISSIONS` is the whole vocabulary, and every one of its entries gates a request now. Device,
- * status and asset grants were each added to that vocabulary before an endpoint existed to check
- * them, and each remained an exception — a capability the panel had and the API did not expose —
- * until the endpoints documented below closed the gap for it, assets last. Named here rather than
+ * `PERMISSIONS` is the whole vocabulary; this is the subset of it with an endpoint behind it today.
+ * A permission can enter that vocabulary before the endpoint that checks it exists — device, status
+ * and asset grants each did, and each remained an exception — a capability the panel had and the
+ * API did not expose — until the endpoints documented below closed the gap for it, assets last —
+ * so this list can run behind `PERMISSIONS` without either one being wrong. Named here rather than
  * derived, because nothing in the code registers "which permissions a route requires"; the test
  * beside this page reads the routes and fails if this list stops matching them.
  */
@@ -256,14 +257,19 @@ export default async function ApiDocsPage() {
 							</P>
 
 							<P>
-								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The asset grants are
-								the newest of them: <Mono>assets:read</Mono> and <Mono>assets:write</Mono> back the assets endpoint
-								below. Whatever a key is granted here, there is a request it unlocks.
+								<EnforcedList /> gate an endpoint today — not the full set of permissions this panel can grant, but
+								every one an endpoint currently checks. A permission can be added ahead of its endpoint: the asset
+								grants were, until the assets endpoint below closed the gap for <Mono>assets:read</Mono> and{" "}
+								<Mono>assets:write</Mono>. Whatever appears in that list unlocks a request; anything granted here but
+								missing from it is waiting on an endpoint of its own.
 							</P>
 
 							<P>
-								Raw ESC/POS writes are deliberately absent from that list. They hand arbitrary bytes to hardware and are
-								reachable only from an admin session on the Tools tab, so no key can be granted them.
+								<Mono>devices:raw</Mono> is for raw ESC/POS writes — handing bytes straight to a printer, bypassing
+								every content check this API applies elsewhere. Today that is still only reachable from an admin session
+								on the Tools tab; no endpoint here accepts it yet. When one does, the permission alone will not be
+								enough: an install-level switch, off by default, has to also allow raw writes before a key's grant does
+								anything.
 							</P>
 
 							<Aside>
