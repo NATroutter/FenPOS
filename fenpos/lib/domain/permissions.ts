@@ -33,6 +33,8 @@ export const PERMISSION_IDS = [
 	"devices:read",
 	"devices:control",
 	"status:read",
+	"assets:read",
+	"assets:write",
 ] as const;
 
 export type Permission = (typeof PERMISSION_IDS)[number];
@@ -67,6 +69,14 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
 	{
 		id: "status:read",
 		description: "Read agent and device health beyond the public liveness probe.",
+	},
+	{
+		id: "assets:read",
+		description: "List the stored images that markup can reference.",
+	},
+	{
+		id: "assets:write",
+		description: "Upload, import and delete stored images. Install-wide: assets are not scoped to a key's devices.",
 	},
 ];
 
