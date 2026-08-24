@@ -175,8 +175,8 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].level).toBe("INFO");
 		expect(rows[0].message).toContain("label-printer integration");
-		// The whole phrase, not a bare "7". A single digit matches anywhere in the line — a name, a
-		// timestamp, another number — so it would pass on a row that never mentioned the size at all.
+		// The whole phrase, not a bare "7". A single digit matches anywhere in the line — a digit
+		// inside a name, another number — so it would pass on a row that never mentioned the size at all.
 		expect(rows[0].message).toContain("Raw write of 7 bytes");
 	});
 
@@ -200,6 +200,54 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(rows[1].message).not.toContain("refused");
 		expect(rows[1].message).toContain("did not complete");
 		expect(rows[1].message).toContain("may or may not have been written");
+	});
+
+	it("keeps the outcome readable when logs.maxMessageChars sits at its floor with maximum-length names", async () => {
+		// `logs.maxMessageChars` cannot go below 200, and MAX_NAME_LENGTH lets a device name and a key
+		// name each run to 64 characters — the worst case this route can be handed. Between them the
+		// two names alone eat most of a 200-character budget, so what has to survive truncation is the
+		// one sentence this row exists to carry: whether the bytes may or may not have reached the
+		// printer. If that gets truncated away and only the names and boilerplate remain, the audit
+		// trail has failed at the only thing it is for.
+		await setSetting("logs.maxMessageChars", 200);
+
+		const longDeviceName = "d".repeat(MAX_NAME_LENGTH);
+		const longKeyName = "k".repeat(MAX_NAME_LENGTH);
+		const longToken = `fp_long_${Date.now()}_${Math.random()}`;
+
+		const agent = await prisma.agent.findUniqueOrThrow({ where: { name: agentName } });
+		const longDevice = await prisma.device.create({
+			data: { agentId: agent.id, name: longDeviceName, port: "COM5", columns: 42 },
+		});
+		await prisma.apiKey.create({
+			data: {
+				name: longKeyName,
+				keyHash: hashSecret(longToken),
+				maskedHint: "wxyz",
+				permissions: { create: [{ permission: "devices:raw" }] },
+				devices: { create: [{ deviceId: longDevice.id }] },
+			},
+		});
+
+		vi.mocked(sendRawWrite).mockRejectedValueOnce(
+			new ApiError("agent_offline", "The agent did not answer; the bytes may or may not have been written."),
+		);
+
+		const response = await POST(
+			new Request(`https://fenpos.test/api/v1/devices/${agentName}/${longDeviceName}/raw`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${longToken}` },
+				body: JSON.stringify({ bytes: BYTES }),
+			}),
+			{ params: Promise.resolve({ agent: agentName, device: longDeviceName }) },
+		);
+
+		expect(response.status).toBe(503);
+
+		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		const warnRow = rows.find((row) => row.level === "WARN");
+		expect(warnRow?.message.length).toBeLessThanOrEqual(200);
+		expect(warnRow?.message).toContain("may or may not have been written");
 	});
 
 	it("says plainly that nothing was sent when the write never reached the agent", async () => {

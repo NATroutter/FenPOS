@@ -167,7 +167,8 @@ export async function recordServerLog(
 		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
 		// every agent on the install, this one runs on the few server-side events worth showing an
 		// operator, so one settings read is not worth a second cache to avoid. Read before the insert
-		// because `maxMessageChars` bounds the row itself; the sweep below uses the same two values.
+		// because `maxMessageChars` bounds the row itself; the sweep below uses the other two of the
+		// three values this same read produces.
 		const { maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
 		const entry = await prisma.logEntry.create({

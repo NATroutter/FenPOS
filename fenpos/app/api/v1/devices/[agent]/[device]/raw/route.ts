@@ -155,6 +155,16 @@ export async function POST(
  * contract asks callers to truncate anything that could be long, and this is the one field on this
  * path a caller chooses.
  *
+ * **The outcome comes first, the names last.** `recordServerLog` truncates from the end at
+ * `logs.maxMessageChars`, whose configurable floor is 200 — and a 64-character device name plus a
+ * 64-character key name, the most `MAX_NAME_LENGTH` allows on each, already consume most of that
+ * budget. If the sentence that actually answers "was anything sent" sat after them, that setting's
+ * minimum would cut it away and leave only the preamble, which is the one trade the audit trail
+ * cannot afford — the whole reason this row exists is that it is the only record a write happened.
+ * So the code and, on the second wording, the honest detail come immediately after the fixed lead-in,
+ * comfortably inside 200 characters on their own; the byte count and the two names are parenthesised
+ * afterward and are what gives way if the line is still too long.
+ *
  * @param device the device named in the path, untrusted and possibly naming nothing
  * @param keyName the authenticated key's name, for attribution
  * @param code the error code the caller was answered with
@@ -166,11 +176,11 @@ function auditFailure(device: string, keyName: string, code: string, handedOff: 
 	const named = device.slice(0, MAX_NAME_LENGTH);
 
 	if (handedOff === null) {
-		return `Raw write to '${named}' refused for key '${keyName}': ${code}. Nothing was sent.`;
+		return `Raw write refused: ${code}. Nothing was sent. (device '${named}', key '${keyName}')`;
 	}
 
 	const detail = error instanceof ApiError ? ` ${error.message}` : "";
-	return `Raw write of ${handedOff} bytes to '${named}' by key '${keyName}' did not complete: ${code}.${detail}`;
+	return `Raw write did not complete: ${code}.${detail} (${handedOff} bytes, device '${named}', key '${keyName}')`;
 }
 
 /**
