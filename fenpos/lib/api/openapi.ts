@@ -1,5 +1,5 @@
 import { API_DEVICE_ACTIONS } from "@/lib/api/device-actions";
-import { API_VERSION } from "@/lib/api-version";
+import { API_BASE, API_VERSION } from "@/lib/api-version";
 import { AgentStatus, Align, AssetKind, ConnectionStatus, JobStatus, Linefeed } from "@/lib/domain/enums";
 import { PERMISSION_IDS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
@@ -302,7 +302,7 @@ export function openApiDocument(publicUrl: string | null): object {
 			},
 		},
 		paths: {
-			"/api/v1/openapi.json": {
+			[`${API_BASE}/openapi.json`]: {
 				get: {
 					summary: "This document.",
 					operationId: "getOpenApiDocument",
@@ -314,7 +314,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/print/{agent}/{device}": {
+			[`${API_BASE}/print/{agent}/{device}`]: {
 				post: {
 					summary: "Submit a receipt to one printer.",
 					operationId: "submitPrintJob",
@@ -342,7 +342,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/preview/{agent}/{device}": {
+			[`${API_BASE}/preview/{agent}/{device}`]: {
 				post: {
 					summary: "Compile a receipt without printing it.",
 					operationId: "previewPrintJob",
@@ -358,7 +358,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/jobs": {
+			[`${API_BASE}/jobs`]: {
 				get: {
 					summary: "List the jobs this key submitted.",
 					operationId: "listJobs",
@@ -394,7 +394,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/jobs/{id}": {
+			[`${API_BASE}/jobs/{id}`]: {
 				get: {
 					summary: "Read one job.",
 					operationId: "getJob",
@@ -425,7 +425,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/devices": {
+			[`${API_BASE}/devices`]: {
 				get: {
 					summary: "List the printers this key may address.",
 					operationId: "listDevices",
@@ -443,7 +443,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/devices/{agent}/{device}": {
+			[`${API_BASE}/devices/{agent}/{device}`]: {
 				get: {
 					summary: "Read one printer's configuration and state.",
 					operationId: "getDevice",
@@ -458,7 +458,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/devices/{agent}/{device}/actions": {
+			[`${API_BASE}/devices/{agent}/{device}/actions`]: {
 				post: {
 					summary: "Ask an agent to act on one printer.",
 					operationId: "actOnDevice",
@@ -494,7 +494,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/status": {
+			[`${API_BASE}/status`]: {
 				get: {
 					summary: "Agent liveness and printer readiness.",
 					operationId: "getStatus",
@@ -527,7 +527,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/assets": {
+			[`${API_BASE}/assets`]: {
 				get: {
 					summary: "List the stored images markup can reference.",
 					operationId: "listAssets",
@@ -573,7 +573,7 @@ export function openApiDocument(publicUrl: string | null): object {
 				},
 			},
 
-			"/api/v1/assets/{name}": {
+			[`${API_BASE}/assets/{name}`]: {
 				delete: {
 					summary: "Remove a stored image.",
 					operationId: "deleteAsset",

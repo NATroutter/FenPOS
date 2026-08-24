@@ -216,9 +216,9 @@ export default async function ApiDocsPage() {
 				    to prevent for the prose inside the sections. */}
 					<div className="flex max-w-[82ch] flex-col gap-3 px-5 py-4 text-[12.5px] leading-[1.65]">
 						<P>
-							Every path below is relative to that address. Apart from <Mono>/api/health</Mono>, every request carries
-							an API key; Authentication, first below, says where one comes from and what it has to be granted before it
-							can do anything.
+							Every path below is relative to that address. Apart from <Mono>/api/health</Mono> and{" "}
+							<Mono>{`${API_BASE}/openapi.json`}</Mono>, every request carries an API key; Authentication, first below,
+							says where one comes from and what it has to be granted before it can do anything.
 						</P>
 
 						<P>
@@ -273,12 +273,14 @@ export default async function ApiDocsPage() {
 							</Aside>
 
 							<P>
-								Listing devices, reading one, and status are throttled per key by <Mono>api.readsPerMinute</Mono>, a
-								limit an operator sets on the Settings tab. A key over budget gets <ErrorRef code="rate_limited" />
-								carrying <Mono>retryAfterSeconds</Mono> in the body — there is no <Mono>Retry-After</Mono> header, so
-								the wait lives in the same JSON envelope every other refusal uses rather than a second place to look.
-								Submitting a job is deliberately not counted here: a receipt already costs a compile and a device round
-								trip, and throttling a till is an operator's decision rather than a default this API makes for them.
+								Listing devices, reading one, status, listing jobs, listing assets and previewing a receipt are
+								throttled per key by <Mono>api.readsPerMinute</Mono>, a limit an operator sets on the Settings tab. A
+								key over budget gets <ErrorRef code="rate_limited" /> carrying <Mono>retryAfterSeconds</Mono> in the
+								body — there is no <Mono>Retry-After</Mono> header, so the wait lives in the same JSON envelope every
+								other refusal uses rather than a second place to look. Submitting a job is deliberately not counted
+								here: a receipt already costs a compile and a device round trip, and throttling a till is an operator's
+								decision rather than a default this API makes for them. Previewing one carries only the compile, with no
+								round trip of its own to provide that friction, so it is throttled instead.
 							</P>
 						</Col>
 
@@ -399,6 +401,12 @@ export default async function ApiDocsPage() {
 								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
 								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
 								non-2xx here.
+							</P>
+
+							<P>
+								A fault's own <Mono>status</Mono>, seen inside a <Status>200</Status> response, is not the status of
+								that response — it is the status <Mono>{`POST ${API_BASE}/print/{agent}/{device}`}</Mono> would have
+								answered with had this same body been submitted rather than previewed.
 							</P>
 
 							<P>
@@ -884,9 +892,10 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
-								needed a credential would need one stored somewhere to use it — so this is what a container runtime or a
-								load balancer calls, and it is deliberately the only thing they can call.
+								One of two endpoints on this API that take no key — the OpenAPI document, below, is the other. A
+								healthcheck runs before anyone has signed in, and a probe that needed a credential would need one stored
+								somewhere to use it — so this is what a container runtime or a load balancer calls, and it is
+								deliberately the only thing they can call.
 							</P>
 
 							<P>
@@ -1013,9 +1022,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								The one endpoint on this API that takes no key. A spec describes the shape of the API rather than the
-								contents of this install — it names no agent, device or job — so a generator reading it should not need
-								a credential to do so.
+								The other endpoint on this API that takes no key, alongside <Mono>/api/health</Mono> above. A spec
+								describes the shape of the API rather than the contents of this install — it names no agent, device or
+								job — so a generator reading it should not need a credential to do so.
 							</P>
 
 							<P>
