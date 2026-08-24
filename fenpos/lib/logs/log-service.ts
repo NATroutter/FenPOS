@@ -1,6 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
+import { publish } from "@/lib/events/bus";
+import { logger } from "@/lib/logger";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
 import { integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
@@ -124,4 +126,61 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			deviceName: row.device?.name ?? null,
 		})),
 	};
+}
+
+/**
+ * Records a log line raised by the server itself, where an operator will see it.
+ *
+ * `logger` writes to stdout, which a log shipper reads and an operator generally does not. The Logs
+ * tab reads `LogEntry` rows, and until now every one of those came from an agent. This is for the
+ * few server-side events that belong in front of a person rather than in a file — the first being a
+ * raw write, which is the one operation this server cannot describe after the fact.
+ *
+ * **Never throws.** Audit logging must not be the reason a request fails: a line lost is a nuisance,
+ * a raw write refused because its audit line would not store is a fault, and one that happened and
+ * then threw on the way out is the worst of the three.
+ *
+ * @param level severity of the line
+ * @param message what happened, already truncated by the caller if it could be long
+ * @param target the agent and device it concerns, when it concerns one
+ */
+export async function recordServerLog(
+	level: LogLevel,
+	message: string,
+	target: { agentId?: string; deviceId?: string } = {},
+): Promise<void> {
+	try {
+		const entry = await prisma.logEntry.create({
+			data: {
+				level,
+				// Derived here rather than at read time, exactly as `ingestLog` does: the severity
+				// filter and the Level column ordering both run in the database, and neither can
+				// compare a level string.
+				severity: LOG_SEVERITY[level],
+				message,
+				agentId: target.agentId ?? null,
+				deviceId: target.deviceId ?? null,
+			},
+			select: { id: true, ts: true, level: true, message: true },
+		});
+
+		// LogEvent.agentId is non-nullable — it is the live stream an agent's own frames publish
+		// to. Publishing here without a real agent would misattribute the line to no one in
+		// particular; skipping it when there is none still leaves the row itself in place, so the
+		// Logs tab shows it on the next read. The raw-write caller always names an agent, so the
+		// live path is exercised in practice.
+		if (target.agentId) {
+			publish({
+				kind: "log",
+				id: entry.id,
+				at: entry.ts.toISOString(),
+				level: entry.level as LogLevel,
+				message: entry.message,
+				agentId: target.agentId,
+				deviceName: null,
+			});
+		}
+	} catch (error) {
+		logger.error("Could not record a server log line", error, { message });
+	}
 }
