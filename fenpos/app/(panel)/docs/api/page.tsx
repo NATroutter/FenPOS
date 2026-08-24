@@ -101,6 +101,12 @@ const SECTIONS = [
 		path: "/api/health",
 	},
 	{ id: "errors", title: "Errors", note: "Stable codes, and what carries a position" },
+	{
+		id: "openapi",
+		title: "OpenAPI document",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/openapi.json`,
+	},
 ] as const;
 
 /**
@@ -993,6 +999,34 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 									</TableBody>
 								</Table>
 							</div>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[14]}>
+					<Split>
+						<Col>
+							<P>
+								The whole reference above, machine-readable: an OpenAPI 3.1 document describing every path, method,
+								permission and status code on this page. A client generator can build a typed client straight from it
+								rather than from this prose.
+							</P>
+
+							<P>
+								The one endpoint on this API that takes no key. A spec describes the shape of the API rather than the
+								contents of this install — it names no agent, device or job — so a generator reading it should not need
+								a credential to do so.
+							</P>
+
+							<P>
+								<Mono>components.schemas.Error</Mono> is the same envelope described in Errors above, and every
+								enumerated value in the document — job statuses, connection states, device actions, permission ids — is
+								the closed set this server actually uses, not a hand-copied guess of it.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/openapi.json`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
