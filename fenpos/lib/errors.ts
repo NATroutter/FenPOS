@@ -57,6 +57,18 @@ export const API_ERROR_STATUS = {
 	 * between "exists but forbidden" and "does not exist".
 	 */
 	insufficient_permission: 403,
+	/**
+	 * Raw writes are switched off for this install.
+	 *
+	 * Distinct from `insufficient_permission` because the remedy is different and the caller cannot
+	 * work it out from a status. A key lacking the grant needs an operator to tick a box on that key;
+	 * an install with `link.allowRawApiWrites` off needs an operator to make a decision about the
+	 * whole install. One code for both would send integrators to the wrong conversation.
+	 *
+	 * Reported before the device grant is checked, so an install with raw writes off answers every
+	 * caller identically and cannot be used to discover which devices exist.
+	 */
+	raw_writes_disabled: 403,
 
 	// --- 404: no such resource, or none this caller may see ---
 	unknown_agent: 404,

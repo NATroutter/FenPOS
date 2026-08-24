@@ -27,3 +27,17 @@ describe("new lifecycle error codes", () => {
 		expect(new ApiError("idempotency_conflict", "…").status).toBe(409);
 	});
 });
+
+describe("raw_writes_disabled", () => {
+	it("is a 403, like any other refusal of an identified caller", () => {
+		expect(API_ERROR_STATUS.raw_writes_disabled).toBe(403);
+	});
+
+	it("is distinct from insufficient_permission, which it would otherwise be mistaken for", () => {
+		// Two different remedies. `insufficient_permission` means "ask for the grant";
+		// `raw_writes_disabled` means "ask the operator to switch it on for the install". A caller
+		// told the wrong one goes to the wrong person.
+		expect(API_ERROR_STATUS.raw_writes_disabled).toBe(API_ERROR_STATUS.insufficient_permission);
+		expect("raw_writes_disabled").not.toBe("insufficient_permission");
+	});
+});
