@@ -4,24 +4,16 @@ import { rasterFor } from "@/lib/assets/asset-service";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
-import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
+import type { Linefeed } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
-import { compilePreview, faultOf } from "@/lib/jobs/preview";
+import { compilePreviewWithContext, faultOf } from "@/lib/jobs/preview";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
 import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/markup/blocks";
-import {
-	type CompileSettings,
-	type DeviceSettings,
-	layOut,
-	type PrintRequest,
-	readRequest,
-} from "@/lib/markup/compiler";
+import { type CompileSettings, layOut } from "@/lib/markup/compiler";
 import { imageGeometry } from "@/lib/markup/images";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
-import { resolveImages } from "@/lib/markup/resolve-images";
-import { globalLimits } from "@/lib/settings/settings-service";
 
 /**
  * Server actions behind the Tools tab.
@@ -152,48 +144,20 @@ export async function preview(
 	const data = source.split("\n");
 	const body = linefeed ? { data, linefeed } : { data };
 
-	const compiled = await compilePreview(deviceId, body);
-	if (compiled.errors.length > 0 || compiled.lines === null) {
+	const { preview: compiled, request, settings } = await compilePreviewWithContext(deviceId, body);
+	if (compiled.errors.length > 0 || compiled.lines === null || request === null || settings === null) {
 		return { ...compiled, lines: null };
 	}
 
 	try {
-		// `compilePreview` already ran this body through `readRequest` and `resolveImages`
-		// successfully, but it does not return either — its callers have no use for a symbol's
-		// measured height. Both are pure functions of the device and the body, so recomputing them
-		// here cannot fail differently than it just did; it only hands the presentation layer what
-		// it needs to draw blocks and markers on top of the same compile.
-		const device = await prisma.device.findUnique({ where: { id: deviceId } });
-		if (!device) {
-			throw new ApiError("unknown_device", "That printer no longer exists.");
-		}
-
-		const deviceSettings: DeviceSettings = {
-			columns: device.columns,
-			codepage: device.codepage as Codepage,
-			onUnsupported: device.onUnsupported as UnsupportedPolicy,
-			defaultWrap: device.defaultWrap,
-			defaultLinefeed: device.defaultLinefeed as Linefeed,
-		};
-
-		const installed = await globalLimits();
-		const limits = {
-			maxLines: device.maxLines ?? installed.maxLines,
-			maxLineChars: device.maxLineChars ?? installed.maxLineChars,
-			maxTotalChars: device.maxTotalChars ?? installed.maxTotalChars,
-			maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
-		};
-
-		const request: PrintRequest = readRequest(body, limits, deviceSettings);
-		const settings: CompileSettings = {
-			...deviceSettings,
-			images: await resolveImages(request.data, deviceSettings.columns),
-		};
-
-		// The same lines `compilePreview` built its job from, before they lost what the wire has no
-		// field for: a symbol's measured height. Laying out again is the preview's cost alone, and
-		// the preview is debounced. The two arrays are the same lines in the same order, one entry
-		// each.
+		// `request` and `settings` are the exact ones `compilePreviewWithContext` compiled from — not
+		// re-read. A second read would be a real gap, not just a wasted one: `resolveImages` fetches
+		// `<image>` URLs over the network, so the window between one read and a second is bounded by
+		// network latency rather than a database round trip. If the device's `columns` changed inside
+		// that window, a re-parsed `request` could wrap to a different number of lines than
+		// `compiled.lines` did, and the loop below zips the two arrays together by index — silently
+		// pairing the wrong text with the wrong block, with no error at all. Reusing the one read
+		// `compilePreviewWithContext` already did is what keeps that zip sound; see its doc comment.
 		const laidOut = layOut(request, settings);
 
 		// One line at a time rather than `Promise.all`. Drawing an image can mean decoding and
@@ -203,6 +167,10 @@ export async function preview(
 		const lines: PreviewLine[] = [];
 		for (const [index, line] of compiled.lines.entries()) {
 			lines.push({
+				// Widened deliberately: `CompiledLine.align` is typed `string` in the shared contract
+				// (compilePreview's JSON-facing return type does not narrow it), but the compiler only
+				// ever produces one of the three below, so this cast reflects a fact rather than
+				// asserting one away.
 				align: line.align as PreviewLine["align"],
 				blocks: await blocksOf(laidOut[index], settings),
 				marker: describe(laidOut[index]),

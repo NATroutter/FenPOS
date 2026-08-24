@@ -69,13 +69,49 @@ export interface CompiledPreview {
 }
 
 /**
- * Compiles a print body against a device and reports what it would print.
+ * What {@link compilePreviewWithContext} returns: the compiled preview, plus the exact inputs it was
+ * compiled from.
+ *
+ * `request` and `settings` are populated the moment each is produced — `request` as soon as
+ * `readRequest` succeeds, `settings` as soon as `resolveImages` does — and stay null before that, so
+ * a caller can tell how far the compile got even when `preview.errors` is non-empty. Both are always
+ * present together with `preview.lines` on a clean compile.
+ */
+export interface PreviewWithContext {
+	/** What an API caller receives: see {@link compilePreview}. */
+	preview: CompiledPreview;
+	/** The validated request `preview` was compiled from, or null if it never parsed. */
+	request: PrintRequest | null;
+	/** The resolved settings `preview` was compiled from, or null if resolution never completed. */
+	settings: CompileSettings | null;
+}
+
+/**
+ * Compiles a print body against a device and reports what it would print, alongside the exact
+ * `request` and `settings` the compile used.
+ *
+ * **Why this exists rather than just {@link compilePreview}.** The Tools panel draws a presentation
+ * layer — a symbol's measured height, a directive's marker — on top of the same lines this compiled,
+ * by running `layOut` over `request` and `settings` a second time and zipping the result with
+ * `preview.lines` by index. That zip is only sound when both arrays came from the same `request` and
+ * `settings`. Re-deriving them with a second `readRequest`/`resolveImages` call would not be merely
+ * wasteful: `resolveImages` fetches `<image>` URLs over the network, so the gap between the first
+ * read and a second is bounded by network latency rather than a database round trip — seconds, not
+ * milliseconds. If the device's `columns` changed in that window, the re-read `request` could wrap to
+ * a different number of lines than `preview.lines` did, and the index-zip would silently pair the
+ * wrong text with the wrong block on screen — no error, just a wrong render. Handing back the one
+ * `request` and `settings` this compile actually used is what closes that window, rather than merely
+ * shrinking it.
+ *
+ * `compilePreview` is implemented in terms of this function, so there remains exactly one compile
+ * path; it is the public half, because an API caller serialises {@link CompiledPreview} straight to
+ * JSON and must not have `request`/`settings` leak into that response.
  *
  * @param deviceId the device whose width and codepage to compile against
  * @param body the print request body, in exactly the shape `POST /print` accepts
- * @returns the compiled lines and their measurements, or everything wrong with the body
+ * @returns the compiled preview, plus the request and settings it was compiled from
  */
-export async function compilePreview(deviceId: string, body: unknown): Promise<CompiledPreview> {
+export async function compilePreviewWithContext(deviceId: string, body: unknown): Promise<PreviewWithContext> {
 	try {
 		const device = await prisma.device.findUnique({ where: { id: deviceId } });
 		if (!device) {
@@ -98,28 +134,42 @@ export async function compilePreview(deviceId: string, body: unknown): Promise<C
 			maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
 		};
 
-		// Everything reported about a failure, minus the failures themselves. Repeated on each early
-		// return so the measurements are always present and honest.
-		const measured = {
-			lines: null,
-			columns: device.columns,
-			outputLines: 0,
-			maxOutputLines: limits.maxOutputLines,
-			linefeed: deviceSettings.defaultLinefeed,
-		} as const;
+		// Everything reported about a failure, minus the failures themselves. Built fresh at each
+		// early return so the measurements are always present and honest, and takes the linefeed
+		// that is actually known at that point: the device's own default before the body has been
+		// validated, and the request's resolved choice from the moment `readRequest` has confirmed
+		// it — which may be the caller's own override, exactly as a successful compile reports it.
+		const measured = (linefeed: Linefeed) =>
+			({
+				lines: null,
+				columns: device.columns,
+				outputLines: 0,
+				maxOutputLines: limits.maxOutputLines,
+				linefeed,
+			}) as const;
 
 		// Request-level validation first, and on its own: it fails for the body as a whole — too many
-		// elements, too many characters — which is one problem, not one per line.
+		// elements, too many characters — which is one problem, not one per line. The body's own
+		// linefeed choice, if any, has not been validated yet at this point, so there is nothing sound
+		// to report beyond the device's default.
 		let request: PrintRequest;
 		try {
 			request = readRequest(body, limits, deviceSettings);
 		} catch (error) {
-			return { ...measured, errors: [faultOf(error)] };
+			return {
+				preview: { ...measured(deviceSettings.defaultLinefeed), errors: [faultOf(error)] },
+				request: null,
+				settings: null,
+			};
 		}
 
 		const elementErrors = collectElementErrors(request, deviceSettings);
 		if (elementErrors.length > 0) {
-			return { ...measured, errors: elementErrors.map(faultOf) };
+			return {
+				preview: { ...measured(request.linefeed), errors: elementErrors.map(faultOf) },
+				request,
+				settings: null,
+			};
 		}
 
 		// After the element errors, deliberately: markup that does not compile has no business making
@@ -129,49 +179,71 @@ export async function compilePreview(deviceId: string, body: unknown): Promise<C
 		try {
 			settings = { ...deviceSettings, images: await resolveImages(request.data, deviceSettings.columns) };
 		} catch (error) {
-			return { ...measured, errors: [faultOf(error)] };
+			return { preview: { ...measured(request.linefeed), errors: [faultOf(error)] }, request, settings: null };
 		}
 
 		const job = compile("preview", device.name, request, limits, settings);
 
 		return {
-			columns: device.columns,
-			errors: [],
-			outputLines: countOutputLines(request, settings),
-			maxOutputLines: limits.maxOutputLines,
-			linefeed: request.linefeed,
-			lines: job.lines.map((line) => ({
-				align: line.align,
-				spans: line.spans.map((span) => ({
-					text: span.text,
-					bold: span.bold,
-					underline: span.underline,
-					invert: span.invert,
-					widthMult: span.widthMult,
+			preview: {
+				columns: device.columns,
+				errors: [],
+				outputLines: countOutputLines(request, settings),
+				maxOutputLines: limits.maxOutputLines,
+				linefeed: request.linefeed,
+				lines: job.lines.map((line) => ({
+					align: line.align,
+					spans: line.spans.map((span) => ({
+						text: span.text,
+						bold: span.bold,
+						underline: span.underline,
+						invert: span.invert,
+						widthMult: span.widthMult,
+					})),
 				})),
-			})),
+			},
+			request,
+			settings,
 		};
 	} catch (error) {
 		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
 
 		if (error instanceof ApiError) {
-			return { ...blank, errors: [faultOf(error)] };
+			return { preview: { ...blank, errors: [faultOf(error)] }, request: null, settings: null };
 		}
 
 		logger.error("Preview failed", error);
 		return {
-			...blank,
-			errors: [
-				{
-					code: "internal_error",
-					message: "Something went wrong. Check the server log.",
-					status: 500,
-					line: null,
-					column: null,
-				},
-			],
+			preview: {
+				...blank,
+				errors: [
+					{
+						code: "internal_error",
+						message: "Something went wrong. Check the server log.",
+						status: 500,
+						line: null,
+						column: null,
+					},
+				],
+			},
+			request: null,
+			settings: null,
 		};
 	}
+}
+
+/**
+ * Compiles a print body against a device and reports what it would print.
+ *
+ * The public half of {@link compilePreviewWithContext} — the same compile, minus the `request` and
+ * `settings` an API caller has no use for and must not see leak into its JSON response.
+ *
+ * @param deviceId the device whose width and codepage to compile against
+ * @param body the print request body, in exactly the shape `POST /print` accepts
+ * @returns the compiled lines and their measurements, or everything wrong with the body
+ */
+export async function compilePreview(deviceId: string, body: unknown): Promise<CompiledPreview> {
+	return (await compilePreviewWithContext(deviceId, body)).preview;
 }
 
 /**
