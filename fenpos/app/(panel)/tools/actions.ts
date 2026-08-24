@@ -7,14 +7,12 @@ import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
+import { compilePreview, faultOf } from "@/lib/jobs/preview";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
 import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/markup/blocks";
 import {
 	type CompileSettings,
-	collectElementErrors,
-	compile,
-	countOutputLines,
 	type DeviceSettings,
 	layOut,
 	type PrintRequest,
@@ -148,7 +146,23 @@ export async function preview(
 	// it here would turn being signed out into a toast over a panel that no longer works.
 	await requireSession();
 
+	// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
+	// what a real request would resolve to rather than restating the device's setting. Omitted
+	// when null, because absence is how the body asks for the device's own.
+	const data = source.split("\n");
+	const body = linefeed ? { data, linefeed } : { data };
+
+	const compiled = await compilePreview(deviceId, body);
+	if (compiled.errors.length > 0 || compiled.lines === null) {
+		return { ...compiled, lines: null };
+	}
+
 	try {
+		// `compilePreview` already ran this body through `readRequest` and `resolveImages`
+		// successfully, but it does not return either — its callers have no use for a symbol's
+		// measured height. Both are pure functions of the device and the body, so recomputing them
+		// here cannot fail differently than it just did; it only hands the presentation layer what
+		// it needs to draw blocks and markers on top of the same compile.
 		const device = await prisma.device.findUnique({ where: { id: deviceId } });
 		if (!device) {
 			throw new ApiError("unknown_device", "That printer no longer exists.");
@@ -170,53 +184,16 @@ export async function preview(
 			maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
 		};
 
-		// Everything the preview reports about a failure, minus the failures themselves. Repeated
-		// on each early return so the footer's measurements are always present and honest.
-		const measured = {
-			lines: null,
-			columns: device.columns,
-			outputLines: 0,
-			maxOutputLines: limits.maxOutputLines,
-			linefeed: linefeed ?? deviceSettings.defaultLinefeed,
-		} as const;
+		const request: PrintRequest = readRequest(body, limits, deviceSettings);
+		const settings: CompileSettings = {
+			...deviceSettings,
+			images: await resolveImages(request.data, deviceSettings.columns),
+		};
 
-		// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
-		// what a real request would resolve to rather than restating the device's setting. Omitted
-		// when null, because absence is how the body asks for the device's own.
-		const data = source.split("\n");
-		const body = linefeed ? { data, linefeed } : { data };
-
-		// Request-level validation first, and on its own: it fails for the body as a whole — too
-		// many elements, too many characters — which is one problem, not one per line.
-		let request: PrintRequest;
-		try {
-			request = readRequest(body, limits, deviceSettings);
-		} catch (error) {
-			return { ...measured, errors: [asPreviewError(error)] };
-		}
-
-		const elementErrors = collectElementErrors(request, deviceSettings);
-		if (elementErrors.length > 0) {
-			return { ...measured, errors: elementErrors.map(asPreviewError) };
-		}
-
-		// After the element errors, deliberately: markup that does not compile has no business
-		// making this server fetch a URL, and whoever is mid-edit should not wait for one to find
-		// out about an unclosed tag. A refusal here — a deleted asset, a host that will not answer —
-		// is the caller's to fix like any other, so it is reported beside them rather than as a
-		// server fault, and the preview keeps its measurements.
-		let settings: CompileSettings;
-		try {
-			settings = { ...deviceSettings, images: await resolveImages(request.data, deviceSettings.columns) };
-		} catch (error) {
-			return { ...measured, errors: [asPreviewError(error)] };
-		}
-
-		const job = compile("preview", device.name, request, limits, settings);
-
-		// The same lines the job was built from, before they lost what the wire has no field for: a
-		// symbol's measured height. Laying out again is the preview's cost alone, and the preview is
-		// debounced. The two arrays are the same lines in the same order, one entry each.
+		// The same lines `compilePreview` built its job from, before they lost what the wire has no
+		// field for: a symbol's measured height. Laying out again is the preview's cost alone, and
+		// the preview is debounced. The two arrays are the same lines in the same order, one entry
+		// each.
 		const laidOut = layOut(request, settings);
 
 		// One line at a time rather than `Promise.all`. Drawing an image can mean decoding and
@@ -224,34 +201,28 @@ export async function preview(
 		// would otherwise hold that many bitmaps at once and the bound would mean nothing. The same
 		// reasoning the Assets tab renders its cards in sequence for, and the preview is debounced.
 		const lines: PreviewLine[] = [];
-		for (const [index, line] of job.lines.entries()) {
+		for (const [index, line] of compiled.lines.entries()) {
 			lines.push({
-				align: line.align,
+				align: line.align as PreviewLine["align"],
 				blocks: await blocksOf(laidOut[index], settings),
 				marker: describe(laidOut[index]),
-				spans: line.spans.map((span) => ({
-					text: span.text,
-					bold: span.bold,
-					underline: span.underline,
-					invert: span.invert,
-					widthMult: span.widthMult,
-				})),
+				spans: line.spans,
 			});
 		}
 
 		return {
-			columns: device.columns,
+			columns: compiled.columns,
 			errors: [],
-			outputLines: countOutputLines(request, settings),
-			maxOutputLines: limits.maxOutputLines,
-			linefeed: request.linefeed,
+			outputLines: compiled.outputLines,
+			maxOutputLines: compiled.maxOutputLines,
+			linefeed: compiled.linefeed,
 			lines,
 		};
 	} catch (error) {
 		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
 
 		if (error instanceof ApiError) {
-			return { ...blank, errors: [asPreviewError(error)] };
+			return { ...blank, errors: [faultOf(error)] };
 		}
 
 		logger.error("Preview failed", error);
@@ -268,30 +239,6 @@ export async function preview(
 			],
 		};
 	}
-}
-
-/**
- * Flattens an API error into the shape the preview renders.
- *
- * Position comes from `details`, which is untyped by design — different codes carry different
- * facts — so each field is read defensively and falls back to "no position" rather than to a
- * number that would point somewhere wrong.
- *
- * @param error the failure, expected to be an {@link ApiError}
- * @returns the error as the preview reports it
- */
-function asPreviewError(error: unknown): PreviewError {
-	if (!(error instanceof ApiError)) {
-		throw error;
-	}
-
-	return {
-		code: error.code,
-		message: error.message,
-		status: error.status,
-		line: typeof error.details.line === "number" ? error.details.line : null,
-		column: typeof error.details.column === "number" ? error.details.column : null,
-	};
 }
 
 /**
