@@ -247,6 +247,8 @@ describe("setting definitions", () => {
 			"link.commandTimeoutSeconds": "integer",
 			"link.scanTimeoutSeconds": "integer",
 			"link.statusIntervalSeconds": "integer",
+			"link.allowRawApiWrites": "boolean",
+			"link.maxRawWriteBytes": "integer",
 			"agent.evictionIntervalSeconds": "integer",
 			"agent.queuePollMs": "integer",
 			"panel.jobPageSize": "integer",
@@ -912,5 +914,28 @@ describe("assets.acceptedFormats", () => {
 		const row = await prisma.setting.findUnique({ where: { key: "assets.acceptedFormats" } });
 		expect(row?.value).toBe(JSON.stringify("png"));
 		expect(row?.value).toBe('"png"');
+	});
+});
+
+describe("raw write settings", () => {
+	it("ships with raw API writes switched off", async () => {
+		// The whole gate. An upgrade must not turn this on for anybody, and a test that pins the
+		// fallback is what stops a future edit doing so by accident — a default flipped here would be
+		// invisible in every install that has never touched the setting.
+		await prisma.setting.deleteMany();
+
+		expect(await booleanSetting("link.allowRawApiWrites")).toBe(false);
+	});
+
+	it("caps a raw write, since nothing else bounds one", async () => {
+		await prisma.setting.deleteMany();
+
+		expect(await integerSetting("link.maxRawWriteBytes")).toBeGreaterThan(0);
+	});
+
+	it("stores a raised cap", async () => {
+		await setSetting("link.maxRawWriteBytes", 16_384);
+
+		expect(await integerSetting("link.maxRawWriteBytes")).toBe(16_384);
 	});
 });

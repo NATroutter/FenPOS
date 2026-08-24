@@ -219,6 +219,8 @@ export const SETTING_KEYS = [
 	"link.commandTimeoutSeconds",
 	"link.scanTimeoutSeconds",
 	"link.statusIntervalSeconds",
+	"link.allowRawApiWrites",
+	"link.maxRawWriteBytes",
 	"agent.evictionIntervalSeconds",
 	"agent.queuePollMs",
 	"panel.jobPageSize",
@@ -731,6 +733,27 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		...jobBound(agentSettingsSchema.shape.statusIntervalSeconds),
 		fallback: 30,
 		unit: "seconds",
+	},
+	{
+		key: "link.allowRawApiWrites",
+		label: "Allow raw API writes",
+		description:
+			"Whether a key holding 'devices:raw' may send raw ESC/POS bytes to a printer. Off by default: raw bytes bypass every content limit, codepage check and width calculation, and this server cannot report what such a write printed. Leave it off unless an integration genuinely needs it.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "link.maxRawWriteBytes",
+		label: "Largest raw write",
+		description:
+			"The most bytes one raw write may carry. This is the only bound on a raw write; none of the print limits apply to one, so it is what stops a single request occupying a printer indefinitely.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 1_048_576,
+		fallback: 8_192,
+		unit: "bytes",
 	},
 	{
 		key: "agent.evictionIntervalSeconds",
