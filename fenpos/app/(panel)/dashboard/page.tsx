@@ -164,7 +164,7 @@ export default async function DashboardPage() {
 /** Says, in a few words, why a printer is not ready. */
 function describe(printer: { online: boolean; connection: string | null; paused: boolean }): string {
 	if (!printer.online) {
-		return "agent offline";
+		return "offline";
 	}
 	if (printer.paused) {
 		return "paused";

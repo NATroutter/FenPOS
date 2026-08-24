@@ -128,7 +128,7 @@ export default async function MarkupDocsPage() {
 
 	return (
 		<div className="flex w-full flex-col gap-5">
-			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
+			<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_210px] xl:items-start">
 				<div className="flex min-w-0 flex-col gap-3">
 					<DocSection {...SECTIONS[0]}>
 						<Split>

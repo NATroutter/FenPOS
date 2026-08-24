@@ -3,8 +3,8 @@ import { cn } from "@/lib/utils";
 
 /** The tile, the mark inside it, and the type set beside them, at each variant. */
 const VARIANTS = {
-	default: { tile: "size-9 rounded-[10px]", mark: 26, name: "text-base" },
-	compact: { tile: "size-8 rounded-[9px]", mark: 23, name: "text-[15px]" },
+	default: { tile: "size-9 rounded-[10px]", mark: 30, name: "text-base" },
+	compact: { tile: "size-8 rounded-[9px]", mark: 30, name: "text-[15px]" },
 } as const;
 
 /**
@@ -37,7 +37,7 @@ export function BrandMark({
 	const variant = VARIANTS[size];
 
 	return (
-		<div className={cn("flex items-center gap-2.5", className)}>
+		<div className={cn("flex items-center gap-1", className)}>
 			{/* The artwork is itself a brand-red tile with its own rounded edge, so this box paints
 			    nothing: a background behind it would show as a rim of a second colour where the
 			    artwork's corners fall away, and an outline would trace this box rather than the shape
@@ -54,7 +54,7 @@ export function BrandMark({
 			<div data-slot="brand-name" className="min-w-0">
 				<div className={cn("font-semibold leading-none tracking-tight", variant.name)}>FenPOS</div>
 				{caption ? (
-					<div className="mt-1 font-mono text-[11px] leading-none text-subtle-foreground">{caption}</div>
+					<div className="mt-0 font-mono text-[11px] leading-none text-subtle-foreground">{caption}</div>
 				) : null}
 			</div>
 		</div>

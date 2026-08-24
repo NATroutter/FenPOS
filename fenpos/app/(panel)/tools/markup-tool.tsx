@@ -1,8 +1,25 @@
 "use client";
 
-import CodeMirror from "@uiw/react-codemirror";
-import { BookOpen, ChevronDown, CircleAlert, CircleCheck, Code, Eraser, Printer, ReceiptText } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useState, useTransition } from "react";
+import { EditorSelection } from "@codemirror/state";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import {
+	ALargeSmall,
+	AlignCenter,
+	Bold,
+	BookOpen,
+	CaseSensitive,
+	ChevronDown,
+	CircleAlert,
+	CircleCheck,
+	Code,
+	Contrast,
+	Eraser,
+	Plus,
+	Printer,
+	ReceiptText,
+	Underline,
+} from "lucide-react";
+import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
 	type PreviewError,
@@ -14,6 +31,7 @@ import {
 import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
+import { InsertDialog, type InsertTag } from "@/app/(panel)/tools/insert-dialog";
 import { ImagePreview } from "@/components/panel/image-preview";
 import { useSessionState } from "@/components/panel/session-state";
 import { SymbolPreview } from "@/components/panel/symbol-preview";
@@ -28,9 +46,19 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Linefeed } from "@/lib/domain/enums";
+import { markupEdit } from "@/lib/markup/editing";
 
 /** How long the editor sits still before a preview is compiled. */
 const DEBOUNCE_MS = 300;
+
+/**
+ * How long a toolbar action keeps pulling focus back to the editor.
+ *
+ * Long enough to outlast a menu closing and returning focus to its trigger, short enough that it is
+ * over before a person could deliberately click something else — a toolbar click and a considered
+ * move to another control are not a third of a second apart.
+ */
+const FOCUS_GUARD_MS = 300;
 
 /**
  * The paper's type size and line spacing, as numbers rather than as classes.
@@ -259,6 +287,75 @@ const EXAMPLES: Example[] = [
 	},
 ];
 
+/** One entry in a toolbar dropdown: what it writes, and how it is described. */
+interface TagChoice {
+	label: string;
+	tag: string;
+	argument?: string;
+	note?: string;
+	/**
+	 * Opens {@link InsertDialog} instead of writing the tag straight away.
+	 *
+	 * For the tags that are useless without something only the operator knows — which image, which
+	 * symbology, what the barcode encodes. Writing `<barcode=CODE128></barcode>` and leaving them to
+	 * fill in the middle is worse than asking: it looks finished, and it compiles to a symbol with
+	 * nothing in it.
+	 */
+	prompt?: InsertTag;
+}
+
+/**
+ * Character multipliers offered as sizes.
+ *
+ * `<size>` takes `W,H`, which is two numbers most people do not want to think about. These are the
+ * combinations worth a button — wider, taller, both — written the long way so the markup a person
+ * ends up reading is the same shape whichever they picked.
+ */
+const SIZE_CHOICES: TagChoice[] = [
+	{ label: "Double width", tag: "size", argument: "2,1", note: "<size=2,1>" },
+	{ label: "Double height", tag: "size", argument: "1,2", note: "<size=1,2>" },
+	{ label: "Double both", tag: "size", argument: "2,2", note: "<size=2,2>" },
+	{ label: "Triple both", tag: "size", argument: "3,3", note: "<size=3,3>" },
+];
+
+/** The two built-in fonts. B is the narrow one, which fits more columns on the same paper. */
+const FONT_CHOICES: TagChoice[] = [
+	{ label: "Font A", tag: "font", argument: "A", note: "The default width" },
+	{ label: "Font B", tag: "font", argument: "B", note: "Narrower, more columns" },
+];
+
+/** Justification. Lowercase, matching how the examples and the docs write it. */
+const ALIGN_CHOICES: TagChoice[] = [
+	{ label: "Left", tag: "align", argument: "left", note: "<align=left>" },
+	{ label: "Centre", tag: "align", argument: "center", note: "<align=center>" },
+	{ label: "Right", tag: "align", argument: "right", note: "<align=right>" },
+];
+
+/**
+ * Everything that is inserted rather than wrapped around a selection.
+ *
+ * The void tags belong here because there is nothing to style with them, and the block tags belong
+ * here because what they enclose is a payload rather than text — a button that wrapped the selected
+ * words in `<qr>` would be reasonable only if those words were the thing to encode, which is the
+ * less common case.
+ *
+ * Half of them go straight in; the other half open a dialog first, because they need a value the
+ * toolbar has no way to guess. See {@link TagChoice.prompt}.
+ */
+const INSERT_CHOICES: TagChoice[] = [
+	{ label: "Horizontal rule", tag: "hr", note: "A full-width line" },
+	{ label: "Fill", tag: "fill", prompt: "fill", note: "Pads out to the paper's width" },
+	{ label: "Feed", tag: "feed", prompt: "feed", note: "Advance the paper" },
+	{ label: "Cut", tag: "cut", note: "Cut the paper" },
+	{ label: "Cash drawer", tag: "drawer", note: "Pulse the drawer" },
+	{ label: "QR code", tag: "qr", prompt: "qr", note: "Choose what it encodes" },
+	{ label: "Barcode", tag: "barcode", prompt: "barcode", note: "Choose a symbology and content" },
+	{ label: "PDF417", tag: "pdf417", prompt: "pdf417", note: "Choose what it encodes" },
+	{ label: "Image", tag: "image", prompt: "image", note: "Pick a stored image, or give a URL" },
+	{ label: "Wrap", tag: "wrap", note: "Break this line at the paper width" },
+	{ label: "No wrap", tag: "nowrap", note: "Print this line as written" },
+];
+
 /**
  * The markup editor, with a preview of the paper it would produce.
  *
@@ -277,8 +374,77 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 	const [result, setResult] = useState<PreviewResult | null>(null);
 	const [compiling, startCompile] = useTransition();
 	const [printing, startPrint] = useTransition();
+	const editor = useRef<ReactCodeMirrorRef>(null);
+	/** Which tag the insert dialog is collecting data for, or null when it is closed. */
+	const [prompting, setPrompting] = useState<InsertTag | null>(null);
 
 	const device = devices.find((entry) => entry.id === deviceId);
+
+	/**
+	 * Writes a tag at the cursor, or around what is selected.
+	 *
+	 * Dispatched through CodeMirror rather than by rebuilding the string in React state, because the
+	 * editor owns the selection and the undo history. Setting `source` directly would drop the caret
+	 * to the end of the document and make the whole edit a single unattributed change; a transaction
+	 * keeps the caret where {@link markupEdit} asked for it and leaves one Ctrl+Z between the person
+	 * and their text.
+	 *
+	 * `changeByRange` applies the same edit to every cursor, so a multi-cursor selection styles each
+	 * of its ranges rather than only the last.
+	 *
+	 * @param name the tag to write
+	 * @param argument its argument, for tags that take one
+	 * @param content what it should enclose, when that came from a dialog rather than from the
+	 *   selection — the two are alternatives, and a dialog's answer wins because the person just
+	 *   typed it
+	 */
+	const applyTag = useCallback((name: string, argument?: string, content?: string) => {
+		const view = editor.current?.view;
+		if (!view) {
+			return;
+		}
+
+		const { state } = view;
+		view.dispatch(
+			state.update(
+				state.changeByRange((range) => {
+					const edit = markupEdit(name, content ?? state.sliceDoc(range.from, range.to), argument);
+					if (!edit) {
+						return { range };
+					}
+
+					return {
+						changes: { from: range.from, to: range.to, insert: edit.insert },
+						range: EditorSelection.range(range.from + edit.selectionFrom, range.from + edit.selectionTo),
+					};
+				}),
+				{ userEvent: "input", scrollIntoView: true },
+			),
+		);
+		// Back to the editor, and then held there. The click moved focus to a button, and the point of
+		// putting the caret between the tags is that the next thing typed lands there.
+		//
+		// The toolbar's four menus make this harder than it looks. An open menu keeps focus inside
+		// itself, so a `focus()` from an item's click handler is taken straight back; the item then
+		// unmounts as the menu closes, dropping focus to `<body>`; and the menu may hand focus to its
+		// own trigger button on the way out. Each of those happens at a moment this code cannot
+		// predict, and counting animation frames to outlast them encodes a duration that goes wrong
+		// the day the animation changes.
+		//
+		// So rather than guessing when, watch for it: while the menu is closing, any focus landing
+		// outside the editor is the menu tidying up after itself, and the caret this function just
+		// placed between two tags is what the person is about to type into. Pull it back, briefly, and
+		// stop watching once things have settled.
+		view.focus();
+
+		const keepFocus = (event: FocusEvent): void => {
+			if (!(event.target instanceof Node) || !view.dom.contains(event.target)) {
+				view.focus();
+			}
+		};
+		document.addEventListener("focusin", keepFocus, true);
+		window.setTimeout(() => document.removeEventListener("focusin", keepFocus, true), FOCUS_GUARD_MS);
+	}, []);
 
 	useEffect(() => {
 		if (!deviceId) {
@@ -323,6 +489,46 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 					    not a value the editor holds — a select would go on claiming an example was
 					    "selected" after the first keystroke changed it into something else. */}
 					<div className="flex flex-wrap items-center gap-2">
+						{/* The three that need no argument get a button each; everything else is a menu,
+						    because a tag with a value has no single obvious one to put on a button. */}
+						<div className="flex items-center gap-1">
+							<TagButton label="Bold" icon={<Bold className="size-3.5" />} onClick={() => applyTag("bold")} />
+							<TagButton
+								label="Underline"
+								icon={<Underline className="size-3.5" />}
+								onClick={() => applyTag("underline")}
+							/>
+							<TagButton label="Invert" icon={<Contrast className="size-3.5" />} onClick={() => applyTag("invert")} />
+						</div>
+
+						<TagMenu
+							label="Size"
+							icon={<ALargeSmall className="size-3.5" />}
+							choices={SIZE_CHOICES}
+							onPick={applyTag}
+						/>
+						<TagMenu
+							label="Font"
+							icon={<CaseSensitive className="size-3.5" />}
+							choices={FONT_CHOICES}
+							onPick={applyTag}
+						/>
+						<TagMenu
+							label="Align"
+							icon={<AlignCenter className="size-3.5" />}
+							choices={ALIGN_CHOICES}
+							onPick={applyTag}
+						/>
+						<TagMenu
+							label="Insert"
+							icon={<Plus className="size-3.5" />}
+							choices={INSERT_CHOICES}
+							onPick={applyTag}
+							onPrompt={setPrompting}
+						/>
+
+						<span aria-hidden className="h-5 w-px bg-border" />
+
 						<Button
 							type="button"
 							variant="outline"
@@ -358,7 +564,7 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 							</DropdownMenuContent>
 						</DropdownMenu>
 
-						<span className="text-[11px] text-subtle-foreground">Replaces the editor; undo with Ctrl+Z.</span>
+						<span className="text-[11px] text-subtle-foreground">Examples replace the editor; undo with Ctrl+Z.</span>
 					</div>
 
 					{/* No border of its own: the editor's background is transparent, so it sits directly
@@ -370,6 +576,7 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 					    `min-h-80` keeps 320px as the floor for when the preview is shorter than that. */}
 					<div className="min-h-80 flex-1 overflow-hidden">
 						<CodeMirror
+							ref={editor}
 							value={source}
 							// `className` lands on the component's own `.cm-theme` wrapper, which has no
 							// height of its own — so the editor's `height="100%"` resolved against `auto`
@@ -389,6 +596,11 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 							onChange={setSource}
 						/>
 					</div>
+
+					{/* Mounted here rather than behind each menu item: a menu item cannot also be a dialog
+					    trigger, because choosing it closes the menu that owns it. The toolbar records which
+					    tag was asked for and this reads that. */}
+					<InsertDialog tag={prompting} onClose={() => setPrompting(null)} onInsert={applyTag} />
 
 					{/* A rule inside the content rather than a filled footer band, matching how the
 					    other tabs' cards separate their controls from what they act on. */}
@@ -470,6 +682,78 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
  * Position and code are set in monospace and column-aligned: they are strings from the API, and a
  * ragged list of them is much harder to scan than an aligned one when there are several.
  */
+/**
+ * One icon-only toolbar button.
+ *
+ * `title` as well as `aria-label`: the icon alone does not say what `<invert>` is, and this toolbar
+ * is used by people who have not read the tag list. A tooltip component would look better and would
+ * need a provider around the tree for the sake of three buttons.
+ */
+function TagButton({ label, icon, onClick }: { label: string; icon: ReactNode; onClick: () => void }) {
+	return (
+		<Button
+			type="button"
+			variant="outline"
+			size="sm"
+			className="size-7 p-0"
+			aria-label={label}
+			title={label}
+			onClick={onClick}
+		>
+			{icon}
+		</Button>
+	);
+}
+
+/**
+ * A toolbar dropdown for one family of tags.
+ *
+ * Each item shows the markup it writes beneath its name. The toolbar is a shortcut, not a
+ * replacement for knowing the language — someone who has used it a few times should be able to type
+ * the tag themselves, and they cannot learn it from a button that hides what it did.
+ */
+function TagMenu({
+	label,
+	icon,
+	choices,
+	onPick,
+	onPrompt,
+}: {
+	label: string;
+	icon: ReactNode;
+	choices: TagChoice[];
+	/** Called for a choice that writes its tag straight away. */
+	onPick: (tag: string, argument?: string) => void;
+	/** Called instead for a choice that needs the dialog to collect something first. */
+	onPrompt?: (prompt: InsertTag) => void;
+}) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" className="h-7 text-[11.5px]" />}>
+				{icon}
+				{label}
+				<ChevronDown className="size-3.5 opacity-60" />
+			</DropdownMenuTrigger>
+			{/* `finalFocus={false}`: the menu would otherwise put focus back on its own trigger button
+			    when it closes, undoing the editor focus that `applyTag` restores and stranding the
+			    caret it just placed between two tags. Nothing here needs focus afterwards — the editor
+			    does. */}
+			<DropdownMenuContent className="w-auto min-w-52" finalFocus={false}>
+				{choices.map((choice) => (
+					<DropdownMenuItem
+						key={choice.label}
+						className="flex-col items-start gap-0.5 text-[12.5px]"
+						onClick={() => (choice.prompt && onPrompt ? onPrompt(choice.prompt) : onPick(choice.tag, choice.argument))}
+					>
+						<span>{choice.label}</span>
+						{choice.note ? <span className="font-mono text-[11px] text-subtle-foreground">{choice.note}</span> : null}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
 function Problems({ errors }: { errors: PreviewError[] }) {
 	// Every element error is a 400. Taking the status from the first rather than hardcoding it
 	// keeps this honest if a request-level failure with a different status ever lands here.

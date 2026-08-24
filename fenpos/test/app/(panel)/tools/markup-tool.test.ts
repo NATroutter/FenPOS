@@ -39,17 +39,33 @@ const BUNDLED_IMAGES = readFileSync("../agent/src/main/java/fi/natroutter/fenpos
 const MARKUP_TOOL = readFileSync("app/(panel)/tools/markup-tool.tsx", "utf8");
 
 /**
+ * Just the `EXAMPLES` array, for the checks that go looking for examples by label.
+ *
+ * Narrowed to the array rather than scanning the whole file, because `label:` is an ordinary field
+ * name — the toolbar's tag menus use it too. Scanning the module picked those up as examples and
+ * then sliced a real example's source short at the first menu entry. Anything reading a module-level
+ * constant still reads {@link MARKUP_TOOL}; only the label scan is scoped.
+ */
+const EXAMPLES_SOURCE = (() => {
+	const from = MARKUP_TOOL.indexOf("const EXAMPLES: Example[] = [");
+	const to = MARKUP_TOOL.indexOf("\n];", from);
+	expect(from, "the EXAMPLES array has been renamed or removed").toBeGreaterThan(-1);
+	expect(to).toBeGreaterThan(from);
+	return MARKUP_TOOL.slice(from, to);
+})();
+
+/**
  * The example's own text, cut out of the module.
  *
  * Sliced rather than searched whole: `<hr>` and `<cut>` appear in every example here, so a check
  * against the file would pass on lines belonging to some other one.
  */
 const EXAMPLE = (() => {
-	const from = MARKUP_TOOL.indexOf('label: "Device test page"');
-	const to = MARKUP_TOOL.indexOf('label: "Wrapping"');
+	const from = EXAMPLES_SOURCE.indexOf('label: "Device test page"');
+	const to = EXAMPLES_SOURCE.indexOf('label: "Wrapping"');
 	expect(from, "the Device test page example has been renamed or removed").toBeGreaterThan(-1);
 	expect(to).toBeGreaterThan(from);
-	return MARKUP_TOOL.slice(from, to);
+	return EXAMPLES_SOURCE.slice(from, to);
 })();
 
 /** Every string literal `TestPage.java` adds to its `data` array. */
@@ -154,7 +170,7 @@ function exampleElements(
 
 /** Every label the Examples menu offers, read out in the order the module defines them. */
 function exampleLabels(): string[] {
-	return [...MARKUP_TOOL.matchAll(/label: "([^"]*)"/g)].map((match) => match[1]);
+	return [...EXAMPLES_SOURCE.matchAll(/label: "([^"]*)"/g)].map((match) => match[1]);
 }
 
 /**
@@ -169,9 +185,10 @@ function exampleSource(label: string): string {
 	const index = labels.indexOf(label);
 	expect(index, `no example is labelled ${JSON.stringify(label)}`).toBeGreaterThanOrEqual(0);
 
-	const from = MARKUP_TOOL.indexOf(`label: "${label}"`);
-	const to = index + 1 < labels.length ? MARKUP_TOOL.indexOf(`label: "${labels[index + 1]}"`) : MARKUP_TOOL.length;
-	return MARKUP_TOOL.slice(from, to);
+	const from = EXAMPLES_SOURCE.indexOf(`label: "${label}"`);
+	const to =
+		index + 1 < labels.length ? EXAMPLES_SOURCE.indexOf(`label: "${labels[index + 1]}"`) : EXAMPLES_SOURCE.length;
+	return EXAMPLES_SOURCE.slice(from, to);
 }
 
 /**

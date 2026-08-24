@@ -179,9 +179,17 @@ export function KeyDialog({
 												disabled={saving}
 												onCheckedChange={() => setPermissions((current) => toggle(current, permission.id))}
 											/>
-											<FieldLabel htmlFor={`permission-${permission.id}`} className="cursor-pointer font-normal">
+											{/* FieldLabel lays its children out in a row, so the id and the description
+											    sat side by side and the description's start moved with the length of
+											    the id beside it. Stacked instead: every id begins at the same x, and a
+											    description that wraps does so under itself rather than pushing its id
+											    off the checkbox it belongs to. */}
+											<FieldLabel
+												htmlFor={`permission-${permission.id}`}
+												className="w-full cursor-pointer flex-col items-start gap-0.5 font-normal"
+											>
 												<span className="font-mono text-[12px]">{permission.id}</span>
-												<span className="block text-[11.5px] font-normal text-subtle-foreground">
+												<span className="text-[11.5px] font-normal text-subtle-foreground">
 													{permission.description}
 												</span>
 											</FieldLabel>

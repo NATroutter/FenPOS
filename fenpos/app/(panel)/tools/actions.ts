@@ -1,6 +1,6 @@
 "use server";
 
-import { rasterFor } from "@/lib/assets/asset-service";
+import { listAssets, rasterFor } from "@/lib/assets/asset-service";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
@@ -436,5 +436,73 @@ export async function writeRaw(deviceId: string, bytes: number[]): Promise<SendR
 		}
 		logger.error("Raw write failed", error);
 		return { error: "Something went wrong. Check the server log.", message: null };
+	}
+}
+
+/**
+ * The width the image picker's thumbnails are dithered for, in printer dots.
+ *
+ * 32 columns, the narrower of the two widths a receipt printer usually has, for the same reason the
+ * Assets tab picks it: an image that still reads at the narrow width reads at the wide one, so an
+ * operator choosing between logos should see the version that survives least well. Small enough that
+ * a library of them is a handful of kilobytes on the wire.
+ */
+const PICKER_DOTS = dotWidth(32);
+
+/** One stored image, as the markup toolbar's picker shows it. */
+export interface MarkupImage {
+	name: string;
+	width: number;
+	height: number;
+	/** A dithered PNG data URI, or null if this one could not be rendered. */
+	preview: string | null;
+}
+
+/**
+ * Lists the stored images, for the toolbar's `<image>` picker.
+ *
+ * Fetched when the picker opens rather than passed into the page, because the Tools tab is not about
+ * images: dithering the whole library on every visit would charge every operator composing markup for
+ * a dialog most of them will not open.
+ *
+ * **The thumbnails are dithered here, by the code the printer's raster comes from.** Showing the
+ * smooth original would show a picture that will never exist on paper — a thermal head has one ink.
+ * That is the same reasoning the Assets tab documents, including doing them one at a time: a decode
+ * holds a full bitmap, and starting the library together would hold all of them at once.
+ *
+ * @returns every stored image, by name, with a preview where one could be rendered
+ */
+export async function listMarkupImages(): Promise<MarkupImage[]> {
+	await requireSession();
+
+	const assets = await listAssets();
+	const images: MarkupImage[] = [];
+	for (const asset of assets) {
+		images.push({
+			name: asset.name,
+			width: asset.width,
+			height: asset.height,
+			preview: await pickerPreview(asset.name),
+		});
+	}
+	return images;
+}
+
+/**
+ * Dithers one stored image for the picker.
+ *
+ * A failure is this server disagreeing with itself — the bytes decoded once already, on the way in —
+ * so it is logged rather than shown to the operator, and the image still appears in the picker by
+ * name. Losing a thumbnail should not cost someone the ability to reference the image.
+ *
+ * @param name the asset's name
+ * @returns a PNG data URI, or null if it could not be rendered
+ */
+async function pickerPreview(name: string): Promise<string | null> {
+	try {
+		return await rasterToPngDataUrl(await rasterFor(name, PICKER_DOTS));
+	} catch (error) {
+		logger.error(`Could not render a picker preview of asset '${name}'`, error);
+		return null;
 	}
 }

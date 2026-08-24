@@ -36,7 +36,7 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 	fetchRemoteImage,
 }));
 
-const { preview } = await import("@/app/(panel)/tools/actions");
+const { listMarkupImages, preview } = await import("@/app/(panel)/tools/actions");
 const { createAsset, rasterFor } = await import("@/lib/assets/asset-service");
 
 const QR_CONTENT = "https://cafe.example/o/123";
@@ -286,5 +286,46 @@ describe("preview", () => {
 		expect(result.errors).toEqual([expect.objectContaining({ code: "invalid_tag_argument", status: 422, line: 1 })]);
 		// The footer still has something true to say about the printer it was compiled against.
 		expect(result.columns).toBe(COLUMNS);
+	});
+});
+
+/**
+ * What the markup toolbar's `<image>` picker is shown.
+ *
+ * The name is the part that matters: it is what ends up in the receipt, and an image the picker
+ * cannot offer is one an operator has to remember the name of instead.
+ */
+describe("listMarkupImages", () => {
+	/** This describe's own image, so it neither depends on nor disturbs the preview fixture above. */
+	const PICKED = `picker-logo-${process.pid}`;
+
+	beforeAll(async () => {
+		await createAsset(PICKED, LOGO);
+	});
+
+	it("offers every stored image, with a preview dithered rather than the original", async () => {
+		const images = await listMarkupImages();
+		const stored = images.find((image) => image.name === PICKED);
+
+		expect(stored, `the picker did not offer '${PICKED}'`).toBeDefined();
+		// The same dots the printer is sent, from the same module — not a rendering of the source
+		// picture, which would show the operator a logo smoother than any paper will carry.
+		expect(stored?.preview).toBe(await rasterToPngDataUrl(await rasterFor(PICKED, dotWidth(32))));
+	});
+
+	it("still offers an image whose preview could not be rendered", async () => {
+		// A thumbnail is a convenience; the name is the thing being picked. Dropping the row would
+		// take away the operator's only route to an image that prints perfectly well.
+		const broken = `broken-preview-${process.pid}`;
+		await createAsset(broken, LOGO);
+		await prisma.asset.update({
+			where: { kind_name: { kind: "IMAGE", name: broken } },
+			data: { data: Buffer.from("not an image") },
+		});
+
+		const listed = (await listMarkupImages()).find((image) => image.name === broken);
+
+		expect(listed).toBeDefined();
+		expect(listed?.preview).toBeNull();
 	});
 });

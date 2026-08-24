@@ -15,14 +15,14 @@ import { DOC_REVEAL_EVENT } from "@/app/(panel)/docs/doc-section";
 export function ContentsRail({ sections }: { sections: readonly { id: string; title: string }[] }) {
 	return (
 		<nav aria-label="On this page" className="hidden xl:sticky xl:top-2 xl:block">
-			<div className="text-[10.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">On this page</div>
-			<ul className="mt-2 flex flex-col gap-px border-l border-border">
+			<div className="text-[11.5px] font-medium tracking-[0.08em] text-subtle-foreground uppercase">On this page</div>
+			<ul className="mt-2.5 flex flex-col gap-px border-l border-border">
 				{sections.map((section) => (
 					<li key={section.id}>
 						<a
 							href={`#${section.id}`}
 							onClick={() => window.dispatchEvent(new CustomEvent(DOC_REVEAL_EVENT, { detail: section.id }))}
-							className="-ml-px block border-l border-transparent py-1 pl-3 text-[12px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+							className="-ml-px block border-l border-transparent py-1.5 pl-3.5 text-[13.5px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
 						>
 							{section.title}
 						</a>

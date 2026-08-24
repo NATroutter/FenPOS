@@ -41,9 +41,10 @@ const RULE_STYLE: Record<Verb | "none", string> = {
 /**
  * One collapsible section of the reference.
  *
- * Open by default. The docs are read by someone who has a request failing right now, and a page
- * of closed headings makes them click through every one to find which section mentions their
- * error code — the browser's own find already does that job if the text is on the page.
+ * Closed by default, so the whole reference is one screen of headings a reader can scan before
+ * choosing what to open. The cost is that the browser's own find only reaches text in sections
+ * already expanded, which is why the contents rail names every section and why being linked to
+ * opens one.
  *
  * The header states the endpoint rather than describing it. An operator scanning for where to
  * send a receipt is looking for `POST /api/v1/print/…`, not for a sentence about paths, so the
@@ -69,7 +70,7 @@ export function DocSection({
 	children: ReactNode;
 }) {
 	const rule = RULE_STYLE[verbs?.[0] ?? "none"];
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(false);
 
 	// Being linked to opens the section. Jumping to a heading that stays shut lands the reader on
 	// the one thing they asked not to be given — the title they already read in the rail.

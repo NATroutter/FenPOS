@@ -33,6 +33,14 @@ export const dynamic = "force-dynamic";
  */
 const SECTIONS = [
 	{ id: "authentication", title: "Authentication", note: "Bearer keys, permissions and device grants" },
+	{ id: "webhooks", title: "Webhooks", note: "Delivery, signature verification and retries for job outcomes" },
+	{ id: "errors", title: "Errors", note: "Stable codes, and what carries a position" },
+	{
+		id: "openapi",
+		title: "OpenAPI document",
+		verbs: ["GET"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/openapi.json`,
+	},
 	{
 		id: "submitting",
 		title: "Submitting a job",
@@ -57,7 +65,6 @@ const SECTIONS = [
 		verbs: ["GET"] as const satisfies readonly Verb[],
 		path: `${API_BASE}/jobs`,
 	},
-	{ id: "webhooks", title: "Webhooks", note: "Delivery, signature verification and retries for job outcomes" },
 	{
 		id: "devices",
 		title: "Listing devices",
@@ -99,13 +106,6 @@ const SECTIONS = [
 		title: "Health",
 		verbs: ["GET"] as const satisfies readonly Verb[],
 		path: "/api/health",
-	},
-	{ id: "errors", title: "Errors", note: "Stable codes, and what carries a position" },
-	{
-		id: "openapi",
-		title: "OpenAPI document",
-		verbs: ["GET"] as const satisfies readonly Verb[],
-		path: `${API_BASE}/openapi.json`,
 	},
 	{
 		id: "raw-write",
@@ -188,7 +188,7 @@ export default async function ApiDocsPage() {
 		// than a band above them. Outside it, the card stretched under the contents rail and its
 		// right edge sat 174px past every section below — the kind of misalignment that reads as a
 		// mistake even when nobody can say what is wrong.
-		<div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1fr)_150px] xl:items-start">
+		<div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1fr)_210px] xl:items-start">
 			<div className="flex min-w-0 flex-col gap-3">
 				<section className="overflow-hidden rounded-lg border border-border bg-card">
 					{/* The two values every call is built from, given the top of the page rather than a
@@ -315,243 +315,6 @@ export default async function ApiDocsPage() {
 					<Split>
 						<Col>
 							<P>
-								Paths are agent-scoped. A device name only has to be unique within its agent, so every site can have its
-								own <Mono>kitchen</Mono> without coordinating names across the install.
-							</P>
-
-							<P>
-								A <Status>202</Status> means the job was compiled, recorded and handed to the agent. It has not printed
-								yet — the response carries the job id to follow it with.
-							</P>
-
-							<P>
-								<Mono>data</Mono> is required and <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
-								<Mono>NONE</Mono>) is optional, defaulting to the device's own setting. No other field is accepted.
-								Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
-								<Mono>&lt;nowrap&gt;</Mono>.
-							</P>
-
-							<P>
-								An optional <Mono>Idempotency-Key</Mono> header makes a retry safe. Omit it and nothing here changes.
-								Send it, and the first request records the key against the job it creates; a retry presenting the{" "}
-								<strong>same</strong> key, the same device and a byte-identical body gets back the original{" "}
-								<Status>202</Status> — with an <Mono>Idempotent-Replay: true</Mono> header — and prints nothing a second
-								time. The same key with a different body, or the same key and body aimed at a different device, is
-								refused as <ErrorRef code="idempotency_conflict" />: reusing a key for two different receipts is a
-								caller error, not something to silently paper over.
-							</P>
-
-							<Aside>
-								This server does not currently sweep the jobs table — <Mono>jobs.retentionMinutes</Mono> and{" "}
-								<Mono>jobs.maxRecords</Mono> bound only what is pushed to each agent's own local job store, not the
-								history kept here. In practice that means a key is retained forever: it is never freed on its own. Use
-								an identifier that is unique for all time — a UUID, not an order number or another value that could
-								recur — and never reuse a key across two different receipts.
-							</Aside>
-
-							<P>
-								Only a request that actually reached <Status>202</Status> <Mono>QUEUED</Mono> is replayable. One that
-								failed validation before any job existed, or was accepted and then failed to compile or reach the agent,
-								never recorded a key — nothing was queued to record it against, so the key is free and a corrected retry
-								is just a new request.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "data": [
-      "<align=center><bold>THE CORNER CAFE</bold></align>",
-      "<hr>",
-      "Coffee<fill>2.50",
-      "Pastry<fill>3.00",
-      "<hr>",
-      "<bold>Total<fill>5.50</bold>",
-      "<feed=3>",
-      "<cut>"
-    ]
-  }'`}</CodeBlock>
-
-							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
-
-							<CodeBlock label="Retry, same Idempotency-Key and body">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Idempotency-Key: 5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "data": [ "…same body…" ] }'`}</CodeBlock>
-
-							<CodeBlock label="202 Accepted (replay)">{`Idempotent-Replay: true
-
-{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
-
-							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict — different body, same key`}>{`{
-  "jobId": "clx…",
-  "error": "idempotency_conflict",
-  "message": "Idempotency-Key '5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d' was already used with a different request body. Use a new key for a different receipt."
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[2]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>print</Mono>, not a permission of its own: preview is strictly less powerful than printing,
-								and a key that may print could already learn everything a preview reports by printing it.
-							</P>
-
-							<P>
-								Same body a submit takes — <Mono>data</Mono> and an optional <Mono>linefeed</Mono> — compiled against
-								the named device and reported back rather than sent anywhere. No job is created, nothing is queued, and
-								the agent is never contacted: this works even while the agent is offline, since only the device's stored
-								configuration is needed.
-							</P>
-
-							<P>
-								Always <Status>200</Status>. Markup that does not compile comes back with <Mono>lines</Mono>{" "}
-								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
-								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
-								non-2xx here.
-							</P>
-
-							<P>
-								A fault's own <Mono>status</Mono>, seen inside a <Status>200</Status> response, is not the status of
-								that response — it is the status <Mono>{`POST ${API_BASE}/print/{agent}/{device}`}</Mono> would have
-								answered with had this same body been submitted rather than previewed.
-							</P>
-
-							<P>
-								<Mono>columns</Mono>, <Mono>outputLines</Mono>, <Mono>maxOutputLines</Mono> and <Mono>linefeed</Mono>{" "}
-								are the same measurements a submit compiles against, so a caller can check a receipt fits before ever
-								sending it.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/preview/${agentName}/${deviceName} \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "data": [ "Coffee<fill>2.50" ] }'`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "agent": "${agentName}",
-  "device": "${deviceName}",
-  "columns": 42,
-  "outputLines": 1,
-  "maxOutputLines": 1000,
-  "linefeed": "LF",
-  "lines": [
-    {
-      "align": "LEFT",
-      "spans": [
-        { "text": "Coffee", "bold": false, "underline": 0, "invert": false, "widthMult": 1 },
-        { "text": "                          2.50", "bold": false, "underline": 0, "invert": false, "widthMult": 1 }
-      ]
-    }
-  ],
-  "errors": []
-}`}</CodeBlock>
-
-							<CodeBlock label="200 OK — markup that does not compile">{`{
-  "agent": "${agentName}",
-  "device": "${deviceName}",
-  "columns": 42,
-  "outputLines": 0,
-  "maxOutputLines": 1000,
-  "linefeed": "LF",
-  "lines": null,
-  "errors": [
-    { "code": "unclosed_tag", "message": "…", "status": ${API_ERROR_STATUS.unclosed_tag}, "line": 1, "column": null }
-  ]
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[3]}>
-					<Split>
-						<Col>
-							<P>
-								<Mono>GET</Mono> needs <Mono>jobs:read</Mono> and returns the job's state and timings. A key sees only
-								the jobs it submitted itself.
-							</P>
-
-							<P>
-								<Mono>DELETE</Mono> needs <Mono>jobs:cancel</Mono> and returns <Status>202</Status>. Cancellation is a
-								request, not a fact: only the agent knows whether the job is still queued or already halfway through the
-								paper, so the final state arrives from it.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}${API_BASE}/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[4]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>jobs:read</Mono>. The caller's own job history, newest first — what recovers a{" "}
-								<Mono>jobId</Mono> a dropped connection lost: a submit that never returned its <Status>202</Status>{" "}
-								still left a job behind, and this is how a caller finds it again without ever learning about anyone
-								else's.
-							</P>
-
-							<P>
-								Cursor-paginated with <Mono>limit</Mono> and <Mono>cursor</Mono>. A response carries{" "}
-								<Mono>nextCursor</Mono>, which is <Mono>null</Mono> on the last page and otherwise the value to send
-								back as <Mono>cursor</Mono> for the next one — never an offset, so a job removed between two requests
-								(its device or agent deleted, say) cannot shift the page boundary under a caller still walking it.
-							</P>
-
-							<P>
-								<Mono>status</Mono>, <Mono>agent</Mono> and <Mono>device</Mono> narrow by name; <Mono>since</Mono> (an
-								ISO 8601 timestamp) narrows to jobs submitted at or after it. Every filter composes with the key's own
-								scope rather than replacing it — a filter can only narrow what a key already sees, never widen it.
-							</P>
-
-							<P>
-								Each entry is the same shape <Mono>{`GET ${API_BASE}/jobs/{id}`}</Mono> returns, so a caller has one
-								body to parse whether it arrived in a list or on its own.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl "${base}${API_BASE}/jobs?status=FAILED&limit=20" \\
-  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "jobs": [
-    {
-      "jobId": "clx…",
-      "status": "FAILED",
-      "agent": "${agentName}",
-      "device": "${deviceName}",
-      "submittedAt": "2026-08-22T18:04:09.000Z",
-      "queuedAt": "2026-08-22T18:04:09.100Z",
-      "startedAt": "2026-08-22T18:04:09.400Z",
-      "finishedAt": "2026-08-22T18:04:09.900Z",
-      "lines": 8,
-      "bytes": 512,
-      "error": "agent_offline",
-      "errorMessage": "The agent disconnected mid-print."
-    }
-  ],
-  "nextCursor": null
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[5]}>
-					<Split>
-						<Col>
-							<P>
 								A key's job outcomes can be delivered to a URL as they settle, instead of being polled for. There is no
 								endpoint here for it: a subscription is registered from the <Mono>Keys</Mono> tab in the panel, by an
 								operator with an admin session, never through this API.
@@ -640,303 +403,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[6]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
-								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
-								site's printers and learns nothing about the rest.
-							</P>
-
-							<P>
-								Not paginated. The size of this list is something an operator chose when granting devices, so it does
-								not grow on its own, and a cursor over a handful of printers would be ceremony for nothing.
-							</P>
-
-							<P>
-								<Mono>observed</Mono> is <Mono>null</Mono> until the agent has reported at least once since this server
-								started; the rest of the body is this server's own configuration and is always present.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "devices": [
-    {
-      "agent": "${agentName}",
-      "device": "${deviceName}",
-      "port": "COM3",
-      "columns": 42,
-      "codepage": "CP437",
-      "defaultLinefeed": "LF",
-      "paused": false,
-      "maxQueueDepth": null,
-      "observed": null
-    }
-  ]
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[7]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>devices:read</Mono>. One device, in the same shape as an entry in the list above — bare
-								rather than wrapped, since the path already names which one.
-							</P>
-
-							<P>
-								Addressed the same agent-scoped way a print is, so a caller that can print to a device can read it
-								without learning a second addressing scheme.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices/${agentName}/${deviceName} \\
-  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "agent": "${agentName}",
-  "device": "${deviceName}",
-  "port": "COM3",
-  "columns": 42,
-  "codepage": "CP437",
-  "defaultLinefeed": "LF",
-  "paused": false,
-  "maxQueueDepth": null,
-  "observed": {
-    "connection": "CONNECTED",
-    "queueDepth": 0,
-    "reportedAt": "2026-08-22T18:04:11.000Z"
-  }
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[8]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>devices:control</Mono>. The body names one <Mono>action</Mono>: <Mono>connect</Mono>,{" "}
-								<Mono>disconnect</Mono>, <Mono>pause</Mono>, <Mono>resume</Mono> or <Mono>clearQueue</Mono>.
-							</P>
-
-							<P>
-								<Mono>pause</Mono> and <Mono>resume</Mono> also write the stored <Mono>paused</Mono> state, so it
-								survives an agent restart. The other three are transient sends: a connection and a queue belong to the
-								machine holding the port, and this server has no column that could be right about either.
-							</P>
-
-							<P>
-								There is no <Mono>test</Mono> action. Printing a diagnostic page is a print, and belongs behind{" "}
-								<Mono>print</Mono> — a key granted control of a printer it may not print to must not be able to make it
-								print by another name.
-							</P>
-
-							<P>
-								<Mono>message</Mono> is <Mono>null</Mono> when the agent's reply carries none of its own, which a
-								successful action is free to do.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/actions \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "action": "pause" }'`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "action": "pause", "message": "Printing paused" }`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[9]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>status:read</Mono>. Agent liveness and printer readiness, grouped by agent, restricted to
-								the agents holding at least one device this key is granted.
-							</P>
-
-							<P>
-								Distinct from <Mono>/api/health</Mono>: that endpoint stays deliberately contentless because it takes no
-								key, and counts of agents or devices there would turn a container probe into a way to watch an install
-								from outside it. This endpoint is authenticated and may say more.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}${API_BASE}/status -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "agents": [
-    {
-      "agent": "${agentName}",
-      "status": "ONLINE",
-      "lastSeenAt": "2026-08-22T18:04:11.000Z",
-      "agentVersion": "1.4.0",
-      "devices": [
-        {
-          "agent": "${agentName}",
-          "device": "${deviceName}",
-          "port": "COM3",
-          "columns": 42,
-          "codepage": "CP437",
-          "defaultLinefeed": "LF",
-          "paused": false,
-          "maxQueueDepth": null,
-          "observed": {
-            "connection": "CONNECTED",
-            "queueDepth": 0,
-            "reportedAt": "2026-08-22T18:04:11.000Z"
-          }
-        }
-      ]
-    }
-  ]
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[10]}>
-					<Split>
-						<Col>
-							<P>
-								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes — the
-								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
-								one namespace, not a slice scoped to its own devices. Ordered by name ascending — unlike the jobs
-								history above, an image library is browsed alphabetically rather than newest first.
-							</P>
-
-							<P>
-								<Mono>POST</Mono> needs <Mono>assets:write</Mono> and stores one, the same two ways the Assets tab
-								offers: <Mono>data</Mono>, the file as base64, or <Mono>url</Mono>, a location to import it from.
-								Exactly one of the two — a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
-								or <ErrorRef code="missing_field" /> respectively.
-							</P>
-
-							<P>
-								Cursor-paginated the same way the jobs listing is — see <Mono>{`GET ${API_BASE}/jobs`}</Mono> above for
-								what <Mono>limit</Mono>, <Mono>cursor</Mono> and <Mono>nextCursor</Mono> mean.
-							</P>
-
-							<P>
-								An upload over the configured size, or bytes that are not an image this pipeline prints, is refused
-								before it is stored — the same gate the panel's own Assets tab goes through. The name the bundled logo
-								uses is reserved and cannot be written here either.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}${API_BASE}/assets -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{
-  "assets": [
-    {
-      "name": "shop-logo",
-      "kind": "IMAGE",
-      "width": 384,
-      "height": 96,
-      "mimeType": "image/png",
-      "sourceUrl": null,
-      "createdAt": "2026-08-22T18:04:09.000Z"
-    }
-  ],
-  "nextCursor": null
-}`}</CodeBlock>
-
-							<CodeBlock label="Request — upload">{`curl -X POST ${base}${API_BASE}/assets \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "name": "shop-logo", "data": "iVBORw0KGgo…" }'`}</CodeBlock>
-
-							<CodeBlock label="201 Created">{`{
-  "kind": "IMAGE",
-  "name": "shop-logo",
-  "width": 384,
-  "height": 96,
-  "mimeType": "image/png",
-  "sourceUrl": null,
-  "createdAt": "2026-08-22T18:04:09.000Z"
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[11]}>
-					<Split>
-						<Col>
-							<P>
-								Needs <Mono>assets:write</Mono> — the same permission a create or replace goes through, since a delete
-								is also a write. Answers <Status>204</Status> with no body: the asset is gone, and a body restating the
-								name the caller just sent would be ceremony.
-							</P>
-
-							<P>
-								A name that names no stored asset is <ErrorRef code="unknown_asset" />. The bundled logo's own name is
-								refused as <ErrorRef code="invalid_type" /> instead — the same code the create path answers for it —
-								because it is not a missing asset and not a taken name, it is not an asset at all, and{" "}
-								<Mono>unknown_asset</Mono> here would invite a caller to conclude it simply has not been uploaded yet.
-							</P>
-
-							<P>
-								Nothing here checks whether markup still names this asset. A receipt that does now fails to compile with{" "}
-								<ErrorRef code="unknown_asset" /> — the same consequence deleting it from the panel's Assets tab has,
-								and it belongs to whoever deletes.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl -X DELETE ${base}${API_BASE}/assets/shop-logo \\
-  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
-
-							<CodeBlock label="204 No Content">{`(empty body)`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[12]}>
-					<Split>
-						<Col>
-							<P>
-								One of two endpoints on this API that take no key — the OpenAPI document, below, is the other. A
-								healthcheck runs before anyone has signed in, and a probe that needed a credential would need one stored
-								somewhere to use it — so this is what a container runtime or a load balancer calls, and it is
-								deliberately the only thing they can call.
-							</P>
-
-							<P>
-								It answers <Status>200</Status> when the process is up and its database answers, and{" "}
-								<Status>503</Status> when the database is unreachable. The round trip is the point: a process that has
-								started but cannot reach its volume serves HTTP perfectly well while being useless, and reporting that
-								as healthy is how a broken deploy gets left running.
-							</P>
-
-							<P>
-								It reports nothing else, and nothing about the failure. Counts of agents, devices or jobs would turn a
-								liveness probe into a way to watch an install from outside it, and the database error's own text is a
-								file path or a driver version. Both stay in the server log.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl ${base}/api/health`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{ "status": "ok", "database": "ok" }`}</CodeBlock>
-
-							<CodeBlock label="503 Service Unavailable">{`{ "status": "unavailable", "database": "unreachable" }`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[13]}>
+				<DocSection {...SECTIONS[2]}>
 					<Split>
 						<Col>
 							<P>
@@ -1026,17 +493,17 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[14]}>
+				<DocSection {...SECTIONS[3]}>
 					<Split>
 						<Col>
 							<P>
-								The whole reference above, machine-readable: an OpenAPI 3.1 document describing every path, method,
+								The whole reference below, machine-readable: an OpenAPI 3.1 document describing every path, method,
 								permission and status code on this page. A client generator can build a typed client straight from it
 								rather than from this prose.
 							</P>
 
 							<P>
-								The other endpoint on this API that takes no key, alongside <Mono>/api/health</Mono> above. A spec
+								The other endpoint on this API that takes no key, alongside <Mono>/api/health</Mono> below. A spec
 								describes the shape of the API rather than the contents of this install — it names no agent, device, job
 								or asset — so a generator reading it should not need a credential to do so. One field is an exception:{" "}
 								<Mono>servers[0].url</Mono> is this install's own address, configured or inferred from the request, so
@@ -1052,6 +519,539 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 						<Col>
 							<CodeBlock label="Request">{`curl ${base}${API_BASE}/openapi.json`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[4]}>
+					<Split>
+						<Col>
+							<P>
+								Paths are agent-scoped. A device name only has to be unique within its agent, so every site can have its
+								own <Mono>kitchen</Mono> without coordinating names across the install.
+							</P>
+
+							<P>
+								A <Status>202</Status> means the job was compiled, recorded and handed to the agent. It has not printed
+								yet — the response carries the job id to follow it with.
+							</P>
+
+							<P>
+								<Mono>data</Mono> is required and <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
+								<Mono>NONE</Mono>) is optional, defaulting to the device's own setting. No other field is accepted.
+								Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
+								<Mono>&lt;nowrap&gt;</Mono>.
+							</P>
+
+							<P>
+								An optional <Mono>Idempotency-Key</Mono> header makes a retry safe. Omit it and nothing here changes.
+								Send it, and the first request records the key against the job it creates; a retry presenting the{" "}
+								<strong>same</strong> key, the same device and a byte-identical body gets back the original{" "}
+								<Status>202</Status> — with an <Mono>Idempotent-Replay: true</Mono> header — and prints nothing a second
+								time. The same key with a different body, or the same key and body aimed at a different device, is
+								refused as <ErrorRef code="idempotency_conflict" />: reusing a key for two different receipts is a
+								caller error, not something to silently paper over.
+							</P>
+
+							<Aside>
+								This server does not currently sweep the jobs table — <Mono>jobs.retentionMinutes</Mono> and{" "}
+								<Mono>jobs.maxRecords</Mono> bound only what is pushed to each agent's own local job store, not the
+								history kept here. In practice that means a key is retained forever: it is never freed on its own. Use
+								an identifier that is unique for all time — a UUID, not an order number or another value that could
+								recur — and never reuse a key across two different receipts.
+							</Aside>
+
+							<P>
+								Only a request that actually reached <Status>202</Status> <Mono>QUEUED</Mono> is replayable. One that
+								failed validation before any job existed, or was accepted and then failed to compile or reach the agent,
+								never recorded a key — nothing was queued to record it against, so the key is free and a corrected retry
+								is just a new request.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "data": [
+      "<align=center><bold>THE CORNER CAFE</bold></align>",
+      "<hr>",
+      "Coffee<fill>2.50",
+      "Pastry<fill>3.00",
+      "<hr>",
+      "<bold>Total<fill>5.50</bold>",
+      "<feed=3>",
+      "<cut>"
+    ]
+  }'`}</CodeBlock>
+
+							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
+
+							<CodeBlock label="Retry, same Idempotency-Key and body">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Idempotency-Key: 5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "data": [ "…same body…" ] }'`}</CodeBlock>
+
+							<CodeBlock label="202 Accepted (replay)">{`Idempotent-Replay: true
+
+{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
+
+							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict — different body, same key`}>{`{
+  "jobId": "clx…",
+  "error": "idempotency_conflict",
+  "message": "Idempotency-Key '5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d' was already used with a different request body. Use a new key for a different receipt."
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[5]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>print</Mono>, not a permission of its own: preview is strictly less powerful than printing,
+								and a key that may print could already learn everything a preview reports by printing it.
+							</P>
+
+							<P>
+								Same body a submit takes — <Mono>data</Mono> and an optional <Mono>linefeed</Mono> — compiled against
+								the named device and reported back rather than sent anywhere. No job is created, nothing is queued, and
+								the agent is never contacted: this works even while the agent is offline, since only the device's stored
+								configuration is needed.
+							</P>
+
+							<P>
+								Always <Status>200</Status>. Markup that does not compile comes back with <Mono>lines</Mono>{" "}
+								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
+								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
+								non-2xx here.
+							</P>
+
+							<P>
+								A fault's own <Mono>status</Mono>, seen inside a <Status>200</Status> response, is not the status of
+								that response — it is the status <Mono>{`POST ${API_BASE}/print/{agent}/{device}`}</Mono> would have
+								answered with had this same body been submitted rather than previewed.
+							</P>
+
+							<P>
+								<Mono>columns</Mono>, <Mono>outputLines</Mono>, <Mono>maxOutputLines</Mono> and <Mono>linefeed</Mono>{" "}
+								are the same measurements a submit compiles against, so a caller can check a receipt fits before ever
+								sending it.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/preview/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "data": [ "Coffee<fill>2.50" ] }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "columns": 42,
+  "outputLines": 1,
+  "maxOutputLines": 1000,
+  "linefeed": "LF",
+  "lines": [
+    {
+      "align": "LEFT",
+      "spans": [
+        { "text": "Coffee", "bold": false, "underline": 0, "invert": false, "widthMult": 1 },
+        { "text": "                          2.50", "bold": false, "underline": 0, "invert": false, "widthMult": 1 }
+      ]
+    }
+  ],
+  "errors": []
+}`}</CodeBlock>
+
+							<CodeBlock label="200 OK — markup that does not compile">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "columns": 42,
+  "outputLines": 0,
+  "maxOutputLines": 1000,
+  "linefeed": "LF",
+  "lines": null,
+  "errors": [
+    { "code": "unclosed_tag", "message": "…", "status": ${API_ERROR_STATUS.unclosed_tag}, "line": 1, "column": null }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[6]}>
+					<Split>
+						<Col>
+							<P>
+								<Mono>GET</Mono> needs <Mono>jobs:read</Mono> and returns the job's state and timings. A key sees only
+								the jobs it submitted itself.
+							</P>
+
+							<P>
+								<Mono>DELETE</Mono> needs <Mono>jobs:cancel</Mono> and returns <Status>202</Status>. Cancellation is a
+								request, not a fact: only the agent knows whether the job is still queued or already halfway through the
+								paper, so the final state arrives from it.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/jobs/clx… -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[7]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>jobs:read</Mono>. The caller's own job history, newest first — what recovers a{" "}
+								<Mono>jobId</Mono> a dropped connection lost: a submit that never returned its <Status>202</Status>{" "}
+								still left a job behind, and this is how a caller finds it again without ever learning about anyone
+								else's.
+							</P>
+
+							<P>
+								Cursor-paginated with <Mono>limit</Mono> and <Mono>cursor</Mono>. A response carries{" "}
+								<Mono>nextCursor</Mono>, which is <Mono>null</Mono> on the last page and otherwise the value to send
+								back as <Mono>cursor</Mono> for the next one — never an offset, so a job removed between two requests
+								(its device or agent deleted, say) cannot shift the page boundary under a caller still walking it.
+							</P>
+
+							<P>
+								<Mono>status</Mono>, <Mono>agent</Mono> and <Mono>device</Mono> narrow by name; <Mono>since</Mono> (an
+								ISO 8601 timestamp) narrows to jobs submitted at or after it. Every filter composes with the key's own
+								scope rather than replacing it — a filter can only narrow what a key already sees, never widen it.
+							</P>
+
+							<P>
+								Each entry is the same shape <Mono>{`GET ${API_BASE}/jobs/{id}`}</Mono> returns, so a caller has one
+								body to parse whether it arrived in a list or on its own.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl "${base}${API_BASE}/jobs?status=FAILED&limit=20" \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "jobs": [
+    {
+      "jobId": "clx…",
+      "status": "FAILED",
+      "agent": "${agentName}",
+      "device": "${deviceName}",
+      "submittedAt": "2026-08-22T18:04:09.000Z",
+      "queuedAt": "2026-08-22T18:04:09.100Z",
+      "startedAt": "2026-08-22T18:04:09.400Z",
+      "finishedAt": "2026-08-22T18:04:09.900Z",
+      "lines": 8,
+      "bytes": 512,
+      "error": "agent_offline",
+      "errorMessage": "The agent disconnected mid-print."
+    }
+  ],
+  "nextCursor": null
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[8]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
+								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
+								site's printers and learns nothing about the rest.
+							</P>
+
+							<P>
+								Not paginated. The size of this list is something an operator chose when granting devices, so it does
+								not grow on its own, and a cursor over a handful of printers would be ceremony for nothing.
+							</P>
+
+							<P>
+								<Mono>observed</Mono> is <Mono>null</Mono> until the agent has reported at least once since this server
+								started; the rest of the body is this server's own configuration and is always present.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "devices": [
+    {
+      "agent": "${agentName}",
+      "device": "${deviceName}",
+      "port": "COM3",
+      "columns": 42,
+      "codepage": "CP437",
+      "defaultLinefeed": "LF",
+      "paused": false,
+      "maxQueueDepth": null,
+      "observed": null
+    }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[9]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:read</Mono>. One device, in the same shape as an entry in the list above — bare
+								rather than wrapped, since the path already names which one.
+							</P>
+
+							<P>
+								Addressed the same agent-scoped way a print is, so a caller that can print to a device can read it
+								without learning a second addressing scheme.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/devices/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "port": "COM3",
+  "columns": 42,
+  "codepage": "CP437",
+  "defaultLinefeed": "LF",
+  "paused": false,
+  "maxQueueDepth": null,
+  "observed": {
+    "connection": "CONNECTED",
+    "queueDepth": 0,
+    "reportedAt": "2026-08-22T18:04:11.000Z"
+  }
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[10]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:control</Mono>. The body names one <Mono>action</Mono>: <Mono>connect</Mono>,{" "}
+								<Mono>disconnect</Mono>, <Mono>pause</Mono>, <Mono>resume</Mono> or <Mono>clearQueue</Mono>.
+							</P>
+
+							<P>
+								<Mono>pause</Mono> and <Mono>resume</Mono> also write the stored <Mono>paused</Mono> state, so it
+								survives an agent restart. The other three are transient sends: a connection and a queue belong to the
+								machine holding the port, and this server has no column that could be right about either.
+							</P>
+
+							<P>
+								There is no <Mono>test</Mono> action. Printing a diagnostic page is a print, and belongs behind{" "}
+								<Mono>print</Mono> — a key granted control of a printer it may not print to must not be able to make it
+								print by another name.
+							</P>
+
+							<P>
+								<Mono>message</Mono> is <Mono>null</Mono> when the agent's reply carries none of its own, which a
+								successful action is free to do.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/actions \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "action": "pause" }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "action": "pause", "message": "Printing paused" }`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[11]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>status:read</Mono>. Agent liveness and printer readiness, grouped by agent, restricted to
+								the agents holding at least one device this key is granted.
+							</P>
+
+							<P>
+								Distinct from <Mono>/api/health</Mono>: that endpoint stays deliberately contentless because it takes no
+								key, and counts of agents or devices there would turn a container probe into a way to watch an install
+								from outside it. This endpoint is authenticated and may say more.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/status -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agents": [
+    {
+      "agent": "${agentName}",
+      "status": "ONLINE",
+      "lastSeenAt": "2026-08-22T18:04:11.000Z",
+      "agentVersion": "1.4.0",
+      "devices": [
+        {
+          "agent": "${agentName}",
+          "device": "${deviceName}",
+          "port": "COM3",
+          "columns": 42,
+          "codepage": "CP437",
+          "defaultLinefeed": "LF",
+          "paused": false,
+          "maxQueueDepth": null,
+          "observed": {
+            "connection": "CONNECTED",
+            "queueDepth": 0,
+            "reportedAt": "2026-08-22T18:04:11.000Z"
+          }
+        }
+      ]
+    }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[12]}>
+					<Split>
+						<Col>
+							<P>
+								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes — the
+								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
+								one namespace, not a slice scoped to its own devices. Ordered by name ascending — unlike the jobs
+								history above, an image library is browsed alphabetically rather than newest first.
+							</P>
+
+							<P>
+								<Mono>POST</Mono> needs <Mono>assets:write</Mono> and stores one, the same two ways the Assets tab
+								offers: <Mono>data</Mono>, the file as base64, or <Mono>url</Mono>, a location to import it from.
+								Exactly one of the two — a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
+								or <ErrorRef code="missing_field" /> respectively.
+							</P>
+
+							<P>
+								Cursor-paginated the same way the jobs listing is — see <Mono>{`GET ${API_BASE}/jobs`}</Mono> above for
+								what <Mono>limit</Mono>, <Mono>cursor</Mono> and <Mono>nextCursor</Mono> mean.
+							</P>
+
+							<P>
+								An upload over the configured size, or bytes that are not an image this pipeline prints, is refused
+								before it is stored — the same gate the panel's own Assets tab goes through. The name the bundled logo
+								uses is reserved and cannot be written here either.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/assets -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "assets": [
+    {
+      "name": "shop-logo",
+      "kind": "IMAGE",
+      "width": 384,
+      "height": 96,
+      "mimeType": "image/png",
+      "sourceUrl": null,
+      "createdAt": "2026-08-22T18:04:09.000Z"
+    }
+  ],
+  "nextCursor": null
+}`}</CodeBlock>
+
+							<CodeBlock label="Request — upload">{`curl -X POST ${base}${API_BASE}/assets \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "name": "shop-logo", "data": "iVBORw0KGgo…" }'`}</CodeBlock>
+
+							<CodeBlock label="201 Created">{`{
+  "kind": "IMAGE",
+  "name": "shop-logo",
+  "width": 384,
+  "height": 96,
+  "mimeType": "image/png",
+  "sourceUrl": null,
+  "createdAt": "2026-08-22T18:04:09.000Z"
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[13]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>assets:write</Mono> — the same permission a create or replace goes through, since a delete
+								is also a write. Answers <Status>204</Status> with no body: the asset is gone, and a body restating the
+								name the caller just sent would be ceremony.
+							</P>
+
+							<P>
+								A name that names no stored asset is <ErrorRef code="unknown_asset" />. The bundled logo's own name is
+								refused as <ErrorRef code="invalid_type" /> instead — the same code the create path answers for it —
+								because it is not a missing asset and not a taken name, it is not an asset at all, and{" "}
+								<Mono>unknown_asset</Mono> here would invite a caller to conclude it simply has not been uploaded yet.
+							</P>
+
+							<P>
+								Nothing here checks whether markup still names this asset. A receipt that does now fails to compile with{" "}
+								<ErrorRef code="unknown_asset" /> — the same consequence deleting it from the panel's Assets tab has,
+								and it belongs to whoever deletes.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X DELETE ${base}${API_BASE}/assets/shop-logo \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="204 No Content">{`(empty body)`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[14]}>
+					<Split>
+						<Col>
+							<P>
+								One of two endpoints on this API that take no key — the OpenAPI document, above, is the other. A
+								healthcheck runs before anyone has signed in, and a probe that needed a credential would need one stored
+								somewhere to use it — so this is what a container runtime or a load balancer calls, and it is
+								deliberately the only thing they can call.
+							</P>
+
+							<P>
+								It answers <Status>200</Status> when the process is up and its database answers, and{" "}
+								<Status>503</Status> when the database is unreachable. The round trip is the point: a process that has
+								started but cannot reach its volume serves HTTP perfectly well while being useless, and reporting that
+								as healthy is how a broken deploy gets left running.
+							</P>
+
+							<P>
+								It reports nothing else, and nothing about the failure. Counts of agents, devices or jobs would turn a
+								liveness probe into a way to watch an install from outside it, and the database error's own text is a
+								file path or a driver version. Both stay in the server log.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}/api/health`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{ "status": "ok", "database": "ok" }`}</CodeBlock>
+
+							<CodeBlock label="503 Service Unavailable">{`{ "status": "unavailable", "database": "unreachable" }`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
