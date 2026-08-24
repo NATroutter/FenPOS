@@ -40,6 +40,12 @@ const SECTIONS = [
 		path: `${API_BASE}/print/{agent}/{device}`,
 	},
 	{
+		id: "preview",
+		title: "Previewing a receipt",
+		verbs: ["POST"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/preview/{agent}/{device}`,
+	},
+	{
 		id: "following",
 		title: "Following a job",
 		verbs: ["GET", "DELETE"] as const satisfies readonly Verb[],
@@ -354,6 +360,76 @@ export default async function ApiDocsPage() {
 					<Split>
 						<Col>
 							<P>
+								Needs <Mono>print</Mono>, not a permission of its own: preview is strictly less powerful than printing,
+								and a key that may print could already learn everything a preview reports by printing it.
+							</P>
+
+							<P>
+								Same body a submit takes — <Mono>data</Mono> and an optional <Mono>linefeed</Mono> — compiled against
+								the named device and reported back rather than sent anywhere. No job is created, nothing is queued, and
+								the agent is never contacted: this works even while the agent is offline, since only the device's stored
+								configuration is needed.
+							</P>
+
+							<P>
+								Always <Status>200</Status>. Markup that does not compile comes back with <Mono>lines</Mono>{" "}
+								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
+								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
+								non-2xx here.
+							</P>
+
+							<P>
+								<Mono>columns</Mono>, <Mono>outputLines</Mono>, <Mono>maxOutputLines</Mono> and <Mono>linefeed</Mono>{" "}
+								are the same measurements a submit compiles against, so a caller can check a receipt fits before ever
+								sending it.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/preview/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "data": [ "Coffee<fill>2.50" ] }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "columns": 42,
+  "outputLines": 1,
+  "maxOutputLines": 1000,
+  "linefeed": "LF",
+  "lines": [
+    {
+      "align": "LEFT",
+      "spans": [
+        { "text": "Coffee", "bold": false, "underline": 0, "invert": false, "widthMult": 1 },
+        { "text": "                          2.50", "bold": false, "underline": 0, "invert": false, "widthMult": 1 }
+      ]
+    }
+  ],
+  "errors": []
+}`}</CodeBlock>
+
+							<CodeBlock label="200 OK — markup that does not compile">{`{
+  "agent": "${agentName}",
+  "device": "${deviceName}",
+  "columns": 42,
+  "outputLines": 0,
+  "maxOutputLines": 1000,
+  "linefeed": "LF",
+  "lines": null,
+  "errors": [
+    { "code": "unclosed_tag", "message": "…", "status": ${API_ERROR_STATUS.unclosed_tag}, "line": 1, "column": null }
+  ]
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[3]}>
+					<Split>
+						<Col>
+							<P>
 								<Mono>GET</Mono> needs <Mono>jobs:read</Mono> and returns the job's state and timings. A key sees only
 								the jobs it submitted itself.
 							</P>
@@ -371,7 +447,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[3]}>
+				<DocSection {...SECTIONS[4]}>
 					<Split>
 						<Col>
 							<P>
@@ -427,7 +503,7 @@ export default async function ApiDocsPage() {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[4]}>
+				<DocSection {...SECTIONS[5]}>
 					<Split>
 						<Col>
 							<P>
@@ -519,7 +595,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[5]}>
+				<DocSection {...SECTIONS[6]}>
 					<Split>
 						<Col>
 							<P>
@@ -561,7 +637,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[6]}>
+				<DocSection {...SECTIONS[7]}>
 					<Split>
 						<Col>
 							<P>
@@ -598,7 +674,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[7]}>
+				<DocSection {...SECTIONS[8]}>
 					<Split>
 						<Col>
 							<P>
@@ -635,7 +711,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[8]}>
+				<DocSection {...SECTIONS[9]}>
 					<Split>
 						<Col>
 							<P>
@@ -684,7 +760,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[9]}>
+				<DocSection {...SECTIONS[10]}>
 					<Split>
 						<Col>
 							<P>
@@ -717,7 +793,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[10]}>
+				<DocSection {...SECTIONS[11]}>
 					<Split>
 						<Col>
 							<P>
