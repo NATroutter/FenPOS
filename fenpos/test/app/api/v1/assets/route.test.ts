@@ -216,6 +216,30 @@ describe("GET /api/v1/assets", () => {
 		expect(raw.height).toBe(0);
 	});
 
+	// `kind` on the Prisma model is a plain `String`, not a database enum — the schema comment on
+	// `Asset.kind` says the closed set is application-level only, guarding against a future kind
+	// reusing a name the way `DELETE /assets/{name}` already addresses rows by `kind_name`. Nothing in
+	// today's API can create a row of any kind but "IMAGE", so — like the null width/height row above
+	// — this one is inserted directly to stand in for that future row.
+	it("does not list an asset of a kind other than IMAGE", async () => {
+		await prisma.asset.create({
+			data: {
+				kind: "STICKER",
+				name: "future-kind",
+				data: Buffer.alloc(1),
+				mimeType: "image/png",
+				width: null,
+				height: null,
+			},
+		});
+
+		const body = await (await GET(get())).json();
+
+		expect(body.assets.find((asset: { name: string }) => asset.name === "future-kind")).toBeUndefined();
+		// Confirms the row is really there, so this cannot pass merely because the insert failed.
+		expect(await prisma.asset.findMany({ where: { name: "future-kind" } })).toHaveLength(1);
+	});
+
 	it("pages with a cursor", async () => {
 		for (const name of ["a-logo", "b-logo", "c-logo"]) {
 			await POST(post({ name, data: PNG.toString("base64") }));
@@ -236,6 +260,27 @@ describe("GET /api/v1/assets", () => {
 	// `test/app/api/v1/jobs/route.test.ts`'s "refuses a cursor naming no job at all".
 	it("refuses a cursor naming no asset at all", async () => {
 		const response = await GET(get("cursor=does-not-exist"));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_query");
+	});
+
+	// Distinct from the case above: this cursor names a row that exists, so it only exercises the
+	// `kind: "IMAGE"` half of `assertCursorInFilter`'s `where` — a plain non-existent id can't tell
+	// that filter apart from the "no such row" case, since both end up refused the same way.
+	it("refuses a cursor naming a row that exists but is not IMAGE", async () => {
+		const other = await prisma.asset.create({
+			data: {
+				kind: "STICKER",
+				name: "future-kind",
+				data: Buffer.alloc(1),
+				mimeType: "image/png",
+				width: null,
+				height: null,
+			},
+		});
+
+		const response = await GET(get(`cursor=${other.id}`));
 
 		expect(response.status).toBe(400);
 		expect((await response.json()).error).toBe("invalid_query");
