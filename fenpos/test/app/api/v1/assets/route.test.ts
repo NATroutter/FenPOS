@@ -173,6 +173,18 @@ describe("GET /api/v1/assets", () => {
 		expect(second.nextCursor).toBeNull();
 	});
 
+	// Assets are install-wide, so there is no per-key `where` a cursor could fall outside of the way
+	// a jobs cursor can — but a cursor naming no row at all is exactly as wrong here as it is there,
+	// and `assertCursorInFilter` is what turns that into a clear refusal instead of a page that comes
+	// up short in a way indistinguishable from "no more records". Mirrors
+	// `test/app/api/v1/jobs/route.test.ts`'s "refuses a cursor naming no job at all".
+	it("refuses a cursor naming no asset at all", async () => {
+		const response = await GET(get("cursor=does-not-exist"));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).error).toBe("invalid_query");
+	});
+
 	it("refuses a key without assets:read", async () => {
 		await prisma.apiKeyPermission.deleteMany({ where: { apiKeyId: keyId, permission: "assets:read" } });
 

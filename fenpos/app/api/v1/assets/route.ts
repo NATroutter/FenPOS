@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
-import { createAsset, importAssetFromUrl, maxAssetBytes } from "@/lib/assets/asset-service";
+import { createAsset, importAssetFromUrl } from "@/lib/assets/asset-service";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { ApiError, toErrorResponse } from "@/lib/errors";
@@ -115,9 +115,12 @@ export async function POST(request: Request): Promise<Response> {
 /**
  * Decodes an inline upload and stores it.
  *
- * The length is checked before `createAsset` sees the buffer so that an oversized upload is refused
- * without a decode — the same ordering the print endpoint uses on its body, and for the same reason:
- * decoding is the work an oversized request is trying to provoke.
+ * The size cap is enforced by `createAsset` alone rather than restated here. `asset-service.ts`'s
+ * `requireWithinByteCap` still runs before `decodeImage`, so "refused before it is decoded" holds
+ * exactly as before — but the refusal's message is `describeBytes`'s, the one form every caller of
+ * that module is required to use on both halves of the sentence (see that function's own doc
+ * comment), rather than a second, raw-byte-count wording that a route-level pre-check would have
+ * needed to keep in step with it by hand.
  *
  * @param name what markup will refer to it by
  * @param data the file, base64 encoded
@@ -125,17 +128,7 @@ export async function POST(request: Request): Promise<Response> {
  * @throws ApiError when the payload is over the configured cap, or is not an image this pipeline prints
  */
 async function storeUpload(name: string, data: string): Promise<Awaited<ReturnType<typeof createAsset>>> {
-	const bytes = Buffer.from(data, "base64");
-
-	const cap = await maxAssetBytes();
-	if (bytes.byteLength > cap) {
-		throw new ApiError("body_too_large", `An asset may be at most ${cap} bytes; this one is ${bytes.byteLength}.`, {
-			bytes: bytes.byteLength,
-			limit: cap,
-		});
-	}
-
-	return await createAsset(name, bytes);
+	return await createAsset(name, Buffer.from(data, "base64"));
 }
 
 /**
