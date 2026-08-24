@@ -77,12 +77,6 @@ const SECTIONS = [
 		path: `${API_BASE}/devices/{agent}/{device}/actions`,
 	},
 	{
-		id: "raw-write",
-		title: "Writing raw bytes",
-		verbs: ["POST"] as const satisfies readonly Verb[],
-		path: `${API_BASE}/devices/{agent}/{device}/raw`,
-	},
-	{
 		id: "status",
 		title: "Status",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -112,6 +106,12 @@ const SECTIONS = [
 		title: "OpenAPI document",
 		verbs: ["GET"] as const satisfies readonly Verb[],
 		path: `${API_BASE}/openapi.json`,
+	},
+	{
+		id: "raw-write",
+		title: "Writing raw bytes",
+		verbs: ["POST"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/devices/{agent}/{device}/raw`,
 	},
 ] as const;
 
@@ -760,59 +760,6 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								Needs <Mono>devices:raw</Mono> <strong>and</strong> the install's <Mono>Allow raw API writes</Mono>{" "}
-								setting, which ships off. The body carries <Mono>bytes</Mono>, base64, and nothing else; they reach the
-								printer exactly as sent — no wrapping, no codepage check, no width calculation, none of the limits every
-								other endpoint here applies.
-							</P>
-
-							<Aside>
-								While the setting is off, every caller gets <ErrorRef code="raw_writes_disabled" /> — checked before the
-								device grant, so the refusal is identical whatever printers the key holds and cannot be used to work out
-								which exist. A key that lacks the permission gets <ErrorRef code="insufficient_permission" /> instead:
-								the two are separate codes because the remedies are different, one a decision about a key and the other
-								a decision about the install.
-							</Aside>
-
-							<P>
-								<Mono>link.maxRawWriteBytes</Mono>, on the Settings tab, is the only bound on a write — none of the
-								print limits apply to one. A payload decoding to more than it is refused with{" "}
-								<ErrorRef code="body_too_large" /> naming both numbers, and a <Mono>bytes</Mono> that is not valid
-								base64 with <ErrorRef code="invalid_type" /> rather than being silently written as whatever it decoded
-								to.
-							</P>
-
-							<P>
-								<Mono>message</Mono> is the agent's own, or <Mono>null</Mono>. Nothing here can tell you what was
-								printed: the bytes are never read, and the printer does not report back. A write that times out says so
-								plainly — the bytes may or may not have been written, and only the paper settles it. Every write, and
-								every refusal after a key is identified, is recorded on the Logs tab, which is the only record that one
-								happened.
-							</P>
-						</Col>
-
-						<Col>
-							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/raw \\
-  -H "Authorization: Bearer fpk_…" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "bytes": "G0BIZWxsbw==" }'`}</CodeBlock>
-
-							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "bytes": 7, "message": "wrote 7 bytes" }`}</CodeBlock>
-
-							<CodeBlock
-								label={`${API_ERROR_STATUS.raw_writes_disabled} Forbidden — the install has raw writes off`}
-							>{`{
-  "error": "raw_writes_disabled",
-  "message": "Raw writes are switched off for this install. An administrator can enable them under Settings → Security."
-}`}</CodeBlock>
-						</Col>
-					</Split>
-				</DocSection>
-
-				<DocSection {...SECTIONS[10]}>
-					<Split>
-						<Col>
-							<P>
 								Needs <Mono>status:read</Mono>. Agent liveness and printer readiness, grouped by agent, restricted to
 								the agents holding at least one device this key is granted.
 							</P>
@@ -858,7 +805,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[11]}>
+				<DocSection {...SECTIONS[10]}>
 					<Split>
 						<Col>
 							<P>
@@ -923,7 +870,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[12]}>
+				<DocSection {...SECTIONS[11]}>
 					<Split>
 						<Col>
 							<P>
@@ -955,7 +902,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[13]}>
+				<DocSection {...SECTIONS[12]}>
 					<Split>
 						<Col>
 							<P>
@@ -989,7 +936,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[14]}>
+				<DocSection {...SECTIONS[13]}>
 					<Split>
 						<Col>
 							<P>
@@ -1079,7 +1026,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[15]}>
+				<DocSection {...SECTIONS[14]}>
 					<Split>
 						<Col>
 							<P>
@@ -1105,6 +1052,59 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 						<Col>
 							<CodeBlock label="Request">{`curl ${base}${API_BASE}/openapi.json`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[15]}>
+					<Split>
+						<Col>
+							<P>
+								Needs <Mono>devices:raw</Mono> <strong>and</strong> the install's <Mono>Allow raw API writes</Mono>{" "}
+								setting, which ships off. The body carries <Mono>bytes</Mono>, base64, and nothing else; they reach the
+								printer exactly as sent — no wrapping, no codepage check, no width calculation, none of the limits every
+								other endpoint here applies.
+							</P>
+
+							<Aside>
+								While the setting is off, every caller gets <ErrorRef code="raw_writes_disabled" /> — checked before the
+								device grant, so the refusal is identical whatever printers the key holds and cannot be used to work out
+								which exist. A key that lacks the permission gets <ErrorRef code="insufficient_permission" /> instead:
+								the two are separate codes because the remedies are different, one a decision about a key and the other
+								a decision about the install.
+							</Aside>
+
+							<P>
+								<Mono>link.maxRawWriteBytes</Mono>, on the Settings tab, is the only bound on a write — none of the
+								print limits apply to one. A payload decoding to more than it is refused with{" "}
+								<ErrorRef code="body_too_large" /> naming both numbers, and a <Mono>bytes</Mono> that is not valid
+								base64 with <ErrorRef code="invalid_type" /> rather than being silently written as whatever it decoded
+								to.
+							</P>
+
+							<P>
+								<Mono>message</Mono> is the agent's own, or <Mono>null</Mono>. Nothing here can tell you what was
+								printed: the bytes are never read, and the printer does not report back. A write that times out says so
+								plainly — the bytes may or may not have been written, and only the paper settles it. Every write, and
+								every refusal after a key is identified, is recorded on the Logs tab, which is the only record that one
+								happened.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/raw \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "bytes": "G0BIZWxsbw==" }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "bytes": 7, "message": "wrote 7 bytes" }`}</CodeBlock>
+
+							<CodeBlock
+								label={`${API_ERROR_STATUS.raw_writes_disabled} Forbidden — the install has raw writes off`}
+							>{`{
+  "error": "raw_writes_disabled",
+  "message": "Raw writes are switched off for this install. An administrator can enable them under Settings → Security."
+}`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
