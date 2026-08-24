@@ -3,6 +3,7 @@ import { nameSchema } from "@/lib/domain/naming";
 import {
 	ContextSource,
 	hasControlCharacter,
+	MAX_VALUE_CHARS_CEILING,
 	OffsetUnit,
 	VARIABLE_REFERENCE,
 	VariableKind,
@@ -48,8 +49,27 @@ describe("variableDefinitionSchema", () => {
 		expect(variableDefinitionSchema.safeParse({ ...staticVariable, value: null }).success).toBe(false);
 	});
 
+	it("refuses a non-static variable carrying a value", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			kind: "DATETIME",
+			pattern: "HH:mm",
+		});
+		expect(result.success).toBe(false);
+	});
+
 	it("refuses a static variable carrying a pattern, which belongs to a datetime", () => {
 		expect(variableDefinitionSchema.safeParse({ ...staticVariable, pattern: "HH:mm" }).success).toBe(false);
+	});
+
+	it("accepts a value at the length ceiling", () => {
+		const value = "a".repeat(MAX_VALUE_CHARS_CEILING);
+		expect(variableDefinitionSchema.safeParse({ ...staticVariable, value }).success).toBe(true);
+	});
+
+	it("refuses a value one character past the length ceiling", () => {
+		const value = "a".repeat(MAX_VALUE_CHARS_CEILING + 1);
+		expect(variableDefinitionSchema.safeParse({ ...staticVariable, value }).success).toBe(false);
 	});
 
 	it("refuses a value containing a control character", () => {
@@ -67,6 +87,16 @@ describe("variableDefinitionSchema", () => {
 		expect(result.success).toBe(true);
 	});
 
+	it("refuses a datetime with no pattern", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			kind: "DATETIME",
+			value: null,
+			pattern: null,
+		});
+		expect(result.success).toBe(false);
+	});
+
 	it("refuses a datetime with an offset amount but no unit", () => {
 		const result = variableDefinitionSchema.safeParse({
 			...staticVariable,
@@ -74,6 +104,38 @@ describe("variableDefinitionSchema", () => {
 			value: null,
 			pattern: "HH:mm",
 			offsetAmount: 14,
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("refuses a datetime with an offset unit but no amount", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			kind: "DATETIME",
+			value: null,
+			pattern: "HH:mm",
+			offsetUnit: "HOURS",
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("accepts a datetime with a full offset", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			kind: "DATETIME",
+			value: null,
+			pattern: "HH:mm",
+			offsetAmount: 14,
+			offsetUnit: "HOURS",
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("refuses a static variable carrying an offset, which only a datetime may have", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			offsetAmount: 14,
+			offsetUnit: "HOURS",
 		});
 		expect(result.success).toBe(false);
 	});
@@ -86,6 +148,23 @@ describe("variableDefinitionSchema", () => {
 			source: "DEVICE_NAME",
 		});
 		expect(result.success).toBe(true);
+	});
+
+	it("refuses a context variable with no source", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			kind: "CONTEXT",
+			value: null,
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("refuses a non-context variable carrying a source", () => {
+		const result = variableDefinitionSchema.safeParse({
+			...staticVariable,
+			source: "DEVICE_NAME",
+		});
+		expect(result.success).toBe(false);
 	});
 
 	it("refuses a name that is not slug-shaped", () => {
@@ -108,6 +187,22 @@ describe("hasControlCharacter", () => {
 
 	it("is true for DEL", () => {
 		expect(hasControlCharacter(String.fromCharCode(0x7f))).toBe(true);
+	});
+
+	it("is true for a C1 character (NEL)", () => {
+		expect(hasControlCharacter(String.fromCharCode(0x85))).toBe(true);
+	});
+
+	it("is true for the top of the C1 range", () => {
+		expect(hasControlCharacter(String.fromCharCode(0x9f))).toBe(true);
+	});
+
+	it("is true for the last C0 character", () => {
+		expect(hasControlCharacter(String.fromCharCode(0x1f))).toBe(true);
+	});
+
+	it("is false for space, the first character past the C0 cutoff", () => {
+		expect(hasControlCharacter(String.fromCharCode(0x20))).toBe(false);
 	});
 });
 
