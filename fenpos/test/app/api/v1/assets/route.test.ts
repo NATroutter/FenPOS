@@ -91,6 +91,18 @@ describe("POST /api/v1/assets", () => {
 		expect(await prisma.asset.count()).toBe(0);
 	});
 
+	// The row id is `asset-service.ts`'s own concern — the panel's Assets tab uses it to address a
+	// rename or a replace — but nothing in the public API accepts one back: markup and `DELETE
+	// /assets/{name}` both address an asset by the name the caller chose. Publishing it here would
+	// be a second way to name the same resource that an integrator could come to depend on.
+	it("does not publish the row id", async () => {
+		const response = await POST(post({ name: "shop-logo", data: PNG.toString("base64") }));
+		const body = await response.json();
+
+		expect(response.status).toBe(201);
+		expect(body).not.toHaveProperty("id");
+	});
+
 	it("imports an image from a URL", async () => {
 		vi.mocked(importAssetFromUrl).mockResolvedValueOnce({
 			id: "asset-1",
@@ -170,6 +182,38 @@ describe("GET /api/v1/assets", () => {
 		// The bytes are what markup references by name; shipping them in a listing would make every
 		// page of this endpoint as large as the images it describes.
 		expect(body.assets[0]).not.toHaveProperty("data");
+	});
+
+	it("orders by name ascending, not by creation time", async () => {
+		for (const name of ["zebra-logo", "apple-logo", "mango-logo"]) {
+			await POST(post({ name, data: PNG.toString("base64") }));
+		}
+
+		const body = await (await GET(get())).json();
+
+		expect(body.assets.map((asset: { name: string }) => asset.name)).toEqual([
+			"apple-logo",
+			"mango-logo",
+			"zebra-logo",
+		]);
+	});
+
+	// Not reachable through the public API — `createAsset` always writes `width`/`height` from the
+	// decoded image — so the row is inserted directly, standing in for what a future non-raster
+	// `AssetKind` might leave null. This is what proves the listing goes through the same
+	// `summarise` every other asset shape does, rather than a second, hand-rolled mapping that
+	// forgot the coercion the OpenAPI schema's required integers depend on.
+	it("coerces a null width/height to the integers the schema declares", async () => {
+		await prisma.asset.create({
+			data: { kind: "IMAGE", name: "raw-row", data: Buffer.alloc(1), mimeType: "image/png", width: null, height: null },
+		});
+
+		const body = await (await GET(get())).json();
+		const raw = body.assets.find((asset: { name: string }) => asset.name === "raw-row");
+
+		expect(raw).toBeDefined();
+		expect(raw.width).toBe(0);
+		expect(raw.height).toBe(0);
 	});
 
 	it("pages with a cursor", async () => {

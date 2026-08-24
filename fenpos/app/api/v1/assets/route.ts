@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { readBoundedJson } from "@/lib/api/bounded-body";
 import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
-import { createAsset, importAssetFromUrl, maxAssetBytes } from "@/lib/assets/asset-service";
+import {
+	type AssetSummary,
+	createAsset,
+	importAssetFromUrl,
+	maxAssetBytes,
+	summarise,
+} from "@/lib/assets/asset-service";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
@@ -26,6 +32,11 @@ import { logger } from "@/lib/logger";
  * bounds, the slug shape, the reserved bundled-logo name, the duplicate check — and raises the
  * `ApiError`s that reach the caller. Restating any of it here would be a second opinion able to
  * disagree with the first.
+ *
+ * **Neither handler publishes the row id.** `GET` lists by name, `POST` answers with the same shape
+ * it lists — one asset type, not two — for the reason `DELETE /assets/{name}`'s own comment gives:
+ * the id is not what markup or a caller names an asset by, and publishing it would be a second way
+ * to name the same thing that integrators would then depend on.
  */
 
 /** Never cached: an asset uploaded a moment ago must appear. */
@@ -60,18 +71,31 @@ export async function GET(request: Request): Promise<Response> {
 		const { take, cursor } = await readPageParams(new URL(request.url));
 
 		// Assets are install-wide — there is no per-key `where` to compose here, unlike the jobs
-		// listing — so this only has to confirm the cursor names a row at all. See
+		// listing — but the query below is filtered to IMAGE assets, so the cursor has to be checked
+		// against that same filter: a cursor naming a row of some other kind would otherwise pass this
+		// guard while never appearing in the listing it is meant to resume. See
 		// `assertCursorInFilter`'s own doc comment for why a cursor naming nothing must be refused
 		// rather than silently answered with a short page.
 		if (cursor !== null) {
-			await assertCursorInFilter(cursor, () => prisma.asset.findFirst({ where: { id: cursor }, select: { id: true } }));
+			await assertCursorInFilter(cursor, () =>
+				prisma.asset.findFirst({ where: { id: cursor, kind: "IMAGE" }, select: { id: true } }),
+			);
 		}
 
 		// `listAssets()` is not used here because it returns everything: on an install with hundreds
 		// of images that is a page this endpoint cannot bound. The columns are the same ones it
 		// selects, and `data` is excluded for the same reason — a listing must not be as large as the
 		// images it describes.
+		//
+		// Filtered to IMAGE for the same reason `DELETE /assets/{name}` addresses a row by
+		// `kind_name: { kind: "IMAGE", name }` rather than by name alone: `AssetKind` has one member
+		// today, so this is a no-op in practice, but the schema anticipates a later kind reusing a
+		// name, and an unfiltered listing would then return rows the delete path could not address.
 		const rows = await prisma.asset.findMany({
+			where: { kind: "IMAGE" },
+			// Ascending by name, not newest-first like the jobs listing — an asset library is browsed
+			// alphabetically, the way the Assets tab presents it, rather than by when each image was
+			// added.
 			orderBy: [{ name: "asc" }, { id: "asc" }],
 			take: take + 1,
 			...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -81,15 +105,11 @@ export async function GET(request: Request): Promise<Response> {
 		const { page, nextCursor } = pageOf(rows, take);
 
 		return Response.json({
-			assets: page.map((row) => ({
-				name: row.name,
-				kind: row.kind,
-				width: row.width,
-				height: row.height,
-				mimeType: row.mimeType,
-				sourceUrl: row.sourceUrl,
-				createdAt: row.createdAt.toISOString(),
-			})),
+			// `summarise` rather than a second, hand-rolled mapping: it is the one place that coerces a
+			// nullable `width`/`height` to the integers the OpenAPI schema declares required and narrows
+			// `kind` to the closed enum, so this listing cannot describe a row differently than the rest
+			// of this module does.
+			assets: page.map((row) => toPublicAsset(summarise(row))),
 			nextCursor,
 		});
 	} catch (error) {
@@ -108,10 +128,25 @@ export async function POST(request: Request): Promise<Response> {
 
 		logger.info("Asset stored through the API", { keyId: key.id, name: asset.name, imported: data === undefined });
 
-		return Response.json(asset, { status: 201 });
+		return Response.json(toPublicAsset(asset), { status: 201 });
 	} catch (error) {
 		return toErrorResponse(error, { route: "POST /api/v1/assets" });
 	}
+}
+
+/**
+ * Strips the row id `asset-service.ts` carries for the panel's own use.
+ *
+ * The one place both handlers narrow to the shape the API actually publishes, so `GET` and `POST`
+ * cannot drift into answering with two different asset types for one resource — see this module's
+ * own doc comment for why the id itself is never one of the fields.
+ *
+ * @param asset the summary as `asset-service.ts` returns it
+ * @returns the same summary, without `id`
+ */
+function toPublicAsset(asset: AssetSummary): Omit<AssetSummary, "id"> {
+	const { id: _id, ...rest } = asset;
+	return rest;
 }
 
 /**

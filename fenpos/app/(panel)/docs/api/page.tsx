@@ -797,7 +797,8 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							<P>
 								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes — the
 								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
-								one namespace, not a slice scoped to its own devices.
+								one namespace, not a slice scoped to its own devices. Ordered by name ascending — unlike the jobs
+								history above, an image library is browsed alphabetically rather than newest first.
 							</P>
 
 							<P>
@@ -843,7 +844,6 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -d '{ "name": "shop-logo", "data": "iVBORw0KGgo…" }'`}</CodeBlock>
 
 							<CodeBlock label="201 Created">{`{
-  "id": "clx…",
   "kind": "IMAGE",
   "name": "shop-logo",
   "width": 384,
@@ -1023,8 +1023,10 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								The other endpoint on this API that takes no key, alongside <Mono>/api/health</Mono> above. A spec
-								describes the shape of the API rather than the contents of this install — it names no agent, device or
-								job — so a generator reading it should not need a credential to do so.
+								describes the shape of the API rather than the contents of this install — it names no agent, device, job
+								or asset — so a generator reading it should not need a credential to do so. One field is an exception:{" "}
+								<Mono>servers[0].url</Mono> is this install's own address, configured or inferred from the request, so
+								an unauthenticated caller does learn that much.
 							</P>
 
 							<P>

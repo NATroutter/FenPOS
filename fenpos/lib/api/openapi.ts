@@ -146,13 +146,6 @@ const ASSET_SUMMARY_SCHEMA = {
 	required: ["name", "kind", "width", "height", "mimeType", "sourceUrl", "createdAt"],
 };
 
-/** What `POST /assets` returns: the summary shape plus the id an operator never otherwise sees. */
-const ASSET_CREATED_SCHEMA = {
-	type: "object",
-	properties: { id: { type: "string" }, ...ASSET_SUMMARY_SCHEMA.properties },
-	required: ["id", ...ASSET_SUMMARY_SCHEMA.required],
-};
-
 /** One compiled line, as `POST /preview` reports it — see `CompiledLine` in `lib/jobs/preview.ts`. */
 const COMPILED_LINE_SCHEMA = {
 	type: "object",
@@ -256,11 +249,13 @@ const NEXT_CURSOR_PROPERTY = {
  * of this install, and a client generator reading it should not need a credential to do so. Nothing
  * below names an actual agent, device, asset or job — every example is either absent or generic.
  *
- * @param publicUrl the address this server is reachable at, or null when none has been resolved —
- *   see `getPublicAddress` in `lib/public-url.ts`, whose caller passes this straight through
+ * @param publicUrl the address this server is reachable at — see `getPublicAddress` in
+ *   `lib/public-url.ts`, whose caller passes its `url` straight through. That function always
+ *   resolves to a string, configured or inferred from the request, so there is no "unresolved"
+ *   case for this to fall back from.
  * @returns the OpenAPI document, ready to serialise as JSON
  */
-export function openApiDocument(publicUrl: string | null): object {
+export function openApiDocument(publicUrl: string): object {
 	return {
 		openapi: "3.1.0",
 		info: {
@@ -269,7 +264,7 @@ export function openApiDocument(publicUrl: string | null): object {
 			description:
 				"The FenPOS public API — submitting print jobs, following them, and managing the devices and assets a key is granted. Requests carry a markup language of their own; see the panel's own /docs/markup page for its reference, since that language has no separate machine-readable schema.",
 		},
-		servers: [{ url: publicUrl ?? "/" }],
+		servers: [{ url: publicUrl }],
 		security: BEARER_AUTH,
 		// A vendor extension rather than a standard field: OpenAPI has no closed vocabulary for the
 		// grants an install's own security model defines. Listed once from PERMISSION_IDS, the
@@ -532,7 +527,7 @@ export function openApiDocument(publicUrl: string | null): object {
 					summary: "List the stored images markup can reference.",
 					operationId: "listAssets",
 					description:
-						"Requires the `assets:read` permission. Install-wide, not scoped to a key's devices — the panel, the markup resolver and every key see one namespace. Cursor-paginated, without the image bytes.",
+						"Requires the `assets:read` permission. Install-wide, not scoped to a key's devices — the panel, the markup resolver and every key see one namespace. Ordered by name ascending, unlike the jobs listing's newest-first — an image library is browsed alphabetically. Cursor-paginated, without the image bytes.",
 					security: BEARER_AUTH,
 					parameters: PAGE_PARAMS,
 					responses: {
@@ -567,7 +562,10 @@ export function openApiDocument(publicUrl: string | null): object {
 						},
 					},
 					responses: {
-						201: jsonResponse("The stored asset.", ASSET_CREATED_SCHEMA),
+						// The same schema `GET` lists with, not a second shape carrying the row id: a caller
+						// addresses an asset by the name it chose, exactly as `DELETE /assets/{name}` does, and
+						// publishing the id here would be a second way to name the same thing.
+						201: jsonResponse("The stored asset.", ASSET_SUMMARY_SCHEMA),
 						default: ERROR_RESPONSE,
 					},
 				},

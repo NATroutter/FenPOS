@@ -1161,10 +1161,15 @@ function isPrismaCode(error: unknown, code: string): boolean {
  * `width` and `height` are nullable in the schema, for a future kind that is not a raster. Every
  * IMAGE has both, so a null here would mean a row this module did not write.
  *
+ * Exported so `GET /api/v1/assets` can build its listing from it instead of re-implementing these
+ * coercions: without them a listing built straight from the columns would emit a nullable
+ * `width`/`height` the OpenAPI schema declares as required integers, and an un-narrowed `kind`
+ * against a schema that declares it a closed enum.
+ *
  * @param row the selected columns
  * @returns the summary
  */
-function summarise(row: AssetRow): AssetSummary {
+export function summarise(row: AssetRow): AssetSummary {
 	return {
 		id: row.id,
 		kind: AssetKind.is(row.kind) ? row.kind : "IMAGE",
