@@ -89,6 +89,12 @@ const SECTIONS = [
 		path: `${API_BASE}/assets`,
 	},
 	{
+		id: "asset-delete",
+		title: "Deleting an asset",
+		verbs: ["DELETE"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/assets/{name}`,
+	},
+	{
 		id: "health",
 		title: "Health",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -238,7 +244,10 @@ export default async function ApiDocsPage() {
 								one is.
 							</P>
 
-							<P>A key does nothing until it is granted both a permission and at least one printer.</P>
+							<P>
+								A key does nothing until it is granted a permission — a device or print grant also needs at least one
+								printer, but the asset grants are install-wide and need no printer to do anything.
+							</P>
 
 							<P>
 								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The asset grants are
@@ -837,6 +846,38 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
+								Needs <Mono>assets:write</Mono> — the same permission a create or replace goes through, since a delete
+								is also a write. Answers <Status>204</Status> with no body: the asset is gone, and a body restating the
+								name the caller just sent would be ceremony.
+							</P>
+
+							<P>
+								A name that names no stored asset is <ErrorRef code="unknown_asset" />. The bundled logo's own name is
+								refused as <ErrorRef code="invalid_type" /> instead — the same code the create path answers for it —
+								because it is not a missing asset and not a taken name, it is not an asset at all, and{" "}
+								<Mono>unknown_asset</Mono> here would invite a caller to conclude it simply has not been uploaded yet.
+							</P>
+
+							<P>
+								Nothing here checks whether markup still names this asset. A receipt that does now fails to compile with{" "}
+								<ErrorRef code="unknown_asset" /> — the same consequence deleting it from the panel's Assets tab has,
+								and it belongs to whoever deletes.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X DELETE ${base}${API_BASE}/assets/shop-logo \\
+  -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="204 No Content">{`(empty body)`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[12]}>
+					<Split>
+						<Col>
+							<P>
 								The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
 								needed a credential would need one stored somewhere to use it — so this is what a container runtime or a
 								load balancer calls, and it is deliberately the only thing they can call.
@@ -866,7 +907,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[12]}>
+				<DocSection {...SECTIONS[13]}>
 					<Split>
 						<Col>
 							<P>
