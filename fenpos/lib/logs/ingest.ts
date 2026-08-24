@@ -188,10 +188,15 @@ async function allow(agentId: string): Promise<boolean> {
  * Counted in writes rather than scheduled on a timer, so a quiet install does no work at all and
  * a busy one sweeps in proportion to what it is producing.
  *
+ * Exported because agents are no longer the only writers of this table: `recordServerLog`
+ * (`lib/logs/log-service.ts`) writes the server's own audit lines to it and calls this for the
+ * same reason `ingestLog` does. Both share the one counter above, which is what makes the
+ * retention cap a property of the table rather than of whoever happened to write the row.
+ *
  * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
- * @param sweepEvery how many ingested lines pass between sweeps (`logs.sweepEvery`)
+ * @param sweepEvery how many recorded lines pass between sweeps (`logs.sweepEvery`)
  */
-async function sweepOccasionally(maxRows: number, sweepEvery: number): Promise<void> {
+export async function sweepOccasionally(maxRows: number, sweepEvery: number): Promise<void> {
 	const writes = (globalForIngest.fenposLogWrites ?? 0) + 1;
 	globalForIngest.fenposLogWrites = writes;
 

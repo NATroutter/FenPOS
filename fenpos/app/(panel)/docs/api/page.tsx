@@ -799,7 +799,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "bytes": 7, "message": "wrote 7 bytes" }`}</CodeBlock>
 
-							<CodeBlock label="403 Forbidden">{`{
+							<CodeBlock
+								label={`${API_ERROR_STATUS.raw_writes_disabled} Forbidden — the install has raw writes off`}
+							>{`{
   "error": "raw_writes_disabled",
   "message": "Raw writes are switched off for this install. An administrator can enable them under Settings → Security."
 }`}</CodeBlock>

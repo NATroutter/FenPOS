@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { readBoundedJson } from "@/lib/api/bounded-body";
 import { prisma } from "@/lib/db";
+import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import {
 	type AuthenticatedKey,
 	authenticateKey,
-	type GrantedDevice,
 	requireGrantedDevice,
 	requirePermission,
 } from "@/lib/keys/authenticate";
@@ -49,7 +49,13 @@ export async function POST(
 ): Promise<Response> {
 	const { agent, device } = await context.params;
 	let key: AuthenticatedKey | null = null;
-	let target: Pick<GrantedDevice, "id" | "name" | "agentId"> | null = null;
+	let target: Awaited<ReturnType<typeof requireGrantedDevice>> | null = null;
+
+	// How many bytes were handed to `sendRawWrite`, or null while nothing has been. This is what
+	// separates a refusal from a failure of unknown outcome in the audit trail below: everything
+	// before the send is a refusal — nothing was written, and the row may say so — while a failure
+	// once this is set has to leave the question open, because the timeout case genuinely is open.
+	let handedOff: number | null = null;
 
 	try {
 		key = await authenticateKey(request);
@@ -72,11 +78,15 @@ export async function POST(
 		// Recorded before the write, not after. A write that reaches the printer and then fails on the
 		// way back must still leave a trace — the paper has moved either way, and an audit trail that
 		// only records the writes that returned cleanly is not an audit trail.
-		await recordServerLog("INFO", `Raw write of ${bytes.length} bytes to '${device}' by key '${key.name}'.`, {
+		//
+		// `target.name` rather than the path segment: this line is written after the grant check, so
+		// the stored name is available and is the one an operator recognises.
+		await recordServerLog("INFO", `Raw write of ${bytes.length} bytes to '${target.name}' by key '${key.name}'.`, {
 			agentId: target.agentId,
 			deviceId: target.id,
 		});
 
+		handedOff = bytes.length;
 		const message = await sendRawWrite(target.agentId, target.name, bytes.toString("base64"));
 
 		logger.info("Raw write accepted", {
@@ -88,11 +98,16 @@ export async function POST(
 
 		return Response.json({ agent, device, bytes: bytes.length, message: message ?? null });
 	} catch (error) {
-		// An identified caller who was refused leaves a trace; an unidentified one does not, because
-		// there is nothing to attribute it to and a row per unauthenticated request is a way to fill a
-		// disk. `authenticateKey`'s own failures are the only ones that reach here with a null key.
-		if (key && error instanceof ApiError) {
-			await recordServerLog("WARN", `Raw write to '${device}' refused for key '${key.name}': ${error.code}.`, {
+		// An identified caller leaves a trace whatever went wrong; an unidentified one does not,
+		// because there is nothing to attribute it to and a row per unauthenticated request is a way
+		// to fill a disk. `authenticateKey`'s own failures are the only ones that reach here with a
+		// null key. An unexpected fault is recorded too, under the code the caller was given for it:
+		// "every write and every refusal is recorded" cannot hold only for the failures this route
+		// anticipated, since an operator has no other way to learn that one happened.
+		if (key) {
+			const code = error instanceof ApiError ? error.code : "internal_error";
+
+			await recordServerLog("WARN", auditFailure(device, key.name, code, handedOff, error), {
 				// Named even on the refusals that never got as far as resolving a device, so every line
 				// this route writes reaches the Logs tab's agent filter and its live stream — which is
 				// what `recordServerLog` means by "the raw-write caller always names an agent". The
@@ -104,6 +119,45 @@ export async function POST(
 
 		return toErrorResponse(error, { route: "POST /api/v1/devices/[agent]/[device]/raw", agent, device });
 	}
+}
+
+/**
+ * The audit line for a request that did not return a write.
+ *
+ * **Two wordings, because there are two different facts.** Everything up to the send is a refusal:
+ * nothing left this server, and the line says so. Once the bytes have been handed to
+ * `sendRawWrite`, "refused" would be a lie in the one direction that matters — the timeout case
+ * cannot say whether the printer wrote them, which is why that function's own message ends "the
+ * bytes may or may not have been written". A trail that recorded that as a refusal would tell an
+ * operator the paper is clean when it may not be, and the paper is the only place they can check.
+ *
+ * The underlying message is carried through on that second path rather than summarised, because it
+ * is the sentence that distinguishes "never connected" from "did not answer" — the difference
+ * between a write that certainly did not happen and one nobody can account for.
+ *
+ * The device is named from the path segment and bounded to {@link MAX_NAME_LENGTH}, since a
+ * refusal before the grant check has no stored row to name it from. `nameSchema` bounds every real
+ * device to that length, so truncating cannot shorten a name that exists here, while an invented
+ * segment cannot write an unbounded string into a row `recordServerLog` stores verbatim — its
+ * contract asks callers to truncate anything that could be long, and this is the one field on this
+ * path a caller chooses.
+ *
+ * @param device the device named in the path, untrusted and possibly naming nothing
+ * @param keyName the authenticated key's name, for attribution
+ * @param code the error code the caller was answered with
+ * @param handedOff how many bytes had been handed to the agent, or null if none had
+ * @param error what went wrong
+ * @returns the line to record
+ */
+function auditFailure(device: string, keyName: string, code: string, handedOff: number | null, error: unknown): string {
+	const named = device.slice(0, MAX_NAME_LENGTH);
+
+	if (handedOff === null) {
+		return `Raw write to '${named}' refused for key '${keyName}': ${code}. Nothing was sent.`;
+	}
+
+	const detail = error instanceof ApiError ? ` ${error.message}` : "";
+	return `Raw write of ${handedOff} bytes to '${named}' by key '${keyName}' did not complete: ${code}.${detail}`;
 }
 
 /**

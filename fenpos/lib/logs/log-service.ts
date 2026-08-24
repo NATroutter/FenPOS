@@ -3,8 +3,9 @@ import { prisma } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
+import { sweepOccasionally } from "@/lib/logs/ingest";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { globalLogIngestSettings, integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -140,6 +141,12 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * a raw write refused because its audit line would not store is a fault, and one that happened and
  * then threw on the way out is the worst of the three.
  *
+ * **Swept like any other row.** These lines land in the same table an agent's do, so they are
+ * counted against `logs.maxRecords` through the same {@link sweepOccasionally} `ingestLog` uses
+ * rather than growing behind it. That matters more here than there: the endpoint that writes these
+ * is a write, and writes are deliberately not counted against `api.readsPerMinute` (see
+ * `requireApiRead`), so nothing upstream bounds how many of these a key can produce.
+ *
  * @param level severity of the line
  * @param message what happened, already truncated by the caller if it could be long
  * @param target the agent and device it concerns, when it concerns one
@@ -180,6 +187,12 @@ export async function recordServerLog(
 				deviceName: null,
 			});
 		}
+
+		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
+		// every agent on the install, this one runs on the few server-side events worth showing an
+		// operator, so one settings read is not worth a second cache to avoid.
+		const { maxRecords, sweepEvery } = await globalLogIngestSettings();
+		void sweepOccasionally(maxRecords, sweepEvery);
 	} catch (error) {
 		logger.error("Could not record a server log line", error, { message });
 	}

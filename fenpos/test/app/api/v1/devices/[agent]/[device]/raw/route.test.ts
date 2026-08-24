@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
+import { ApiError } from "@/lib/errors";
 import { setSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -174,6 +176,73 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(rows[0].level).toBe("INFO");
 		expect(rows[0].message).toContain("label-printer integration");
 		expect(rows[0].message).toContain("7");
+	});
+
+	it("does not call a timed-out write a refusal, because nobody here knows what the printer did", async () => {
+		// The wording is the test. `sendRawWrite` times out with "the bytes may or may not have been
+		// written" — the honest answer — and an audit trail that recorded that as "refused" would tell
+		// an operator the paper is clean when it may not be. The paper is the only place they can
+		// check, so this line must not answer the question it cannot answer.
+		vi.mocked(sendRawWrite).mockRejectedValueOnce(
+			new ApiError("agent_offline", "The agent did not answer; the bytes may or may not have been written."),
+		);
+
+		const response = await POST(...call({ bytes: BYTES }));
+
+		expect(response.status).toBe(503);
+
+		// Two rows for one write: the INFO recorded before the send, and this. The send happened.
+		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		expect(rows).toHaveLength(2);
+		expect(rows[1].level).toBe("WARN");
+		expect(rows[1].message).not.toContain("refused");
+		expect(rows[1].message).toContain("did not complete");
+		expect(rows[1].message).toContain("may or may not have been written");
+	});
+
+	it("says plainly that nothing was sent when the write never reached the agent", async () => {
+		// The other half of the pair. A refusal before the send *can* answer the question, and an
+		// operator reading the Logs tab should not have to guess which kind of failure they are looking
+		// at.
+		await setSetting("link.allowRawApiWrites", false);
+
+		await POST(...call({ bytes: BYTES }));
+
+		const rows = await prisma.logEntry.findMany();
+		expect(rows[0].message).toContain("refused");
+		expect(rows[0].message).toContain("Nothing was sent.");
+	});
+
+	it("records an audit line for an unexpected fault, not only for a refusal it anticipated", async () => {
+		// A fault the route did not plan for is exactly the one an operator most needs to see, and it
+		// is answered as `internal_error` with the details deliberately kept out of the response — so
+		// the audit row is the only place the caller's own name is attached to it.
+		vi.mocked(sendRawWrite).mockRejectedValueOnce(new Error("the link registry exploded"));
+
+		const response = await POST(...call({ bytes: BYTES }));
+
+		expect(response.status).toBe(500);
+
+		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		expect(rows).toHaveLength(2);
+		expect(rows[1].level).toBe("WARN");
+		expect(rows[1].message).toContain("internal_error");
+		expect(rows[1].message).toContain("label-printer integration");
+	});
+
+	it("bounds the device name it writes into an audit line", async () => {
+		// The path segment is the caller's, and on the pre-grant path nothing has validated it. A real
+		// device name cannot exceed MAX_NAME_LENGTH, so truncating there loses nothing an operator
+		// could have wanted while keeping an invented segment from writing an unbounded string into a
+		// row this server stores verbatim.
+		await setSetting("link.allowRawApiWrites", false);
+
+		await POST(...call({ bytes: BYTES }, "d".repeat(5_000)));
+
+		const rows = await prisma.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].message).toContain(`'${"d".repeat(MAX_NAME_LENGTH)}'`);
+		expect(rows[0].message.length).toBeLessThan(MAX_NAME_LENGTH + 200);
 	});
 
 	it("records an audit line when a write is refused for a reason other than a bad credential", async () => {

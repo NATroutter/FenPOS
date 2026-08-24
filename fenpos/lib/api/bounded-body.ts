@@ -9,9 +9,9 @@ import { ApiError } from "@/lib/errors";
  * size costs one `Buffer.byteLength` call; nothing here reads it twice.
  *
  * Every route on this API that reads a JSON body from an untrusted caller goes through
- * {@link readBoundedJson} rather than restating the check: `print`, `preview`, and asset creation
- * today, with a raw-write endpoint to follow. One place for the bound and its wording means none
- * of them can drift out of step with the others.
+ * {@link readBoundedJson} rather than restating the check: `print`, `preview`, asset creation, and
+ * the raw write. One place for the bound and its wording means none of them can drift out of step
+ * with the others.
  */
 
 /**
