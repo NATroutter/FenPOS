@@ -489,6 +489,44 @@ export function openApiDocument(publicUrl: string): object {
 				},
 			},
 
+			[`${API_BASE}/devices/{agent}/{device}/raw`]: {
+				post: {
+					summary: "Write raw ESC/POS bytes to one printer.",
+					operationId: "writeRawBytes",
+					description:
+						"Requires the `devices:raw` permission *and* the install's `link.allowRawApiWrites` setting, which ships off — the permission alone grants nothing. The bytes are base64 in `bytes` and reach the hardware unmodified: no wrapping, no codepage validation, no width calculation, and none of the limits the print endpoint applies. `link.maxRawWriteBytes` is the only bound on one. While the setting is off every caller gets `raw_writes_disabled`, decided before the device grant is checked so the refusal cannot be used to discover which printers exist. Nothing in the response describes what was printed: the bytes are never read here, and a write that times out is reported as one that may or may not have reached the paper.",
+					security: BEARER_AUTH,
+					parameters: [pathParam("agent"), pathParam("device")],
+					requestBody: {
+						required: true,
+						content: {
+							"application/json": {
+								schema: {
+									type: "object",
+									properties: {
+										bytes: { type: "string", description: "The payload, base64 encoded. Sent to the printer unread." },
+									},
+									required: ["bytes"],
+								},
+							},
+						},
+					},
+					responses: {
+						200: jsonResponse("The bytes were handed to the agent.", {
+							type: "object",
+							properties: {
+								agent: { type: "string" },
+								device: { type: "string" },
+								bytes: { type: "integer", description: "How many decoded bytes were sent." },
+								message: { type: ["string", "null"], description: "The agent's own reply, if it sent one." },
+							},
+							required: ["agent", "device", "bytes", "message"],
+						}),
+						default: ERROR_RESPONSE,
+					},
+				},
+			},
+
 			[`${API_BASE}/status`]: {
 				get: {
 					summary: "Agent liveness and printer readiness.",

@@ -392,11 +392,12 @@ export async function printMarkup(
 /**
  * Writes raw bytes to a printer.
  *
- * Admin session only. `devices:raw` exists to gate this for a machine client, but no endpoint
- * checks it yet, and holding it would not be enough on its own even once one does — the
- * install-level switch that also gates it ships off. These bytes are the printer's own language: a
- * wrong sequence can leave a device needing a power cycle, and no machine client has any business
- * sending one until both gates are open.
+ * Admin session only. A machine client reaches the same act through
+ * `POST /api/v1/devices/{agent}/{device}/raw`, where it needs `devices:raw` *and* the install's
+ * `link.allowRawApiWrites` switch, which ships off. Both gates are that route's, not this one's:
+ * these bytes are the printer's own language — a wrong sequence can leave a device needing a power
+ * cycle — and an administrator sitting in this panel has already cleared a higher bar than either
+ * of them, which is why the Tools tab does not consult the setting a key is measured against.
  *
  * @param deviceId the device to write to
  * @param bytes the bytes to write

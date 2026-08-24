@@ -7,16 +7,15 @@ import { z } from "zod";
  * can do nothing. That default matters: a key created but not yet configured must be inert,
  * never permissive.
  *
- * Raw ESC/POS writes are in this set, and are meant to be the one grant here that is not sufficient
- * on its own. They hand arbitrary bytes to hardware, bypassing every content limit, codepage check
- * and width calculation the compiler applies — so `devices:raw` is meant to be gated a second time
- * by the install-level `link.allowRawApiWrites` setting, which ships off
- * (`lib/settings/settings-service.ts`). That setting exists now; nothing yet reads it. No route
- * enforces it, so granting `devices:raw` today grants exactly what its description says, regardless
- * of the setting. Once a route does check it, granting the permission on an install that has not
- * enabled the setting will grant nothing at all, which is the intended design: turning this on
- * should take two deliberate decisions by two different kinds of thinking, "this key may" and "this
- * install does".
+ * Raw ESC/POS writes are in this set, and are the one grant here that is not sufficient on its own.
+ * They hand arbitrary bytes to hardware, bypassing every content limit, codepage check and width
+ * calculation the compiler applies — so `devices:raw` is gated a second time by the install-level
+ * `link.allowRawApiWrites` setting, which ships off (`lib/settings/settings-service.ts`).
+ * `POST /devices/{agent}/{device}/raw` reads that setting on every call, so granting the permission
+ * on an install that has not enabled it grants nothing at all. That is the intended design: turning
+ * this on takes two deliberate decisions by two different kinds of thinking, "this key may" and
+ * "this install does". The description below says so in the present tense, and the route is what
+ * makes it true.
  */
 
 /** One permission and the description shown beside its checkbox in the admin panel. */

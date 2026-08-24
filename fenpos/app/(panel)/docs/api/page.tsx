@@ -77,6 +77,12 @@ const SECTIONS = [
 		path: `${API_BASE}/devices/{agent}/{device}/actions`,
 	},
 	{
+		id: "raw-write",
+		title: "Writing raw bytes",
+		verbs: ["POST"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/devices/{agent}/{device}/raw`,
+	},
+	{
 		id: "status",
 		title: "Status",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -113,12 +119,12 @@ const SECTIONS = [
  * The permissions an endpoint on this API actually checks.
  *
  * `PERMISSIONS` is the whole vocabulary; this is the subset of it with an endpoint behind it today.
- * A permission can enter that vocabulary before the endpoint that checks it exists — device, status
- * and asset grants each did, and each remained an exception — a capability the panel had and the
- * API did not expose — until the endpoints documented below closed the gap for it, assets last —
- * so this list can run behind `PERMISSIONS` without either one being wrong. Named here rather than
- * derived, because nothing in the code registers "which permissions a route requires"; the test
- * beside this page reads the routes and fails if this list stops matching them.
+ * A permission can enter that vocabulary before the endpoint that checks it exists — device, status,
+ * asset and raw-write grants each did, and each remained an exception — a capability the panel had
+ * and the API did not expose — until the endpoints documented below closed the gap for it, raw
+ * writes last — so this list can run behind `PERMISSIONS` without either one being wrong. Named
+ * here rather than derived, because nothing in the code registers "which permissions a route
+ * requires"; the test beside this page reads the routes and fails if this list stops matching them.
  */
 const ENFORCED: readonly Permission[] = [
 	"print",
@@ -129,6 +135,7 @@ const ENFORCED: readonly Permission[] = [
 	"status:read",
 	"assets:read",
 	"assets:write",
+	"devices:raw",
 ];
 
 /**
@@ -265,11 +272,12 @@ export default async function ApiDocsPage() {
 							</P>
 
 							<P>
-								<Mono>devices:raw</Mono> is for raw ESC/POS writes — handing bytes straight to a printer, bypassing
-								every content check this API applies elsewhere. Today that is still only reachable from an admin session
-								on the Tools tab; no endpoint here accepts it yet. When one does, the permission alone will not be
-								enough: an install-level switch, off by default, has to also allow raw writes before a key's grant does
-								anything.
+								<Mono>devices:raw</Mono> is the one grant in that list that is not enough on its own. It hands bytes
+								straight to a printer, bypassing every content check this API applies elsewhere, so the install has to
+								allow raw writes as well — a switch on the Settings tab that ships off. Until an administrator turns it
+								on, a key holding the permission can do nothing with it and every caller gets the same{" "}
+								<ErrorRef code="raw_writes_disabled" />, whatever printers they are granted. Writing raw bytes, below,
+								is the endpoint it gates.
 							</P>
 
 							<Aside>
@@ -752,6 +760,57 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
+								Needs <Mono>devices:raw</Mono> <strong>and</strong> the install's <Mono>Allow raw API writes</Mono>{" "}
+								setting, which ships off. The body carries <Mono>bytes</Mono>, base64, and nothing else; they reach the
+								printer exactly as sent — no wrapping, no codepage check, no width calculation, none of the limits every
+								other endpoint here applies.
+							</P>
+
+							<Aside>
+								While the setting is off, every caller gets <ErrorRef code="raw_writes_disabled" /> — checked before the
+								device grant, so the refusal is identical whatever printers the key holds and cannot be used to work out
+								which exist. A key that lacks the permission gets <ErrorRef code="insufficient_permission" /> instead:
+								the two are separate codes because the remedies are different, one a decision about a key and the other
+								a decision about the install.
+							</Aside>
+
+							<P>
+								<Mono>link.maxRawWriteBytes</Mono>, on the Settings tab, is the only bound on a write — none of the
+								print limits apply to one. A payload decoding to more than it is refused with{" "}
+								<ErrorRef code="body_too_large" /> naming both numbers, and a <Mono>bytes</Mono> that is not valid
+								base64 with <ErrorRef code="invalid_type" /> rather than being silently written as whatever it decoded
+								to.
+							</P>
+
+							<P>
+								<Mono>message</Mono> is the agent's own, or <Mono>null</Mono>. Nothing here can tell you what was
+								printed: the bytes are never read, and the printer does not report back. A write that times out says so
+								plainly — the bytes may or may not have been written, and only the paper settles it. Every write, and
+								every refusal after a key is identified, is recorded on the Logs tab, which is the only record that one
+								happened.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/devices/${agentName}/${deviceName}/raw \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "bytes": "G0BIZWxsbw==" }'`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "bytes": 7, "message": "wrote 7 bytes" }`}</CodeBlock>
+
+							<CodeBlock label="403 Forbidden">{`{
+  "error": "raw_writes_disabled",
+  "message": "Raw writes are switched off for this install. An administrator can enable them under Settings → Security."
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[10]}>
+					<Split>
+						<Col>
+							<P>
 								Needs <Mono>status:read</Mono>. Agent liveness and printer readiness, grouped by agent, restricted to
 								the agents holding at least one device this key is granted.
 							</P>
@@ -797,7 +856,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[10]}>
+				<DocSection {...SECTIONS[11]}>
 					<Split>
 						<Col>
 							<P>
@@ -862,7 +921,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[11]}>
+				<DocSection {...SECTIONS[12]}>
 					<Split>
 						<Col>
 							<P>
@@ -894,7 +953,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[12]}>
+				<DocSection {...SECTIONS[13]}>
 					<Split>
 						<Col>
 							<P>
@@ -928,7 +987,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[13]}>
+				<DocSection {...SECTIONS[14]}>
 					<Split>
 						<Col>
 							<P>
@@ -1018,7 +1077,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[14]}>
+				<DocSection {...SECTIONS[15]}>
 					<Split>
 						<Col>
 							<P>
