@@ -109,6 +109,24 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 		expect((await response.json()).error).toBe("invalid_json");
 	});
 
+	it("refuses an oversized body before it is parsed", async () => {
+		// Valid JSON, not malformed — a failure here can only be the size check that runs before
+		// `JSON.parse`, not a parse failure that would prove nothing about the ordering.
+		const oversized = JSON.stringify({ data: ["x".repeat(70_000)] });
+
+		const response = await POST(
+			new Request(`https://fenpos.test/api/v1/preview/${agentName}/kitchen`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body: oversized,
+			}),
+			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
+		);
+
+		expect(response.status).toBe(413);
+		expect((await response.json()).error).toBe("body_too_large");
+	});
+
 	it("refuses a key without 'print'", async () => {
 		await prisma.apiKeyPermission.deleteMany({ where: { apiKeyId: keyId } });
 

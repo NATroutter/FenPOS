@@ -1,5 +1,6 @@
+import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
 import { requireApiRead } from "@/lib/auth/rate-limit";
-import { ApiError, toErrorResponse } from "@/lib/errors";
+import { toErrorResponse } from "@/lib/errors";
 import { compilePreview } from "@/lib/jobs/preview";
 import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
 
@@ -19,9 +20,6 @@ import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/
  * printer, only its configuration, which this server owns.
  */
 
-/** Largest body accepted, matching the print endpoint so a body that previews can always be sent. */
-const MAX_BODY_BYTES = 64 * 1024;
-
 export async function POST(
 	request: Request,
 	context: { params: Promise<{ agent: string; device: string }> },
@@ -36,17 +34,7 @@ export async function POST(
 
 		const target = await requireGrantedDevice(key, agent, device);
 
-		const raw = await request.text();
-		if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
-			throw new ApiError("body_too_large", `Request body must be under ${MAX_BODY_BYTES} bytes.`);
-		}
-
-		let body: unknown;
-		try {
-			body = JSON.parse(raw);
-		} catch {
-			throw new ApiError("invalid_json", "Body is not valid JSON");
-		}
+		const { body } = await readBoundedJson(request, PRINT_REQUEST_MAX_BODY_BYTES);
 
 		return Response.json({ agent, device, ...(await compilePreview(target.id, body)) });
 	} catch (error) {

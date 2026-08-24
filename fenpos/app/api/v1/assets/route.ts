@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { readBoundedJson } from "@/lib/api/bounded-body";
 import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
-import { createAsset, importAssetFromUrl } from "@/lib/assets/asset-service";
+import { createAsset, importAssetFromUrl, maxAssetBytes } from "@/lib/assets/asset-service";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
+import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { authenticateKey, requirePermission } from "@/lib/keys/authenticate";
 import { logger } from "@/lib/logger";
@@ -132,19 +134,40 @@ async function storeUpload(name: string, data: string): Promise<Awaited<ReturnTy
 }
 
 /**
+ * How large a create-asset body may be before it is parsed.
+ *
+ * `requireWithinByteCap` inside `createAsset` still enforces the real, decoded limit — this exists
+ * only to refuse a body too large to be a legitimate request before `JSON.parse` (and, on the
+ * upload branch, a base64 decode) does the work of parsing it, so it is deliberately generous
+ * rather than exact.
+ *
+ * The body wraps the image as base64 in JSON, so the ceiling this route reads up to has to cover
+ * both inflations: base64 turns 3 bytes into 4 characters, a 4/3 expansion of {@link maxAssetBytes},
+ * and the envelope wraps that string in `{"name":"…","data":"…"}` — two field names, their quoting,
+ * the object's own punctuation, and a name up to {@link MAX_NAME_LENGTH} characters. 512 bytes of
+ * headroom past the base64 expansion and the longest legal name covers all of that with room to
+ * spare.
+ *
+ * A `url` import's body is far smaller than this, but the bound is checked before the body is
+ * parsed — before either branch can be told apart — so both read up to the same ceiling, sized for
+ * the larger of the two.
+ *
+ * @returns the byte ceiling this route reads a create body up to
+ */
+async function maxCreateAssetBodyBytes(): Promise<number> {
+	const imageCap = await maxAssetBytes();
+	return Math.ceil((imageCap * 4) / 3) + 512 + MAX_NAME_LENGTH;
+}
+
+/**
  * Reads a create request.
  *
  * @param request the incoming request
  * @returns the name, and exactly one of the two sources
- * @throws ApiError when the body is not JSON, names no source, or names both
+ * @throws ApiError when the body is too large, not JSON, names no source, or names both
  */
 async function readCreate(request: Request): Promise<{ name: string; data?: string; url?: string }> {
-	let body: unknown;
-	try {
-		body = await request.json();
-	} catch {
-		throw new ApiError("invalid_json", "Body is not valid JSON");
-	}
+	const { body } = await readBoundedJson(request, await maxCreateAssetBodyBytes());
 
 	const parsed = createSchema.safeParse(body);
 	if (!parsed.success) {

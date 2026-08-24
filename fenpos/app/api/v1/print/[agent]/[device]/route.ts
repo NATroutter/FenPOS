@@ -1,3 +1,4 @@
+import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { bodyHash, findReplay, type IdempotentReplay, isIdempotencyKeyRace } from "@/lib/jobs/idempotency";
@@ -34,9 +35,6 @@ import { getClientAddress } from "@/lib/request-context";
  * replayed.
  */
 
-/** Largest body accepted. Bounded before parsing, so an oversized request costs nothing. */
-const MAX_BODY_BYTES = 64 * 1024;
-
 /** Largest `Idempotency-Key` accepted. Long enough for a UUID or an order reference, and bounded. */
 const MAX_IDEMPOTENCY_KEY_CHARS = 255;
 
@@ -56,7 +54,7 @@ export async function POST(
 		const target = await requireGrantedDevice(key, agent, device);
 
 		const idempotencyKey = readIdempotencyKey(request);
-		const { body, raw } = await readBody(request);
+		const { body, raw } = await readBoundedJson(request, PRINT_REQUEST_MAX_BODY_BYTES);
 
 		// Checked after the body is read, because the answer depends on the body: a repeated key
 		// with different content is a conflict rather than a replay, and that cannot be known until
@@ -181,30 +179,4 @@ function readIdempotencyKey(request: Request): string | null {
 		throw new ApiError("invalid_type", `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_CHARS} characters.`);
 	}
 	return raw;
-}
-
-/**
- * Reads and parses the request body, keeping the raw text.
- *
- * Size is checked on the raw text before parsing, because parsing is the work an oversized body
- * is trying to provoke. The text is returned alongside the parsed value because the idempotency
- * fingerprint is taken over the bytes as they arrived rather than over a re-serialised object —
- * see `bodyHash`.
- *
- * @param request the incoming request
- * @returns the parsed body and the text it was parsed from
- * @throws ApiError when the body is too large or not JSON
- */
-async function readBody(request: Request): Promise<{ body: unknown; raw: string }> {
-	const raw = await request.text();
-
-	if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
-		throw new ApiError("body_too_large", `Request body must be under ${MAX_BODY_BYTES} bytes.`);
-	}
-
-	try {
-		return { body: JSON.parse(raw), raw };
-	} catch {
-		throw new ApiError("invalid_json", "Body is not valid JSON");
-	}
 }

@@ -79,6 +79,18 @@ describe("POST /api/v1/assets", () => {
 		expect(await prisma.asset.count()).toBe(1);
 	});
 
+	it("refuses an oversized body before it is parsed", async () => {
+		// Comfortably over the envelope this route derives from the default 2 MiB `assets.maxUploadMb`
+		// (base64's 4/3 expansion plus headroom is about 2.8 MB) while still being valid JSON, so a
+		// failure here can only be the size check that runs before `JSON.parse` and the base64 decode
+		// it guards — not a parse failure, which would prove nothing about the ordering.
+		const response = await POST(post({ name: "huge", data: "x".repeat(3_000_000) }));
+
+		expect(response.status).toBe(413);
+		expect((await response.json()).error).toBe("body_too_large");
+		expect(await prisma.asset.count()).toBe(0);
+	});
+
 	it("imports an image from a URL", async () => {
 		vi.mocked(importAssetFromUrl).mockResolvedValueOnce({
 			id: "asset-1",
