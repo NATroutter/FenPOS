@@ -83,6 +83,12 @@ const SECTIONS = [
 		path: `${API_BASE}/status`,
 	},
 	{
+		id: "assets",
+		title: "Assets",
+		verbs: ["GET", "POST"] as const satisfies readonly Verb[],
+		path: `${API_BASE}/assets`,
+	},
+	{
 		id: "health",
 		title: "Health",
 		verbs: ["GET"] as const satisfies readonly Verb[],
@@ -94,9 +100,10 @@ const SECTIONS = [
 /**
  * The permissions an endpoint on this API actually checks.
  *
- * `PERMISSIONS` is the whole vocabulary, and every one of its entries gates a request now. The
- * device and status grants used to be the exception — capabilities the panel had and the API did
- * not expose — until the endpoints documented below closed that gap. Named here rather than
+ * `PERMISSIONS` is the whole vocabulary, and every one of its entries gates a request now. Device,
+ * status and asset grants were each added to that vocabulary before an endpoint existed to check
+ * them, and each remained an exception — a capability the panel had and the API did not expose —
+ * until the endpoints documented below closed the gap for it, assets last. Named here rather than
  * derived, because nothing in the code registers "which permissions a route requires"; the test
  * beside this page reads the routes and fails if this list stops matching them.
  */
@@ -107,6 +114,8 @@ const ENFORCED: readonly Permission[] = [
 	"devices:read",
 	"devices:control",
 	"status:read",
+	"assets:read",
+	"assets:write",
 ];
 
 /**
@@ -232,10 +241,9 @@ export default async function ApiDocsPage() {
 							<P>A key does nothing until it is granted both a permission and at least one printer.</P>
 
 							<P>
-								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The device and status
-								grants are the newest of them: <Mono>devices:read</Mono> and <Mono>devices:control</Mono> back the
-								device endpoints below, and <Mono>status:read</Mono> backs the status endpoint beside them. Whatever a
-								key is granted here, there is a request it unlocks.
+								<EnforcedList /> gate an endpoint today — every permission this panel can grant. The asset grants are
+								the newest of them: <Mono>assets:read</Mono> and <Mono>assets:write</Mono> back the assets endpoint
+								below. Whatever a key is granted here, there is a request it unlocks.
 							</P>
 
 							<P>
@@ -764,6 +772,71 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
+								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes — the
+								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
+								one namespace, not a slice scoped to its own devices.
+							</P>
+
+							<P>
+								<Mono>POST</Mono> needs <Mono>assets:write</Mono> and stores one, the same two ways the Assets tab
+								offers: <Mono>data</Mono>, the file as base64, or <Mono>url</Mono>, a location to import it from.
+								Exactly one of the two — a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
+								or <ErrorRef code="missing_field" /> respectively.
+							</P>
+
+							<P>
+								Cursor-paginated the same way the jobs listing is — see <Mono>{`GET ${API_BASE}/jobs`}</Mono> above for
+								what <Mono>limit</Mono>, <Mono>cursor</Mono> and <Mono>nextCursor</Mono> mean.
+							</P>
+
+							<P>
+								An upload over the configured size, or bytes that are not an image this pipeline prints, is refused
+								before it is stored — the same gate the panel's own Assets tab goes through. The name the bundled logo
+								uses is reserved and cannot be written here either.
+							</P>
+						</Col>
+
+						<Col>
+							<CodeBlock label="Request">{`curl ${base}${API_BASE}/assets -H "Authorization: Bearer fpk_…"`}</CodeBlock>
+
+							<CodeBlock label="200 OK">{`{
+  "assets": [
+    {
+      "name": "shop-logo",
+      "kind": "IMAGE",
+      "width": 384,
+      "height": 96,
+      "mimeType": "image/png",
+      "sourceUrl": null,
+      "createdAt": "2026-08-22T18:04:09.000Z"
+    }
+  ],
+  "nextCursor": null
+}`}</CodeBlock>
+
+							<CodeBlock label="Request — upload">{`curl -X POST ${base}${API_BASE}/assets \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "name": "shop-logo", "data": "iVBORw0KGgo…" }'`}</CodeBlock>
+
+							<CodeBlock label="201 Created">{`{
+  "id": "clx…",
+  "kind": "IMAGE",
+  "name": "shop-logo",
+  "width": 384,
+  "height": 96,
+  "mimeType": "image/png",
+  "sourceUrl": null,
+  "createdAt": "2026-08-22T18:04:09.000Z"
+}`}</CodeBlock>
+						</Col>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[11]}>
+					<Split>
+						<Col>
+							<P>
 								The one endpoint that takes no key. A healthcheck runs before anyone has signed in, and a probe that
 								needed a credential would need one stored somewhere to use it — so this is what a container runtime or a
 								load balancer calls, and it is deliberately the only thing they can call.
@@ -793,7 +866,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					</Split>
 				</DocSection>
 
-				<DocSection {...SECTIONS[11]}>
+				<DocSection {...SECTIONS[12]}>
 					<Split>
 						<Col>
 							<P>
