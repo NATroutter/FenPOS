@@ -55,6 +55,9 @@ export async function POST(
 	// separates a refusal from a failure of unknown outcome in the audit trail below: everything
 	// before the send is a refusal — nothing was written, and the row may say so — while a failure
 	// once this is set has to leave the question open, because the timeout case genuinely is open.
+	//
+	// Set before the call, not after, which deliberately conflates two of the three outcomes: see
+	// {@link auditFailure}.
 	let handedOff: number | null = null;
 
 	try {
@@ -124,12 +127,22 @@ export async function POST(
 /**
  * The audit line for a request that did not return a write.
  *
- * **Two wordings, because there are two different facts.** Everything up to the send is a refusal:
- * nothing left this server, and the line says so. Once the bytes have been handed to
+ * **Two wordings for three facts, and the conflation is deliberate.** Everything up to the send is a
+ * refusal: nothing left this server, and the line says so. Once the bytes have been handed to
  * `sendRawWrite`, "refused" would be a lie in the one direction that matters — the timeout case
  * cannot say whether the printer wrote them, which is why that function's own message ends "the
  * bytes may or may not have been written". A trail that recorded that as a refusal would tell an
  * operator the paper is clean when it may not be, and the paper is the only place they can check.
+ *
+ * The third fact is that two failures *inside* `sendRawWrite` also provably sent nothing — the agent
+ * was not connected, and the socket dropped before the frame went out (`lib/link/commands.ts`) — and
+ * this function reports both under the second wording, because `handedOff` is set before the call
+ * rather than after it. That is the safe direction of the two: an audit line that says "may have
+ * been written" about a write that certainly was not sends an operator to look at a printer for
+ * nothing, while the reverse tells them not to look at one that may have moved paper. Separating
+ * them would mean `sendRawWrite` reporting *where* it failed, not just that it did, and the honest
+ * detail below already carries the agent's own sentence — "That agent is not connected" reads
+ * differently from "did not answer" to the person reading the row.
  *
  * The underlying message is carried through on that second path rather than summarised, because it
  * is the sentence that distinguishes "never connected" from "did not answer" — the difference
@@ -212,6 +225,13 @@ function maxRawWriteBodyBytes(cap: number): number {
  * The configured cap is checked on the decoded length, not on the body's, because that is what the
  * setting promises an operator: the most bytes one write may put through a printer. A body that
  * passes {@link maxRawWriteBodyBytes} can still decode to more than the cap allows.
+ *
+ * This is the last size check, and there is deliberately no third one against what a link frame can
+ * carry. `link.maxRawWriteBytes` derives its own maximum from the `raw.write` frame's payload bound
+ * (`rawWriteByteCeiling` in `lib/settings/settings-service.ts`), and a stored value outside a
+ * setting's bounds is ignored in favour of the fallback rather than clamped — so `cap` can never
+ * exceed what `serialiseServerFrame` will accept, and a check here could only ever be dead code
+ * restating the number the derivation exists to stop anyone restating.
  *
  * @param request the incoming request
  * @param cap the configured `link.maxRawWriteBytes`

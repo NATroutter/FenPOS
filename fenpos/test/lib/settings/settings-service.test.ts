@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting } from "@/lib/format/datetime";
-import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema, rawWriteSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel } from "@/lib/logger";
 
 import type { SettingKey, SettingType } from "@/lib/settings/settings-service";
@@ -933,9 +933,25 @@ describe("raw write settings", () => {
 		expect(await integerSetting("link.maxRawWriteBytes")).toBeGreaterThan(0);
 	});
 
-	it("stores a raised cap", async () => {
-		await setSetting("link.maxRawWriteBytes", 16_384);
+	it("stores a cap raised to the largest payload a link frame can carry", async () => {
+		// 12288 is the bound derived from `rawWriteSchema.shape.bytes` — 16384 base64 characters, three
+		// bytes per four characters. Written as the derivation rather than as a number so this test
+		// follows the schema if the frame is ever widened.
+		const ceiling = Math.floor((rawWriteSchema.shape.bytes.maxLength as number) / 4) * 3;
+		expect(ceiling).toBe(12_288);
 
-		expect(await integerSetting("link.maxRawWriteBytes")).toBe(16_384);
+		await setSetting("link.maxRawWriteBytes", ceiling);
+
+		expect(await integerSetting("link.maxRawWriteBytes")).toBe(ceiling);
+	});
+
+	it("refuses a cap the link could not carry, so the panel cannot outrun the wire", async () => {
+		// The failure this bound exists to prevent: a value the panel accepts, then a ZodError out of
+		// `serialiseServerFrame` that is not an ApiError — a 500, a leaked reply slot, and an audit row
+		// claiming an unknown outcome for bytes that never left the server.
+		const ceiling = Math.floor((rawWriteSchema.shape.bytes.maxLength as number) / 4) * 3;
+
+		await expect(setSetting("link.maxRawWriteBytes", ceiling + 1)).rejects.toThrow();
+		await expect(setSetting("link.maxRawWriteBytes", 100_000)).rejects.toThrow();
 	});
 });

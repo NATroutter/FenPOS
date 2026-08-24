@@ -175,7 +175,9 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].level).toBe("INFO");
 		expect(rows[0].message).toContain("label-printer integration");
-		expect(rows[0].message).toContain("7");
+		// The whole phrase, not a bare "7". A single digit matches anywhere in the line — a name, a
+		// timestamp, another number — so it would pass on a row that never mentioned the size at all.
+		expect(rows[0].message).toContain("Raw write of 7 bytes");
 	});
 
 	it("does not call a timed-out write a refusal, because nobody here knows what the printer did", async () => {

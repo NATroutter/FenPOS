@@ -458,10 +458,19 @@ const requestIdSchema = z.string().min(1).max(64);
 /**
  * Server to agent: write these bytes to the printer, unmodified.
  *
- * The one frame that hands arbitrary bytes to hardware. Reachable only from an admin session —
- * no API key can ever be granted it — size capped, and audit logged on the way out. Everything
- * else in this protocol is a description of what to print; this is the printer's own language,
- * and a wrong byte sequence can leave a device needing a power cycle.
+ * The one frame that hands arbitrary bytes to hardware. Two callers can raise it: an admin session
+ * on the Tools tab, and an API key that holds `devices:raw` on an install whose
+ * `link.allowRawApiWrites` setting has been switched on — it ships off — and only for a printer that
+ * key is granted. Either way the payload is size capped here and audit logged on the way out.
+ * Everything else in this protocol is a description of what to print; this is the printer's own
+ * language, and a wrong byte sequence can leave a device needing a power cycle.
+ *
+ * The `bytes` bound below is the wire's own limit and the authority for everything above it: the
+ * agent's `FrameCodec` mirrors it as `MAX_RAW_CHARS`, and the `link.maxRawWriteBytes` setting derives
+ * its maximum from it rather than restating a number (`rawWriteByteCeiling` in
+ * `lib/settings/settings-service.ts`), so a payload an operator is allowed to configure always fits
+ * in a frame. Widening it here widens that setting with it — and the agent has to be widened in the
+ * same change, or it will reject what this side now sends.
  */
 export const rawWriteSchema = z.object({
 	type: z.literal("raw.write"),

@@ -64,6 +64,7 @@ describe("recordServerLog", () => {
 	// suite without it, which fails all three non-throwing tests on stale rows.
 	beforeEach(async () => {
 		await prisma.logEntry.deleteMany();
+		await prisma.setting.deleteMany();
 	});
 
 	it("writes a row the Logs tab will show", async () => {
@@ -92,6 +93,17 @@ describe("recordServerLog", () => {
 		const row = await prisma.logEntry.findFirst();
 		expect(row?.agentId).toBe(agent.id);
 		expect(row?.deviceId).toBe(device.id);
+	});
+
+	it("truncates to logs.maxMessageChars, the same bound an agent's lines get", async () => {
+		// One table, one limit. An install that lowers this meant it for every row it stores, and a
+		// server-side audit line that ignored it would leave the Logs tab holding two kinds of line
+		// with two different ceilings. 200 is the setting's declared minimum.
+		await setSetting("logs.maxMessageChars", 200);
+
+		await recordServerLog("INFO", "x".repeat(500));
+
+		expect((await prisma.logEntry.findFirst())?.message).toHaveLength(200);
 	});
 
 	it("does not throw when the row cannot be written", async () => {

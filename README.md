@@ -225,11 +225,12 @@ The status is `202`: the job is queued, and the paper has not moved yet.
 `fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut`
 
 **Permissions:** `print` · `jobs:read` · `jobs:cancel` · `devices:read` · `devices:control` ·
-`status:read`
+`status:read` · `assets:read` · `assets:write` · `devices:raw`
 
 A key without a grant for the device gets `404` rather than `403`, so the endpoint does not
-confirm that a device exists to someone who cannot use it. Raw ESC/POS writes are admin-session
-only and cannot be granted to a key.
+confirm that a device exists to someone who cannot use it. Raw ESC/POS writes need `devices:raw`
+**and** the install's `Allow raw API writes` setting, which ships off — the permission alone grants
+nothing until an administrator turns it on.
 
 The **Docs** tab carries the full reference, generated from the running install.
 

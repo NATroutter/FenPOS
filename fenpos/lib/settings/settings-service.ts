@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting, setFormatting } from "@/lib/format/datetime";
-import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema } from "@/lib/link/protocol";
+import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema, rawWriteSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 
@@ -171,6 +171,36 @@ function jobBound(field: { minValue: number | null; maxValue: number | null }): 
 		throw new Error("schema field declares no bound to derive from");
 	}
 	return { min: field.minValue, max: field.maxValue };
+}
+
+/**
+ * The most decoded bytes one `raw.write` frame can actually carry, derived from {@link rawWriteSchema}.
+ *
+ * The same failure class {@link jobBound} exists to prevent, one module over. `link.maxRawWriteBytes`
+ * bounds the *decoded* bytes; the frame bounds the *base64 string* that carries them, and the agent's
+ * `FrameCodec` (`MAX_RAW_CHARS`) mirrors that bound again. A `SETTINGS` maximum written as a literal
+ * larger than the frame allows is a value the panel accepts and `serialiseServerFrame` then refuses —
+ * and unlike `pushDeviceConfig`, the raw-write route has no catch-and-log for that: the ZodError is
+ * not an `ApiError`, so the caller gets a 500, the reply slot leaks until `link.commandTimeoutSeconds`,
+ * and the audit trail reads as a write of unknown outcome for bytes that provably never left. Deriving
+ * the ceiling here means widening it in `protocol.ts` (and in the agent) is the only edit it needs.
+ *
+ * Base64 encodes three bytes as four characters, so a string of at most `maxLength` characters decodes
+ * to at most `floor(maxLength / 4) * 3` bytes. Today that is 16384 characters, so 12288 bytes.
+ *
+ * `.maxLength` types as `number | null` because a Zod string schema need not declare one; this field
+ * does, and `setting definitions` (settings-service.test.ts) walks every bound, so the throw is
+ * unreachable in practice rather than a case this module has to recover from.
+ *
+ * @returns the largest decoded payload the link can carry
+ * @throws Error when the frame's `bytes` field declares no maximum length
+ */
+function rawWriteByteCeiling(): number {
+	const chars = rawWriteSchema.shape.bytes.maxLength;
+	if (chars === null) {
+		throw new Error("the raw.write frame declares no payload bound to derive from");
+	}
+	return Math.floor(chars / 4) * 3;
 }
 
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
@@ -747,11 +777,13 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "link.maxRawWriteBytes",
 		label: "Largest raw write",
 		description:
-			"The most bytes one raw write may carry. This is the only bound on a raw write; none of the print limits apply to one, so it is what stops a single request occupying a printer indefinitely.",
+			"The most bytes one raw write may carry. This is the only bound on a raw write; none of the print limits apply to one, so it is what stops a single request occupying a printer indefinitely. The ceiling is what one link frame can carry, so a write that passes here always fits on the wire.",
 		category: "security",
 		type: "integer",
 		min: 1,
-		max: 1_048_576,
+		// Derived, not restated: a bound above what the frame carries is a value the panel accepts and
+		// the link then refuses. See {@link rawWriteByteCeiling}.
+		max: rawWriteByteCeiling(),
 		fallback: 8_192,
 		unit: "bytes",
 	},

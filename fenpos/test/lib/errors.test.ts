@@ -38,6 +38,10 @@ describe("raw_writes_disabled", () => {
 		// `raw_writes_disabled` means "ask the operator to switch it on for the install". A caller
 		// told the wrong one goes to the wrong person.
 		expect(API_ERROR_STATUS.raw_writes_disabled).toBe(API_ERROR_STATUS.insufficient_permission);
-		expect("raw_writes_disabled").not.toBe("insufficient_permission");
+
+		// Same status, so only the code tells the two apart — which means the code has to exist in its
+		// own right. Read off the map rather than compared as two literals: `"a" !== "b"` typed into a
+		// test asserts nothing about the code, and would still pass if the map lost the key entirely.
+		expect(Object.keys(API_ERROR_STATUS)).toContain("raw_writes_disabled");
 	});
 });

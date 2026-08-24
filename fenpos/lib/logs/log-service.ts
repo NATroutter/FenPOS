@@ -147,8 +147,15 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * is a write, and writes are deliberately not counted against `api.readsPerMinute` (see
  * `requireApiRead`), so nothing upstream bounds how many of these a key can produce.
  *
+ * **Truncated to `logs.maxMessageChars`, exactly as `ingestLog` truncates an agent's lines.** One
+ * table, one bound: an install that lowers the setting to keep its log rows small meant it for every
+ * row, and a path that stored the full string regardless would leave the Logs tab showing two kinds
+ * of line with two different limits. Callers may still shorten a field of their own first — the
+ * raw-write route bounds the device name it was handed — since this cut lands on the end of the
+ * sentence and a caller usually knows better which part is worth losing.
+ *
  * @param level severity of the line
- * @param message what happened, already truncated by the caller if it could be long
+ * @param message what happened; stored truncated to `logs.maxMessageChars`
  * @param target the agent and device it concerns, when it concerns one
  */
 export async function recordServerLog(
@@ -157,6 +164,12 @@ export async function recordServerLog(
 	target: { agentId?: string; deviceId?: string } = {},
 ): Promise<void> {
 	try {
+		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
+		// every agent on the install, this one runs on the few server-side events worth showing an
+		// operator, so one settings read is not worth a second cache to avoid. Read before the insert
+		// because `maxMessageChars` bounds the row itself; the sweep below uses the same two values.
+		const { maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+
 		const entry = await prisma.logEntry.create({
 			data: {
 				level,
@@ -164,7 +177,7 @@ export async function recordServerLog(
 				// filter and the Level column ordering both run in the database, and neither can
 				// compare a level string.
 				severity: LOG_SEVERITY[level],
-				message,
+				message: message.slice(0, maxMessageChars),
 				agentId: target.agentId ?? null,
 				deviceId: target.deviceId ?? null,
 			},
@@ -188,10 +201,6 @@ export async function recordServerLog(
 			});
 		}
 
-		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
-		// every agent on the install, this one runs on the few server-side events worth showing an
-		// operator, so one settings read is not worth a second cache to avoid.
-		const { maxRecords, sweepEvery } = await globalLogIngestSettings();
 		void sweepOccasionally(maxRecords, sweepEvery);
 	} catch (error) {
 		logger.error("Could not record a server log line", error, { message });

@@ -152,10 +152,13 @@ const SNIPPET_GROUPS: { group: string; snippets: Snippet[] }[] = [
 /**
  * The raw byte editor.
  *
- * **This is the one place in the system that hands arbitrary bytes to hardware.** There is no
- * permission that grants it: an API key cannot reach it at any grant level, and it is reachable
- * only from an admin session. Every write is logged twice — here and on the agent — because two
- * records on two machines is what makes it auditable if either is later in question.
+ * **This hands arbitrary bytes to hardware.** It is the admin-session way in, and it answers to the
+ * session alone: `writeRaw` checks no permission and no install setting, because an administrator
+ * sitting in this panel has already cleared a higher bar than either. A machine client reaches the
+ * same act through `POST /devices/{agent}/{device}/raw`, which is gated twice over — a key must hold
+ * `devices:raw` *and* the install must have `link.allowRawApiWrites` switched on, which it does not
+ * by default. Every write is logged twice — here and on the agent — because two records on two
+ * machines is what makes it auditable if either is later in question.
  *
  * Bytes are written in hexadecimal rather than as text. A text field would invite pasting a
  * receipt into it, and the difference between "print this" and "execute this" is the difference
@@ -185,7 +188,8 @@ export function RawTool({ devices }: { devices: ToolDevice[] }) {
 					<div className="min-w-0 flex-1">
 						<h3 className="text-[13px] font-medium">Raw bytes</h3>
 						<p className="mt-0.5 text-[11.5px] text-muted-foreground">
-							Written to the port unmodified, bypassing the queue. Admin only — no API key can be granted this.
+							Written to the port unmodified, bypassing the queue. Admins send from here; an API key needs the raw-write
+							permission and the install switch under Settings → Security.
 						</p>
 					</div>
 					<DevicePicker devices={devices} value={deviceId} onChange={setDeviceId} />
