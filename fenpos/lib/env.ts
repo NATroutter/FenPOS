@@ -31,6 +31,35 @@ export const envSchema = z.object({
 			message: "must be a SQLite file URL beginning with file:",
 		}),
 
+	/**
+	 * Signing key for Better Auth's cookies and tokens.
+	 *
+	 * Required with no default, deliberately. A generated-if-absent fallback would mean every
+	 * restart silently invalidated every session, and a checked-in default would mean every
+	 * install shared a signing key — which is not a weak secret but no secret at all.
+	 *
+	 * The 32-character floor is a shape check, not an entropy measure: it stops an operator
+	 * pasting a word, and nothing here can tell a strong 32-byte value from a weak one. Generate
+	 * with `openssl rand -base64 32`.
+	 */
+	BETTER_AUTH_SECRET: z.string().min(32, "must be at least 32 characters; generate with `openssl rand -base64 32`"),
+
+	/**
+	 * Absolute origin the panel is reached on, e.g. `https://pos.example.com`.
+	 *
+	 * Optional: left unset, Better Auth derives the origin from the incoming request, which is
+	 * correct for a LAN install reached by address. Set it when the panel sits behind a proxy
+	 * that rewrites the host, because a wrong origin makes cookies silently fail to set — a
+	 * failure that presents as "sign-in does nothing" rather than as an error.
+	 *
+	 * Distinct from the `server.publicUrl` setting, which is the address *agents* dial. The two
+	 * are usually the same and are allowed to differ.
+	 */
+	BETTER_AUTH_URL: z
+		.string()
+		.refine((value) => /^https?:\/\/[^\s/$.?#][^\s]*$/i.test(value), "must be an absolute http or https URL")
+		.optional(),
+
 	/** Port the combined Next.js and WebSocket server listens on. */
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 

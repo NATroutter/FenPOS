@@ -23,6 +23,12 @@ const DATABASE_FILE = join(SERVER_ROOT, "data", `test-${process.pid}.db`);
 
 process.env.DATABASE_URL = `file:${DATABASE_FILE}`;
 
+// lib/env.ts parses the environment at import time and refuses a missing signing key, so this
+// must be set before any module that reaches it is imported — the same reason DATABASE_URL is
+// assigned here rather than inside a test. The value is not a secret and does not need to be:
+// nothing in the suite verifies a real session cookie.
+process.env.BETTER_AUTH_SECRET ??= "test-signing-key-not-a-secret-000000";
+
 beforeAll(() => {
 	mkdirSync(join(SERVER_ROOT, "data"), { recursive: true });
 
