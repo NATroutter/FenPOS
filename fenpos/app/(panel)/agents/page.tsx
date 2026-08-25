@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function AgentsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("agents:read");
+	await requirePagePermission("agents:read", "/agents");
 
 	const [agents, address, pairingEnabled] = await Promise.all([
 		listAgents(),

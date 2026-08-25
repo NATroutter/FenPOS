@@ -34,7 +34,7 @@ export default async function JobsPage({
 	}>;
 }) {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("jobs:read");
+	await requirePagePermission("jobs:read", "/jobs");
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);

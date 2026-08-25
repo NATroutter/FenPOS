@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function KeysPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("keys:read");
+	await requirePagePermission("keys:read", "/keys");
 
 	const [keys, devices, webhooks] = await Promise.all([
 		listApiKeys(),

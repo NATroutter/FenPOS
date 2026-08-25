@@ -30,7 +30,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function VariablesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("variables:read");
+	await requirePagePermission("variables:read", "/variables");
 
 	const [variables, enabled] = await Promise.all([listVariables(), booleanSetting("variables.enabled")]);
 

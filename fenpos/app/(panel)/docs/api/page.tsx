@@ -173,7 +173,7 @@ function EnforcedList() {
  */
 export default async function ApiDocsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("docs:read");
+	await requirePagePermission("docs:read", "/docs/api");
 
 	const [address, device] = await Promise.all([
 		getPublicAddress(),

@@ -27,7 +27,7 @@ export default async function LogsPage({
 	searchParams: Promise<{ agent?: string; level?: string; skip?: string; sort?: string; dir?: string }>;
 }) {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("logs:read");
+	await requirePagePermission("logs:read", "/logs");
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
