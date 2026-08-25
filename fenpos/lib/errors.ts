@@ -205,6 +205,19 @@ export const API_ERROR_STATUS = {
 	symbol_too_wide: 422,
 	/** A `{name}` naming no variable this device can resolve. See `MARKUP_ERRORS.unknownVariable`. */
 	unknown_variable: 422,
+	/** A definition that fails `variableDefinitionSchema` — a cross-field rule, or a value shape it refuses. */
+	invalid_variable: 422,
+	/** A variable value beyond the install's configured `variables.maxValueChars`. */
+	variable_too_long: 422,
+	/** Defining one more variable than the install's configured `variables.maxCount` allows. */
+	too_many_variables: 422,
+	/**
+	 * A device override attempted on a variable that is not `STATIC`.
+	 *
+	 * A date's format and a printer's own name are the same everywhere, so only a static variable's
+	 * literal value may differ per printer. See `setDeviceOverride` in `lib/variables/variable-service.ts`.
+	 */
+	not_overridable: 422,
 	/** More `{name}` references in one element than the install allows. See `MARKUP_ERRORS.tooManyVariableReferences`. */
 	too_many_variable_references: 422,
 	/**

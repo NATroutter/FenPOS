@@ -173,10 +173,11 @@ model Device {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  agent      Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  jobs       Job[]
-  keyGrants  ApiKeyDevice[]
-  logEntries LogEntry[]
+  agent          Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  jobs           Job[]
+  keyGrants      ApiKeyDevice[]
+  logEntries     LogEntry[]
+  variableValues DeviceVariable[]
 
   @@unique([agentId, name])
   @@index([agentId])
@@ -356,6 +357,64 @@ model Asset {
   /// for it without colliding with an image.
   @@unique([kind, name])
   @@map("assets")
+}
+
+/// A named value receipts refer to as `{name}`.
+///
+/// A discriminated union over `kind`, flattened into nullable columns because SQLite has no
+/// variants and a table per kind buys nothing at three of them. The cross-field rules — a STATIC
+/// row has a value and nothing else, a DATETIME has a pattern — are enforced by
+/// `variableDefinitionSchema` in lib/variables/definition.ts, which every write goes through.
+///
+/// Resolved entirely on this side. A compiled job crosses the link with every reference already
+/// substituted into spans, so nothing here has an agent-side counterpart to stay in step with.
+model Variable {
+  id           String   @id @default(cuid())
+  /// Referenced from markup. Slug-shaped, validated by nameSchema in lib/domain/naming.ts.
+  name         String   @unique
+  /// STATIC | DATETIME | CONTEXT. See VariableKind in lib/variables/definition.ts.
+  kind         String
+  /// STATIC only: the literal text, substituted exactly and never re-read as markup.
+  value        String?
+  /// DATETIME only: a date-fns format pattern, e.g. "HH:mm:ss".
+  pattern      String?
+  /// DATETIME only: signed shift applied before formatting. Null for no shift.
+  offsetAmount Int?     @map("offset_amount")
+  /// DATETIME only: MINUTES | HOURS | DAYS | WEEKS | MONTHS.
+  offsetUnit   String?  @map("offset_unit")
+  /// CONTEXT only: DEVICE_NAME | AGENT_NAME | API_KEY_NAME.
+  source       String?
+  /// Whether a print request may supply its own value for this name.
+  ///
+  /// Defaults to false, and that default is the point: a store's phone number is exactly the kind
+  /// of value that should not be silently replaceable by whatever fed the POS. Opening one up is a
+  /// deliberate act per variable.
+  overridable  Boolean  @default(false)
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  deviceValues DeviceVariable[]
+
+  @@map("variables")
+}
+
+/// One printer's own value for one variable.
+///
+/// Restricted to STATIC variables, enforced on write rather than by the schema: overriding a
+/// printer's `{location}` is the real case, while "this printer formats time differently" is not,
+/// and allowing it would mean this row could carry a pattern needing its own validation.
+model DeviceVariable {
+  deviceId   String @map("device_id")
+  variableId String @map("variable_id")
+  value      String
+
+  device   Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  variable Variable @relation(fields: [variableId], references: [id], onDelete: Cascade)
+
+  @@id([deviceId, variableId])
+  @@index([variableId])
+  @@map("device_variables")
 }
 
 /// Where one API key's job outcomes are delivered.
