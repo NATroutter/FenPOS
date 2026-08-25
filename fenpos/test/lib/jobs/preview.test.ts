@@ -273,6 +273,34 @@ describe("a preview and a print of the same markup", () => {
 		expect(preview.lines?.[0].spans.map((span) => span.text).join("")).toBe("by!");
 		expect(linesOf(lastJob)).toEqual(["by!"]);
 	});
+
+	/**
+	 * The same property for a date the *caller* described rather than one the panel defines.
+	 *
+	 * A dynamic value travels a route nothing else does — read by `readRequest`, rendered by
+	 * `resolveVariables` — and both endpoints have to take the same one. The pattern is deliberately
+	 * `yyyy`: the two sides read the clock independently, milliseconds apart, so a pattern whose value
+	 * changes at midnight would make this test fail once a year for a reason that has nothing to do
+	 * with what it is checking.
+	 *
+	 * The markup is longer than the device is wide, so a divergence shows up as a different number of
+	 * lines and not only as different text.
+	 */
+	it("produce the same lines for a date the request described", async () => {
+		const body = {
+			data: ["Return by {return_by} at the counter"],
+			variables: { return_by: { pattern: "yyyy", offset: { amount: 1, unit: "DAYS" } } },
+		};
+
+		const preview = await compilePreview(deviceId, body);
+		await submitJob(deviceId, body);
+
+		expect(preview.errors).toEqual([]);
+		expect(linesOf(lastJob)).not.toEqual([]);
+		expect(linesOf(preview)).toEqual(linesOf(lastJob));
+		// And it actually resolved, rather than both sides agreeing on an empty span.
+		expect(linesOf(preview).join("")).toContain("Return by 2");
+	});
 });
 
 describe("faultOf", () => {
