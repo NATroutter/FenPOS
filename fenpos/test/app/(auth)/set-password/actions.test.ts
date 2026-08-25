@@ -1,69 +1,99 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAdminPassword } from "@/lib/auth/admin";
-import { prisma } from "@/lib/db";
-import { setSetting } from "@/lib/settings/settings-service";
 
 /**
- * Tests for the "choose a password" action — specifically that it enforces the *configured*
- * `auth.minimumPasswordLength`, not just the built-in floor `passwordSchema` defaults to
- * elsewhere. A regression here looks like nothing: the panel would advertise a raised minimum
- * while this action quietly kept accepting the old, shorter one — exactly the divergence this
- * setting exists to prevent.
+ * Replacing a password the account is required to change.
  *
- * `getCurrentSession`, `getClientAddress`/`getUserAgent`, and `redirect` are all mocked because
- * they read a real Next.js request or throw the framework's own redirect signal — neither works
- * outside a request. `isPasswordGenerated` is not mocked — `ensureAdminPassword()` below makes it
- * true for real, against the actual database, which is less to keep in sync than a second mock
- * would be.
- *
- * The point of mocking every step *after* validation, rather than stopping at the session guard,
- * is that a reverted call site (`passwordSchema(12)` instead of the configured minimum) must fail
- * on the assertion below, not on some unrelated dependency the test happened not to mock — a
- * password that clears the built-in floor of 12 would otherwise run past validation and crash on
- * the first un-mocked call instead of producing a clean, legible test failure.
+ * The gate this defends is `mustChangePassword`: a session that owes a change reaches nothing but
+ * this action, and this action must refuse anyone who does not owe one — otherwise it becomes a
+ * way to change a password without knowing the current one, which is what the Settings form is
+ * for and why that one asks.
  */
-vi.mock("@/lib/auth/session-cookie", () => ({
-	getCurrentSession: async () => ({ id: "test-session", ipAddress: "127.0.0.1", userAgent: null }),
-	setSessionCookie: async () => {},
-}));
-
-vi.mock("@/lib/request-context", () => ({
-	getClientAddress: async () => "127.0.0.1",
-	getUserAgent: async () => null,
-}));
-
-// The real `redirect` signals success by throwing; a plain thrown error does the same job here
-// without needing Next's router, and still fails this test loudly if the code path ever reaches it.
 vi.mock("next/navigation", () => ({
-	redirect: (url: string) => {
-		throw new Error(`redirected to ${url}`);
+	redirect: (destination: string) => {
+		throw new Error(`REDIRECT:${destination}`);
 	},
 }));
 
-const { setPassword } = await import("@/app/(auth)/set-password/actions");
+vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 
-function formData(password: string, confirm: string): FormData {
+const user = vi.fn();
+vi.mock("@/lib/auth/require-session", () => ({ currentUser: () => user() }));
+
+const setPasswordApi = vi.fn();
+vi.mock("@/lib/auth/auth", () => ({ auth: { api: { setPassword: (args: unknown) => setPasswordApi(args) } } }));
+
+const { setPassword } = await import("@/app/(auth)/set-password/actions");
+const { prisma } = await import("@/lib/db");
+
+function form(password: string, confirm: string): FormData {
 	const data = new FormData();
 	data.set("password", password);
 	data.set("confirm", confirm);
 	return data;
 }
 
-beforeEach(async () => {
-	await prisma.session.deleteMany({});
-	await prisma.adminAuth.deleteMany({});
-	await prisma.setting.deleteMany({});
-	await ensureAdminPassword();
-});
-
 describe("setPassword", () => {
-	it("refuses a password that satisfies the built-in floor but not the configured minimum", async () => {
-		// Long enough for the built-in floor (12) but short of a minimum raised to 20. Reverting
-		// the call site to a literal `passwordSchema(12)` must make this test fail.
-		await setSetting("auth.minimumPasswordLength", 20);
+	beforeEach(async () => {
+		user.mockReset();
+		setPasswordApi.mockReset().mockResolvedValue({});
+		await prisma.user.deleteMany({});
+	});
 
-		const result = await setPassword({ error: null }, formData("a".repeat(16), "a".repeat(16)));
+	it("sends an unauthenticated caller to sign-in", async () => {
+		user.mockResolvedValue(null);
 
-		expect(result.error).not.toBeNull();
+		await expect(setPassword({ error: null }, form("a-long-password", "a-long-password"))).rejects.toThrow(
+			"REDIRECT:/login",
+		);
+	});
+
+	it("sends a caller who owes no change to the dashboard", async () => {
+		user.mockResolvedValue({
+			id: "u1",
+			name: "A",
+			email: "a@example.com",
+			isSuperuser: false,
+			mustChangePassword: false,
+		});
+
+		await expect(setPassword({ error: null }, form("a-long-password", "a-long-password"))).rejects.toThrow(
+			"REDIRECT:/dashboard",
+		);
+		expect(setPasswordApi).not.toHaveBeenCalled();
+	});
+
+	it("refuses a mismatched confirmation", async () => {
+		user.mockResolvedValue({
+			id: "u1",
+			name: "A",
+			email: "a@example.com",
+			isSuperuser: false,
+			mustChangePassword: true,
+		});
+
+		const result = await setPassword({ error: null }, form("a-long-password", "a-different-password"));
+
+		expect(result.error).toMatch(/do not match/i);
+		expect(setPasswordApi).not.toHaveBeenCalled();
+	});
+
+	it("clears the flag and redirects on success", async () => {
+		await prisma.user.create({
+			data: { id: "u1", name: "A", email: "a@example.com", mustChangePassword: true, updatedAt: new Date() },
+		});
+		user.mockResolvedValue({
+			id: "u1",
+			name: "A",
+			email: "a@example.com",
+			isSuperuser: false,
+			mustChangePassword: true,
+		});
+
+		await expect(setPassword({ error: null }, form("a-long-password", "a-long-password"))).rejects.toThrow(
+			"REDIRECT:/dashboard",
+		);
+
+		expect(setPasswordApi).toHaveBeenCalled();
+		expect((await prisma.user.findUnique({ where: { id: "u1" } }))?.mustChangePassword).toBe(false);
 	});
 });

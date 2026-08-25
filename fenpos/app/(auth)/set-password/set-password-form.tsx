@@ -11,11 +11,11 @@ import { Spinner } from "@/components/ui/spinner";
 const INITIAL_STATE: SetPasswordState = { error: null };
 
 /**
- * The form that replaces the generated password.
+ * The form that replaces a password the account is required to change.
  *
- * Deliberately does not ask for the current password. The operator typed it moments ago to
- * get here and the session proves it; asking again would only invite them to keep the
- * generated one in a clipboard for longer.
+ * Deliberately does not ask for the current password. The caller typed it moments ago to get
+ * here and the session proves it; see `actions.ts` for why that is a different situation from
+ * the Settings form, which does ask.
  *
  * A client component only for the pending state — every check that matters is in the server
  * action, because a form is not a security boundary.
