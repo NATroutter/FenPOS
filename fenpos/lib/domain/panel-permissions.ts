@@ -126,6 +126,7 @@ export const PANEL_PERMISSION_IDS = [
 	"settings:write:media",
 	"settings:write:variables",
 	"settings:write:security",
+	"settings:write:audit",
 	"settings:write:connections",
 	"settings:write:panel",
 
@@ -314,6 +315,10 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 			{
 				id: "settings:write:security",
 				description: "Change sessions, sign-in throttling, pairing, and whether raw writes are allowed at all.",
+			},
+			{
+				id: "settings:write:audit",
+				description: "Change how much of the audit record is kept, and how much of it is written.",
 			},
 			{
 				id: "settings:write:connections",

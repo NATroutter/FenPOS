@@ -66,6 +66,7 @@ export type SettingCategory =
 	| "media"
 	| "variables"
 	| "security"
+	| "audit"
 	| "connections"
 	| "panel";
 
@@ -91,6 +92,7 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 		summary: "What `{name}` may resolve to, and how much of it one receipt may ask for.",
 	},
 	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
+	{ id: "audit", title: "Audit", summary: "How much of the record is kept, and how much of it is written." },
 	{ id: "connections", title: "Connections", summary: "Timeouts on the links to agents and to this panel." },
 	{ id: "panel", title: "Panel", summary: "How this interface displays things." },
 ];
@@ -254,6 +256,10 @@ export const SETTING_KEYS = [
 	"auth.signInAttemptsPerMinute",
 	"auth.minimumPasswordLength",
 	"auth.lastSeenRefreshMinutes",
+	"audit.retentionDays",
+	"audit.maxRecords",
+	"audit.sweepEvery",
+	"audit.recordPageViews",
 	"api.readsPerMinute",
 	"api.defaultPageSize",
 	"api.maxPageSize",
@@ -685,6 +691,50 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 120,
 		fallback: 5,
 		unit: "minutes",
+	},
+	{
+		key: "audit.retentionDays",
+		label: "Audit retention",
+		description:
+			"How long an audit event is kept. Sweeping is the only deletion this record has, it runs oldest-first, and it re-anchors the chain behind itself so what survives stays verifiable.",
+		category: "audit",
+		type: "integer",
+		min: 1,
+		max: 3_650,
+		fallback: 365,
+		unit: "days",
+	},
+	{
+		key: "audit.maxRecords",
+		label: "Audit records kept",
+		description:
+			"Hard cap, applied on top of the retention window and sweeping the oldest events first. Bounds the table on an install busy enough to fill the window early.",
+		category: "audit",
+		type: "integer",
+		min: 1_000,
+		max: 5_000_000,
+		fallback: 200_000,
+		unit: "records",
+	},
+	{
+		key: "audit.sweepEvery",
+		label: "Sweep interval",
+		description: "How many recorded events pass between retention sweeps. Lower is tidier, higher is cheaper.",
+		category: "audit",
+		type: "integer",
+		min: 50,
+		max: 10_000,
+		fallback: 500,
+		unit: "records",
+	},
+	{
+		key: "audit.recordPageViews",
+		label: "Record page views",
+		description:
+			"Whether opening a panel page writes an audit event. Off by default: a live tab re-renders on every job or log event, not only when somebody navigates, so this records far more than it reads like it would.",
+		category: "audit",
+		type: "boolean",
+		fallback: false,
 	},
 	{
 		key: "api.readsPerMinute",
@@ -1214,6 +1264,41 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 		maxRecords: value("logs.maxRecords"),
 		maxMessageChars: value("logs.maxMessageChars"),
 		sweepEvery: value("logs.sweepEvery"),
+	};
+}
+
+/** The `audit.*` settings as one object, in the shape `lib/audit/` reads them. */
+export interface GlobalAuditSettings {
+	/** `audit.retentionDays`: how long an event is kept before it is swept. */
+	retentionDays: number;
+	/** `audit.maxRecords`: rows kept before the oldest are swept, applied on top of the window. */
+	maxRecords: number;
+	/** `audit.sweepEvery`: how many recorded events pass between sweeps. */
+	sweepEvery: number;
+	/** `audit.recordPageViews`: whether opening a panel page writes a row. */
+	recordPageViews: boolean;
+}
+
+/**
+ * Reads the audit settings as one object, honouring overrides.
+ *
+ * One call rather than four, for the same reason {@link globalLogIngestSettings} exists: its caller
+ * is on the audit write path, which runs for every recorded event, and four `listSettings()` reads
+ * where one would do is three round trips per row.
+ *
+ * @returns the audit settings in effect install-wide
+ */
+export async function globalAuditSettings(): Promise<GlobalAuditSettings> {
+	const settings = await listSettings();
+	// Every key named below is declared with the type it is narrowed to here, asserted by the test
+	// that walks SETTINGS. A mismatch is a definition that changed type without its readers.
+	const integer = (key: SettingKey): number => narrow(settings, key, "integer") as number;
+
+	return {
+		retentionDays: integer("audit.retentionDays"),
+		maxRecords: integer("audit.maxRecords"),
+		sweepEvery: integer("audit.sweepEvery"),
+		recordPageViews: narrow(settings, "audit.recordPageViews", "boolean") as boolean,
 	};
 }
 
