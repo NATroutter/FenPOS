@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	grantablePermissionGroups,
 	isPanelPermission,
 	NEVER_GRANTABLE,
 	PANEL_PERMISSION_GROUPS,
@@ -68,6 +69,39 @@ describe("panel permissions", () => {
 		// and nothing else would say so.
 		for (const category of CATEGORIES) {
 			expect(PANEL_PERMISSION_IDS).toContain(`settings:write:${category.id}`);
+		}
+	});
+});
+
+describe("grantablePermissionGroups", () => {
+	it("offers no checkbox for a permission no grant can confer", () => {
+		const offered = grantablePermissionGroups().flatMap((group) => group.permissions.map((entry) => entry.id));
+
+		for (const permission of NEVER_GRANTABLE) {
+			expect(offered).not.toContain(permission);
+		}
+	});
+
+	it("offers every other permission exactly once", () => {
+		const offered = grantablePermissionGroups().flatMap((group) => group.permissions.map((entry) => entry.id));
+
+		expect(new Set(offered).size).toBe(offered.length);
+		expect(offered.length).toBe(PANEL_PERMISSION_IDS.length - NEVER_GRANTABLE.length);
+	});
+
+	it("keeps the Users group, which loses one member but not all of them", () => {
+		const users = grantablePermissionGroups().find((group) => group.label === "Users");
+
+		expect(users?.permissions.map((entry) => entry.id)).toContain("users:grant");
+		expect(users?.permissions.map((entry) => entry.id)).not.toContain("users:set-superuser");
+	});
+
+	it("drops a group that would render with nothing under it", () => {
+		// Not reachable with today's NEVER_GRANTABLE, and asserted anyway: the filter is what would
+		// have to be right on the day a whole group becomes ungrantable, and a heading over an empty
+		// list is worse than no heading.
+		for (const group of grantablePermissionGroups()) {
+			expect(group.permissions.length).toBeGreaterThan(0);
 		}
 	});
 });

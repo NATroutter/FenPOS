@@ -11,7 +11,7 @@ import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
-import { permittedNavGroups } from "@/lib/auth/require-permission";
+import { permittedNavHrefs } from "@/lib/auth/require-permission";
 import { requireSession } from "@/lib/auth/require-session";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
 import { panelLayoutSettings } from "@/lib/settings/settings-service";
@@ -77,10 +77,11 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// `panelLayoutSettings`.
 	const { minimumPasswordLength, formatting } = await panelLayoutSettings();
 
-	// Filtered here rather than in the sidebar: deciding what an account may see needs the database,
-	// and the sidebar is a client component. This is convenience — each page's own gate is the
-	// boundary, because anyone can type a URL.
-	const navGroups = await permittedNavGroups(user);
+	// Decided here rather than in the sidebar: what an account may see needs the database, and the
+	// sidebar is a client component. Paths rather than the sections themselves, because a section
+	// carries its icon and a function cannot cross this boundary — see `permittedNavHrefs`. This is
+	// convenience either way; each page's own gate is the boundary, because anyone can type a URL.
+	const permittedHrefs = await permittedNavHrefs(user);
 
 	return (
 		// Outermost, so every descendant — including the sidebar, not just the pages below the
@@ -91,7 +92,7 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 		<FormatProvider locale={formatting.locale} hour12={formatting.hour12} timeZone={formatting.timeZone}>
 			<SidebarProvider>
 				<AppSidebar
-					navGroups={navGroups}
+					permittedHrefs={permittedHrefs}
 					version={APP_VERSION}
 					signOutAction={signOut}
 					minimumPasswordLength={minimumPasswordLength}

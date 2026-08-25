@@ -14,6 +14,8 @@ import {
 	ScrollText,
 	Server,
 	Settings2,
+	Shield,
+	Users,
 	Wrench,
 } from "lucide-react";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
@@ -136,6 +138,24 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 	{
 		label: "Administration",
 		items: [
+			{
+				href: "/users",
+				label: "Users",
+				title: "Users",
+				description:
+					"Panel accounts and what each may do. Nothing is emailed: whoever creates an account delivers the credentials themselves.",
+				icon: Users,
+				permission: "users:read",
+			},
+			{
+				href: "/roles",
+				label: "Roles",
+				title: "Roles",
+				description:
+					"Bundles of permissions several people share. Editing a role changes what every member can do, immediately.",
+				icon: Shield,
+				permission: "roles:read",
+			},
 			{
 				href: "/keys",
 				label: "API keys",

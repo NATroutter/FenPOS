@@ -43,9 +43,19 @@ describe("API key authorisation", () => {
 		barId = (await prisma.device.create({ data: { agentId, name: "bar", port: "COM4" }, select: { id: true } })).id;
 	});
 
+	/**
+	 * Whoever minted the keys here.
+	 *
+	 * No matching `user` row, deliberately: the two columns are plain rather than a relation, so a
+	 * key outlives — and never depended on — the account named in them. Nothing in this file is about
+	 * the minter, and requiring one to exist would only assert the opposite of what those columns are
+	 * for.
+	 */
+	const minter = { id: "minter", name: "Minter" };
+
 	/** Mints a key and returns both its secret and what an authenticated call sees. */
 	const mint = async (permissions: string[], deviceIds: string[]) => {
-		const created = await createApiKey("till", permissions, deviceIds);
+		const created = await createApiKey("till", permissions, deviceIds, minter);
 		return { id: created.id, secret: created.secret };
 	};
 
@@ -113,7 +123,7 @@ describe("API key authorisation", () => {
 
 	it("issues a distinct secret per key", async () => {
 		const first = await mint(["print"], []);
-		const second = await createApiKey("other", ["print"], []);
+		const second = await createApiKey("other", ["print"], [], minter);
 
 		expect(first.secret).not.toBe(second.secret);
 	});
@@ -262,7 +272,7 @@ describe("API key authorisation", () => {
 
 	it("keeps two keys' grants apart", async () => {
 		const kitchenKey = await authenticate((await mint(["print"], [kitchenId])).secret);
-		const barKey = await authenticate((await createApiKey("bar-till", ["print"], [barId])).secret);
+		const barKey = await authenticate((await createApiKey("bar-till", ["print"], [barId], minter)).secret);
 
 		await expect(requireGrantedDevice(kitchenKey, "site-a", "kitchen")).resolves.toBeDefined();
 		await expect(requireGrantedDevice(barKey, "site-a", "bar")).resolves.toBeDefined();

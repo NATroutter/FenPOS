@@ -4,7 +4,7 @@ import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelUser, requireSession } from "@/lib/auth/require-session";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
-import { NAV_GROUPS, type NavGroup, type NavItem } from "@/lib/navigation";
+import { NAV_GROUPS } from "@/lib/navigation";
 
 /**
  * The page-side half of authorisation.
@@ -74,40 +74,44 @@ export async function requirePagePermission(permission: PanelPermission): Promis
 }
 
 /**
- * The sidebar sections this account may open.
+ * The sidebar sections this account may open, as bare route paths.
  *
- * A group with nothing left under it is dropped rather than rendered empty, and a parent's children
- * are filtered the same way — a heading pointing at nothing is worse than no heading.
+ * **Paths rather than the `NavItem`s themselves, and that is the whole point.** Every item carries
+ * `icon: LucideIcon`, which is a function component, and the sidebar is a Client Component — handing
+ * it a filtered `NavGroup[]` from the server layout meant handing a function across the
+ * server-to-client boundary, which React refuses with "Only plain objects can be passed to Client
+ * Components". It refuses it fatally: every page under the panel layout rendered "This page couldn't
+ * load", which is how this was eventually found. A `string[]` crosses cleanly, and the icons stay
+ * where they always were — imported by the sidebar, on the client.
  *
- * This is convenience. {@link requirePagePermission} is the boundary, because anyone can type a URL.
+ * The server still decides. The sidebar filters its own copy of `NAV_GROUPS` down to these paths and
+ * cannot widen the answer, because a path it was not given is one it does not render.
+ *
+ * This is convenience either way. {@link requirePagePermission} is the boundary, because anyone can
+ * type a URL.
  *
  * Sequential `await` rather than `Promise.all`: `userHolds` reads a per-request memo after the first
  * call, so concurrency would buy nothing and the loop reads as what it is.
  *
  * @param user the signed-in account
- * @returns the groups to render, in the declared order
+ * @returns the `href` of every section and child section this account may open
  */
-export async function permittedNavGroups(user: PanelUser): Promise<NavGroup[]> {
-	const groups: NavGroup[] = [];
+export async function permittedNavHrefs(user: PanelUser): Promise<string[]> {
+	const hrefs: string[] = [];
 
 	for (const group of NAV_GROUPS) {
-		const items: NavItem[] = [];
 		for (const item of group.items) {
 			if (!(await userHolds(user, item.permission))) {
 				continue;
 			}
-			const children: NavItem[] = [];
+			hrefs.push(item.href);
 			for (const child of item.children ?? []) {
 				if (await userHolds(user, child.permission)) {
-					children.push(child);
+					hrefs.push(child.href);
 				}
 			}
-			items.push(item.children ? { ...item, children } : item);
-		}
-		if (items.length > 0) {
-			groups.push({ ...group, items });
 		}
 	}
 
-	return groups;
+	return hrefs;
 }

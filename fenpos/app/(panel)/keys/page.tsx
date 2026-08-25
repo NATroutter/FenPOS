@@ -50,6 +50,7 @@ export default async function KeysPage() {
 		revokedAt: key.revokedAt?.toISOString() ?? null,
 		permissions: key.permissions,
 		devices: key.devices,
+		createdByName: key.createdByName,
 		webhook: webhookByKeyId.get(key.id) ?? null,
 	}));
 

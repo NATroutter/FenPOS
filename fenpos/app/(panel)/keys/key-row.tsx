@@ -42,6 +42,8 @@ export interface KeyRowData {
 	revokedAt: string | null;
 	permissions: string[];
 	devices: { id: string; name: string; agentName: string }[];
+	/** Who minted it, or null for a key that predates the column. */
+	createdByName: string | null;
 	/** This key's webhook subscription, or null when it has none. */
 	webhook: { url: string } | null;
 }
@@ -118,6 +120,7 @@ export function KeyRow({ apiKey, devices }: { apiKey: KeyRowData; devices: Grant
 				<CardActions>
 					<span className="text-[11.5px] text-subtle-foreground">
 						Created {formatDate(apiKey.createdAt)}
+						{apiKey.createdByName ? ` by ${apiKey.createdByName}` : ""}
 						{apiKey.lastUsedAt ? ` · last used ${formatDateTime(apiKey.lastUsedAt)}` : " · never used"}
 					</span>
 

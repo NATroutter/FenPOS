@@ -80,6 +80,19 @@ describe("effectivePermissions", () => {
 		expect(await userHolds({ id: account.id, isSuperuser: false }, "settings:write:security")).toBe(false);
 	});
 
+	it("ignores a grant row for something no grant may confer", async () => {
+		const account = await user("u8");
+		await prisma.userPermission.create({ data: { userId: account.id, permission: "users:set-superuser" } });
+		await prisma.userPermission.create({ data: { userId: account.id, permission: "devices:read" } });
+
+		// The row should not exist — `grant-guard.ts` refuses to write one and no checkbox offers it —
+		// but a hand-edited database, a restored backup or an older version could leave one behind,
+		// and honouring it would hand out the one permission that is outside the grant system
+		// entirely. Where a grant is in doubt, the safe answer is no.
+		expect([...(await effectivePermissions(account.id))]).toEqual(["devices:read"]);
+		expect(await userHolds({ id: account.id, isSuperuser: false }, "users:set-superuser")).toBe(false);
+	});
+
 	it("says a superuser holds one that is never grantable", async () => {
 		const account = await user("u7");
 		// `users:set-superuser` is outside the grant system rather than the top of it: no row can

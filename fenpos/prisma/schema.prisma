@@ -405,6 +405,15 @@ model ApiKey {
   createdAt  DateTime  @default(now()) @map("created_at")
   lastUsedAt DateTime? @map("last_used_at")
   revokedAt  DateTime? @map("revoked_at")
+  /// Who minted this key, and what they were called at the time.
+  ///
+  /// Plain columns rather than a relation, and denormalised on purpose: a key must outlive the
+  /// account that created it while still naming who that was. A foreign key would either take the
+  /// key with the account or keep the key and lose the name, and neither is what an operator
+  /// looking at a live credential needs to know. Null for keys minted before this column existed,
+  /// which the panel renders as "unknown" rather than guessing.
+  createdByUserId String? @map("created_by_user_id")
+  createdByName   String? @map("created_by_name")
 
   permissions ApiKeyPermission[]
   devices     ApiKeyDevice[]
