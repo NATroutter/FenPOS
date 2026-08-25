@@ -8,6 +8,19 @@
 // SQLite does not support Prisma enums, so every closed value set is stored as TEXT and
 // validated at the application boundary. The TypeScript unions in lib/domain/ are the
 // single source of truth for those values; nothing else may widen them.
+//
+// user, session, account, verification and two_factor (the TwoFactor model, mapped to the
+// camelCase table "twoFactor") are not FenPOS's to edit — they are owned by Better Auth, and
+// their column names come from its own generator rather than this project's house style. They
+// were derived from @better-auth/core 1.7.1's actual table definitions, confirmed by running
+// `@better-auth/cli generate` against this project's real Better Auth config rather than by
+// hand-transcribing the docs. That check mattered: a hand-drafted version of this same schema,
+// written before that generator was run, used the wrong table-name casing for the two-factor
+// table and was missing three of its columns (verified, failedVerificationCount, lockedUntil),
+// and would have shipped that way had the generated output not been compared against it first.
+// `@better-auth/cli` itself carries an npm deprecation notice ("Package no longer supported") —
+// it still produces a correct schema, but do not trust it, or a hand-written guess, blindly:
+// regenerate and diff against a real run before touching these five models again.
 
 generator client {
   provider = "prisma-client"

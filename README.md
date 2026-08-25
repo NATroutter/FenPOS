@@ -57,6 +57,12 @@ the printer.
 > **Docker is the supported way to run FenPOS.** The `pnpm` and `mvn` commands further down
 > are only for working on FenPOS itself.
 
+> [!IMPORTANT]
+> **`BETTER_AUTH_SECRET` is required and has no default.** Neither compose file below sets one,
+> and the server refuses to start without it. Generate one with `openssl rand -base64 32` and
+> add it under `environment:` for the `fenpos` service before the first `up`. See
+> [Configuration](#configuration).
+
 ### 1 · Server only
 
 The common case: one server somewhere central, agents added later at each site.
@@ -73,7 +79,7 @@ mkdir -p data && sudo chown -R 10001:10001 data
 
 ```sh
 docker compose -f compose.server.yaml up -d
-docker compose -f compose.server.yaml logs fenpos   # your administrator password is in here
+docker compose -f compose.server.yaml logs fenpos   # the setup key is in here
 ```
 
 Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
@@ -122,7 +128,7 @@ you have a domain and a certificate, drop `network_mode` and point `FENPOS_SERVE
 
 ```sh
 docker compose -f compose.all-in-one.yaml up -d fenpos      # server first
-docker compose -f compose.all-in-one.yaml logs fenpos      # read the password, make a code
+docker compose -f compose.all-in-one.yaml logs fenpos      # read the setup key, make a code
 docker compose -f compose.all-in-one.yaml up -d            # then the agent
 ```
 
@@ -130,17 +136,17 @@ docker compose -f compose.all-in-one.yaml up -d            # then the agent
 
 ## First sign-in
 
-On its first start FenPOS **generates an administrator password** and prints it, framed, to
-the log:
+On its first start, before any account exists, FenPOS mints a **setup key** and prints it,
+framed, to the log:
 
 ```
 ──────────────────────────────────────────────────────────────────
-  This install is still using its generated administrator password:
+  This install has no accounts yet. Claim it with this setup key:
 
       9MYX-5861-NGAF-JQWJ-HJ3D
 
-  Sign in with it. FenPOS will ask you to replace it before letting you
-  into the panel, and this message stops once you have.
+  Open the panel, enter the key, and create the first account. A new key
+  is issued on every restart until you do, and this message then stops.
 ──────────────────────────────────────────────────────────────────
 ```
 
@@ -148,11 +154,23 @@ the log:
 docker compose logs fenpos
 ```
 
-Sign in with it and the panel asks you to choose your own password. Every panel route
-redirects to that screen until you have, so the generated password reaches nothing else.
+Open the panel — a fresh install redirects `/` straight to `/setup` — enter the key, and fill
+in the name, email and password for the first account. Submitting signs you straight in and
+lands you on the dashboard.
 
-It is reprinted on **every start** until you replace it, so losing the first log to a restart
-or a rotation does not lock you out.
+**The key is reissued on every restart** until the install is claimed, and this is deliberate:
+nothing is bound to it, so replacing it costs nothing. An operator who scrolled past the log or
+restarted before claiming just restarts again for a fresh key, and a key someone else glimpsed
+stops working at the same moment. Only the current key's hash is stored — never the plaintext —
+so there is nothing to reprint later the way the password this replaces had to be.
+
+**Setup cannot be reopened once an account exists.** `/setup` then redirects to `/login`, and no
+key is minted or printed on later starts. There is currently **no recovery path** for a lost
+password. In development, `pnpm db:reset` recreates the database from its migrations (see
+**Development** below) and setup runs again — but that discards everything else too, not just
+the account, and there is no equivalent for a production install short of clearing its data
+volume by hand. A dedicated `auth:recover` CLI is planned for a later phase but does not exist
+yet.
 
 ---
 
@@ -243,6 +261,8 @@ The **Docs** tab carries the full reference, generated from the running install.
 | Variable | Default | What it does |
 |---|---|---|
 | `DATABASE_URL` | `file:/app/data/fenpos.db` | SQLite file. Must point at a mounted volume. |
+| `BETTER_AUTH_SECRET` | — **(required)** | Signs session cookies and tokens. No default and no generated fallback — the server refuses to start without it. Generate one with `openssl rand -base64 32` and keep it stable: changing it invalidates every existing session and signs everyone out at once. |
+| `BETTER_AUTH_URL` | derived from the request | Absolute origin the panel is reached on, e.g. `https://pos.example.com`. Only needed behind a proxy that rewrites the host — a wrong value makes sign-in silently fail to set its cookie. |
 | `PORT` | `3000` | Panel, print API and agent link share it. |
 | `FENPOS_HOST` | `0.0.0.0` | Interface to bind. Rarely changed. |
 | `TZ` | UTC | Job and log timestamps are user-facing. |
@@ -266,8 +286,11 @@ address than agents should use.
 ## Backups and upgrades
 
 Back up the server's `data/` volume. It holds the agents and their credentials, every device,
-the API keys and the administrator password. The agent's `data/` holds only its identity; if
-you lose it, unpair and pair again with a fresh code.
+the API keys and the hashed account credential. `BETTER_AUTH_SECRET` lives outside it, in your
+own environment configuration, not in the volume — back it up too, since a lost or changed
+secret signs every session out at once even though the account itself is unaffected (the
+password hash does not depend on it). The agent's `data/` holds only its identity; if you lose
+it, unpair and pair again with a fresh code.
 
 Upgrades apply their own migrations at container start:
 
@@ -335,9 +358,7 @@ mvn package
 
 | Command | What it does |
 |---|---|
-| `pnpm admin:set-password "…"` | Sets the password directly against the database. This is the recovery path for a lost password, not setup — first boot generates one. |
-| `pnpm admin:reset-password` | Drops the credential and every session, so the next start generates a fresh password. Leaves agents, devices, keys and history alone. Useful for re-testing the first-run flow. |
-| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it. |
+| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account — the next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but there is no lighter-weight way to do it: there is currently no command that resets only the credential and leaves agents, devices, keys and history alone. |
 | `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone; run this only after changing the logo or the widths, and commit what it produces. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 

@@ -638,7 +638,9 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.sessionHours",
 		label: "Session lifetime",
 		description:
-			"How long a panel sign-in lasts. A shared back-office terminal wants hours; a private office wants days. Applies to sessions created after the change — one already signed in keeps the lifetime it was issued.",
+			"Not applied in this release — Better Auth reads its session lifetime once, at startup, so " +
+			"this value is stored but ignored; changing it does nothing until Phase 6 (auth hardening) " +
+			"wires it back in. A shared back-office terminal wants hours; a private office wants days.",
 		category: "security",
 		type: "integer",
 		min: 1,
@@ -673,7 +675,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "auth.lastSeenRefreshMinutes",
 		label: "Session activity refresh",
-		description: "How often a live session updates its last-seen time. Purely a write-rate control.",
+		description:
+			"Not applied in this release — Better Auth's own session `updateAge` (fixed in `auth.ts`) " +
+			"controls this write-rate concern now, so this value is stored but ignored; changing it does " +
+			"nothing until Phase 6 (auth hardening) wires it back in.",
 		category: "security",
 		type: "integer",
 		min: 1,

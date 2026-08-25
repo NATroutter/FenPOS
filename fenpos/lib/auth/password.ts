@@ -71,8 +71,9 @@ export function normalizePassword(plaintext: string): string {
  *
  * A function rather than a fixed schema, because `auth.minimumPasswordLength` is a stored
  * setting, read asynchronously — and this module is imported everywhere a password is checked,
- * including a `"use server"` action and the transaction that seals first-run setup, so it cannot
- * hold a database connection open to fetch that setting itself. Every caller reads the minimum it cares about
+ * including a `"use server"` action and the setup flow that hashes a password before the
+ * transaction that seals first-run setup opens, so it cannot hold a database connection open to
+ * fetch that setting itself. Every caller reads the minimum it cares about
  * first (the configured value where one is reachable, `MINIMUM_PASSWORD_LENGTH` where it is not —
  * see `password-policy.ts`) and builds its own schema from it; nothing here reads a stale minimum
  * while the setting appears to work, because nothing here reads the minimum at all.
