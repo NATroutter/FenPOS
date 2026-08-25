@@ -329,6 +329,33 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 ];
 
 /**
+ * Whether a permission can be conferred by any grant at all.
+ *
+ * @param permission the identifier to test
+ * @returns false for anything in {@link NEVER_GRANTABLE}
+ */
+export function isGrantable(permission: PanelPermission): boolean {
+	return !NEVER_GRANTABLE.includes(permission);
+}
+
+/**
+ * The checkbox list the account and role screens render.
+ *
+ * Derived from {@link PANEL_PERMISSION_GROUPS} rather than written out a second time, which is what
+ * makes "no checkbox for a permission no grant can confer" a property of the data instead of a rule
+ * a form has to remember. A group left with nothing in it is dropped: a heading over an empty list
+ * is worse than no heading.
+ *
+ * @returns the groups to render, in the declared order, without the ungrantable
+ */
+export function grantablePermissionGroups(): PanelPermissionGroup[] {
+	return PANEL_PERMISSION_GROUPS.map((group) => ({
+		label: group.label,
+		permissions: group.permissions.filter((entry) => isGrantable(entry.id)),
+	})).filter((group) => group.permissions.length > 0);
+}
+
+/**
  * Narrows an arbitrary string to a known permission.
  *
  * Needed because Prisma types the stored column as `string`; a row written by an older version, or
