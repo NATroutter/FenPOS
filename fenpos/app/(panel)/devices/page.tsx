@@ -4,6 +4,7 @@ import { DeviceDialog, EMPTY_DEVICE } from "@/app/(panel)/devices/device-dialog"
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import type { Codepage, FlowControl, Linefeed, Parity, UnsupportedPolicy } from "@/lib/domain/enums";
 import { getAgentStatus } from "@/lib/link/device-status";
@@ -30,6 +31,9 @@ export const dynamic = "force-dynamic";
  * rather than resolving them into one misleading answer.
  */
 export default async function DevicesPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("devices:read");
+
 	const [agents, variables] = await Promise.all([
 		prisma.agent.findMany({
 			orderBy: { name: "asc" },

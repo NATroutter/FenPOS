@@ -33,7 +33,7 @@ import {
 	SidebarRail,
 	useSidebar,
 } from "@/components/ui/sidebar";
-import { NAV_GROUPS, type NavItem } from "@/lib/navigation";
+import type { NavGroup, NavItem } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -65,9 +65,11 @@ function owns(pathname: string, href: string): boolean {
  *
  * A client component because the active entry is derived from the current path. Sign-out is
  * a server action passed in from the layout, so this component holds no session logic of its
- * own.
+ * own — and the groups are passed in already filtered, for the same reason: deciding what a user
+ * may see needs the database, and this component cannot reach it.
  */
 export function AppSidebar({
+	navGroups,
 	version,
 	signOutAction,
 	minimumPasswordLength,
@@ -76,6 +78,13 @@ export function AppSidebar({
 	avatarUrl,
 	initial,
 }: {
+	/**
+	 * The sections to offer, already filtered to what this account may open.
+	 *
+	 * Filtered on the server by `permittedNavGroups`. Convenience only — the boundary is each page's
+	 * own `requirePagePermission`, because anyone can type a URL.
+	 */
+	navGroups: readonly NavGroup[];
 	/** Application version, shown under the wordmark. */
 	version: string;
 	/** Server action that revokes the session and redirects. */
@@ -112,7 +121,7 @@ export function AppSidebar({
 			</SidebarHeader>
 
 			<SidebarContent>
-				{NAV_GROUPS.map((group) => (
+				{navGroups.map((group) => (
 					<SidebarGroup key={group.label}>
 						<SidebarGroupLabel>{group.label}</SidebarGroupLabel>
 						<SidebarGroupContent>

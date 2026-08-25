@@ -4,6 +4,7 @@ import { AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAgents } from "@/lib/agents/agent-service";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { isConnected } from "@/lib/link/registry";
 import { getPublicAddress } from "@/lib/public-url";
 import { booleanSetting } from "@/lib/settings/settings-service";
@@ -25,6 +26,9 @@ export const dynamic = "force-dynamic";
  * is the failure worth avoiding here.
  */
 export default async function AgentsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("agents:read");
+
 	const [agents, address, pairingEnabled] = await Promise.all([
 		listAgents(),
 		getPublicAddress(),

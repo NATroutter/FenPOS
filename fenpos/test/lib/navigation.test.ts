@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PANEL_PERMISSION_IDS } from "@/lib/domain/panel-permissions";
 import { findNavItem, NAV_GROUPS, NAV_ITEMS, type NavItem } from "@/lib/navigation";
 
 /**
@@ -76,6 +77,14 @@ describe("NAV_ITEMS", () => {
 			expect(item.label.length, `${item.href} has no label`).toBeGreaterThan(0);
 			expect(item.title.length, `${item.href} has no title`).toBeGreaterThan(0);
 			expect(item.description.length, `${item.href} has no description`).toBeGreaterThan(0);
+		}
+	});
+
+	it("declares a permission this install defines for every section", () => {
+		// A section added without deciding who may see it would otherwise be one the sidebar shows to
+		// everybody and the page gate has nothing to check.
+		for (const item of everyItem()) {
+			expect(PANEL_PERMISSION_IDS, `${item.href} names an unknown permission`).toContain(item.permission);
 		}
 	});
 });

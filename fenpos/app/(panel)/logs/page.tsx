@@ -3,6 +3,7 @@ import { Filters } from "@/app/(panel)/jobs/filters";
 import { FollowProvider, FollowToggle } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
 import { Button } from "@/components/ui/button";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { FILTERABLE_LEVELS, isFilterableLevel, listLogs } from "@/lib/logs/log-service";
 import { isLogSortColumn } from "@/lib/logs/log-sort";
@@ -25,6 +26,9 @@ export default async function LogsPage({
 }: {
 	searchParams: Promise<{ agent?: string; level?: string; skip?: string; sort?: string; dir?: string }>;
 }) {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("logs:read");
+
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
 	// Anything else in the URL — including `DEBUG`, which the dropdown used to offer — falls back to

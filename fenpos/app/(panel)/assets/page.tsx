@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAssets, maxAssetBytes, rasterFor } from "@/lib/assets/asset-service";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { logger } from "@/lib/logger";
 import { dotWidth } from "@/lib/markup/blocks";
 import { enumSetting } from "@/lib/settings/settings-service";
@@ -43,6 +44,9 @@ const PREVIEW_DOTS = dotWidth(32);
  * cache keyed by asset and width, not a cache of these data URIs.
  */
 export default async function AssetsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("assets:read");
+
 	const assets = await listAssets();
 	const uploadCap = await maxAssetBytes();
 	const acceptedFormats = await enumSetting<AcceptedFormats>("assets.acceptedFormats");

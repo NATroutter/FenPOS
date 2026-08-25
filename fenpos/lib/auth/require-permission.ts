@@ -4,6 +4,7 @@ import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelUser, requireSession } from "@/lib/auth/require-session";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
+import { NAV_GROUPS, type NavGroup, type NavItem } from "@/lib/navigation";
 
 /**
  * The page-side half of authorisation.
@@ -70,4 +71,43 @@ export async function requirePagePermission(permission: PanelPermission): Promis
 	}
 
 	return user;
+}
+
+/**
+ * The sidebar sections this account may open.
+ *
+ * A group with nothing left under it is dropped rather than rendered empty, and a parent's children
+ * are filtered the same way — a heading pointing at nothing is worse than no heading.
+ *
+ * This is convenience. {@link requirePagePermission} is the boundary, because anyone can type a URL.
+ *
+ * Sequential `await` rather than `Promise.all`: `userHolds` reads a per-request memo after the first
+ * call, so concurrency would buy nothing and the loop reads as what it is.
+ *
+ * @param user the signed-in account
+ * @returns the groups to render, in the declared order
+ */
+export async function permittedNavGroups(user: PanelUser): Promise<NavGroup[]> {
+	const groups: NavGroup[] = [];
+
+	for (const group of NAV_GROUPS) {
+		const items: NavItem[] = [];
+		for (const item of group.items) {
+			if (!(await userHolds(user, item.permission))) {
+				continue;
+			}
+			const children: NavItem[] = [];
+			for (const child of item.children ?? []) {
+				if (await userHolds(user, child.permission)) {
+					children.push(child);
+				}
+			}
+			items.push(item.children ? { ...item, children } : item);
+		}
+		if (items.length > 0) {
+			groups.push({ ...group, items });
+		}
+	}
+
+	return groups;
 }

@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { MAX_IMAGE_DIMENSION, maxAssetBytes } from "@/lib/assets/asset-service";
 import { BUNDLED_LOGO_WIDTHS } from "@/lib/assets/bundled-logo";
 import { MAX_REMOTE_IMAGE_BYTES, remoteFetchTimeoutMs } from "@/lib/assets/fetch-remote";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { BarcodeSystem } from "@/lib/domain/enums";
 import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
@@ -140,6 +141,9 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
  * that prints it, and the material they need is the tag table and what each tag costs the paper.
  */
 export default async function MarkupDocsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("docs:read");
+
 	const assetCap = await maxAssetBytes();
 	const remoteTimeoutMs = await remoteFetchTimeoutMs();
 	const remoteLimit = await maxRemoteReferences();

@@ -1,4 +1,5 @@
 import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { CATEGORIES, listSettings, toClientDefinition } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings" };
@@ -14,6 +15,9 @@ export const dynamic = "force-dynamic";
  * next to that printer, not in a list of install-wide knobs where it would have to be qualified.
  */
 export default async function SettingsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("settings:read");
+
 	const settings = await listSettings();
 
 	// The definition is passed through whole, not flattened field by field — flattening a union

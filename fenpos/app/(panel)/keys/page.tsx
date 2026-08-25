@@ -4,6 +4,7 @@ import { KeyRow, type KeyRowData } from "@/app/(panel)/keys/key-row";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { API_BASE } from "@/lib/api-version";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { listApiKeys } from "@/lib/keys/key-service";
 
@@ -20,6 +21,9 @@ export const dynamic = "force-dynamic";
  * only safe default for a credential created before anyone has decided what it is for.
  */
 export default async function KeysPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("keys:read");
+
 	const [keys, devices, webhooks] = await Promise.all([
 		listApiKeys(),
 		prisma.device.findMany({

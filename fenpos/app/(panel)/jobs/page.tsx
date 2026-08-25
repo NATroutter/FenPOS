@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { JobTable } from "@/app/(panel)/jobs/job-table";
 import { Button } from "@/components/ui/button";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
 import { listJobs } from "@/lib/jobs/job-service";
@@ -32,6 +33,9 @@ export default async function JobsPage({
 		dir?: string;
 	}>;
 }) {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("jobs:read");
+
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
 	const status = params.status && JobStatus.is(params.status) ? params.status : undefined;

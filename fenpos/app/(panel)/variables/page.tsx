@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { logger } from "@/lib/logger";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { booleanSetting } from "@/lib/settings/settings-service";
@@ -28,6 +29,9 @@ export const dynamic = "force-dynamic";
  * the raw pattern.
  */
 export default async function VariablesPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("variables:read");
+
 	const [variables, enabled] = await Promise.all([listVariables(), booleanSetting("variables.enabled")]);
 
 	// `resolveVariables` returns null when the feature is off, which is handled below with the

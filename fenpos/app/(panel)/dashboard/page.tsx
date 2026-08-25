@@ -6,6 +6,7 @@ import { LogStream } from "@/app/(panel)/logs/log-stream";
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { countJobsByStatus } from "@/lib/jobs/job-service";
 import { getAgentStatus } from "@/lib/link/device-status";
@@ -31,6 +32,9 @@ export const dynamic = "force-dynamic";
  * failure worth avoiding here.
  */
 export default async function DashboardPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("dashboard:read");
+
 	const [windowHours, tailLines] = await Promise.all([
 		integerSetting("panel.dashboardWindowHours"),
 		integerSetting("panel.dashboardTailLines"),

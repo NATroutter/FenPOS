@@ -1,6 +1,7 @@
 import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { MarkupTool } from "@/app/(panel)/tools/markup-tool";
 import { RawTool } from "@/app/(panel)/tools/raw-tool";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { isConnected } from "@/lib/link/registry";
 
@@ -18,6 +19,9 @@ export const dynamic = "force-dynamic";
  * behind one editor would invite sending a receipt as raw bytes.
  */
 export default async function ToolsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("tools:read");
+
 	const rows = await prisma.device.findMany({
 		orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 		select: {

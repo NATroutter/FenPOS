@@ -15,6 +15,7 @@ import {
 } from "@/app/(panel)/docs/prose";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { API_BASE } from "@/lib/api-version";
+import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
@@ -171,6 +172,9 @@ function EnforcedList() {
  * and each explanation sits beside the call, table or list it describes rather than above it.
  */
 export default async function ApiDocsPage() {
+	// Outside any try: both an absent session and a refusal signal by throwing.
+	await requirePagePermission("docs:read");
+
 	const [address, device] = await Promise.all([
 		getPublicAddress(),
 		prisma.device.findFirst({

@@ -16,6 +16,7 @@ import {
 	Settings2,
 	Wrench,
 } from "lucide-react";
+import type { PanelPermission } from "@/lib/domain/panel-permissions";
 
 /**
  * The panel's navigation structure and page titles.
@@ -41,6 +42,14 @@ export interface NavItem {
 	 */
 	description: string;
 	icon: LucideIcon;
+	/**
+	 * The permission that reveals this section, and that its page requires.
+	 *
+	 * Declared beside the route rather than in a second table, so a section added without deciding
+	 * who may see it is a type error rather than a section everyone can see. The sidebar filters on
+	 * it; the page's own `requirePagePermission` is the boundary.
+	 */
+	permission: PanelPermission;
 	/**
 	 * Sections nested under this one in the sidebar.
 	 *
@@ -73,6 +82,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Dashboard",
 				description: "What is reachable now, and what the last day produced.",
 				icon: LayoutDashboard,
+				permission: "dashboard:read",
 			},
 			{
 				href: "/jobs",
@@ -80,6 +90,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Print jobs",
 				description: "Every job and what became of it. A job that failed carries the agent's own words about why.",
 				icon: ListOrdered,
+				permission: "jobs:read",
 			},
 			{
 				href: "/logs",
@@ -87,6 +98,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Logs",
 				description: "What the agents forwarded. Each also keeps its own complete log on the machine it runs on.",
 				icon: ScrollText,
+				permission: "logs:read",
 			},
 		],
 	},
@@ -100,6 +112,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Each agent is one machine with printers attached. Agents dial the server, so no inbound port needs opening at the site.",
 				icon: Server,
+				permission: "agents:read",
 			},
 			{
 				href: "/devices",
@@ -108,6 +121,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Each printer belongs to one agent. Names need only be unique within their agent, so every site can have its own kitchen.",
 				icon: Printer,
+				permission: "devices:read",
 			},
 			{
 				href: "/tools",
@@ -115,6 +129,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Tools",
 				description: "Compose a receipt and see where it lands on the paper, or send bytes straight to a printer.",
 				icon: Wrench,
+				permission: "tools:read",
 			},
 		],
 	},
@@ -128,6 +143,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Keys for machines that print. Each is shown once when created and stored only as a hash, so a lost key is replaced rather than recovered.",
 				icon: KeyRound,
+				permission: "keys:read",
 			},
 			{
 				href: "/assets",
@@ -136,6 +152,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Images receipts can print. Referenced from markup by name, and pushed to the agents that need them.",
 				icon: ImageIcon,
+				permission: "assets:read",
 			},
 			{
 				href: "/variables",
@@ -144,6 +161,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Values receipts refer to by name. Written as {name} in markup and filled in when the receipt is printed, so a phone number or an address is changed in one place.",
 				icon: Braces,
+				permission: "variables:read",
 			},
 			{
 				href: "/settings",
@@ -152,6 +170,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Install-wide defaults. Per-printer settings are on the Devices tab, and your password is under your profile in the sidebar.",
 				icon: Settings2,
+				permission: "settings:read",
 			},
 			{
 				href: "/docs",
@@ -159,6 +178,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Documentation",
 				description: "How to drive this install from another system, and how to write what it prints.",
 				icon: BookOpen,
+				permission: "docs:read",
 				children: [
 					{
 						href: "/docs/api",
@@ -166,6 +186,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 						title: "API documentation",
 						description: "The print API, as this install serves it.",
 						icon: Plug,
+						permission: "docs:read",
 					},
 					{
 						href: "/docs/markup",
@@ -173,6 +194,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 						title: "Markup language",
 						description: "What goes inside a job's data: the tags a receipt is written with, and the blocks they draw.",
 						icon: CodeXml,
+						permission: "docs:read",
 					},
 				],
 			},
