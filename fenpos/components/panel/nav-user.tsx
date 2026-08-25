@@ -16,7 +16,7 @@ import {
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 
 /**
- * The administrator, in the corner of the sidebar.
+ * The signed-in user, in the corner of the sidebar.
  *
  * One control where there were three. The name, the profile dialog and sign-out used to sit side
  * by side in a row that had to shrink to fit them; collapsed to icons there is no room for a row
@@ -35,8 +35,8 @@ export function NavUser({
 	minimumPasswordLength,
 }: {
 	displayName: string;
-	/** Null when none is set, which is also what selects the drawn initial over a Gravatar. */
-	email: string | null;
+	/** The signed-in user's email. Better Auth requires every account to carry one. */
+	email: string;
 	/** Resolved on the server, so no address and no hashing reach the browser. */
 	avatarUrl: string | null;
 	initial: string;
@@ -62,7 +62,7 @@ export function NavUser({
 							<Avatar src={avatarUrl} initial={initial} />
 							<div className="grid flex-1 text-left leading-tight">
 								<span className="truncate text-[12.5px] font-semibold">{displayName}</span>
-								<span className="truncate text-[11px] text-subtle-foreground">{email ?? "No email set"}</span>
+								<span className="truncate text-[11px] text-subtle-foreground">{email}</span>
 							</div>
 							<ChevronsUpDown className="ml-auto size-3.5 text-subtle-foreground" />
 						</DropdownMenuTrigger>
@@ -76,7 +76,7 @@ export function NavUser({
 										<Avatar src={avatarUrl} initial={initial} />
 										<div className="grid flex-1 text-left leading-tight">
 											<span className="truncate text-[12.5px] font-semibold">{displayName}</span>
-											<span className="truncate text-[11px] text-subtle-foreground">{email ?? "No email set"}</span>
+											<span className="truncate text-[11px] text-subtle-foreground">{email}</span>
 										</div>
 									</div>
 								</DropdownMenuLabel>

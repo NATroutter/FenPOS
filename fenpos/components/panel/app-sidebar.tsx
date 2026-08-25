@@ -83,10 +83,10 @@ export function AppSidebar({
 	/** Shortest acceptable password, shown as a hint in the profile dialog. Passed from the
 	    server so this client component does not import the argon2-backed password module. */
 	minimumPasswordLength: number;
-	/** The administrator's name, shown in the account menu. */
+	/** The signed-in user's name, shown in the account menu. */
 	displayName: string;
-	/** Null when none is set, which is also what selects the drawn initial over a Gravatar. */
-	email: string | null;
+	/** The signed-in user's email. Better Auth requires every account to carry one. */
+	email: string;
 	/** Resolved on the server, so no address and no hashing reach the browser. */
 	avatarUrl: string | null;
 	initial: string;

@@ -1,12 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { setAdminPassword, setAdminProfile, verifyAdminPassword } from "@/lib/auth/admin";
+import { auth } from "@/lib/auth/auth";
 import { passwordSchema } from "@/lib/auth/password";
 import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/profile";
 import { requireSession } from "@/lib/auth/require-session";
+import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { clearSetting, integerSetting, setSetting } from "@/lib/settings/settings-service";
@@ -113,7 +115,7 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
 }
 
 /**
- * Changes the administrator password.
+ * Changes the signed-in user's password.
  *
  * The current password is required even though the caller is already signed in. A session left
  * open on an unattended machine is the case this defends against, and it is a common one in a
@@ -125,37 +127,46 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
  */
 export async function changePassword(current: string, next: string): Promise<ActionState> {
 	return run("password", async () => {
-		if (!(await verifyAdminPassword(current))) {
-			throw new ApiError("invalid_key", "That is not the current password.");
-		}
-
-		// Checked here rather than trusted from the form. The form disables its button on an
-		// empty field, which stops a slip but not a direct call to this action — and a server
-		// action is a public endpoint, so anything reachable only through the browser's
-		// cooperation is not enforced at all.
+		// Checked here rather than trusted from the form, and before Better Auth ever sees the
+		// candidate: the form disables its button on an empty field, which stops a slip but not a
+		// direct call to this action, and Better Auth's own `changePassword` enforces only its own
+		// built-in bounds — it knows nothing about the install's configured
+		// `auth.minimumPasswordLength`.
 		const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
 		const parsed = passwordSchema(minimumPasswordLength).safeParse(next);
 		if (!parsed.success) {
 			throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 		}
 
-		const revoked = await setAdminPassword(parsed.data);
-		logger.info("Administrator password changed", { sessionsRevoked: revoked });
+		try {
+			await auth.api.changePassword({
+				body: { currentPassword: current, newPassword: parsed.data, revokeOtherSessions: true },
+				headers: await headers(),
+			});
+		} catch {
+			// Better Auth collapses every reason it might refuse this into one error, and from the
+			// caller's side there is only one that matters: the current password they typed is not
+			// the one on the account.
+			throw new ApiError("invalid_key", "That is not the current password.");
+		}
+
+		logger.info("Password changed");
 	});
 }
 
 /**
- * Replaces the administrator's display name and email.
+ * Replaces the signed-in user's display name and email.
  *
  * No current-password check, unlike `changePassword`. Neither field is a credential and neither
  * can be used to sign in — asking for a password to change the name beside the avatar would be
  * ceremony that teaches an operator to type their password into any box that asks.
  *
  * The email is validated and stored as typed. Nothing sends mail yet, so a confirmation loop
- * would be theatre.
+ * would be theatre. Unlike the single-administrator model this replaced, it may not be cleared to
+ * empty: Better Auth requires every account to carry one, and the column is unique.
  *
  * @param displayName the new name
- * @param email the new address, or null/empty to remove it
+ * @param email the new address
  * @returns the state to render
  */
 export async function updateProfile(displayName: string, email: string | null): Promise<ActionState> {
@@ -174,14 +185,41 @@ export async function updateProfile(displayName: string, email: string | null): 
 					`Keep the display name to ${MAXIMUM_DISPLAY_NAME_LENGTH} characters or fewer.`,
 				);
 			}
-			if (address !== "" && !z.email().safeParse(address).success) {
+			if (address === "") {
+				throw new ApiError("missing_field", "An email address is required.");
+			}
+			if (!z.email().safeParse(address).success) {
 				throw new ApiError("invalid_type", "That is not a valid email address.");
 			}
 
-			await setAdminProfile({ displayName: name, email: address === "" ? null : address });
+			const { id } = await requireSession();
+
+			try {
+				await prisma.user.update({ where: { id }, data: { name, email: address } });
+			} catch (thrown) {
+				// The check above only proves the address is well-formed, not that it is free — two
+				// requests racing past that check is exactly what the column's own unique constraint
+				// is for. Without this, the loser gets `run()`'s generic "check the server log"
+				// instead of the one thing they could act on.
+				if (isPrismaCode(thrown, "P2002")) {
+					throw new ApiError("name_taken", "That email address is already in use.");
+				}
+				throw thrown;
+			}
 		},
 		// The sidebar footer is in the layout, so refreshing a page would leave the name and the
 		// avatar showing their old values until a hard reload.
 		() => revalidatePath("/", "layout"),
 	);
+}
+
+/**
+ * Whether a caught value is a Prisma error with the given code.
+ *
+ * @param error the caught value
+ * @param code the Prisma error code to match, e.g. `P2002`
+ * @returns true when the error carries that code
+ */
+function isPrismaCode(error: unknown, code: string): boolean {
+	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code;
 }

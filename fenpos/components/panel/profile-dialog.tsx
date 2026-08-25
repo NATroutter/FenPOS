@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 type Category = "account" | "security";
 
 /**
- * The administrator's own account, reached from the sidebar footer.
+ * The signed-in user's own account, reached from the sidebar footer.
  *
  * Separated from Settings because the two answer different questions. Settings is about the
  * install — limits every device inherits, how long job history is kept — and is the sort of
@@ -55,10 +55,10 @@ export function ProfileDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	minimumLength: number;
-	/** The administrator's current name, and what the Account panel resets to. */
+	/** The signed-in user's current name, and what the Account panel resets to. */
 	displayName: string;
-	/** Null when none is set, which is also what selects the drawn initial over a Gravatar. */
-	email: string | null;
+	/** The signed-in user's email. Better Auth requires every account to carry one. */
+	email: string;
 	/** Resolved on the server, so no address and no hashing reach the browser. */
 	avatarUrl: string | null;
 	initial: string;
@@ -66,7 +66,7 @@ export function ProfileDialog({
 	const [category, setCategory] = useState<Category>("account");
 
 	const [name, setName] = useState(displayName);
-	const [address, setAddress] = useState(email ?? "");
+	const [address, setAddress] = useState(email);
 	const [accountError, setAccountError] = useState<string | null>(null);
 	const [accountPending, startAccountTransition] = useTransition();
 
@@ -79,7 +79,7 @@ export function ProfileDialog({
 	const reset = (): void => {
 		setCategory("account");
 		setName(displayName);
-		setAddress(email ?? "");
+		setAddress(email);
 		setAccountError(null);
 		setCurrent("");
 		setNext("");
@@ -130,10 +130,10 @@ export function ProfileDialog({
 		>
 			<DialogContent className="sm:max-w-[720px]">
 				<DialogHeader>
-					<DialogTitle>Administrator</DialogTitle>
+					<DialogTitle>Your account</DialogTitle>
 					<DialogDescription>
-						The account for this console: your name, your email, and the password that gets you in. Changing the
-						password signs out every other session immediately, which is the point of changing it.
+						Your name, your email, and the password that gets you in. Changing the password signs out every other
+						session immediately, which is the point of changing it.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody className="flex-row items-start gap-6">
@@ -189,7 +189,7 @@ export function ProfileDialog({
 								/>
 								<FieldDescription>
 									Used to fetch a picture from Gravatar — the address is hashed on the server before it is sent, never
-									in the browser. Leave it blank to use a drawn initial instead.
+									in the browser. No picture registered there yet? The initial is shown instead.
 								</FieldDescription>
 							</Field>
 
@@ -267,7 +267,11 @@ export function ProfileDialog({
 				</DialogBody>
 				<DialogFooter>
 					{category === "account" ? (
-						<Button type="button" disabled={accountPending || name.trim() === ""} onClick={saveAccount}>
+						<Button
+							type="button"
+							disabled={accountPending || name.trim() === "" || address.trim() === ""}
+							onClick={saveAccount}
+						>
 							{accountPending ? <Spinner className="size-3.5" /> : null}
 							Save profile
 						</Button>
