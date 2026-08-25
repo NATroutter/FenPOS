@@ -3,6 +3,7 @@ import { API_BASE, API_VERSION } from "@/lib/api-version";
 import { AgentStatus, Align, AssetKind, ConnectionStatus, JobStatus, Linefeed } from "@/lib/domain/enums";
 import { PERMISSION_IDS } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
+import { MAX_OFFSET_AMOUNT, MAX_PATTERN_CHARS, OffsetUnit } from "@/lib/variables/definition";
 
 /**
  * A machine-readable description of the public API, served at `GET /api/v1/openapi.json`.
@@ -214,9 +215,38 @@ const PRINT_REQUEST_SCHEMA = {
 		},
 		variables: {
 			type: "object",
-			additionalProperties: { type: "string" },
+			additionalProperties: {
+				oneOf: [
+					{ type: "string", description: "A literal value, substituted exactly as sent." },
+					{
+						type: "object",
+						description:
+							"A date for this server to compute and format. The pattern and the offset are the caller's; the time zone and the locale are always the install's, so every date on one receipt agrees.",
+						properties: {
+							pattern: {
+								type: "string",
+								minLength: 1,
+								maxLength: MAX_PATTERN_CHARS,
+								description: "A date-fns format pattern, e.g. `dd.MM.yyyy`.",
+							},
+							offset: {
+								type: "object",
+								description: "How far to shift from the instant the job compiles at. Omit it for that instant itself.",
+								properties: {
+									amount: { type: "integer", minimum: -MAX_OFFSET_AMOUNT, maximum: MAX_OFFSET_AMOUNT },
+									unit: { type: "string", enum: OffsetUnit.values },
+								},
+								required: ["amount", "unit"],
+								additionalProperties: false,
+							},
+						},
+						required: ["pattern"],
+						additionalProperties: false,
+					},
+				],
+			},
 			description:
-				"Values this job supplies for its own `{name}` references, narrower than a per-printer override or a variable's own definition — see the panel's own /docs/markup#variables for the three layers and /docs/api#submitting for the error codes this can raise. Accepted only when the install allows it and a named variable is marked overridable; refused outright otherwise.",
+				"Values this job supplies for its own `{name}` references, narrower than a per-printer override or a variable's own definition — see the panel's own /docs/markup#variables for the three layers and /docs/api#submitting for the error codes this can raise. A value is either a literal string or an object describing a date for this server to compute. Accepted only when the install allows it and a named variable is marked overridable; refused outright otherwise.",
 		},
 	},
 	required: ["data"],

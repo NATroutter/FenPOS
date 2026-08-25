@@ -557,6 +557,22 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 								<ErrorRef code="variable_not_overridable" />.
 							</P>
 
+							<P>
+								A value is normally a string, substituted exactly as sent. It may instead be an object describing a date
+								for <em>this</em> server to compute:{" "}
+								<Mono>{'{ "pattern": "dd.MM.yyyy", "offset": { "amount": 14, "unit": "DAYS" } }'}</Mono>. The pattern
+								and the offset are yours; the <strong>time zone and locale are this install's</strong>, and there is no
+								way to send your own. That is the point of it — a caller in another zone, or one that formats{" "}
+								<Mono>MM/dd</Mono>, would otherwise print a date that disagrees with every other date on the same
+								receipt. Omit <Mono>offset</Mono> for the instant the job compiles at; <Mono>MINUTES</Mono> and{" "}
+								<Mono>HOURS</Mono> are elapsed real time while <Mono>DAYS</Mono>, <Mono>WEEKS</Mono> and{" "}
+								<Mono>MONTHS</Mono> are calendar arithmetic done in the install's zone, exactly as for a variable
+								defined in the panel. An object whose shape or bounds are wrong, or whose pattern this server cannot
+								format, is <ErrorRef code="invalid_variable" /> — and it refuses that request only. What it renders to
+								is measured against the same <Mono>variables.maxValueChars</Mono> a string value obeys, so a long enough
+								result is still <ErrorRef code="variable_too_long" />.
+							</P>
+
 							<Aside>
 								<ErrorRef code="unknown_variable" /> and <ErrorRef code="too_many_variable_references" /> are different
 								from the ones above: they come from compiling the markup itself rather than from reading the field, so —
@@ -634,6 +650,19 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -d '{
     "data": [ "Order #{order_id}" ],
     "variables": { "order_id": "1041" }
+  }'`}</CodeBlock>
+
+							<CodeBlock label="Request — a date this server computes">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "data": [ "Return by {return_by}" ],
+    "variables": {
+      "return_by": {
+        "pattern": "dd.MM.yyyy",
+        "offset": { "amount": 14, "unit": "DAYS" }
+      }
+    }
   }'`}</CodeBlock>
 						</Col>
 					</Split>

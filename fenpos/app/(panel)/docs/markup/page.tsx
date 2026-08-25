@@ -248,7 +248,10 @@ export default async function MarkupDocsPage() {
 									toggle is on; supplying a value for one that is not is <ErrorRef code="variable_not_overridable" />.
 									Only the middle layer is per-printer, and only a <Mono>STATIC</Mono> variable may carry one: a date's
 									pattern and a printer's own name mean the same thing on every printer, so only a literal value can
-									differ by printer.
+									differ by printer. The markup is the same whoever computed the value — <Mono>{"{return_by}"}</Mono>{" "}
+									looks identical whether it came from a definition here or from the request — but a print request can
+									also send a date's <em>pattern</em> rather than a finished date, and have this install render it in
+									its own zone and locale; see <DocLink href="/docs/api#submitting">Submitting a job</DocLink>.
 								</P>
 
 								<P>
