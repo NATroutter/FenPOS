@@ -9,7 +9,7 @@ import {
 	renameAgent as renameAgentRecord,
 	unpairAgent as unpairAgentRecord,
 } from "@/lib/agents/agent-service";
-import { requireSession } from "@/lib/auth/require-session";
+import { panelAction } from "@/lib/auth/panel-action";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
@@ -19,37 +19,13 @@ import { logger } from "@/lib/logger";
 /**
  * Server actions behind the Agents tab.
  *
- * Every action re-checks the session through {@link requireSession}.
+ * Every action goes through {@link panelAction}, which resolves the session, checks the permission
+ * its registry entry names, runs the body, and records the attempt. The `logger` calls below stay
+ * where they are: stdout and the audit record are two channels with two audiences.
  */
 
-/**
- * Runs an action, converting a failure into a message the form can render.
- *
- * An `ApiError` carries a message written to be read, so it is passed through. Anything else
- * is unexpected: it is logged in full and reported generically, because an internal message
- * in the panel is at best noise and at worst a disclosure.
- *
- * @param label short description used in the log line
- * @param work the action body
- * @returns the state to render
- */
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
-
-	try {
-		await work();
-		revalidatePath("/agents");
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error(`Agent action failed: ${label}`, error);
-		return { error: "Something went wrong. Check the server log." };
-	}
-}
+/** What every action here refreshes on success. */
+const revalidate = () => revalidatePath("/agents");
 
 /**
  * Creates a agent and issues its first pairing code.
@@ -60,12 +36,16 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
  */
 export async function createAgent(_previous: ActionState, formData: FormData): Promise<ActionState> {
 	const name = formData.get("name");
-	return run("create", async () => {
-		if (typeof name !== "string") {
-			throw new ApiError("missing_field", "A name is required.");
-		}
-		await createAgentRecord(name);
-	});
+	return panelAction(
+		"agents:create",
+		async () => {
+			if (typeof name !== "string") {
+				throw new ApiError("missing_field", "A name is required.");
+			}
+			await createAgentRecord(name);
+		},
+		{ revalidate, target: { kind: "agent", label: typeof name === "string" ? name : null } },
+	);
 }
 
 /**
@@ -76,7 +56,10 @@ export async function createAgent(_previous: ActionState, formData: FormData): P
  * @returns the state to render
  */
 export async function renameAgent(agentId: string, name: string): Promise<ActionState> {
-	return run("rename", () => renameAgentRecord(agentId, name));
+	return panelAction("agents:rename", () => renameAgentRecord(agentId, name), {
+		revalidate,
+		target: { kind: "agent", id: agentId, label: name },
+	});
 }
 
 /**
@@ -86,9 +69,13 @@ export async function renameAgent(agentId: string, name: string): Promise<Action
  * @returns the state to render
  */
 export async function refreshPairingCode(agentId: string): Promise<ActionState> {
-	return run("regenerate code", async () => {
-		await regeneratePairingCode(agentId);
-	});
+	return panelAction(
+		"agents:pairing-code",
+		async () => {
+			await regeneratePairingCode(agentId);
+		},
+		{ revalidate, target: { kind: "agent", id: agentId } },
+	);
 }
 
 /**
@@ -103,11 +90,15 @@ export async function refreshPairingCode(agentId: string): Promise<ActionState> 
  * @returns the state to render
  */
 export async function unpairAgent(agentId: string): Promise<ActionState> {
-	return run("unpair", async () => {
-		await unpairAgentRecord(agentId);
-		getLink(agentId)?.close("unpaired by the administrator");
-		logger.info("Agent unpaired", { agentId });
-	});
+	return panelAction(
+		"agents:unpair",
+		async () => {
+			await unpairAgentRecord(agentId);
+			getLink(agentId)?.close("unpaired by the administrator");
+			logger.info("Agent unpaired", { agentId });
+		},
+		{ revalidate, target: { kind: "agent", id: agentId } },
+	);
 }
 
 /**
@@ -117,11 +108,15 @@ export async function unpairAgent(agentId: string): Promise<ActionState> {
  * @returns the state to render
  */
 export async function deleteAgent(agentId: string): Promise<ActionState> {
-	return run("delete", async () => {
-		getLink(agentId)?.close("removed by the administrator");
-		await deleteAgentRecord(agentId);
-		logger.info("Agent deleted", { agentId });
-	});
+	return panelAction(
+		"agents:delete",
+		async () => {
+			getLink(agentId)?.close("removed by the administrator");
+			await deleteAgentRecord(agentId);
+			logger.info("Agent deleted", { agentId });
+		},
+		{ revalidate, target: { kind: "agent", id: agentId } },
+	);
 }
 
 /**
@@ -137,20 +132,24 @@ export async function deleteAgent(agentId: string): Promise<ActionState> {
  * @returns the state to render
  */
 export async function sendTestPrint(agentId: string): Promise<ActionState> {
-	return run("test print", async () => {
-		const device = await prisma.device.findFirst({
-			where: { agentId },
-			orderBy: { name: "asc" },
-			select: { id: true },
-		});
+	return panelAction(
+		"agents:test-print",
+		async () => {
+			const device = await prisma.device.findFirst({
+				where: { agentId },
+				orderBy: { name: "asc" },
+				select: { id: true },
+			});
 
-		if (!device) {
-			throw new ApiError("unknown_device", "This agent has no printer configured yet. Add one before printing.");
-		}
+			if (!device) {
+				throw new ApiError("unknown_device", "This agent has no printer configured yet. Add one before printing.");
+			}
 
-		const job = await submitJob(device.id, { data: testJob() });
-		logger.info("Test job submitted", { agentId, jobId: job.id, deviceName: job.deviceName });
-	});
+			const job = await submitJob(device.id, { data: testJob() });
+			logger.info("Test job submitted", { agentId, jobId: job.id, deviceName: job.deviceName });
+		},
+		{ revalidate, target: { kind: "agent", id: agentId } },
+	);
 }
 
 /**

@@ -2,16 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { requireSession } from "@/lib/auth/require-session";
-import { ApiError } from "@/lib/errors";
+import { panelAction } from "@/lib/auth/panel-action";
 import { cancelJob as cancelJobRequest } from "@/lib/jobs/job-service";
-import { logger } from "@/lib/logger";
 
 /**
  * Server actions behind the Jobs tab.
  *
- * The session is re-checked here rather than trusted from the layout: an action is a POST
- * endpoint in its own right, callable by anyone who knows its id.
+ * The one action here goes through {@link panelAction}, which resolves the session, checks the
+ * permission its registry entry names, runs the body, and records the attempt.
  */
 
 /**
@@ -21,19 +19,8 @@ import { logger } from "@/lib/logger";
  * @returns the state to render
  */
 export async function cancelJob(jobId: string): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
-
-	try {
-		await cancelJobRequest(jobId);
-		revalidatePath("/jobs");
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error("Job action failed: cancel", error);
-		return { error: "Something went wrong. Check the server log." };
-	}
+	return panelAction("jobs:cancel", () => cancelJobRequest(jobId), {
+		revalidate: () => revalidatePath("/jobs"),
+		target: { kind: "job", id: jobId },
+	});
 }
