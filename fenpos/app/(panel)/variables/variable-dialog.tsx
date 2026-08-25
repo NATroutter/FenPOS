@@ -422,7 +422,11 @@ export function VariableDialog({
 					<Button type="button" variant="outline" disabled={saving} onClick={close}>
 						Cancel
 					</Button>
-					<Button type="button" disabled={saving} onClick={onSubmit}>
+					{/* Held shut while the live preview says `date-fns` cannot read the pattern. The server
+					    refuses such a definition anyway — `requireValid` renders every `DATETIME` before
+					    storing it — so this is not the check, it is the dialog agreeing with the check
+					    rather than inviting a click whose only outcome is the same message again. */}
+					<Button type="button" disabled={saving || (kind === "DATETIME" && preview.error !== null)} onClick={onSubmit}>
 						{saving ? <Spinner className="size-3.5" /> : null}
 						{variableId ? "Save" : "Create variable"}
 					</Button>

@@ -9,6 +9,7 @@ import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components
 import { logger } from "@/lib/logger";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { booleanSetting } from "@/lib/settings/settings-service";
+import { PANEL_PRINT_CONTEXT } from "@/lib/variables/formatting";
 import { listVariables } from "@/lib/variables/variable-service";
 
 export const metadata = { title: "Variables" };
@@ -30,19 +31,15 @@ export default async function VariablesPage() {
 	const [variables, enabled] = await Promise.all([listVariables(), booleanSetting("variables.enabled")]);
 
 	// `resolveVariables` returns null when the feature is off, which is handled below with the
-	// banner. It can also throw: `variableDefinitionSchema` checks a pattern's *shape*, not whether
-	// `date-fns` can actually read it, so a `DATETIME` row can be saved today and only turn out to
-	// be unformattable when `evaluateVariable` tries to render it. One such row should not take the
-	// whole table down — every other variable is still a value an operator needs to see — so the
-	// failure is logged and the column falls back to "—" for everyone rather than crashing the page.
+	// banner. A row it cannot evaluate is now omitted from the map rather than thrown through — so
+	// that row alone reads "—" and every other variable still shows its value, which is the outcome
+	// this catch was written to approximate and could not: it could only tell that *something* had
+	// failed, and blanked the whole column for it. The catch stays for anything that genuinely does
+	// escape — a settings read, a database fault — where a table with no values beats no page.
 	let resolved: ReadonlyMap<string, string> | null = null;
 	if (enabled) {
 		try {
-			const context = await resolveVariables({
-				deviceId: "",
-				context: { deviceName: "—", agentName: "—", apiKeyName: null },
-				supplied: {},
-			});
+			const context = await resolveVariables({ deviceId: "", context: PANEL_PRINT_CONTEXT, supplied: {} });
 			resolved = context?.values ?? null;
 		} catch (error) {
 			logger.error("Could not resolve variables for the panel table", error);

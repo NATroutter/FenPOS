@@ -145,4 +145,62 @@ describe("resolveVariables", () => {
 
 		expect((await resolveVariables(job(), NOW))?.values.get("phone")).toBe("install-wide");
 	});
+
+	/**
+	 * The half of the fix that contains a bad row already in the table.
+	 *
+	 * `createVariable` now refuses a pattern `date-fns` cannot render, so these rows are written
+	 * straight through Prisma — which is exactly how the ones that matter got there: saved before that
+	 * check existed, or by any future write path that forgets it. The property being pinned is the
+	 * blast radius. This function evaluates *every* defined variable on *every* job, so a throw
+	 * escaping it took down every printer, every key and every receipt on the install, as a 500 with
+	 * no job row to explain itself. Omitting the name instead means only the receipts that actually
+	 * reference it fail, and they fail as `unknown_variable`, naming it and its column.
+	 */
+	describe("a variable that cannot be evaluated", () => {
+		/** Writes a row past the service, as one saved before `requireValid` learned to check patterns. */
+		const storeUnrenderable = async (name: string) => {
+			await prisma.variable.create({
+				data: { name, kind: "DATETIME", pattern: "YYYY-MM-DD", overridable: false },
+			});
+		};
+
+		it("does not fail the whole resolution", async () => {
+			await storeUnrenderable("bad_date");
+			await createVariable(definition());
+
+			const context = await resolveVariables(job(), NOW);
+
+			expect(context).not.toBeNull();
+			expect(context?.values.get("phone")).toBe("install-wide");
+		});
+
+		it("is simply absent, which the parser reads as unknown_variable on the receipts that name it", async () => {
+			await storeUnrenderable("bad_date");
+
+			const context = await resolveVariables(job(), NOW);
+
+			expect(context?.values.has("bad_date")).toBe(false);
+		});
+
+		/**
+		 * A broken row must not become an overridable one. The check that refuses a job-supplied value
+		 * asks whether the name is *defined*, not whether it evaluated — a row this install has an
+		 * opinion about still has that opinion when it cannot be rendered.
+		 */
+		it("still refuses a job-supplied value for it, because it is defined and locked", async () => {
+			await storeUnrenderable("bad_date");
+
+			await expect(resolveVariables(job({ bad_date: "whatever" }), NOW)).rejects.toBeInstanceOf(ApiError);
+		});
+
+		it("accepts a job-supplied value for it when the row is marked overridable", async () => {
+			await prisma.variable.create({
+				data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD", overridable: true },
+			});
+
+			const context = await resolveVariables(job({ bad_date: "2026-08-25" }), NOW);
+			expect(context?.values.get("bad_date")).toBe("2026-08-25");
+		});
+	});
 });

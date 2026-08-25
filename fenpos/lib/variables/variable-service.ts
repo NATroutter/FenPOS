@@ -11,6 +11,8 @@ import {
 	type VariableKind,
 	variableDefinitionSchema,
 } from "@/lib/variables/definition";
+import { evaluateVariable, type Formatting } from "@/lib/variables/evaluate";
+import { PANEL_PRINT_CONTEXT } from "@/lib/variables/formatting";
 
 /**
  * Reading and writing the variables table.
@@ -188,11 +190,61 @@ async function requireValid(input: VariableDefinition): Promise<VariableDefiniti
 		throw new ApiError("invalid_variable", parsed.error.issues[0]?.message ?? "That variable is not valid.");
 	}
 
+	requireRenderablePattern(parsed.data);
+
 	if (parsed.data.value !== null) {
 		await requireStorableValue(parsed.data.value);
 	}
 
 	return parsed.data;
+}
+
+/** A fixed instant to render a candidate pattern against. Any instant would do; a constant is reproducible. */
+const PATTERN_PROBE_INSTANT = new Date("2026-01-02T03:04:05.000Z");
+
+/**
+ * How a candidate pattern is rendered for the check below. Deliberately not the install's own
+ * settings: whether `date-fns` accepts a token is a fact about the token, and reading the operator's
+ * zone and locale here would turn a fixed rule into a question with a database answer — and one this
+ * function would then have to `await` on every write for no gain.
+ */
+const PATTERN_PROBE_FORMATTING: Formatting = { timeZone: "UTC", locale: "en-US" };
+
+/**
+ * Refuses a `DATETIME` pattern that `date-fns` cannot actually render.
+ *
+ * **`variableDefinitionSchema` checks the pattern's shape and nothing else** — `z.string().min(1)`
+ * says a pattern was typed, not that it means anything. `date-fns` throws a `RangeError` on
+ * `YYYY` and `DD` on purpose, because they are almost always a mistake for `yyyy` and `dd`, and
+ * those two are the single most likely thing an operator types. Without this, such a row saves
+ * cleanly and turns into a failure at print time instead — and it is a failure with a blast radius
+ * far larger than the variable: `resolveVariables` evaluates every defined variable on every job, so
+ * one bad row made every receipt on the install fail, including receipts that mention nothing
+ * dynamic. That containment is now handled there too, but a row that can never print has no business
+ * being written in the first place. Refusing it here is what makes the dialog's live preview an aid
+ * rather than the only thing standing between an operator and a broken install.
+ *
+ * The message `evaluateVariable` raises names the offending token, in `date-fns`'s own words, which
+ * is the only wording that tells the operator what to type instead.
+ *
+ * @param definition the parsed definition
+ * @throws ApiError if the pattern cannot be rendered
+ */
+function requireRenderablePattern(definition: VariableDefinition): void {
+	if (definition.kind !== "DATETIME") {
+		return;
+	}
+
+	try {
+		evaluateVariable(definition, PATTERN_PROBE_INSTANT, PANEL_PRINT_CONTEXT, PATTERN_PROBE_FORMATTING);
+	} catch (error) {
+		throw new ApiError(
+			"invalid_variable",
+			error instanceof Error ? error.message : "That pattern could not be formatted.",
+			{},
+			{ cause: error },
+		);
+	}
 }
 
 /**

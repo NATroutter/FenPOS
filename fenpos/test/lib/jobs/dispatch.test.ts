@@ -323,6 +323,44 @@ describe("dispatch with variables", () => {
 		expect(job).toMatchObject({ status: "FAILED", errorCode: "unknown_variable" });
 	});
 
+	/**
+	 * **The containment property, at the level where it actually mattered.**
+	 *
+	 * `resolveVariables` evaluates every defined variable on every job, whether or not the receipt
+	 * names one. A `DATETIME` row whose pattern `date-fns` refuses — `YYYY` and `DD` being the two
+	 * an operator is most likely to type — therefore threw out of `resolveVariables`, out of
+	 * `submitJob`, and reached the caller as an opaque `500 internal_error`. On every printer, for
+	 * every key, for every receipt on the install, including receipts like this one that mention
+	 * nothing dynamic at all. No job row was created, so the panel's job list showed nothing either.
+	 *
+	 * The row is written straight through Prisma because `createVariable` now refuses to store one —
+	 * which is the other half of the fix, and is why this is about rows that got in some other way.
+	 */
+	it("prints a receipt that names nothing dynamic, even with an unrenderable variable in the table", async () => {
+		const deviceId = await connectedDevice();
+		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
+
+		const job = await submitJob(deviceId, { data: ["Kahvi 2.50"] });
+
+		expect(job.lines).toBe(1);
+		expect(
+			sentJob()
+				?.lines[0].spans.map((span) => span.text)
+				.join(""),
+		).toBe("Kahvi 2.50");
+	});
+
+	/** And the receipt that does name it fails as a markup error naming it, not as a 500 about nothing. */
+	it("fails only the receipt that references the unrenderable variable, as unknown_variable", async () => {
+		const deviceId = await connectedDevice();
+		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
+
+		await expect(submitJob(deviceId, { data: ["Printed {bad_date}"] })).rejects.toMatchObject({
+			code: "unknown_variable",
+			status: 422,
+		});
+	});
+
 	it("resolves a variable inside an image reference", async () => {
 		const deviceId = await connectedDevice();
 		await createVariable({ ...STATIC, name: "brand", value: "logo" });

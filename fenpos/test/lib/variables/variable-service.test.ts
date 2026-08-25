@@ -74,6 +74,74 @@ describe("variable service", () => {
 		);
 	});
 
+	/**
+	 * The half of the fix that stops the bad row existing.
+	 *
+	 * `variableDefinitionSchema` only checks that a pattern is a non-empty string of reasonable
+	 * length; `date-fns` is the one that decides whether it means anything, and it throws a
+	 * `RangeError` on `YYYY` and `DD` deliberately, because they are almost always a mistake for
+	 * `yyyy` and `dd`. Those two are also the single most likely thing an operator types. Saved, such
+	 * a row is not merely a broken variable: `resolveVariables` evaluates every defined variable on
+	 * every job, so it used to fail every print on the install — including receipts that mention
+	 * nothing dynamic — as an opaque 500 with no job row to show what happened.
+	 */
+	describe("a DATETIME pattern date-fns cannot render", () => {
+		it.each(["YYYY-MM-DD", "DD.MM.yyyy"])("refuses %s on create", async (pattern) => {
+			const thrown = await createVariable(definition({ name: "when", kind: "DATETIME", value: null, pattern })).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			expect(thrown).toBeInstanceOf(ApiError);
+			expect((thrown as ApiError).code).toBe("invalid_variable");
+			// `date-fns`'s own wording, which is the only wording that says what to type instead.
+			expect((thrown as ApiError).message).toContain("instead");
+			expect(await listVariables()).toHaveLength(0);
+		});
+
+		it("refuses it on update too, leaving the working definition in place", async () => {
+			const created = await createVariable(
+				definition({ name: "when", kind: "DATETIME", value: null, pattern: "HH:mm" }),
+			);
+
+			await expect(
+				updateVariable(created.id, definition({ name: "when", kind: "DATETIME", value: null, pattern: "YYYY" })),
+			).rejects.toBeInstanceOf(ApiError);
+
+			expect((await listVariables())[0].pattern).toBe("HH:mm");
+		});
+
+		/** The presets `variable-dialog.tsx` offers as one-click buttons. A check that refused these would be the wrong check. */
+		const PATTERN_PRESETS = ["HH:mm", "HH:mm:ss", "dd.MM.yyyy", "dd.MM.yyyy HH:mm", "cccc", "yyyy-MM-dd"];
+
+		it("still accepts every pattern the dialog offers, so this refuses only what date-fns refuses", async () => {
+			for (const [index, pattern] of PATTERN_PRESETS.entries()) {
+				await createVariable(definition({ name: `preset-${index}`, kind: "DATETIME", value: null, pattern }));
+			}
+
+			expect(await listVariables()).toHaveLength(PATTERN_PRESETS.length);
+		});
+
+		/**
+		 * An offset is applied before the pattern is rendered, so a definition carrying both has to be
+		 * checked as a whole rather than by looking at the pattern alone.
+		 */
+		it("checks the pattern with the offset applied", async () => {
+			await expect(
+				createVariable(
+					definition({
+						name: "return-by",
+						kind: "DATETIME",
+						value: null,
+						pattern: "DD.MM.yyyy",
+						offsetAmount: 14,
+						offsetUnit: "DAYS",
+					}),
+				),
+			).rejects.toBeInstanceOf(ApiError);
+		});
+	});
+
 	it("updates a variable in place", async () => {
 		const created = await createVariable(definition());
 
