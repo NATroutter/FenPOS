@@ -148,8 +148,8 @@ describe("symbolGeometry", () => {
 	 * position rather than a receipt.
 	 */
 	it("refuses non-ASCII content in a two-dimensional symbol", () => {
-		expect(validateSymbolContent({ kind: "QR", content: "kahvi ä", size: 6 })).toMatch(/ASCII/);
-		expect(validateSymbolContent({ kind: "PDF417", content: "kahvi ä", errorLevel: 1 })).toMatch(/ASCII/);
+		expect(validateSymbolContent({ kind: "QR", content: "coffee é", size: 6 })).toMatch(/ASCII/);
+		expect(validateSymbolContent({ kind: "PDF417", content: "coffee é", errorLevel: 1 })).toMatch(/ASCII/);
 	});
 
 	it("accepts the whole ASCII range in a two-dimensional symbol", () => {

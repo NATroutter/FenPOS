@@ -194,7 +194,7 @@ export interface Line {
  *
  * **A substituted span reports its reference's column for every character it holds**, rather than
  * counting forward through characters the author never wrote. `{x}` is three columns of source; a
- * value of `Kahvi ☕` is seven characters of output. Adding the offset would report column 7 for an
+ * value of `Coffee ☕` is eight characters of output. Adding the offset would report column 8 for an
  * element only three columns long — a position that does not exist, handed to someone told this API
  * points at the exact character at fault. Pointing at the reference is the honest answer: it is
  * where the caller has to look, and it is a column their element actually has. What character

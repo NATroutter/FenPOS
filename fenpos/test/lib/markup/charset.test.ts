@@ -106,12 +106,12 @@ describe("validateCharset", () => {
 		/**
 		 * The column names the reference, not a position counted through the value's own characters.
 		 *
-		 * `{x}` occupies three columns; `Kahvi €` is seven characters, and the euro is the seventh of
-		 * them. Counting forward reported column 7 of a three-column element — a position that does
+		 * `{x}` occupies three columns; `Coffee €` is eight characters, and the euro is the eighth of
+		 * them. Counting forward reported column 8 of a three-column element — a position that does
 		 * not exist, in the field a client uses to underline the mistake for its user.
 		 */
 		it("reports the reference's column rather than one past the end of the element", () => {
-			const thrown = substituted("{x}", "Kahvi €");
+			const thrown = substituted("{x}", "Coffee €");
 
 			expect(thrown.character).toBe("€");
 			expect(thrown.column).toBe(1);

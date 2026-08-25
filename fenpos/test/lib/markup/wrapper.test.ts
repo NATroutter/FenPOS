@@ -15,10 +15,10 @@ describe("wrapLine", () => {
 	const texts = (lines: Line[]): string[] => lines.map(plainText);
 
 	it("leaves a line that fits untouched", () => {
-		const wrapped = wrap("Kahvi 2.50", 32);
+		const wrapped = wrap("Coffee 2.50", 32);
 
 		expect(wrapped).toHaveLength(1);
-		expect(plainText(wrapped[0])).toBe("Kahvi 2.50");
+		expect(plainText(wrapped[0])).toBe("Coffee 2.50");
 	});
 
 	it("breaks at the space before exceeding the width", () => {

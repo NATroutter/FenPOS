@@ -61,7 +61,7 @@ describe("compile pipeline", () => {
 	};
 
 	it("compiles a valid request into a job", () => {
-		const job = run({ data: ["Kahvi 2.50", "<bold>Yht</bold>"] });
+		const job = run({ data: ["Tea 2.50", "<bold>Total</bold>"] });
 
 		expect(job.lines).toHaveLength(2);
 		expect(job.device).toBe("kitchen");

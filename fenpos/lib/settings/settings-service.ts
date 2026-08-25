@@ -552,7 +552,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "variables.locale",
 		label: "Printed date format",
 		description:
-			"Which locale's month and day names date variables are written with — the difference between `Monday` and `maanantai` for a pattern containing `EEEE`. Patterns made only of numbers are unaffected.",
+			"Which locale's month and day names date variables are written with, for a pattern containing `MMMM` or `EEEE`. Patterns made only of numbers are unaffected, so an install printing dates as digits can leave this alone.",
 		category: "variables",
 		type: "enum",
 		values: ["en-US", "en-GB", "fi-FI", "sv-SE", "de-DE", "fr-FR"] as const,

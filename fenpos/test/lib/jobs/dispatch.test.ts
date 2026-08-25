@@ -95,7 +95,7 @@ describe("submitJob", () => {
 	it("dispatches a receipt that fits", async () => {
 		const { deviceId, sent } = await connectedDevice();
 
-		const job = await submitJob(deviceId, { data: ["Kahvi 2.50"] });
+		const job = await submitJob(deviceId, { data: ["Coffee 2.50"] });
 
 		expect(job.lines).toBe(1);
 		expect(sent).toHaveLength(1);
@@ -110,7 +110,7 @@ describe("submitJob", () => {
 	it("records the compiled line count on the row, not only in the response", async () => {
 		const { deviceId } = await connectedDevice();
 
-		const job = await submitJob(deviceId, { data: ["Kahvi 2.50", "Toinen rivi"] });
+		const job = await submitJob(deviceId, { data: ["Coffee 2.50", "Second line"] });
 
 		const row = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
 		expect(row.lines).toBe(job.lines);
@@ -211,7 +211,7 @@ describe("submitJob", () => {
 			throw new Error("x".repeat(1000));
 		};
 
-		const thrown = await submitJob(deviceId, { data: ["Kahvi 2.50"] }).then(
+		const thrown = await submitJob(deviceId, { data: ["Coffee 2.50"] }).then(
 			() => null,
 			(error: unknown) => error,
 		);
@@ -340,14 +340,14 @@ describe("dispatch with variables", () => {
 		const deviceId = await connectedDevice();
 		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
 
-		const job = await submitJob(deviceId, { data: ["Kahvi 2.50"] });
+		const job = await submitJob(deviceId, { data: ["Coffee 2.50"] });
 
 		expect(job.lines).toBe(1);
 		expect(
 			sentJob()
 				?.lines[0].spans.map((span) => span.text)
 				.join(""),
-		).toBe("Kahvi 2.50");
+		).toBe("Coffee 2.50");
 	});
 
 	/** And the receipt that does name it fails as a markup error naming it, not as a 500 about nothing. */

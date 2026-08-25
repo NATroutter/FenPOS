@@ -57,10 +57,10 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("parses plain text as one unstyled span", () => {
-		const line = parseMarkup("Kahvi 2.50");
+		const line = parseMarkup("Coffee 2.50");
 
 		expect(line.spans).toHaveLength(1);
-		expect(line.spans[0].text).toBe("Kahvi 2.50");
+		expect(line.spans[0].text).toBe("Coffee 2.50");
 		expect(line.spans[0].style.bold).toBe(false);
 		expect(line.align).toBe("LEFT");
 	});
@@ -536,24 +536,24 @@ describe("parseMarkup", () => {
 		 * `columnAt` reports the reference's own column for every character of a substituted span,
 		 * rather than counting forward from it. The arithmetic that used to run — `sourceColumn +
 		 * offset` — is exact for `&amp;`, which turns five source characters into one, but a variable
-		 * reverses that ratio: `{x}` is three columns of source and this value is seven characters, so
-		 * counting forward reports column 7 for an element three columns long. A position the element
+		 * reverses that ratio: `{x}` is three columns of source and this value is eight characters, so
+		 * counting forward reports column 8 for an element three columns long. A position the element
 		 * does not have is worse than no position, in an API whose whole promise is that the column
 		 * points at the character to fix.
 		 */
 		it("reports a character inside a substituted value at the reference's column, not past the element", () => {
-			const line = parseMarkup("{x}", context({ x: "Kahvi ☕" }));
+			const line = parseMarkup("{x}", context({ x: "Coffee ☕" }));
 
 			const span = line.spans[0];
-			expect(span.text).toBe("Kahvi ☕");
+			expect(span.text).toBe("Coffee ☕");
 			expect(span.expandedFrom).toBe("x");
 			expect(columnAt(span, 0)).toBe(1);
-			expect(columnAt(span, 6)).toBe(1);
+			expect(columnAt(span, 7)).toBe(1);
 		});
 
 		/** Text the author wrote still counts forward, which is what makes the case above a special case. */
 		it("still counts forward through a span the author typed", () => {
-			const line = parseMarkup("Kahvi", context({}));
+			const line = parseMarkup("Coffee", context({}));
 
 			expect(line.spans[0].expandedFrom).toBeUndefined();
 			expect(columnAt(line.spans[0], 3)).toBe(4);
@@ -580,7 +580,7 @@ describe("wrap tags", () => {
 	});
 
 	it("reads <wrap> as a request to wrap", () => {
-		expect(parseMarkup("<wrap>Iso kahvi ja korvapuusti</wrap>").wrap).toBe(true);
+		expect(parseMarkup("<wrap>A large coffee and a cinnamon bun</wrap>").wrap).toBe(true);
 	});
 
 	it("keeps the text and drops the tag", () => {

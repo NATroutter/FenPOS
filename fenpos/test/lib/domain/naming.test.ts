@@ -43,7 +43,7 @@ describe("toNameCandidate", () => {
 	});
 
 	it("strips diacritics so similar names do not diverge", () => {
-		expect(toNameCandidate("Kahvilä")).toBe("kahvila");
+		expect(toNameCandidate("Café")).toBe("cafe");
 	});
 
 	it("collapses runs of punctuation into a single separator", () => {

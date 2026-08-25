@@ -298,7 +298,7 @@ describe("resolveImages", () => {
 	});
 
 	it("refuses an image nobody has stored, naming the element it was written on", async () => {
-		const thrown = await refusal(["Kahvi 2.50", "<image>missing</image>"]);
+		const thrown = await refusal(["Coffee 2.50", "<image>missing</image>"]);
 
 		expect(thrown.code).toBe("unknown_asset");
 		expect(thrown.message).toContain("missing");
@@ -371,7 +371,7 @@ describe("resolveImages", () => {
 	});
 
 	it("resolves nothing at all for a receipt with no images", async () => {
-		const images = await resolve(["Kahvi 2.50", "<qr>https://x.test/o/1</qr>"]);
+		const images = await resolve(["Coffee 2.50", "<qr>https://x.test/o/1</qr>"]);
 
 		expect(images.size).toBe(0);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
@@ -562,7 +562,7 @@ describe("dots that have to travel with the job", () => {
 		 * other width rather than previewing a picture the paper cannot carry.
 		 */
 		it("refuses a width the agent bundles nothing for, naming the element", async () => {
-			const thrown = await refusal(["Kahvi 2.50", "<image=50>fenpos</image>"]);
+			const thrown = await refusal(["Coffee 2.50", "<image=50>fenpos</image>"]);
 
 			expect(thrown.code).toBe("unbundled_logo_width");
 			expect(thrown.details.line).toBe(2);

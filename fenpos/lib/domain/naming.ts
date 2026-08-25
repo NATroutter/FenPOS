@@ -45,7 +45,7 @@ export const nameSchema = z
 export function toNameCandidate(input: string, options: { keepTrailingSeparator?: boolean } = {}): string {
 	const slug = input
 		.normalize("NFKD")
-		// Strip diacritics so "Kahvila" and "Kahvilä" do not become different names.
+		// Strip diacritics so "Cafe" and "Café" do not become different names.
 		.replace(/[̀-ͯ]/g, "")
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")

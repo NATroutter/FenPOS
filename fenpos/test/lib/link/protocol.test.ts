@@ -37,7 +37,7 @@ function helloFrame(overrides: Record<string, unknown> = {}): string {
 function line(overrides: Partial<Line> = {}): Line {
 	return {
 		align: "LEFT",
-		spans: [{ text: "Kahvi", bold: false, underline: 0, invert: false, widthMult: 1, heightMult: 1, font: "A" }],
+		spans: [{ text: "Coffee", bold: false, underline: 0, invert: false, widthMult: 1, heightMult: 1, font: "A" }],
 		directives: [],
 		...overrides,
 	};
