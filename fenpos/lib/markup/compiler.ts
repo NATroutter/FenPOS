@@ -9,7 +9,7 @@ import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/mark
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
 import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
-import { readSuppliedVariables } from "@/lib/variables/supplied";
+import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/supplied";
 
 /**
  * Turns a request body into a job an agent can print, or explains precisely why it cannot.
@@ -94,8 +94,11 @@ export interface CompileSettings extends DeviceSettings {
 export interface PrintRequest {
 	data: string[];
 	linefeed: Linefeed;
-	/** Values the caller supplied for this job. Empty when they supplied none. */
-	variables: Record<string, string>;
+	/**
+	 * Values the caller supplied for this job — literal text, or a date for this server to compute.
+	 * Empty when they supplied none.
+	 */
+	variables: Record<string, SuppliedValue>;
 }
 
 /**

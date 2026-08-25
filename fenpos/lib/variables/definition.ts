@@ -79,6 +79,30 @@ export const ContextSource = closedSet([
 export type ContextSource = (typeof ContextSource.values)[number];
 
 /**
+ * The longest a `DATETIME` pattern may be, wherever one arrives from.
+ *
+ * Exported as a number as well as a schema because the OpenAPI document states the same bound, and
+ * that document's own header promises every value in it is read from the constant that defines it
+ * rather than typed out a second time.
+ */
+export const MAX_PATTERN_CHARS = 120;
+
+/** The largest magnitude a `DATETIME` offset amount may have. See {@link MAX_PATTERN_CHARS}. */
+export const MAX_OFFSET_AMOUNT = 100_000;
+
+/**
+ * A `date-fns` format pattern, bounded.
+ *
+ * Exported because a print request may now carry its own pattern, and `readSuppliedVariables` holds
+ * it to the same bound a stored one obeys. Restating `.min(1).max(120)` there would be a second copy
+ * of a rule to keep in step, and this feature has already been bitten twice by exactly that.
+ */
+export const datePatternSchema = z.string().min(1).max(MAX_PATTERN_CHARS);
+
+/** A signed offset amount, bounded. See {@link datePatternSchema} for why this is shared. */
+export const offsetAmountSchema = z.int().min(-MAX_OFFSET_AMOUNT).max(MAX_OFFSET_AMOUNT);
+
+/**
  * The hard ceiling on a stored value, independent of the `variables.maxValueChars` setting.
  *
  * The setting is the operator's policy and can be raised; this is the bound past which no policy
@@ -213,8 +237,8 @@ export const variableDefinitionSchema = z
 		name: nameSchema,
 		kind: VariableKind.schema,
 		value: printableValue.nullable(),
-		pattern: z.string().min(1).max(120).nullable(),
-		offsetAmount: z.int().min(-100_000).max(100_000).nullable(),
+		pattern: datePatternSchema.nullable(),
+		offsetAmount: offsetAmountSchema.nullable(),
 		offsetUnit: OffsetUnit.schema.nullable(),
 		source: ContextSource.schema.nullable(),
 		overridable: z.boolean(),
