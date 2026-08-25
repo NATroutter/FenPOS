@@ -6,6 +6,7 @@ import { integerSetting } from "@/lib/settings/settings-service";
 import {
 	type ContextSource,
 	type OffsetUnit,
+	printableValue,
 	type VariableDefinition,
 	type VariableKind,
 	variableDefinitionSchema,
@@ -105,8 +106,14 @@ export async function updateVariable(id: string, input: VariableDefinition): Pro
  * decision that an unknown name is refused rather than printed.
  *
  * @param id the variable to remove
+ * @throws ApiError if there is no such variable
  */
 export async function deleteVariable(id: string): Promise<void> {
+	const existing = await prisma.variable.findUnique({ where: { id }, select: { id: true } });
+	if (!existing) {
+		throw new ApiError("unknown_variable", "That variable no longer exists.");
+	}
+
 	await prisma.variable.deleteMany({ where: { id } });
 }
 
@@ -116,7 +123,9 @@ export async function deleteVariable(id: string): Promise<void> {
  * @param deviceId the printer
  * @param variableId the variable
  * @param value the printer's value, or null to fall back to the install-wide one
- * @throws ApiError if the variable is not static, is gone, or the value is not storable
+ * @throws ApiError if the variable is not static, is gone, or the value is not storable — including
+ *         a value containing a control character, which {@link requirePrintableValue} refuses here
+ *         exactly as `variableDefinitionSchema` would refuse it on a `Variable.value`
  */
 export async function setDeviceOverride(deviceId: string, variableId: string, value: string | null): Promise<void> {
 	if (value === null) {
@@ -135,6 +144,7 @@ export async function setDeviceOverride(deviceId: string, variableId: string, va
 		);
 	}
 
+	requirePrintableValue(value);
 	await requireStorableValue(value);
 
 	await prisma.deviceVariable.upsert({
@@ -183,6 +193,26 @@ async function requireValid(input: VariableDefinition): Promise<VariableDefiniti
 	}
 
 	return parsed.data;
+}
+
+/**
+ * Refuses a bare value `printableValue` would refuse — today, one containing a control character.
+ *
+ * `setDeviceOverride` takes a bare value rather than a whole {@link VariableDefinition}, so it
+ * cannot go through {@link variableDefinitionSchema} the way {@link requireValid} does. This applies
+ * the same rule `printableValue` already states, rather than restating the control-character check
+ * a second time: a `DeviceVariable.value` lands in exactly the same substitution sink as a
+ * `Variable.value`, and a write path that skipped this would let an unprintable value sit in the
+ * table looking fine.
+ *
+ * @param value the candidate
+ * @throws ApiError if it contains a control character
+ */
+function requirePrintableValue(value: string): void {
+	const parsed = printableValue.safeParse(value);
+	if (!parsed.success) {
+		throw new ApiError("invalid_variable_value", parsed.error.issues[0]?.message ?? "That value is not valid.");
+	}
 }
 
 /**

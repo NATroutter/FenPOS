@@ -207,6 +207,14 @@ export const API_ERROR_STATUS = {
 	unknown_variable: 422,
 	/** A definition that fails `variableDefinitionSchema` — a cross-field rule, or a value shape it refuses. */
 	invalid_variable: 422,
+	/**
+	 * A device override value that `printableValue` refuses — today, only a control character.
+	 *
+	 * Distinct from `invalid_variable`, which is about a whole definition failing
+	 * `variableDefinitionSchema`: a device override is a bare value, not a definition, so there is no
+	 * definition for that code to describe. See `setDeviceOverride` in `lib/variables/variable-service.ts`.
+	 */
+	invalid_variable_value: 422,
 	/** A variable value beyond the install's configured `variables.maxValueChars`. */
 	variable_too_long: 422,
 	/** Defining one more variable than the install's configured `variables.maxCount` allows. */

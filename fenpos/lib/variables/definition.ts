@@ -118,8 +118,14 @@ export interface VariableDefinition {
 	description: string | null;
 }
 
-/** Text with nothing in it the printer would obey, bounded by the hard ceiling. */
-const printableValue = z
+/**
+ * Text with nothing in it the printer would obey, bounded by the hard ceiling.
+ *
+ * Exported so a write path that does not go through {@link variableDefinitionSchema} as a whole —
+ * `setDeviceOverride` in `lib/variables/variable-service.ts`, which validates a bare value rather
+ * than a full definition — still applies the same control-character rule rather than restating it.
+ */
+export const printableValue = z
 	.string()
 	.max(MAX_VALUE_CHARS_CEILING, `A value must be at most ${MAX_VALUE_CHARS_CEILING} characters.`)
 	.refine((text) => !hasControlCharacter(text), "A value cannot contain control characters.");

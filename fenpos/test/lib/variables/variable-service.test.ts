@@ -101,6 +101,10 @@ describe("variable service", () => {
 		expect(await listVariables()).toHaveLength(0);
 	});
 
+	it("refuses to delete a variable that does not exist", async () => {
+		await expect(deleteVariable("no-such-id")).rejects.toBeInstanceOf(ApiError);
+	});
+
 	describe("device overrides", () => {
 		it("stores and reads one", async () => {
 			const deviceId = await aDevice();
@@ -136,6 +140,15 @@ describe("variable service", () => {
 			const created = await createVariable(definition({ kind: "DATETIME", value: null, pattern: "HH:mm" }));
 
 			await expect(setDeviceOverride(deviceId, created.id, "x")).rejects.toBeInstanceOf(ApiError);
+		});
+
+		it("refuses an override value containing a control character", async () => {
+			const deviceId = await aDevice();
+			const created = await createVariable(definition());
+
+			await expect(setDeviceOverride(deviceId, created.id, `x${String.fromCharCode(0x1b)}y`)).rejects.toBeInstanceOf(
+				ApiError,
+			);
 		});
 
 		it("goes away with the variable it overrides", async () => {
