@@ -83,17 +83,17 @@ describe("completeSetup", () => {
 	/**
 	 * The adapter (`@prisma/adapter-better-sqlite3`) opens every transaction with a plain `BEGIN`
 	 * (verified at `node_modules/.pnpm/@prisma+adapter-better-sqlite3@7.9.1/.../dist/index.js`,
-	 * `startTransaction`), not `BEGIN IMMEDIATE`. A deferred `BEGIN` does not take SQLite's write
-	 * lock until the first write, so two concurrent transactions can both read `user.count() === 0`
-	 * before either has written anything — the exact race this test exists to close, made real by
-	 * the adapter rather than closed by it. Distinguishing the two submissions by email would let
-	 * that interleaving produce two committed users, which is not a failure of the seal but a gap
-	 * this test must not paper over. So the two submissions share one email instead: `@@unique` on
-	 * `User.email` guarantees the second insert fails at the database regardless of how the two
-	 * transactions interleave, and "exactly one winner" is asserted the same way either mechanism
-	 * would produce it.
+	 * `startTransaction`), not `BEGIN IMMEDIATE` — so SQLite itself takes no write lock until the
+	 * first write, and nothing at the SQL level stops two concurrent transactions from both reading
+	 * `user.count() === 0`. What actually closes the race, and why that is still safe, is explained
+	 * in setup.ts's own doc comment; the test below exercises the harder case that mechanism has to
+	 * cover, with distinct emails, so this test uses the *same* email for both submissions instead.
+	 * That makes it a weaker, second check: it shows `@@unique` on `User.email` would still stop a
+	 * second row even if the application-level guard above it were ever removed or broken — a
+	 * defense-in-depth backstop, not the property the seal actually relies on. Kept for that reason
+	 * rather than deleted now that the distinct-email test exists.
 	 */
-	it("lets exactly one of two concurrent submissions win", async () => {
+	it("lets exactly one of two concurrent submissions with the same email win", async () => {
 		const key = (await rotateSetupKey()) as string;
 
 		const results = await Promise.allSettled([
@@ -103,6 +103,48 @@ describe("completeSetup", () => {
 
 		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
 		expect(await prisma.user.count()).toBe(1);
+	});
+
+	/**
+	 * The race this module's guarantee actually has to close: two concurrent submissions for
+	 * *distinct* emails, so `@@unique` on `User.email` cannot be what picks the winner — only the
+	 * in-transaction re-read of the key row and the user count, described in setup.ts, can be.
+	 * Asserting the loser's rejection is specifically a `SetupRefusedError` (rather than merely
+	 * `rejects.toThrow()`) is the point: it shows the application's own check caught the loser, not
+	 * a raw unique-constraint violation surfacing from the database.
+	 *
+	 * Looped rather than run once, because the mechanism that closes this race — the driver's
+	 * synchronity and where this function's `await`s happen to fall, not SQL isolation — is a
+	 * scheduling property rather than something a single trial can rule out a failure mode for.
+	 * 25 iterations, each against a freshly reset table state, is the count a companion review
+	 * probe used to observe 50/50 clean runs before this test existed; keeping that count here
+	 * makes a regression with even a one-in-ten failure rate all but certain to surface, while
+	 * keeping this file's runtime reasonable.
+	 */
+	it("lets exactly one of two concurrent submissions with distinct emails win, refusing the other", async () => {
+		const ITERATIONS = 25;
+
+		for (let iteration = 0; iteration < ITERATIONS; iteration++) {
+			await prisma.setupKey.deleteMany({});
+			await prisma.session.deleteMany({});
+			await prisma.account.deleteMany({});
+			await prisma.user.deleteMany({});
+
+			const key = (await rotateSetupKey()) as string;
+
+			const results = await Promise.allSettled([
+				completeSetup({ ...details, email: `first-${iteration}@example.com`, setupKey: key }),
+				completeSetup({ ...details, email: `second-${iteration}@example.com`, setupKey: key }),
+			]);
+
+			const fulfilled = results.filter((result) => result.status === "fulfilled");
+			const rejected = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+
+			expect(fulfilled).toHaveLength(1);
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0].reason).toBeInstanceOf(SetupRefusedError);
+			expect(await prisma.user.count()).toBe(1);
+		}
 	});
 
 	it("refuses a password below the built-in floor", async () => {

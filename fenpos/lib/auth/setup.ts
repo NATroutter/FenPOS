@@ -25,9 +25,21 @@ import { logger } from "@/lib/logger";
  * - **No code path writes a setup key row while a user exists.** Re-opening setup is not a
  *   permission anyone holds; it is not expressible in this application. The only route back is
  *   the recovery CLI, which needs filesystem access and audits itself.
- * - **The race is closed.** Two simultaneous submissions cannot both succeed: whichever commits
- *   second finds the key row gone and a user present, and the `user` count check runs inside the
- *   same transaction as the insert rather than before it.
+ * - **The race is closed — but not by SQL isolation.** Two simultaneous submissions cannot both
+ *   succeed, and it would be natural to credit that to the transaction itself: `BEGIN`, some kind
+ *   of database-level lock, isolation in the SQL sense. It rests on none of that — this driver's
+ *   `BEGIN` is deferred, not `BEGIN IMMEDIATE`, so SQLite takes no write lock until the first
+ *   write. What actually closes the race is that `@prisma/adapter-better-sqlite3` wraps a
+ *   *synchronous* driver, and Node only interleaves two concurrent calls at an `await`. The
+ *   winning submission's entire write phase — creating the user, creating the account, deleting
+ *   the key row, and committing — runs to completion in one uninterrupted stretch before the
+ *   losing submission's own `await`s ever let it resume. So when the loser's `tx.user.count()`
+ *   re-read finally runs, it sees exactly the state the winner already committed: no key row, one
+ *   user. The guarantee therefore depends on where the `await`s in this function fall and on the
+ *   driver staying synchronous — introducing an `await` between the checks above and the writes
+ *   below, or swapping in an async driver, would silently reopen the race. The concurrency tests
+ *   in `setup.test.ts` — one with a shared email, one with distinct emails — exist to catch that
+ *   regression.
  * - **A partial failure leaves nothing behind.** If the account write fails after the user row is
  *   created, the transaction rolls back and the key survives, so the operator can try again — as
  *   opposed to an install with a user and no credential, which would be sealed and unreachable.
