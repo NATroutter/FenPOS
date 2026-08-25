@@ -148,8 +148,7 @@ export async function recordAudit(input: AuditEventInput): Promise<void> {
 		for (let attempt = 1; attempt <= MAX_CHAIN_ATTEMPTS; attempt++) {
 			// Re-read on every attempt: losing the constraint means somebody else's row is now the
 			// tail, and chaining onto the stale one would lose the same race again.
-			const tail = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { hash: true } });
-			const prevHash = tail?.hash ?? GENESIS_HASH;
+			const prevHash = await tailHash();
 
 			try {
 				await prisma.auditEvent.create({ data: { ...fields, prevHash, hash: hashEvent(fields, prevHash) } });
@@ -182,4 +181,26 @@ function encodeDetail(detail: Record<string, unknown> | undefined): string | nul
 		return null;
 	}
 	return JSON.stringify(redact(detail)).slice(0, MAX_DETAIL_CHARS);
+}
+
+/**
+ * What the next row must name as its predecessor.
+ *
+ * Three-deep, and the middle step is the one that matters. After a retention sweep that removed every
+ * row, the table is empty but `AuditAnchor` holds the last swept event — and `verifyAuditChain` starts
+ * its walk from that anchor and requires the oldest surviving row's `prevHash` to equal it
+ * (`verify.ts`). Falling straight through to genesis there would make an untouched chain report
+ * `anchor-mismatch`: the record accusing itself of tampering, with no tampering to find.
+ *
+ * Genesis is reached only on an install that has never recorded and never swept.
+ *
+ * @returns the tail row's hash, else the anchor's, else {@link GENESIS_HASH}
+ */
+async function tailHash(): Promise<string> {
+	const tail = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { hash: true } });
+	if (tail) {
+		return tail.hash;
+	}
+	const anchor = await prisma.auditAnchor.findUnique({ where: { id: 1 }, select: { hash: true } });
+	return anchor?.hash ?? GENESIS_HASH;
 }

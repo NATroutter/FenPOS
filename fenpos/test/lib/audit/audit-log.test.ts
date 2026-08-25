@@ -116,4 +116,25 @@ describe("recordAudit", () => {
 		expect(rows[0].prevHash).toBe(GENESIS_HASH);
 		expect(rows[1].prevHash).toBe(rows[0].hash);
 	});
+
+	it("chains onto the anchor when a sweep left the table empty", async () => {
+		// The state a sweep that removed everything leaves behind. `verifyAuditChain` starts from the
+		// anchor and expects the oldest surviving row to link to it, so a row that started again at
+		// genesis here would make an untouched chain report `anchor-mismatch` — the record accusing
+		// itself of tampering, with no tampering to find.
+		await prisma.auditAnchor.create({ data: { id: 1, seq: 40, hash: "a".repeat(64) } });
+
+		await recordAudit({ action: "test:after-sweep", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		const row = await prisma.auditEvent.findFirstOrThrow();
+		expect(row.prevHash).toBe("a".repeat(64));
+	});
+
+	it("still starts at genesis when there is no anchor either", async () => {
+		// The other half, so the fix above cannot be made by simply always reading the anchor.
+		await recordAudit({ action: "test:fresh", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		const row = await prisma.auditEvent.findFirstOrThrow();
+		expect(row.prevHash).toBe(GENESIS_HASH);
+	});
 });
