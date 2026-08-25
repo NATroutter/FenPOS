@@ -1,5 +1,5 @@
+import type { PrismaClient } from "@/generated/prisma/client";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
-import { prisma } from "@/lib/db";
 
 /**
  * Walking the chain and reporting where it breaks.
@@ -7,6 +7,12 @@ import { prisma } from "@/lib/db";
  * Read-only, and deliberately so: there is no repair. A chain that fails verification is evidence,
  * and a function that could "fix" it would be a function that could erase the evidence — which is
  * the exact capability the hash chain exists to deny.
+ *
+ * **The client is passed in rather than imported.** `lib/db.ts` begins with `import "server-only"`,
+ * which throws in a plain node process — and `pnpm audit:verify` is a plain node process, run from
+ * a shell precisely because the panel is what an attacker holding superuser credentials already
+ * has. Taking the client as an argument is what keeps this module reachable from both sides;
+ * `scripts/seed-demo-data.ts` builds its own client for the same reason.
  *
  * **What this detects:** an edited row (its own hash no longer matches its contents), a removed row
  * (its successor's link no longer matches the row now preceding it), a forged insert, and a swept
@@ -43,14 +49,24 @@ export type ChainVerification =
 const BATCH_SIZE = 500;
 
 /**
+ * The reads a walk needs.
+ *
+ * A structural subset of `PrismaClient` rather than the client itself, so the signature says what
+ * this does: it reads two tables and writes nothing. Handing a verifier something that could
+ * `update` or `delete` an audit row would contradict the whole shape of the record.
+ */
+export type AuditChainReader = Pick<PrismaClient, "auditAnchor" | "auditEvent">;
+
+/**
  * Verifies the retained chain.
  *
+ * @param db a client for the database to read; the panel passes the shared one, the CLI its own
  * @returns confirmation with the range checked, or the exact `seq` at which it breaks and how
  */
-export async function verifyAuditChain(): Promise<ChainVerification> {
+export async function verifyAuditChain(db: AuditChainReader): Promise<ChainVerification> {
 	// Absent on an install that has never swept, which is not a fault: it means the chain still
 	// starts where it started, at genesis.
-	const anchor = await prisma.auditAnchor.findUnique({ where: { id: 1 } });
+	const anchor = await db.auditAnchor.findUnique({ where: { id: 1 } });
 
 	let expectedPrevHash = anchor?.hash ?? GENESIS_HASH;
 	let cursor = anchor?.seq ?? 0;
@@ -59,7 +75,7 @@ export async function verifyAuditChain(): Promise<ChainVerification> {
 	let lastSeq: number | null = null;
 
 	for (;;) {
-		const rows = await prisma.auditEvent.findMany({
+		const rows = await db.auditEvent.findMany({
 			where: { seq: { gt: cursor } },
 			orderBy: { seq: "asc" },
 			take: BATCH_SIZE,

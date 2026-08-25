@@ -21,7 +21,7 @@ describe("verifyAuditChain", () => {
 	});
 
 	it("confirms an untouched chain", async () => {
-		const result = await verifyAuditChain();
+		const result = await verifyAuditChain(prisma);
 
 		expect(result.ok).toBe(true);
 		expect(result).toMatchObject({ checked: 4 });
@@ -30,14 +30,14 @@ describe("verifyAuditChain", () => {
 	it("confirms an empty table", async () => {
 		await prisma.auditEvent.deleteMany({});
 
-		expect(await verifyAuditChain()).toMatchObject({ ok: true, checked: 0, firstSeq: null, lastSeq: null });
+		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: true, checked: 0, firstSeq: null, lastSeq: null });
 	});
 
 	it("detects an altered row at that row", async () => {
 		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
 		await prisma.auditEvent.update({ where: { seq: rows[1].seq }, data: { action: "test:innocent" } });
 
-		expect(await verifyAuditChain()).toMatchObject({ ok: false, brokenAt: rows[1].seq, reason: "hash-mismatch" });
+		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: false, brokenAt: rows[1].seq, reason: "hash-mismatch" });
 	});
 
 	it("detects a removed row at its successor", async () => {
@@ -46,7 +46,7 @@ describe("verifyAuditChain", () => {
 
 		// The gap in `seq` is the symptom; the successor still claiming a predecessor that no longer
 		// precedes it is what actually detects the removal.
-		expect(await verifyAuditChain()).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "link-mismatch" });
+		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "link-mismatch" });
 	});
 
 	it("detects a row inserted out of order", async () => {
@@ -64,7 +64,7 @@ describe("verifyAuditChain", () => {
 			},
 		});
 
-		const result = await verifyAuditChain();
+		const result = await verifyAuditChain(prisma);
 		expect(result.ok).toBe(false);
 		expect(result).toMatchObject({ brokenAt: rows[3].seq + 1 });
 	});
@@ -74,7 +74,7 @@ describe("verifyAuditChain", () => {
 		await prisma.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: rows[1].hash } });
 		await prisma.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
 
-		expect(await verifyAuditChain()).toMatchObject({ ok: true, checked: 2, firstSeq: rows[2].seq });
+		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: true, checked: 2, firstSeq: rows[2].seq });
 	});
 
 	it("detects an anchor that does not match the oldest retained row", async () => {
@@ -82,7 +82,11 @@ describe("verifyAuditChain", () => {
 		await prisma.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: "not-what-was-swept" } });
 		await prisma.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
 
-		expect(await verifyAuditChain()).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "anchor-mismatch" });
+		expect(await verifyAuditChain(prisma)).toMatchObject({
+			ok: false,
+			brokenAt: rows[2].seq,
+			reason: "anchor-mismatch",
+		});
 	});
 });
 

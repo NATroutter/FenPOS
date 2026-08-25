@@ -13,6 +13,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"agent:bundle-logo": "tsx scripts/bundle-logo-rasters.ts",
+		"audit:verify": "tsx scripts/audit-verify.ts",
 		"db:generate": "prisma generate",
 		"db:migrate": "prisma migrate dev",
 		"db:deploy": "prisma migrate deploy",
