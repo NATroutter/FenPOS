@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
 	BookOpen,
+	Braces,
 	CodeXml,
 	// `Image` is also a DOM global, and one that a React file legitimately reaches for. Aliased so
 	// the name in this file can only mean the icon.
@@ -135,6 +136,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Images receipts can print. Referenced from markup by name, and pushed to the agents that need them.",
 				icon: ImageIcon,
+			},
+			{
+				href: "/variables",
+				label: "Variables",
+				title: "Variables",
+				description:
+					"Values receipts refer to by name. Written as {name} in markup and filled in when the receipt is printed, so a phone number or an address is changed in one place.",
+				icon: Braces,
 			},
 			{
 				href: "/settings",
