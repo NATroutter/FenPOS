@@ -664,7 +664,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.minimumPasswordLength",
 		label: "Minimum password length",
 		description:
-			"Shortest acceptable administrator password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed. First-run setup enforces only the built-in floor, not this setting, since there is no administrator yet to have configured it.",
+			"Shortest acceptable account password. The floor is the built-in value — this can be raised, never lowered. Existing passwords are unaffected until they are changed. First-run setup enforces only the built-in floor, not this setting, since there is no account yet to have configured it.",
 		category: "security",
 		type: "integer",
 		min: MINIMUM_PASSWORD_LENGTH,

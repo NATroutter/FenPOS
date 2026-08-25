@@ -150,7 +150,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				label: "Settings",
 				title: "Settings",
 				description:
-					"Install-wide defaults. Per-printer settings are on the Devices tab, and the administrator password is under your profile in the sidebar.",
+					"Install-wide defaults. Per-printer settings are on the Devices tab, and your password is under your profile in the sidebar.",
 				icon: Settings2,
 			},
 			{

@@ -17,10 +17,16 @@ services:
 
     volumes:
       # Everything that matters: the database holds agents, their credentials,
-      # devices, keys, jobs and the admin password. Back this up.
+      # devices, keys, jobs and every account's password. Back this up.
       - ./data:/app/data
 
     environment:
+      # Required, no default: signs session cookies and tokens. Generate with:
+      #   openssl rand -base64 32
+      # Set it in the shell that runs `docker compose`, or in a .env file next to this one
+      # (docker compose loads that automatically) — never commit the real value. Changing it
+      # signs everyone out; it is not stored in the data/ volume above.
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?not set - generate one with 'openssl rand -base64 32' and export it before running compose}"
       # Job and log timestamps are user-facing, so the container's zone matters.
       TZ: "Europe/Helsinki"
 

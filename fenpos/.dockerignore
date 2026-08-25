@@ -11,7 +11,7 @@ docs/
 tsconfig.tsbuildinfo
 
 # The live database and the environment that points at it belong to the host.
-# An image carrying either would ship someone's data, and their admin password
+# An image carrying either would ship someone's data, and every account's password
 # hash with it.
 data/
 .env

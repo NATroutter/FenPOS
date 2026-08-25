@@ -23,6 +23,10 @@ describe("envSchema", () => {
 		expect(envSchema.safeParse({ ...base, BETTER_AUTH_SECRET: "short" }).success).toBe(false);
 	});
 
+	it("refuses an auth secret one character under the 32-character floor", () => {
+		expect(envSchema.safeParse({ ...base, BETTER_AUTH_SECRET: "x".repeat(31) }).success).toBe(false);
+	});
+
 	it("accepts an absent public URL, which means derive it from the request", () => {
 		expect(envSchema.safeParse(base).data?.BETTER_AUTH_URL).toBeUndefined();
 	});

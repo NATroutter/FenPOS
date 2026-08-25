@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { admin, twoFactor } from "better-auth/plugins";
-import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { hashPassword, MAXIMUM_PASSWORD_LENGTH, verifyPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 
@@ -64,6 +64,20 @@ export const auth = betterAuth({
 			hash: (password) => hashPassword(password),
 			verify: ({ hash, password }) => verifyPassword(hash, password),
 		},
+		/**
+		 * Matched to `password.ts`'s own `MAXIMUM_PASSWORD_LENGTH` rather than left at Better
+		 * Auth's default of 128.
+		 *
+		 * Setup hashes directly and enforces only `password.ts`'s bound, so a password between 129
+		 * and 1024 characters is created and stored without Better Auth ever seeing it. Left
+		 * unset, the first time that same password reached a Better Auth endpoint — signing in,
+		 * or changing it from Settings — it would be refused as `PASSWORD_TOO_LONG` against a
+		 * limit the operator was never told about and cannot see, and `settings/actions.ts`
+		 * collapses that refusal into "That is not the current password," which is false. Setting
+		 * this equal to `MAXIMUM_PASSWORD_LENGTH` closes the gap: every path that accepts a
+		 * password agrees on the same ceiling.
+		 */
+		maxPasswordLength: MAXIMUM_PASSWORD_LENGTH,
 	},
 
 	user: {

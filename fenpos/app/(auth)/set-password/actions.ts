@@ -71,7 +71,23 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 		return { error: "The two passwords do not match." };
 	}
 
-	await auth.api.setPassword({ body: { newPassword: parsed.data }, headers: await headers() });
+	// `auth.api.setPassword` is the wrong endpoint for this: it throws `PASSWORD_ALREADY_SET`
+	// (better-auth/dist/api/routes/update-user.mjs) the moment the account already has a
+	// credential row, which every account reaching this page does — `setup.ts` writes
+	// `account.password` directly, and nothing in this codebase creates a user without one. That
+	// would make this page a dead end: refused on the one submission it exists to accept.
+	// `auth.api.setUserPassword` (better-auth/dist/plugins/admin/routes.mjs) is built for exactly
+	// this — it updates an existing credential instead of refusing it — but it runs behind the
+	// admin plugin's `adminMiddleware` and a `user:["set-password"]` permission check, so the
+	// caller's own session must already carry the "admin" role. Right now every account does:
+	// `setup.ts` is the only place a user is created, and it always sets `role: "admin"`. Passing
+	// the signed-in user's own id lets an account clear its own forced reset. This stops being true
+	// the moment a later phase creates a non-admin account with "Require password reset" ticked —
+	// tracked there, not fixed here.
+	await auth.api.setUserPassword({
+		body: { userId: user.id, newPassword: parsed.data },
+		headers: await headers(),
+	});
 
 	// Cleared after the password is actually stored, not before. The other order would leave an
 	// account free of the requirement but still holding the password it was told to replace, if

@@ -11,19 +11,24 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * every other request — where a second WebSocket would have to be routed past Next's own upgrade
  * handling, which this process already does once and would rather not do twice.
  *
- * **Signed-in session only.** The stream carries job identifiers, device names and log lines from
- * every site in the install, which is more than any API key is ever granted.
+ * **Signed-in session only, and not one that still owes a password change.** The stream carries
+ * job identifiers, device names and log lines from every site in the install, which is more than
+ * any API key is ever granted.
  *
  * Gated with {@link currentUser} rather than `requireSession`: the latter redirects an
  * unauthenticated caller, and a redirect is wrong here — the browser's `EventSource` would follow
  * it and receive an HTML redirect target on a connection it opened expecting `text/event-stream`.
+ * That means the `mustChangePassword` gate `requireSession` applies for every other panel route
+ * has to be repeated here by hand — a session owing a change must reach nothing but `/set-password`,
+ * and this route is the one place that check does not come for free.
  */
 
 /** Never cached and never prerendered: the whole point is that it does not end. */
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-	if (!(await currentUser())) {
+	const user = await currentUser();
+	if (!user || user.mustChangePassword) {
 		return Response.json({ error: "missing_key", message: "Not signed in." }, { status: 401 });
 	}
 

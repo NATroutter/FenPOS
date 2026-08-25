@@ -397,12 +397,17 @@ export async function printMarkup(
 /**
  * Writes raw bytes to a printer.
  *
- * Admin session only. A machine client reaches the same act through
- * `POST /api/v1/devices/{agent}/{device}/raw`, where it needs `devices:raw` *and* the install's
- * `link.allowRawApiWrites` switch, which ships off. Both gates are that route's, not this one's:
- * these bytes are the printer's own language — a wrong sequence can leave a device needing a power
- * cycle — and an administrator sitting in this panel has already cleared a higher bar than either
- * of them, which is why the Tools tab does not consult the setting a key is measured against.
+ * Gated on holding a panel session, nothing more — no permission check, no install setting. A
+ * machine client reaches the same act through `POST /api/v1/devices/{agent}/{device}/raw`, where
+ * it needs `devices:raw` *and* the install's `link.allowRawApiWrites` switch, which ships off.
+ * Those two gates are that route's, not this one's.
+ *
+ * **This is only as strong as "there is only one account."** Right now that is true of every
+ * install — `setup.ts` is the only place a user is created — so a panel session and an
+ * administrator are the same thing and the gate above is a real bar. `tools:raw` is already in
+ * Phase 3's permission set for exactly this reason: the moment a second account exists, holding a
+ * session stops implying holding that bar, and this function needs the permission check it does
+ * not have today.
  *
  * @param deviceId the device to write to
  * @param bytes the bytes to write

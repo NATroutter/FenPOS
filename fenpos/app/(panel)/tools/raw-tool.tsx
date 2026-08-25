@@ -152,9 +152,11 @@ const SNIPPET_GROUPS: { group: string; snippets: Snippet[] }[] = [
 /**
  * The raw byte editor.
  *
- * **This hands arbitrary bytes to hardware.** It is the admin-session way in, and it answers to the
- * session alone: `writeRaw` checks no permission and no install setting, because an administrator
- * sitting in this panel has already cleared a higher bar than either. A machine client reaches the
+ * **This hands arbitrary bytes to hardware.** It answers to the panel session alone: `writeRaw`
+ * checks no permission and no install setting, only that a session is open. That is only as strong
+ * as "there is only one account" — true of every install today, since `setup.ts` is the only place
+ * a user is created — and it stops being true the moment a later phase adds a second one; `tools:raw`
+ * is already reserved in Phase 3's permission set against that day. A machine client reaches the
  * same act through `POST /devices/{agent}/{device}/raw`, which is gated twice over — a key must hold
  * `devices:raw` *and* the install must have `link.allowRawApiWrites` switched on, which it does not
  * by default. Every write is logged twice — here and on the agent — because two records on two
