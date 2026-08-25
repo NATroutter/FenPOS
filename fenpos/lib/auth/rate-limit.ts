@@ -231,6 +231,19 @@ export function signInThrottlePhrase(limit: number): string {
 export const pairingLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });
 
 /**
+ * Setup key limiter, keyed by client address.
+ *
+ * Tighter than sign-in and tighter than pairing, because a wrong guess here is never an operator
+ * mistyping a password they know — the key is copied off a terminal, so a legitimate attempt is
+ * a paste. What is on the other side of a correct guess is total control of an unclaimed install
+ * and, through it, of the printers it will later drive.
+ *
+ * Deliberately not a setting, for the same reason `pairingLimiter` is not: the key's entropy
+ * budget assumes guessing is slow, and there is no floor here that would be safe to expose.
+ */
+export const setupLimiter = new RateLimiter({ limit: 3, windowMs: 60_000 });
+
+/**
  * The ceiling `api.readsPerMinute` may be configured to, and this limiter's constructed default.
  *
  * Matches the setting's declared `max`. Unlike the sign-in limiter, no provisional consume against

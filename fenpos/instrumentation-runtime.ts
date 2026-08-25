@@ -1,6 +1,5 @@
 import { purgeExpiredPairingCodes } from "@/lib/agents/pairing";
-import { ensureAdminPassword } from "@/lib/auth/admin";
-import { purgeExpiredSessions } from "@/lib/auth/session";
+import { rotateSetupKey } from "@/lib/auth/setup-key";
 import { prisma } from "@/lib/db";
 import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
 import { getHttpServer } from "@/lib/link/server-handle";
@@ -25,7 +24,7 @@ const DELIVERY_DRAIN_INTERVAL_MS = 5_000;
  * bundle pulling in Prisma and failing to compile.
  */
 export async function registerRuntime(): Promise<void> {
-	await announceAdminPassword();
+	await announceSetupKey();
 	await runMaintenance();
 	// Seeds modules that hold a mutable value pushed from the store — the logger's minimum
 	// level today — with whatever is saved. Placed after the maintenance queries above so it
@@ -37,38 +36,40 @@ export async function registerRuntime(): Promise<void> {
 }
 
 /**
- * Prints the generated administrator password, creating it on the first boot that needs one.
+ * Prints the setup key, minting a fresh one on every boot while the install is unclaimed.
  *
- * Repeated on every start for as long as that password is still in use, rather than shown
- * once. An operator who scrolled past it, restarted before signing in, or came to a container
- * whose first logs have rotated away would otherwise have no route in but to reset the
- * install. It stops appearing the moment a real password is set, so it cannot become
- * background noise nobody reads.
+ * Rotating on each start is the deliberate difference from the administrator password this
+ * replaces, which had to be stored in the clear so it could be reprinted. Nothing is bound to a
+ * setup key, so replacing it costs nothing — and it means an operator who scrolled past the
+ * message, restarted before claiming, or came to a container whose first logs have rotated away
+ * simply restarts, while a key someone else glimpsed stops working at the same moment.
  *
- * Written straight to stdout rather than through the logger, and framed, because it is the
- * one thing in the output an operator must not miss.
+ * Silent on a claimed install, so this can never become background noise nobody reads.
  *
- * A failure here blocks sign-in but not serving, so it is reported rather than thrown: the
- * logs explaining what went wrong are easier to reach with the server up.
+ * Written straight to stdout rather than through the logger, and framed, because it is the one
+ * thing in the output an operator must not miss.
+ *
+ * A failure here blocks claiming the install but not serving it, so it is reported rather than
+ * thrown: the logs explaining what went wrong are easier to reach with the server up.
  */
-async function announceAdminPassword(): Promise<void> {
+async function announceSetupKey(): Promise<void> {
 	try {
-		const password = await ensureAdminPassword();
-		if (!password) {
+		const key = await rotateSetupKey();
+		if (!key) {
 			return;
 		}
 
 		const rule = "─".repeat(66);
 		process.stdout.write(
 			`\n${rule}\n` +
-				`  This install is still using its generated administrator password:\n\n` +
-				`      ${password}\n\n` +
-				`  Sign in with it. FenPOS will ask you to replace it before letting you\n` +
-				`  into the panel, and this message stops once you have.\n` +
+				`  This install has no accounts yet. Claim it with this setup key:\n\n` +
+				`      ${key}\n\n` +
+				`  Open the panel, enter the key, and create the first account. A new key\n` +
+				`  is issued on every restart until you do, and this message then stops.\n` +
 				`${rule}\n\n`,
 		);
 	} catch (error) {
-		logger.error("Could not read or create the administrator password", error);
+		logger.error("Could not mint or print the setup key", error);
 	}
 }
 
@@ -81,15 +82,6 @@ async function announceAdminPassword(): Promise<void> {
  * error would turn a cosmetic problem into an outage.
  */
 async function runMaintenance(): Promise<void> {
-	try {
-		const purged = await purgeExpiredSessions();
-		if (purged > 0) {
-			logger.info("Purged expired sessions at startup", { count: purged });
-		}
-	} catch (error) {
-		logger.error("Could not purge expired sessions at startup", error);
-	}
-
 	try {
 		// Agent status records whether a live WebSocket exists, and that lives in memory. After
 		// a restart nothing is connected, so a row still claiming ONLINE is a lie that would

@@ -239,3 +239,18 @@ describe("requireApiRead", () => {
 		}
 	});
 });
+
+describe("setup limiter", () => {
+	it("is tighter than the sign-in limiter", async () => {
+		const { setupLimiter } = await import("@/lib/auth/rate-limit");
+
+		const address = "203.0.113.9";
+		const now = Date.now();
+
+		const outcomes = Array.from({ length: 6 }, () => setupLimiter.consume(address, now));
+
+		expect(outcomes.filter((outcome) => outcome.allowed)).toHaveLength(3);
+		expect(outcomes.at(-1)?.allowed).toBe(false);
+		expect(outcomes.at(-1)?.retryAfterMs).toBeGreaterThan(0);
+	});
+});
