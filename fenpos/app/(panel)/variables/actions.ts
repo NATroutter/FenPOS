@@ -8,7 +8,11 @@ import { logger } from "@/lib/logger";
 import type { OffsetUnit, VariableDefinition } from "@/lib/variables/definition";
 import { evaluateVariable } from "@/lib/variables/evaluate";
 import { PANEL_PRINT_CONTEXT, printedFormatting } from "@/lib/variables/formatting";
-import { createVariable, deleteVariable, updateVariable } from "@/lib/variables/variable-service";
+import {
+	createVariable as createVariableRecord,
+	deleteVariable,
+	updateVariable as updateVariableRecord,
+} from "@/lib/variables/variable-service";
 
 /**
  * Server actions behind the Variables tab.
@@ -35,23 +39,32 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
 }
 
 /**
- * Creates or replaces a variable.
+ * Creates a variable.
  *
- * One action for both because the dialog is one form: whether it is editing depends only on whether
- * it was opened on a row, and splitting this in two would mean the same fields validated by two
- * paths that could drift.
+ * Split from the update path, which was one action branching on whether `id` was null. One action
+ * with two meanings cannot carry one permission, and the permission is what the panel is gated on,
+ * so the action is split rather than the rule bent. The dialog is still one form: it decides which
+ * of these to call from the same state it used to decide what to pass as `id`.
  *
- * @param id the variable to replace, or null to create one
  * @param input the definition
  * @returns the state to render
  */
-export async function saveVariable(id: string | null, input: VariableDefinition): Promise<ActionState> {
-	return run("save", async () => {
-		if (id === null) {
-			await createVariable(input);
-		} else {
-			await updateVariable(id, input);
-		}
+export async function createVariable(input: VariableDefinition): Promise<ActionState> {
+	return run("create", async () => {
+		await createVariableRecord(input);
+	});
+}
+
+/**
+ * Replaces a variable's definition.
+ *
+ * @param id the variable to replace
+ * @param input the new definition
+ * @returns the state to render
+ */
+export async function updateVariable(id: string, input: VariableDefinition): Promise<ActionState> {
+	return run("update", async () => {
+		await updateVariableRecord(id, input);
 	});
 }
 
@@ -81,7 +94,7 @@ export interface MomentPreview {
  *
  * A server action rather than something the dialog computes itself: `evaluateVariable` needs the
  * install's configured zone and locale, which are settings, and an empty pattern is not an error
- * here the way it is in {@link saveVariable} — there is simply nothing yet to show.
+ * here the way it is in {@link createVariable} — there is simply nothing yet to show.
  *
  * The synthetic context is the one every panel surface shares — see `PANEL_PRINT_CONTEXT` — a
  * printer name of "—" rather than a real device, because a pattern preview has no printer in mind

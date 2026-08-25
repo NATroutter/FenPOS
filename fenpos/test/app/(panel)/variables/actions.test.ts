@@ -13,7 +13,7 @@ vi.mock("@/lib/auth/require-session", () => ({
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
-const { removeVariable, saveVariable } = await import("@/app/(panel)/variables/actions");
+const { createVariable, removeVariable, updateVariable } = await import("@/app/(panel)/variables/actions");
 const { prisma } = await import("@/lib/db");
 const { listVariables } = await import("@/lib/variables/variable-service");
 
@@ -37,31 +37,31 @@ describe("variable actions", () => {
 	});
 
 	it("creates a variable when given no id", async () => {
-		const state = await saveVariable(null, input());
+		const state = await createVariable(input());
 
 		expect(state.error).toBeNull();
 		expect(await listVariables()).toHaveLength(1);
 	});
 
 	it("updates in place when given an id", async () => {
-		await saveVariable(null, input());
+		await createVariable(input());
 		const [created] = await listVariables();
 
-		const state = await saveVariable(created.id, input({ value: "020-7654321" }));
+		const state = await updateVariable(created.id, input({ value: "020-7654321" }));
 
 		expect(state.error).toBeNull();
 		expect((await listVariables())[0].value).toBe("020-7654321");
 	});
 
 	it("reports an invalid definition as a message rather than throwing", async () => {
-		const state = await saveVariable(null, input({ name: "Not A Slug" }));
+		const state = await createVariable(input({ name: "Not A Slug" }));
 
 		expect(state.error).toBeTruthy();
 		expect(await listVariables()).toHaveLength(0);
 	});
 
 	it("removes a variable", async () => {
-		await saveVariable(null, input());
+		await createVariable(input());
 		const [created] = await listVariables();
 
 		const state = await removeVariable(created.id);

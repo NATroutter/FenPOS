@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { type ReactElement, useEffect, useState, useTransition } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
-import { previewMoment, saveVariable } from "@/app/(panel)/variables/actions";
+import { createVariable, previewMoment, updateVariable } from "@/app/(panel)/variables/actions";
 import { CONTEXT_LABELS, KIND_LABELS } from "@/app/(panel)/variables/variable-row";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -183,7 +183,7 @@ export function VariableDialog({
 	const onSubmit = form.handleSubmit((values) => {
 		setError(null);
 		startSave(async () => {
-			const result = await saveVariable(variableId ?? null, values);
+			const result = variableId ? await updateVariable(variableId, values) : await createVariable(values);
 			if (result.error) {
 				setError(result.error);
 				return;
