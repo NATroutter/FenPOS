@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import type { Codepage, FlowControl, Linefeed, Parity, UnsupportedPolicy } from "@/lib/domain/enums";
 import { getAgentStatus } from "@/lib/link/device-status";
 import { isConnected } from "@/lib/link/registry";
+import { listDeviceOverrides, listVariables } from "@/lib/variables/variable-service";
 
 export const metadata = { title: "Devices" };
 
@@ -29,54 +30,76 @@ export const dynamic = "force-dynamic";
  * rather than resolving them into one misleading answer.
  */
 export default async function DevicesPage() {
-	const agents = await prisma.agent.findMany({
-		orderBy: { name: "asc" },
-		include: { devices: { orderBy: { name: "asc" } } },
-	});
+	const [agents, variables] = await Promise.all([
+		prisma.agent.findMany({
+			orderBy: { name: "asc" },
+			include: { devices: { orderBy: { name: "asc" } } },
+		}),
+		listVariables(),
+	]);
 
-	const groups = agents.map((agent) => {
-		const online = isConnected(agent.id);
-		const observed = getAgentStatus(agent.id);
+	// Only a `STATIC` variable can carry a per-printer value — `setDeviceOverride` refuses any
+	// other kind, since a date's format or a job's own name is the same fact on every printer. This
+	// filters here rather than in the dialog so a device with no `STATIC` variables at all never
+	// asks the panel to render an override row for one it could not save anyway.
+	const staticVariables = variables.filter((variable) => variable.kind === "STATIC");
 
-		const devices: DeviceCardData[] = agent.devices.map((device) => {
-			const state = observed.get(device.name);
-			return {
-				id: device.id,
-				agentId: agent.id,
-				agentName: agent.name,
-				agentOnline: online,
-				name: device.name,
-				paused: device.paused,
-				connection: state?.connection ?? null,
-				queueDepth: state?.queueDepth ?? null,
-				settings: {
-					name: device.name,
-					port: device.port,
-					baudRate: device.baudRate,
-					dataBits: device.dataBits,
-					stopBits: device.stopBits,
-					// SQLite has no enums, so Prisma types these as plain strings. The values are
-					// written only through the device service, which validates them against the same
-					// closed sets, and a row that somehow held anything else would be refused by the
-					// config push long before it reached a printer.
-					parity: device.parity as Parity,
-					flowControl: device.flowControl as FlowControl,
-					writeTimeoutMs: device.writeTimeoutMs,
-					autoConnect: device.autoConnect,
-					autoReconnect: device.autoReconnect,
-					reconnectDelaySeconds: device.reconnectDelaySeconds,
-					columns: device.columns,
-					codepage: device.codepage as Codepage,
-					onUnsupported: device.onUnsupported as UnsupportedPolicy,
-					defaultWrap: device.defaultWrap,
-					defaultLinefeed: device.defaultLinefeed as Linefeed,
-					maxQueueDepth: device.maxQueueDepth ?? EMPTY_DEVICE.maxQueueDepth,
-				},
-			};
-		});
+	const groups = await Promise.all(
+		agents.map(async (agent) => {
+			const online = isConnected(agent.id);
+			const observed = getAgentStatus(agent.id);
 
-		return { id: agent.id, name: agent.name, online, devices };
-	});
+			const devices: DeviceCardData[] = await Promise.all(
+				agent.devices.map(async (device) => {
+					const state = observed.get(device.name);
+					const overrides = await listDeviceOverrides(device.id);
+					return {
+						id: device.id,
+						agentId: agent.id,
+						agentName: agent.name,
+						agentOnline: online,
+						name: device.name,
+						paused: device.paused,
+						connection: state?.connection ?? null,
+						queueDepth: state?.queueDepth ?? null,
+						settings: {
+							name: device.name,
+							port: device.port,
+							baudRate: device.baudRate,
+							dataBits: device.dataBits,
+							stopBits: device.stopBits,
+							// SQLite has no enums, so Prisma types these as plain strings. The values are
+							// written only through the device service, which validates them against the same
+							// closed sets, and a row that somehow held anything else would be refused by the
+							// config push long before it reached a printer.
+							parity: device.parity as Parity,
+							flowControl: device.flowControl as FlowControl,
+							writeTimeoutMs: device.writeTimeoutMs,
+							autoConnect: device.autoConnect,
+							autoReconnect: device.autoReconnect,
+							reconnectDelaySeconds: device.reconnectDelaySeconds,
+							columns: device.columns,
+							codepage: device.codepage as Codepage,
+							onUnsupported: device.onUnsupported as UnsupportedPolicy,
+							defaultWrap: device.defaultWrap,
+							defaultLinefeed: device.defaultLinefeed as Linefeed,
+							maxQueueDepth: device.maxQueueDepth ?? EMPTY_DEVICE.maxQueueDepth,
+						},
+						variables: staticVariables.map((variable) => ({
+							id: variable.id,
+							name: variable.name,
+							// `STATIC` guarantees `value` is set — `variableDefinitionSchema` refuses a
+							// `STATIC` row without one — so this never falls back in practice.
+							value: variable.value ?? "",
+							override: overrides.get(variable.name) ?? null,
+						})),
+					};
+				}),
+			);
+
+			return { id: agent.id, name: agent.name, online, devices };
+		}),
+	);
 
 	const total = groups.reduce((count, group) => count + group.devices.length, 0);
 

@@ -3,7 +3,7 @@
 import { RefreshCw } from "lucide-react";
 import { type ReactElement, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createDevice, scanAgentPorts, updateDevice } from "@/app/(panel)/devices/actions";
+import { createDevice, saveDeviceOverride, scanAgentPorts, updateDevice } from "@/app/(panel)/devices/actions";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,6 +63,22 @@ export interface DeviceFormValues {
 	maxQueueDepth: number;
 }
 
+/**
+ * One `STATIC` variable as this printer may override it.
+ *
+ * Only `STATIC` variables appear here at all — a `DATETIME` variable's format and a `CONTEXT`
+ * variable's source are the same fact on every printer, so `setDeviceOverride` refuses them, and
+ * the dialog never offers them in the first place.
+ */
+export interface OverridableVariable {
+	id: string;
+	name: string;
+	/** The install-wide value, shown as placeholder text so the operator can see what they are replacing. */
+	value: string;
+	/** This printer's own value, or null when it falls back to the install-wide one. */
+	override: string | null;
+}
+
 /** A printer as it arrives from the server, with defaults already applied. */
 export const EMPTY_DEVICE: DeviceFormValues = {
 	name: "",
@@ -99,6 +115,7 @@ export function DeviceDialog({
 	agentOnline,
 	deviceId,
 	initial,
+	variables = [],
 	trigger,
 }: {
 	agentId: string;
@@ -106,6 +123,8 @@ export function DeviceDialog({
 	agentOnline: boolean;
 	deviceId?: string;
 	initial?: DeviceFormValues;
+	/** This printer's `STATIC` variables, for the overrides section. Empty on the "Add printer" dialog, which has no `deviceId` yet to hang an override on. */
+	variables?: OverridableVariable[];
 	trigger: ReactElement;
 }) {
 	const [open, setOpen] = useState(false);
@@ -355,6 +374,8 @@ export function DeviceDialog({
 							/>
 						</div>
 
+						{deviceId ? <OverridesSection deviceId={deviceId} variables={variables} disabled={saving} /> : null}
+
 						{error ? (
 							<Alert variant="destructive">
 								<AlertDescription>{error}</AlertDescription>
@@ -470,5 +491,108 @@ function Toggle({
 				{label}
 			</FieldLabel>
 		</div>
+	);
+}
+
+/**
+ * Lets this one printer carry its own value for a `STATIC` variable, in place of the install-wide
+ * one every other printer sees.
+ *
+ * Only shown once the printer already exists — `deviceId` has to name a real row for an override
+ * to hang off of, which is why the "Add printer" dialog never renders this at all. Each field saves
+ * itself independently of the dialog's own Save button: an override is a separate write against a
+ * separate table, and batching it behind "Save" would mean losing it if the operator closed the
+ * dialog with Cancel after only meaning to skip the serial settings they hadn't touched.
+ */
+function OverridesSection({
+	deviceId,
+	variables,
+	disabled,
+}: {
+	deviceId: string;
+	variables: OverridableVariable[];
+	disabled: boolean;
+}) {
+	return (
+		<div className="flex flex-col gap-2.5 border-t border-border pt-3">
+			<div>
+				<FieldLabel>Variable overrides</FieldLabel>
+				<FieldDescription>
+					A date's format and a printer's own name are the same on every printer, so only text variables can be
+					overridden here.
+				</FieldDescription>
+			</div>
+
+			{variables.length === 0 ? (
+				<p className="text-[11.5px] text-subtle-foreground">
+					No text variables are defined yet. Add one on the Variables tab to override it here.
+				</p>
+			) : (
+				<div className="grid grid-cols-2 gap-4">
+					{variables.map((variable) => (
+						<OverrideField key={variable.id} deviceId={deviceId} variable={variable} disabled={disabled} />
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * One variable's field in {@link OverridesSection}.
+ *
+ * Saves on blur rather than on every keystroke, the same tradeoff the serial fields above make by
+ * waiting for the dialog's own Save — a value is not this printer's until the operator has finished
+ * typing it, and a save per character would spam `setDeviceOverride` for nothing. Clearing the box
+ * and moving on saves `null`, which removes the override and falls back to the install-wide value
+ * shown as the box's placeholder.
+ */
+function OverrideField({
+	deviceId,
+	variable,
+	disabled,
+}: {
+	deviceId: string;
+	variable: OverridableVariable;
+	disabled: boolean;
+}) {
+	const [draft, setDraft] = useState(variable.override ?? "");
+	const [saving, startSaving] = useTransition();
+
+	// Re-syncs the box when the server's own value moves for a reason this field did not cause —
+	// another tab's edit landing after `revalidatePath`, or the dialog reopening on a different
+	// printer's data while this component happens to stay mounted.
+	useEffect(() => {
+		setDraft(variable.override ?? "");
+	}, [variable.override]);
+
+	const commit = (): void => {
+		const next = draft === "" ? null : draft;
+		if (next === variable.override) {
+			return;
+		}
+		startSaving(async () => {
+			const result = await saveDeviceOverride(deviceId, variable.id, next);
+			if (result.error) {
+				toast.error(result.error);
+				setDraft(variable.override ?? "");
+			}
+		});
+	};
+
+	return (
+		<Field>
+			<FieldLabel htmlFor={`override-${variable.id}`} className="font-mono">
+				{variable.name}
+			</FieldLabel>
+			<Input
+				id={`override-${variable.id}`}
+				value={draft}
+				placeholder={variable.value}
+				disabled={disabled || saving}
+				onChange={(event) => setDraft(event.target.value)}
+				onBlur={commit}
+			/>
+		</Field>
 	);
 }

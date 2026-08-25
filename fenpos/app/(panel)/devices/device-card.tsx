@@ -4,7 +4,7 @@ import { FileText, Pause, Play, Plug, PlugZap, Printer, Settings2, Trash, Trash2
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { clearQueue, deleteDevice, printTestPage, setConnected, setPaused } from "@/app/(panel)/devices/actions";
-import { DeviceDialog, type DeviceFormValues } from "@/app/(panel)/devices/device-dialog";
+import { DeviceDialog, type DeviceFormValues, type OverridableVariable } from "@/app/(panel)/devices/device-dialog";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -33,6 +33,8 @@ export interface DeviceCardData {
 	connection: ConnectionStatus | null;
 	queueDepth: number | null;
 	settings: DeviceFormValues;
+	/** This printer's `STATIC` variables and its own value for each, for the Configure dialog's overrides section. */
+	variables: OverridableVariable[];
 }
 
 /**
@@ -148,6 +150,7 @@ export function DeviceCard({ device }: { device: DeviceCardData }) {
 						agentOnline={online}
 						deviceId={device.id}
 						initial={device.settings}
+						variables={device.variables}
 						trigger={
 							<Button
 								variant="outline"

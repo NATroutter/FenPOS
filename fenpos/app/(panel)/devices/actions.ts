@@ -15,6 +15,7 @@ import { ApiError } from "@/lib/errors";
 import { scanPorts, sendDeviceCommand } from "@/lib/link/commands";
 import type { SerialPortInfo } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
+import { setDeviceOverride } from "@/lib/variables/variable-service";
 
 /**
  * Server actions behind the Devices tab.
@@ -147,6 +148,28 @@ export async function printTestPage(deviceId: string): Promise<ActionState> {
 		const device = await requireDevice(deviceId);
 		await sendDeviceCommand(device.agentId, "device.test", device.name);
 	});
+}
+
+/**
+ * Sets or clears one printer's own value for a variable.
+ *
+ * `setDeviceOverride` already enforces every rule — that only a `STATIC` variable can be
+ * overridden, that a value cannot carry a control character, that it cannot exceed
+ * `variables.maxValueChars`, and that the variable must still exist — so this just calls it and
+ * lets its `ApiError` become the message the dialog shows. `value: null` clears the override and
+ * falls back to the install-wide value.
+ *
+ * @param deviceId the printer
+ * @param variableId the variable
+ * @param value the printer's own value, or null to clear it
+ * @returns the state to render
+ */
+export async function saveDeviceOverride(
+	deviceId: string,
+	variableId: string,
+	value: string | null,
+): Promise<ActionState> {
+	return run("override variable", () => setDeviceOverride(deviceId, variableId, value));
 }
 
 /** The result of asking an agent what ports it can see. */
