@@ -4,52 +4,48 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { z } from "zod";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
+import { recordAudit, userActor } from "@/lib/audit/audit-log";
+import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
+import { userHolds } from "@/lib/auth/effective-permissions";
+import { panelAction, panelSelf } from "@/lib/auth/panel-action";
 import { passwordSchema } from "@/lib/auth/password";
 import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
-import { requireSession } from "@/lib/auth/require-session";
+import { PermissionDeniedError } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
+import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { clearSetting, integerSetting, setSetting } from "@/lib/settings/settings-service";
+import { clearSetting, integerSetting, SETTINGS, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Server actions behind the Settings tab.
  *
- * The session is re-checked here rather than trusted from the layout: an action is a POST
- * endpoint in its own right, callable by anyone who knows its id.
+ * Two of the three actions here are on the caller's own account and are deliberately ungated —
+ * every authenticated user must be able to change their own password, and gating that one would
+ * let somebody be locked out of the forced reset standing between them and the panel. They are
+ * still recorded. The third, {@link saveSettings}, checks a permission per staged change.
  */
 
 /**
- * Runs an action, converting a failure into a message the panel can render.
+ * The permission that governs changing one setting.
  *
- * @param label short description used in the log line
- * @param work the action body
- * @param revalidate what to refresh on success. Defaults to the Settings page, which is what
- *   every action on that page wants; the profile action refreshes the layout instead, because
- *   the name and avatar it changes are rendered by the sidebar rather than by any page.
- * @returns the state to render
+ * Derived from the setting's own declared category rather than from its key prefix, because the
+ * categories deliberately span prefixes — `auth.*` and `pairing.*` are both security. A key with no
+ * definition has no category and therefore no permission that could allow it, so it is refused:
+ * `setSetting` would reject it anyway, and refusing it here means the record says which of the two
+ * happened.
+ *
+ * The cast rests on every `SettingCategory` having a matching `settings:write:<category>`
+ * identifier, which `test/lib/domain/panel-permissions.test.ts` asserts directly — without it,
+ * adding a category would silently make its settings superuser-only.
+ *
+ * @param key the setting key being changed
+ * @returns the permission required, or null when nothing defines that key
  */
-async function run(
-	label: string,
-	work: () => Promise<void>,
-	revalidate: () => void = () => revalidatePath("/settings"),
-): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
-
-	try {
-		await work();
-		revalidate();
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error(`Settings action failed: ${label}`, error);
-		return { error: "Something went wrong. Check the server log." };
-	}
+function permissionForSetting(key: string): PanelPermission | null {
+	const definition = SETTINGS.find((candidate) => candidate.key === key);
+	return definition ? (`settings:write:${definition.category}` as PanelPermission) : null;
 }
 
 /**
@@ -81,27 +77,46 @@ export interface SaveSettingsResult {
  * redo work that was already acceptable. Each change is applied independently and the ones that
  * failed come back named, so the page can keep exactly those staged and clear the rest.
  *
- * The session is re-checked here rather than trusted from the layout: an action is a POST endpoint
- * in its own right, callable by anyone who knows its id. `setSetting` and `clearSetting` do the
+ * **Refusals are per-setting too, and for the same reason.** The batch spans categories, and each
+ * category has its own permission, so the caller's authority is checked once per change rather than
+ * once per call — which is why this is the registry's one `custom` entry and does its own checking
+ * instead of going through the shared gate. Without the split, whoever may change the Jobs-per-page
+ * number could disable the IP allowlist in the same batch.
+ *
+ * The session is resolved here rather than trusted from the layout: an action is a POST endpoint in
+ * its own right, callable by anyone who knows its id. `setSetting` and `clearSetting` do the
  * validation — the types on `SettingChange` are a shape, not a check.
  *
  * @param changes the staged changes, in the order they should be applied
  * @returns the setting keys that failed, each with the message to show against it
  */
 export async function saveSettings(changes: SettingChange[]): Promise<SaveSettingsResult> {
-	await requireSession();
+	const user = await panelSelf("settings:save");
 
 	const errors: Record<string, string> = {};
+	const applied: string[] = [];
+	const refused: string[] = [];
 
 	for (const change of changes) {
 		try {
+			const permission = permissionForSetting(change.key);
+			if (permission === null || !(await userHolds(user, permission))) {
+				// Refused per change rather than per batch, matching how a rejected value already
+				// behaves: refusing the other nine settings because of one would make an operator redo
+				// work that was already acceptable.
+				throw new PermissionDeniedError(permission ?? "settings:read");
+			}
 			if (change.kind === "reset") {
 				await clearSetting(change.key);
 			} else {
 				await setSetting(change.key, change.value);
 			}
+			applied.push(change.key);
 		} catch (error) {
-			if (error instanceof ApiError) {
+			if (error instanceof PermissionDeniedError) {
+				refused.push(change.key);
+				errors[change.key] = error.message;
+			} else if (error instanceof ApiError) {
 				errors[change.key] = error.message;
 			} else {
 				logger.error("Settings action failed: save", error, { key: change.key });
@@ -109,6 +124,22 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
 			}
 		}
 	}
+
+	// One row for the batch rather than one per setting: the operator pressed Save once, and a row
+	// per knob would make a routine edit look like a rampage. The keys are named, so the row still
+	// says exactly what moved. Values are deliberately absent — a batch can carry
+	// `server.publicUrl` today and credentials later, and the settings table holds what each became.
+	await recordAudit({
+		action: "settings:save",
+		outcome: refused.length > 0 && applied.length === 0 ? "DENIED" : "SUCCESS",
+		actor: userActor(user),
+		detail: {
+			applied,
+			refused,
+			failed: Object.keys(errors).filter((key) => !refused.includes(key)),
+		},
+		provenance: await requestProvenance(),
+	});
 
 	revalidatePath("/settings");
 	return { errors };
@@ -126,32 +157,38 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
  * @returns the state to render
  */
 export async function changePassword(current: string, next: string): Promise<ActionState> {
-	return run("password", async () => {
-		// Checked here rather than trusted from the form, and before Better Auth ever sees the
-		// candidate: the form disables its button on an empty field, which stops a slip but not a
-		// direct call to this action, and Better Auth's own `changePassword` enforces only its own
-		// built-in bounds — it knows nothing about the install's configured
-		// `auth.minimumPasswordLength`.
-		const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-		const parsed = passwordSchema(minimumPasswordLength).safeParse(next);
-		if (!parsed.success) {
-			throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
-		}
+	return panelAction(
+		"self:change-password",
+		async () => {
+			// Checked here rather than trusted from the form, and before Better Auth ever sees the
+			// candidate: the form disables its button on an empty field, which stops a slip but not a
+			// direct call to this action, and Better Auth's own `changePassword` enforces only its own
+			// built-in bounds — it knows nothing about the install's configured
+			// `auth.minimumPasswordLength`.
+			const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
+			const parsed = passwordSchema(minimumPasswordLength).safeParse(next);
+			if (!parsed.success) {
+				throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
+			}
 
-		try {
-			await auth.api.changePassword({
-				body: { currentPassword: current, newPassword: parsed.data, revokeOtherSessions: true },
-				headers: await headers(),
-			});
-		} catch {
-			// Better Auth collapses every reason it might refuse this into one error, and from the
-			// caller's side there is only one that matters: the current password they typed is not
-			// the one on the account.
-			throw new ApiError("invalid_key", "That is not the current password.");
-		}
+			try {
+				await auth.api.changePassword({
+					body: { currentPassword: current, newPassword: parsed.data, revokeOtherSessions: true },
+					headers: await headers(),
+				});
+			} catch {
+				// Better Auth collapses every reason it might refuse this into one error, and from the
+				// caller's side there is only one that matters: the current password they typed is not
+				// the one on the account.
+				throw new ApiError("invalid_key", "That is not the current password.");
+			}
 
-		logger.info("Password changed");
-	});
+			logger.info("Password changed");
+			// Nothing about the password reaches the record: not its length, not its strength. The row
+			// says the account replaced it, which is the whole of what an investigation needs.
+		},
+		{ revalidate: () => revalidatePath("/settings") },
+	);
 }
 
 /**
@@ -170,12 +207,12 @@ export async function changePassword(current: string, next: string): Promise<Act
  * @returns the state to render
  */
 export async function updateProfile(displayName: string, email: string | null): Promise<ActionState> {
-	return run(
-		"update profile",
-		async () => {
-			const name = displayName.trim();
-			const address = (email ?? "").trim();
+	const name = displayName.trim();
+	const address = (email ?? "").trim();
 
+	return panelAction(
+		"self:update-profile",
+		async (user) => {
 			if (name === "") {
 				throw new ApiError("missing_field", "A display name is required.");
 			}
@@ -192,14 +229,12 @@ export async function updateProfile(displayName: string, email: string | null): 
 				throw new ApiError("invalid_type", "That is not a valid email address.");
 			}
 
-			const { id } = await requireSession();
-
 			try {
-				await prisma.user.update({ where: { id }, data: { name, email: address } });
+				await prisma.user.update({ where: { id: user.id }, data: { name, email: address } });
 			} catch (thrown) {
 				// The check above only proves the address is well-formed, not that it is free — two
 				// requests racing past that check is exactly what the column's own unique constraint
-				// is for. Without this, the loser gets `run()`'s generic "check the server log"
+				// is for. Without this, the loser gets the gate's generic "check the server log"
 				// instead of the one thing they could act on.
 				if (isPrismaCode(thrown, "P2002")) {
 					throw new ApiError("name_taken", "That email address is already in use.");
@@ -207,9 +242,14 @@ export async function updateProfile(displayName: string, email: string | null): 
 				throw thrown;
 			}
 		},
-		// The sidebar footer is in the layout, so refreshing a page would leave the name and the
-		// avatar showing their old values until a hard reload.
-		() => revalidatePath("/", "layout"),
+		{
+			// The sidebar footer is in the layout, so refreshing a page would leave the name and the
+			// avatar showing their old values until a hard reload.
+			revalidate: () => revalidatePath("/", "layout"),
+			// Recorded in full: "who changed that account's email, and to what" is the question a
+			// compromised-account investigation opens with.
+			detail: { name, email: address },
+		},
 	);
 }
 
