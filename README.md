@@ -58,9 +58,15 @@ the printer.
 > are only for working on FenPOS itself.
 
 > [!IMPORTANT]
-> **`BETTER_AUTH_SECRET` is required and has no default.** Neither compose file below sets one,
-> and the server refuses to start without it. Generate one with `openssl rand -base64 32` and
-> add it under `environment:` for the `fenpos` service before the first `up`. See
+> **`BETTER_AUTH_SECRET` is required and has no default.** Both compose files below read it from
+> your environment and refuse to start without it — `docker compose` fails immediately with a
+> message telling you what to set, rather than crash-looping the container. Generate one and
+> export it before the first `up`:
+> ```sh
+> export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
+> ```
+> Or put `BETTER_AUTH_SECRET=...` in a `.env` file next to the compose file you're using — Docker
+> Compose loads that automatically. Either way, never commit the real value. See
 > [Configuration](#configuration).
 
 ### 1 · Server only
@@ -261,7 +267,7 @@ The **Docs** tab carries the full reference, generated from the running install.
 | Variable | Default | What it does |
 |---|---|---|
 | `DATABASE_URL` | `file:/app/data/fenpos.db` | SQLite file. Must point at a mounted volume. |
-| `BETTER_AUTH_SECRET` | — **(required)** | Signs session cookies and tokens. No default and no generated fallback — the server refuses to start without it. Generate one with `openssl rand -base64 32` and keep it stable: changing it invalidates every existing session and signs everyone out at once. |
+| `BETTER_AUTH_SECRET` | — **(required)** | Signs session cookies and tokens. No default and no generated fallback — the server refuses to start without it, and the bundled compose files refuse even earlier, at `docker compose up`, before a container is created. Generate one with `openssl rand -base64 32` and keep it stable: changing it invalidates every existing session and signs everyone out at once. |
 | `BETTER_AUTH_URL` | derived from the request | Absolute origin the panel is reached on, e.g. `https://pos.example.com`. Only needed behind a proxy that rewrites the host — a wrong value makes sign-in silently fail to set its cookie. |
 | `PORT` | `3000` | Panel, print API and agent link share it. |
 | `FENPOS_HOST` | `0.0.0.0` | Interface to bind. Rarely changed. |

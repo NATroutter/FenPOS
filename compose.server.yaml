@@ -16,7 +16,7 @@ services:
       - "3000:3000"
 
     volumes:
-      # Agents, devices, keys, jobs and the admin password all live here. Back it up.
+      # Agents, devices, keys, jobs and the hashed account credential all live here. Back it up.
       #
       # The container runs as uid 10001, and a bind mount keeps the host directory owner,
       # so create it and hand it over before the first start or the server cannot open its
@@ -25,6 +25,12 @@ services:
       - ./data:/app/data
 
     environment:
+      # Required, no default: signs session cookies and tokens. Generate with:
+      #   openssl rand -base64 32
+      # Set it in the shell that runs `docker compose`, or in a .env file next to this one
+      # (docker compose loads that automatically) — never commit the real value. Changing it
+      # signs everyone out; it is not stored in the data/ volume above.
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?not set - generate one with 'openssl rand -base64 32' and export it before running compose}"
       TZ: "Europe/Helsinki"
 
     healthcheck:

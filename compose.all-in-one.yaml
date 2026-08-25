@@ -5,7 +5,7 @@
 # loopback, so pointing it at http://fenpos:3000 over a Docker network would be refused. With a
 # domain and a certificate, drop network_mode and use your https:// address instead.
 #
-# Start the server, read the password from its log, create a pairing code in the panel, put it
+# Start the server, read the setup key from its log, create a pairing code in the panel, put it
 # in FENPOS_PAIR_CODE, then bring the agent up.
 #
 #   docker compose -f compose.all-in-one.yaml up -d fenpos
@@ -25,6 +25,12 @@ services:
       #   sudo chown -R 10001:10001 server-data agent-data agent-logs
       - ./server-data:/app/data
     environment:
+      # Required, no default: signs session cookies and tokens. Generate with:
+      #   openssl rand -base64 32
+      # Set it in the shell that runs `docker compose`, or in a .env file next to this one
+      # (docker compose loads that automatically) — never commit the real value. Changing it
+      # signs everyone out; it is not stored in the server-data/ volume above.
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?not set - generate one with 'openssl rand -base64 32' and export it before running compose}"
       TZ: "Europe/Helsinki"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
