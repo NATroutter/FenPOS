@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { auth } from "@/lib/auth/auth";
 import { passwordSchema } from "@/lib/auth/password";
-import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/profile";
+import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { requireSession } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";

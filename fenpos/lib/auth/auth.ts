@@ -18,7 +18,8 @@ import { env } from "@/lib/env";
  * The reason for *this* library rather than Auth.js is sessions. Auth.js's credentials provider
  * steers callers to self-contained JWTs, and a JWT cannot be revoked before it expires. Sessions
  * here stay database rows, so signing out, changing a password, or banning an account ends access
- * at once — which is the property `lib/auth/session.ts` was built around and the one worth keeping.
+ * at once — the property the retired hand-written session layer was built around and the one
+ * worth keeping.
  */
 
 /**

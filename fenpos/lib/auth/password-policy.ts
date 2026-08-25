@@ -1,26 +1,24 @@
 /**
- * Password-length rules shared by both sides of the wire.
+ * Password and profile rules shared by both sides of the wire.
  *
  * Deliberately a plain module: no `server-only`, no `node:` imports, nothing that reaches the
  * database or argon2's native binding. `password.ts` validates against these, and the profile
- * dialog and the initial-password hint quote them — the same reason `profile.ts` beside this file
- * is plain — so this has to be importable from a client component without pulling
- * `@node-rs/argon2` into the browser bundle along with it.
+ * dialog and the initial-password hint quote them, so this has to be importable from a client
+ * component without pulling `@node-rs/argon2` into the browser bundle along with it.
  */
 
 /**
- * The floor `auth.minimumPasswordLength` can never fall below, and what
- * `scripts/set-admin-password.ts` enforces instead of that setting.
+ * The floor `auth.minimumPasswordLength` can never fall below, and what `setup.ts` enforces
+ * instead of that setting when creating the first account.
  *
- * That script (not `scripts/reset-admin-password.ts`, which deletes the credential and validates
- * no password at all) runs as a one-shot `tsx` process outside the running server, with its own
- * ad hoc Prisma connection — it never reaches `settings-service.ts` and so never sees an
- * administrator-raised minimum. That is an accepted gap rather than an oversight: it is a
- * break-glass recovery path, not a privilege boundary — anyone able to run it can already delete
- * the setting row, wipe the credential, or write an arbitrary hash directly — and this floor is
- * still a real one, never the silent zero a missing check would leave behind.
+ * There is no administrator yet at that moment to have configured the setting, so the built-in
+ * floor is the only meaningful bound available — and it is a real one, never the silent zero a
+ * missing check would leave behind.
  */
 export const MINIMUM_PASSWORD_LENGTH = 12;
+
+/** Longest display name accepted. Long enough for a person or a shop, short enough for the footer. */
+export const MAXIMUM_DISPLAY_NAME_LENGTH = 60;
 
 /**
  * Phrases a password-length minimum for a sentence, pluralising "character" only where the count

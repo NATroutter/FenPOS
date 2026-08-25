@@ -3,7 +3,7 @@ import { z } from "zod";
 import { minimumLengthPhrase } from "@/lib/auth/password-policy";
 
 /**
- * Administrator password hashing.
+ * Account password hashing.
  *
  * This is the one credential in the system chosen by a human, so it is the one credential
  * with a brute-force surface worth defending: argon2id with a deliberately expensive memory
@@ -67,12 +67,12 @@ export function normalizePassword(plaintext: string): string {
 }
 
 /**
- * Builds the schema that validates a candidate administrator password.
+ * Builds the schema that validates a candidate password.
  *
  * A function rather than a fixed schema, because `auth.minimumPasswordLength` is a stored
  * setting, read asynchronously — and this module is imported everywhere a password is checked,
- * including a `"use server"` action and a bare `tsx` script, so it cannot hold a database
- * connection open to fetch that setting itself. Every caller reads the minimum it cares about
+ * including a `"use server"` action and the transaction that seals first-run setup, so it cannot
+ * hold a database connection open to fetch that setting itself. Every caller reads the minimum it cares about
  * first (the configured value where one is reachable, `MINIMUM_PASSWORD_LENGTH` where it is not —
  * see `password-policy.ts`) and builds its own schema from it; nothing here reads a stale minimum
  * while the setting appears to work, because nothing here reads the minimum at all.
@@ -108,7 +108,7 @@ export function passwordSchema(minimumLength: number) {
 }
 
 /**
- * Hashes an administrator password for storage.
+ * Hashes a password for storage.
  *
  * @param plaintext the password as entered
  * @returns a PHC-format argon2id string carrying its own salt and parameters

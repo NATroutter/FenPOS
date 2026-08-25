@@ -26,7 +26,20 @@ import { imageGeometry, printedWidthDots } from "@/lib/markup/images";
  * than some second fetch written for the preview's convenience.
  */
 vi.mock("@/lib/auth/require-session", () => ({
-	requireSession: async () => {},
+	requireSession: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
+	currentUser: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
 }));
 
 const fetchRemoteImage = vi.hoisted(() => vi.fn<(url: string) => Promise<Buffer>>());

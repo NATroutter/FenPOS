@@ -12,8 +12,14 @@ import { settled } from "@/test/settled";
  * of seconds, and must appear once they pass — a test that only checked the second half would still
  * pass against the route's old hardcoded twenty-five seconds.
  */
-vi.mock("@/lib/auth/session-cookie", () => ({
-	getCurrentSession: async () => ({ id: "test-session", ipAddress: "127.0.0.1", userAgent: null }),
+vi.mock("@/lib/auth/require-session", () => ({
+	currentUser: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
 }));
 
 const { GET } = await import("@/app/api/events/route");

@@ -22,7 +22,20 @@ import { TAGS } from "@/lib/markup/tags";
 // The session guard redirects, and a redirect is not what this file is about. Everything
 // downstream of it is the real pipeline against the real database.
 vi.mock("@/lib/auth/require-session", () => ({
-	requireSession: async () => {},
+	requireSession: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
+	currentUser: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
 }));
 
 const { preview } = await import("@/app/(panel)/tools/actions");

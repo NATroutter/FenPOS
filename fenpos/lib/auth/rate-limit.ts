@@ -5,9 +5,10 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * Attempt limiting for credential endpoints.
  *
  * Two endpoints depend on this rather than treating it as a nicety. Sign-in is throttled so
- * the administrator password cannot be ground down online, and agent pairing is throttled
- * because the pairing code's entropy budget assumes guessing is slow — without a limiter,
- * the code's short lifetime is the only bound on how many guesses an attacker gets.
+ * no account's password — and there are many accounts now, each with its own — can be ground
+ * down online, and agent pairing is throttled because the pairing code's entropy budget assumes
+ * guessing is slow — without a limiter, the code's short lifetime is the only bound on how many
+ * guesses an attacker gets.
  *
  * State is held in this process. That is correct for the supported deployment — one
  * self-hosted server — but it means limits are per-instance and reset on restart. Neither

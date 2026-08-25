@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VariableDefinition } from "@/lib/variables/definition";
 
-vi.mock("@/lib/auth/require-session", () => ({ requireSession: vi.fn(async () => ({ id: "session" })) }));
+const SESSION_USER = {
+	id: "test-user",
+	name: "Test User",
+	email: "test@example.com",
+	isSuperuser: true,
+	mustChangePassword: false,
+};
+vi.mock("@/lib/auth/require-session", () => ({
+	requireSession: vi.fn(async () => SESSION_USER),
+	currentUser: vi.fn(async () => SESSION_USER),
+}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const { saveDeviceOverride } = await import("@/app/(panel)/devices/actions");

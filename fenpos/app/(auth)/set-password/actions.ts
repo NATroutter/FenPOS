@@ -34,7 +34,10 @@ export interface SetPasswordState {
  * work, for however long its lifetime allows. A session held here has no other page it could have
  * been left open on, so the window this check would close is bounded by the moment between
  * signing in and submitting this form — not, as it is on Settings, by how long the session itself
- * stays valid.
+ * stays valid. Submission is not the whole story, though: if the holder never submits at all, that
+ * window has no earlier cap and simply widens until it meets the same session-lifetime bound the
+ * Settings form is defended against — submission is only the earlier of the two caps, not an
+ * alternative to it.
  *
  * Refuses a caller who owes no change, so this cannot become a route to changing a password
  * without knowing the current one.

@@ -1,13 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { hashPassword, passwordSchema, verifyPassword } from "@/lib/auth/password";
 import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { integerSetting, setSetting } from "@/lib/settings/settings-service";
-
-const SERVER_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /**
  * `passwordSchema` takes the minimum as a parameter rather than baking one in — see its doc
@@ -113,32 +108,6 @@ describe("hashPassword and verifyPassword", () => {
 		await expect(verifyPassword("not-a-hash", "whatever")).resolves.toBe(false);
 		await expect(verifyPassword("", "whatever")).resolves.toBe(false);
 		await expect(verifyPassword("$argon2id$v=19$truncated", "whatever")).resolves.toBe(false);
-	});
-});
-
-describe("bootstrap script parity", () => {
-	const scriptSources = ["scripts/set-admin-password.ts", "scripts/reset-admin-password.ts"].map((path) =>
-		readFileSync(join(SERVER_ROOT, path), "utf8"),
-	);
-
-	it("leaves hashing, validation and the row shape to the shared modules", () => {
-		// These were once copied into the scripts, on the belief that all of lib/auth was
-		// server-only. They drifted, and the CLI ended up writing a password while the server
-		// went on advertising the generated one it had replaced. A copy reappearing is the
-		// failure this guards, so the test is that the constants are absent rather than equal.
-		for (const source of scriptSources) {
-			expect(source).not.toMatch(/ARGON2_OPTIONS\s*=\s*\{/);
-			expect(source).not.toMatch(/MINIMUM_PASSWORD_LENGTH\s*=\s*\d/);
-			expect(source).not.toMatch(/MAXIMUM_PASSWORD_LENGTH\s*=\s*\d/);
-			expect(source).not.toMatch(/ADMIN_ROW_ID\s*=\s*\d/);
-		}
-	});
-
-	it("imports them from lib/auth instead", () => {
-		expect(scriptSources[0]).toMatch(/from "\.\.\/lib\/auth\/password"/);
-		for (const source of scriptSources) {
-			expect(source).toMatch(/from "\.\.\/lib\/auth\/admin-credential"/);
-		}
 	});
 });
 

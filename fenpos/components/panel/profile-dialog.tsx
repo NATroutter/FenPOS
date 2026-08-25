@@ -19,8 +19,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { minimumLengthPhrase } from "@/lib/auth/password-policy";
-import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/profile";
+import { MAXIMUM_DISPLAY_NAME_LENGTH, minimumLengthPhrase } from "@/lib/auth/password-policy";
 import { cn } from "@/lib/utils";
 
 type Category = "account" | "security";

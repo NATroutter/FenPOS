@@ -9,7 +9,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
  * *human-chosen* password expensive; against 256 bits of random it buys nothing, while its
  * per-value salt would make lookup impossible — resolving an incoming bearer token would
  * degrade from one indexed query to a scan-and-verify over every row. Argon2 is used for
- * the administrator password and nothing else (see password.ts).
+ * account passwords and nothing else (see password.ts).
  */
 
 /** Bytes of entropy in a generated token. 32 bytes is 256 bits. */
@@ -118,20 +118,19 @@ export function generatePairingCode(): string {
 	return groups.join("-");
 }
 
-/** Characters in the password generated at first boot. 20 over a 32-symbol alphabet is 100 bits. */
+/** Characters in a generated secret of this shape. 20 over a 32-symbol alphabet is 100 bits. */
 const GENERATED_PASSWORD_LENGTH = 20;
 
 /**
- * Generates the administrator password used before an operator sets their own.
+ * Generates a random secret in the pairing alphabet's grouped format.
  *
- * Uses the pairing alphabet, and for the same reason: this value is read off a terminal and
- * typed into a browser, so the characters mistaken for one another are excluded. It is
- * grouped for the same legibility, and the dashes count toward its length only as literal
- * characters — the entropy is in the 20 sampled symbols.
+ * `rotateSetupKey` (`setup-key.ts`) is the caller: this mints the plaintext key that claims an
+ * unconfigured install. Uses the pairing alphabet, and for the same reason: this value is read
+ * off a terminal and typed into a browser, so the characters mistaken for one another are
+ * excluded. It is grouped for the same legibility, and the dashes count toward its length only as
+ * literal characters — the entropy is in the 20 sampled symbols.
  *
- * Not a passphrase: it exists to be replaced, and the panel says so until it is.
- *
- * @returns a password such as `H7K2-M9PX-4TRB-N6QW-3JZY`
+ * @returns a secret such as `H7K2-M9PX-4TRB-N6QW-3JZY`
  */
 export function generatePassword(): string {
 	const limit = Math.floor(256 / PAIRING_ALPHABET.length) * PAIRING_ALPHABET.length;

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 /**
- * How the administrator's avatar is chosen.
+ * How a signed-in account's avatar is chosen.
  *
  * Two derivations, both pure, both run on the server. Keeping them out of the browser means the
  * address is never in client JavaScript and no hashing has to happen there — the panel renders a
@@ -35,7 +35,7 @@ export function gravatarUrl(email: string | null): string | null {
  * Split with `Array.from` rather than indexed, because a display name is operator-supplied text
  * and its first character may be a surrogate pair — `charAt(0)` would render half of one.
  *
- * @param displayName the administrator's name
+ * @param displayName the signed-in account's name
  * @returns a single uppercased character
  */
 export function avatarInitial(displayName: string): string {

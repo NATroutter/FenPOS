@@ -17,7 +17,20 @@ import { prisma } from "@/lib/db";
  * tests are about. `revalidatePath` is stubbed because it needs a request scope these do not have.
  */
 vi.mock("@/lib/auth/require-session", () => ({
-	requireSession: async () => {},
+	requireSession: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
+	currentUser: async () => ({
+		id: "test-user",
+		name: "Test User",
+		email: "test@example.com",
+		isSuperuser: true,
+		mustChangePassword: false,
+	}),
 }));
 vi.mock("next/cache", () => ({
 	revalidatePath: () => {},

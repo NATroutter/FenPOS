@@ -41,7 +41,7 @@ const pending: Map<string, Pending> = globalForRequests.fenposPendingRequests;
  * Phrases how long a request waited, for {@link RequestTimeoutError}'s message.
  *
  * Extracted rather than inlined for the same reason `signInThrottlePhrase` (`lib/auth/rate-limit.ts`)
- * and `sessionLifetimePhrase` (`lib/auth/session.ts`) were: a sentence built from a value an
+ * and `minimumLengthPhrase` (`lib/auth/password-policy.ts`) were: a sentence built from a value an
  * operator configures is a sentence that can only be checked by pulling it out of the template
  * literal it would otherwise be buried in. `timeoutMs` now traces back to `link.commandTimeoutSeconds`
  * or `link.scanTimeoutSeconds`, so this is the one place their bounds meet the words shown for them.

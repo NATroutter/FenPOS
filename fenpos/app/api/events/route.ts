@@ -1,4 +1,4 @@
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { currentUser } from "@/lib/auth/require-session";
 import { type PanelEvent, subscribe } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
 import { integerSetting } from "@/lib/settings/settings-service";
@@ -11,15 +11,19 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * every other request — where a second WebSocket would have to be routed past Next's own upgrade
  * handling, which this process already does once and would rather not do twice.
  *
- * **Admin session only.** The stream carries job identifiers, device names and log lines from
+ * **Signed-in session only.** The stream carries job identifiers, device names and log lines from
  * every site in the install, which is more than any API key is ever granted.
+ *
+ * Gated with {@link currentUser} rather than `requireSession`: the latter redirects an
+ * unauthenticated caller, and a redirect is wrong here — the browser's `EventSource` would follow
+ * it and receive an HTML redirect target on a connection it opened expecting `text/event-stream`.
  */
 
 /** Never cached and never prerendered: the whole point is that it does not end. */
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-	if (!(await getCurrentSession())) {
+	if (!(await currentUser())) {
 		return Response.json({ error: "missing_key", message: "Not signed in." }, { status: 401 });
 	}
 
