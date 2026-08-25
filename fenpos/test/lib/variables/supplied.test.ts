@@ -26,9 +26,9 @@ describe("readSuppliedVariables", () => {
 	});
 
 	it("reads names to values", () => {
-		expect(read({ order_id: "1041", customer: "M. Virtanen" })).toEqual({
+		expect(read({ order_id: "1041", customer: "J. Carter" })).toEqual({
 			order_id: text("1041"),
-			customer: text("M. Virtanen"),
+			customer: text("J. Carter"),
 		});
 	});
 
