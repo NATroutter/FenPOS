@@ -36,7 +36,12 @@ export async function POST(
 
 		const { body } = await readBoundedJson(request, PRINT_REQUEST_MAX_BODY_BYTES);
 
-		return Response.json({ agent, device, ...(await compilePreview(target.id, body)) });
+		// The key's own name goes with it. A receipt using an `API_KEY_NAME` variable is compiled
+		// against the same name a print by this key would substitute, which is the only way the claim
+		// this endpoint makes — that what comes back is what the printer would produce — stays true for
+		// such a receipt. It is not merely the substituted text that would otherwise differ: a name of
+		// a different length wraps differently and changes the `outputLines` the response reports.
+		return Response.json({ agent, device, ...(await compilePreview(target.id, body, key.name)) });
 	} catch (error) {
 		return toErrorResponse(error, { route: "POST /api/v1/preview/[agent]/[device]", agent, device });
 	}

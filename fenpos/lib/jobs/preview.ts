@@ -111,9 +111,15 @@ export interface PreviewWithContext {
  *
  * @param deviceId the device whose width and codepage to compile against
  * @param body the print request body, in exactly the shape `POST /print` accepts
+ * @param apiKeyName the name of the key asking, or null when the panel is. See {@link compilePreview}
+ *        for why this is a parameter rather than a constant
  * @returns the compiled preview, plus the request and settings it was compiled from
  */
-export async function compilePreviewWithContext(deviceId: string, body: unknown): Promise<PreviewWithContext> {
+export async function compilePreviewWithContext(
+	deviceId: string,
+	body: unknown,
+	apiKeyName: string | null = null,
+): Promise<PreviewWithContext> {
 	try {
 		const device = await prisma.device.findUnique({
 			where: { id: deviceId },
@@ -172,14 +178,21 @@ export async function compilePreviewWithContext(deviceId: string, body: unknown)
 
 		// Resolved before the element errors, even though it is a database read and they are not:
 		// `collectElementErrors` parses every element, and `unknown_variable` is one of the errors it
-		// has to be able to report. A preview from the Tools page was not submitted by a key, so
-		// `apiKeyName` is honestly null here — `evaluateVariable` renders that as an empty string
-		// rather than inventing a word for "nobody".
+		// has to be able to report.
+		//
+		// `apiKeyName` comes from the caller and is not hardcoded, because it is the one fact in this
+		// context that differs between the two callers and this file's whole claim is that it does
+		// not differ from a print. A key previewing through `POST /api/v1/preview` passes its own
+		// name, exactly as `submitJob` looks one up; the Tools page passes null, because a receipt
+		// composed in the panel genuinely was not submitted by a key. Hardcoding null here made a
+		// receipt using an `API_KEY_NAME` variable preview blank and print the key's name — and since
+		// the substituted span is then a different length, the wrapping and the reported
+		// `outputLines` could differ too, which is the approximation this function exists not to be.
 		let variables: VariableContext | null;
 		try {
 			variables = await resolveVariables({
 				deviceId: device.id,
-				context: { deviceName: device.name, agentName: device.agent.name, apiKeyName: null },
+				context: { deviceName: device.name, agentName: device.agent.name, apiKeyName },
 				supplied: request.variables,
 			});
 		} catch (error) {
@@ -265,12 +278,23 @@ export async function compilePreviewWithContext(deviceId: string, body: unknown)
  * The public half of {@link compilePreviewWithContext} — the same compile, minus the `request` and
  * `settings` an API caller has no use for and must not see leak into its JSON response.
  *
+ * **Pass the key's name whenever a key is asking.** A `CONTEXT` variable with source `API_KEY_NAME`
+ * substitutes it, and `submitJob` supplies the real name on the print path, so a preview that left
+ * it null would answer a question about a receipt nobody is going to print. Defaulted to null rather
+ * than made required so the panel's Tools preview — which no key submitted — says so by saying
+ * nothing.
+ *
  * @param deviceId the device whose width and codepage to compile against
  * @param body the print request body, in exactly the shape `POST /print` accepts
+ * @param apiKeyName the name of the key asking, or null when the panel is
  * @returns the compiled lines and their measurements, or everything wrong with the body
  */
-export async function compilePreview(deviceId: string, body: unknown): Promise<CompiledPreview> {
-	return (await compilePreviewWithContext(deviceId, body)).preview;
+export async function compilePreview(
+	deviceId: string,
+	body: unknown,
+	apiKeyName: string | null = null,
+): Promise<CompiledPreview> {
+	return (await compilePreviewWithContext(deviceId, body, apiKeyName)).preview;
 }
 
 /**
