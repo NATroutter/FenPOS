@@ -1,0 +1,97 @@
+import "server-only";
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { nextCookies } from "better-auth/next-js";
+import { admin, twoFactor } from "better-auth/plugins";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { prisma } from "@/lib/db";
+import { env } from "@/lib/env";
+
+/**
+ * The panel's authentication instance.
+ *
+ * Better Auth replaces the hand-written credential layer this project carried until now. The
+ * reason for a library at all is that credential code is the one part of a system where being
+ * unattacked and being unattackable look identical from the inside, and this panel may end up
+ * reachable from the public internet with physical printers behind it.
+ *
+ * The reason for *this* library rather than Auth.js is sessions. Auth.js's credentials provider
+ * steers callers to self-contained JWTs, and a JWT cannot be revoked before it expires. Sessions
+ * here stay database rows, so signing out, changing a password, or banning an account ends access
+ * at once — which is the property `lib/auth/session.ts` was built around and the one worth keeping.
+ */
+
+/**
+ * How long a session lasts, and how often its expiry is extended.
+ *
+ * Fixed here rather than read from `auth.sessionHours`, which is where it lived before. Better
+ * Auth reads this once when the instance is constructed, at module load, and a setting read at
+ * that moment would either need a synchronous database call or would silently pin whatever value
+ * happened to be stored at the last restart. Phase 6 moves session lifetime to a setting properly,
+ * by re-reading it on the paths that can await; until then this is the honest value.
+ */
+const SESSION_SECONDS = 12 * 60 * 60;
+
+export const auth = betterAuth({
+	database: prismaAdapter(prisma, { provider: "sqlite" }),
+	secret: env.BETTER_AUTH_SECRET,
+	// Undefined means "derive the origin from the request", which is right for a LAN install
+	// reached by address. See the variable's own note in `lib/env.ts`.
+	baseURL: env.BETTER_AUTH_URL,
+
+	emailAndPassword: {
+		enabled: true,
+		/**
+		 * No self-registration, ever.
+		 *
+		 * This is the single line that makes "accounts are created by an administrator" a fact
+		 * rather than an intention: without it Better Auth serves a public sign-up endpoint at
+		 * `/api/auth/sign-up/email` that would let anyone on the network mint themselves an
+		 * account. First-run setup and the admin plugin's `createUser` both create users through
+		 * the server-side API, which this flag does not gate.
+		 */
+		disableSignUp: true,
+		/**
+		 * argon2id, not Better Auth's default.
+		 *
+		 * The password is the one credential in this system chosen by a human and therefore the
+		 * one with a brute-force surface worth paying for. `lib/auth/password.ts` holds the OWASP
+		 * baseline parameters and the reasoning behind them; reusing it here also means a hash
+		 * written by the recovery CLI and one written by the panel are the same kind of hash.
+		 */
+		password: {
+			hash: (password) => hashPassword(password),
+			verify: ({ hash, password }) => verifyPassword(hash, password),
+		},
+	},
+
+	user: {
+		/**
+		 * Every added field is `input: false`.
+		 *
+		 * That is what stops a crafted request body setting `isSuperuser` on a user it is
+		 * otherwise allowed to create or update. These two fields are decided by the seal and by
+		 * the account-management service, never by whatever arrived over the wire.
+		 */
+		additionalFields: {
+			isSuperuser: { type: "boolean", input: false, defaultValue: false, returned: true },
+			mustChangePassword: { type: "boolean", input: false, defaultValue: false, returned: true },
+		},
+	},
+
+	session: {
+		expiresIn: SESSION_SECONDS,
+		// Extend a session's expiry at most once per hour rather than on every request. The same
+		// write-rate concern `auth.lastSeenRefreshMinutes` existed to control, expressed in the
+		// library's own terms.
+		updateAge: 60 * 60,
+	},
+
+	plugins: [
+		admin(),
+		twoFactor(),
+		// Must be last. It wraps the handlers that follow it to write `Set-Cookie` through
+		// Next's cookie store, so anything registered after it would not get that treatment.
+		nextCookies(),
+	],
+});
