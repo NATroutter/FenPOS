@@ -229,6 +229,32 @@ export const API_ERROR_STATUS = {
 	/** More `{name}` references in one element than the install allows. See `MARKUP_ERRORS.tooManyVariableReferences`. */
 	too_many_variable_references: 422,
 	/**
+	 * A print request supplied a value for a variable that is defined here and not marked
+	 * overridable.
+	 *
+	 * Distinct from `not_overridable`, which is `setDeviceOverride` refusing a *panel* write against a
+	 * non-`STATIC` variable. This is `resolveVariables` refusing a *job's* supplied value against a
+	 * `STATIC` variable whose `overridable` flag is off — a different actor, at a different point in
+	 * the pipeline, refused for a different reason.
+	 */
+	variable_not_overridable: 422,
+	/**
+	 * A print request carried a `variables` object while this install's `variables.allowRequestValues`
+	 * is off.
+	 *
+	 * The remedy is a decision only an operator can make — turn the setting on, or configure the value
+	 * in the panel instead — so this is reported rather than the field being silently ignored.
+	 */
+	variables_not_allowed: 422,
+	/**
+	 * A name in a print request's `variables` object is not slug-shaped.
+	 *
+	 * Checked against `nameSchema`, the same rule a defined variable's own name follows — not
+	 * `VARIABLE_REFERENCE`, whose anchor-at-start pattern would accept a name no markup could ever
+	 * reference. See `readSuppliedVariables` in `lib/variables/supplied.ts`.
+	 */
+	invalid_variable_name: 422,
+	/**
 	 * An `<image>` naming the application's own logo at a width nothing was bundled for.
 	 *
 	 * The logo is not an asset and is not scaled: the agent holds one raster per bundled paper
