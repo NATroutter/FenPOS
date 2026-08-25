@@ -76,6 +76,11 @@ model User {
   sessions   Session[]
   accounts   Account[]
   twofactors TwoFactor[]
+  /// Roles this account belongs to, and grants made to it directly. Both cascade on delete: a
+  /// grant is a statement about an account that exists, and outlives nothing. The audit trail is
+  /// the deliberate opposite — see `AuditEvent`.
+  roles       UserRole[]
+  permissions UserPermission[]
 
   @@unique([email])
   @@map("user")
@@ -196,6 +201,74 @@ model SetupKey {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("setup_key")
+}
+
+/// A named bundle of permissions that accounts can be given all at once.
+///
+/// Roles are additive to individual grants rather than a replacement for them: an account's
+/// effective set is the union of every role it holds and every permission granted to it directly.
+/// There is no "deny" row and no precedence to reason about, which is the whole reason the union is
+/// safe to compute in one pass — a permission is held or it is not.
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  permissions RolePermission[]
+  members     UserRole[]
+
+  @@map("roles")
+}
+
+/// One permission carried by one role.
+///
+/// A row per grant rather than a delimited column, so a role with no rows carries nothing — the
+/// same default `ApiKeyPermission` already establishes, and for the same reason: a role created but
+/// not yet configured must be inert.
+model RolePermission {
+  roleId     String @map("role_id")
+  /// See PanelPermission in lib/domain/panel-permissions.ts. Stored as TEXT; an identifier this
+  /// version no longer recognises is dropped on read rather than honoured.
+  permission String
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permission])
+  @@index([permission])
+  @@map("role_permissions")
+}
+
+/// One account's membership of one role.
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// One permission granted to one account directly, on top of whatever its roles carry.
+///
+/// Individual grants exist so an operator can hand somebody one extra capability without inventing
+/// a role for it. They are additive only: there is no way to subtract a permission a role confers,
+/// because a subtraction is a rule two people have to hold in their heads at once and a union is
+/// not.
+model UserPermission {
+  userId     String @map("user_id")
+  /// See PanelPermission in lib/domain/panel-permissions.ts.
+  permission String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permission])
+  @@index([permission])
+  @@map("user_permissions")
 }
 
 /// A printer agent: one machine with printers attached, at one physical location.
