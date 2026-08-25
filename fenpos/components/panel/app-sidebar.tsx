@@ -33,7 +33,7 @@ import {
 	SidebarRail,
 	useSidebar,
 } from "@/components/ui/sidebar";
-import type { NavGroup, NavItem } from "@/lib/navigation";
+import { NAV_GROUPS, type NavGroup, type NavItem } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -61,15 +61,50 @@ function owns(pathname: string, href: string): boolean {
 }
 
 /**
+ * Narrows the navigation tree to the sections an account may open.
+ *
+ * The filtering happens here rather than on the server because a `NavItem` carries `icon`, a
+ * function component, and a function cannot cross the server-to-client boundary — React refuses it,
+ * fatally, and every page under the panel layout renders "This page couldn't load". So the server
+ * sends the permitted paths and this rebuilds the tree around them from its own import.
+ *
+ * A group left with nothing under it is dropped rather than rendered empty, and a parent's children
+ * are filtered the same way — a heading pointing at nothing is worse than no heading.
+ *
+ * @param permittedHrefs the paths the server decided this account may open
+ * @returns the groups to render, in the declared order
+ */
+function permittedGroups(permittedHrefs: readonly string[]): NavGroup[] {
+	const allowed = new Set(permittedHrefs);
+	const groups: NavGroup[] = [];
+
+	for (const group of NAV_GROUPS) {
+		const items: NavItem[] = [];
+		for (const item of group.items) {
+			if (!allowed.has(item.href)) {
+				continue;
+			}
+			const children = (item.children ?? []).filter((child) => allowed.has(child.href));
+			items.push(item.children ? { ...item, children } : item);
+		}
+		if (items.length > 0) {
+			groups.push({ ...group, items });
+		}
+	}
+
+	return groups;
+}
+
+/**
  * The panel's primary navigation.
  *
  * A client component because the active entry is derived from the current path. Sign-out is
  * a server action passed in from the layout, so this component holds no session logic of its
- * own — and the groups are passed in already filtered, for the same reason: deciding what a user
- * may see needs the database, and this component cannot reach it.
+ * own — and which sections to offer is decided on the server, for the same reason: deciding what a
+ * user may see needs the database, and this component cannot reach it.
  */
 export function AppSidebar({
-	navGroups,
+	permittedHrefs,
 	version,
 	signOutAction,
 	minimumPasswordLength,
@@ -79,12 +114,14 @@ export function AppSidebar({
 	initial,
 }: {
 	/**
-	 * The sections to offer, already filtered to what this account may open.
+	 * The paths this account may open, decided on the server by `permittedNavHrefs`.
 	 *
-	 * Filtered on the server by `permittedNavGroups`. Convenience only — the boundary is each page's
-	 * own `requirePagePermission`, because anyone can type a URL.
+	 * Paths rather than the sections themselves, because a section carries its icon and a function
+	 * cannot cross this boundary. This component cannot widen the answer: a path it was not given is
+	 * one it does not render. Convenience only — the boundary is each page's own
+	 * `requirePagePermission`, because anyone can type a URL.
 	 */
-	navGroups: readonly NavGroup[];
+	permittedHrefs: readonly string[];
 	/** Application version, shown under the wordmark. */
 	version: string;
 	/** Server action that revokes the session and redirects. */
@@ -101,6 +138,7 @@ export function AppSidebar({
 	initial: string;
 }) {
 	const pathname = usePathname();
+	const navGroups = permittedGroups(permittedHrefs);
 
 	return (
 		<Sidebar collapsible="icon">
