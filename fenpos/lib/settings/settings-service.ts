@@ -58,7 +58,16 @@ const TIME_ZONES = ["system", ...Intl.supportedValuesOf("timeZone")] as const;
  * are all connections. Deriving from the prefix would mean either a category per prefix — a dozen
  * nav entries — or renaming keys to suit the navigation, and a key is a stored contract.
  */
-export type SettingCategory = "general" | "limits" | "jobs" | "logs" | "media" | "security" | "connections" | "panel";
+export type SettingCategory =
+	| "general"
+	| "limits"
+	| "jobs"
+	| "logs"
+	| "media"
+	| "variables"
+	| "security"
+	| "connections"
+	| "panel";
 
 /**
  * The categories in the order the panel lists them.
@@ -76,6 +85,11 @@ export const CATEGORIES: readonly { id: SettingCategory; title: string; summary:
 	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
 	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
 	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
+	{
+		id: "variables",
+		title: "Variables",
+		summary: "What `{name}` may resolve to, and how much of it one receipt may ask for.",
+	},
 	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
 	{ id: "connections", title: "Connections", summary: "Timeouts on the links to agents and to this panel." },
 	{ id: "panel", title: "Panel", summary: "How this interface displays things." },
@@ -221,6 +235,14 @@ export const SETTING_KEYS = [
 	"images.remoteFetchTimeoutMs",
 	"images.allowPlainHttp",
 	"images.allowedRemoteHosts",
+	"variables.enabled",
+	"variables.allowRequestValues",
+	"variables.maxCount",
+	"variables.maxValueChars",
+	"variables.maxPerRequest",
+	"variables.maxPerElement",
+	"variables.timezone",
+	"variables.locale",
 	"logs.minimumLevel",
 	"logs.linesPerMinutePerAgent",
 	"logs.maxRecords",
@@ -450,6 +472,91 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		maxLength: 512,
 		pattern: /^$|^[A-Za-z0-9.-]+(?:\s*,\s*[A-Za-z0-9.-]+)*$/,
 		fallback: "",
+	},
+	{
+		key: "variables.enabled",
+		label: "Enable variables",
+		description:
+			"Whether `{name}` in markup is replaced by a configured value. Switched off, a brace is ordinary text and every receipt prints exactly as it did before this feature existed — which is the reason to switch it off: turning variables on changes what existing markup means, because a slug-shaped `{something}` that used to print goes to failing as an unknown variable.",
+		category: "variables",
+		type: "boolean",
+		fallback: true,
+	},
+	{
+		key: "variables.allowRequestValues",
+		label: "Allow values from print requests",
+		description:
+			"Whether a print request may carry its own `variables` object. Switched off, only values configured here and per-printer overrides are used, and a request sending the field is refused. An install whose receipts should be entirely under this panel's control turns it off.",
+		category: "variables",
+		type: "boolean",
+		fallback: true,
+	},
+	{
+		key: "variables.maxCount",
+		label: "Variables kept",
+		description:
+			"How many variables may be defined. Reached only by an install using them for something they are not for.",
+		category: "variables",
+		type: "integer",
+		min: 1,
+		max: 5_000,
+		fallback: 200,
+		unit: "variables",
+	},
+	{
+		key: "variables.maxValueChars",
+		label: "Value length",
+		description:
+			"Longest value a variable may hold, whether configured here, overridden on a printer, or supplied with a print request. This is what bounds how far one short line of markup can expand.",
+		category: "variables",
+		type: "integer",
+		min: 1,
+		max: 4_096,
+		fallback: 200,
+		unit: "characters",
+	},
+	{
+		key: "variables.maxPerRequest",
+		label: "Values per request",
+		description: "How many names one print request's `variables` object may carry.",
+		category: "variables",
+		type: "integer",
+		min: 0,
+		max: 500,
+		fallback: 50,
+		unit: "values",
+	},
+	{
+		key: "variables.maxPerElement",
+		label: "References per line",
+		description:
+			"How many `{name}` references one element of `data` may contain. Bounds expansion where it happens, rather than leaving the printed-lines limit to catch the result after the work is done.",
+		category: "variables",
+		type: "integer",
+		min: 1,
+		max: 1_000,
+		fallback: 100,
+		unit: "references",
+	},
+	{
+		key: "variables.timezone",
+		label: "Printed time zone",
+		description:
+			"Which zone date and time variables are formatted in. Separate from the panel's own zone on purpose: that one is a display preference for whoever is looking at this screen, while this is what gets printed on paper, possibly at a site in another country. `system` uses the server's own zone.",
+		category: "variables",
+		type: "enum",
+		values: TIME_ZONES,
+		fallback: "system",
+	},
+	{
+		key: "variables.locale",
+		label: "Printed date format",
+		description:
+			"Which locale's month and day names date variables are written with — the difference between `Monday` and `maanantai` for a pattern containing `EEEE`. Patterns made only of numbers are unaffected.",
+		category: "variables",
+		type: "enum",
+		values: ["en-US", "en-GB", "fi-FI", "sv-SE", "de-DE", "fr-FR"] as const,
+		fallback: "en-US",
 	},
 	{
 		key: "logs.minimumLevel",

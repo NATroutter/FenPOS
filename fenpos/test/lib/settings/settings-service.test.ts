@@ -190,6 +190,7 @@ describe("setting definitions", () => {
 			"jobs",
 			"logs",
 			"media",
+			"variables",
 			"security",
 			"connections",
 			"panel",
@@ -219,6 +220,14 @@ describe("setting definitions", () => {
 			"images.remoteFetchTimeoutMs": "integer",
 			"images.allowPlainHttp": "boolean",
 			"images.allowedRemoteHosts": "string",
+			"variables.enabled": "boolean",
+			"variables.allowRequestValues": "boolean",
+			"variables.maxCount": "integer",
+			"variables.maxValueChars": "integer",
+			"variables.maxPerRequest": "integer",
+			"variables.maxPerElement": "integer",
+			"variables.timezone": "enum",
+			"variables.locale": "enum",
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.maxRecords": "integer",
@@ -953,5 +962,58 @@ describe("raw write settings", () => {
 
 		await expect(setSetting("link.maxRawWriteBytes", ceiling + 1)).rejects.toThrow();
 		await expect(setSetting("link.maxRawWriteBytes", 100_000)).rejects.toThrow();
+	});
+});
+
+describe("variable settings", () => {
+	it("declares every variable key", () => {
+		const keys = SETTINGS.filter((setting) => setting.key.startsWith("variables.")).map((setting) => setting.key);
+
+		expect(keys).toEqual([
+			"variables.enabled",
+			"variables.allowRequestValues",
+			"variables.maxCount",
+			"variables.maxValueChars",
+			"variables.maxPerRequest",
+			"variables.maxPerElement",
+			"variables.timezone",
+			"variables.locale",
+		]);
+	});
+
+	it("ships with variables on", () => {
+		const enabled = SETTINGS.find((setting) => setting.key === "variables.enabled");
+
+		expect(enabled).toMatchObject({ type: "boolean", fallback: true });
+	});
+
+	it("offers the same locales as the panel does", () => {
+		const panel = SETTINGS.find((setting) => setting.key === "panel.locale");
+		const variables = SETTINGS.find((setting) => setting.key === "variables.locale");
+
+		expect(variables).toMatchObject({ type: "enum" });
+		expect(variables && "values" in variables ? variables.values : null).toEqual(
+			panel && "values" in panel ? panel.values : undefined,
+		);
+	});
+
+	it("offers the same zones as the panel does, including the system sentinel", () => {
+		const panel = SETTINGS.find((setting) => setting.key === "panel.timezone");
+		const variables = SETTINGS.find((setting) => setting.key === "variables.timezone");
+
+		expect(variables && "values" in variables ? variables.values : null).toEqual(
+			panel && "values" in panel ? panel.values : undefined,
+		);
+		expect(variables).toMatchObject({ fallback: "system" });
+	});
+
+	it("lists the variables category", () => {
+		expect(CATEGORIES.map((category) => category.id)).toContain("variables");
+	});
+
+	it("puts every variable setting in that category", () => {
+		for (const setting of SETTINGS.filter((one) => one.key.startsWith("variables."))) {
+			expect(setting.category).toBe("variables");
+		}
 	});
 });
