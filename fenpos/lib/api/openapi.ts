@@ -212,6 +212,12 @@ const PRINT_REQUEST_SCHEMA = {
 			enum: Linefeed.values,
 			description: "Overrides the device's own default for this job only.",
 		},
+		variables: {
+			type: "object",
+			additionalProperties: { type: "string" },
+			description:
+				"Values this job supplies for its own `{name}` references, narrower than a per-printer override or a variable's own definition — see the panel's own /docs/markup#variables for the three layers and /docs/api#submitting for the error codes this can raise. Accepted only when the install allows it and a named variable is marked overridable; refused outright otherwise.",
+		},
 	},
 	required: ["data"],
 };

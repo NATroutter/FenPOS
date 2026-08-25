@@ -24,7 +24,7 @@ import { BarcodeSystem } from "@/lib/domain/enums";
 import { describeBytes } from "@/lib/format/bytes";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { maxRemoteReferences } from "@/lib/markup/resolve-images";
-import { booleanSetting, enumSetting, stringSetting } from "@/lib/settings/settings-service";
+import { booleanSetting, enumSetting, integerSetting, stringSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Markup" };
 
@@ -36,8 +36,25 @@ export const metadata = { title: "Markup" };
  */
 const SECTIONS = [
 	{ id: "markup", title: "Markup", note: "What a data element may contain" },
+	{ id: "variables", title: "Variables", note: "Values substituted into markup when a job compiles" },
 	{ id: "blocks", title: "Blocks", note: "Symbols, images and the drawer, and the paper they cost" },
 ] as const;
+
+/**
+ * Common `date-fns` patterns a `DATETIME` variable might carry, and what each prints.
+ *
+ * Rendered against a fixed Wednesday (2026-08-26) in `en-US`, which is why `cccc` and `EEEE`
+ * agree here — see the aside beside this table for the locale where they do not.
+ */
+const DATE_PATTERNS: { pattern: string; example: string }[] = [
+	{ pattern: "yyyy-MM-dd", example: "2026-08-26" },
+	{ pattern: "dd.MM.yyyy", example: "26.08.2026" },
+	{ pattern: "HH:mm", example: "14:05" },
+	{ pattern: "h:mm a", example: "2:05 PM" },
+	{ pattern: "cccc", example: "Wednesday — the standalone day name" },
+	{ pattern: "EEEE", example: "Wednesday — the inflected form in some locales" },
+	{ pattern: "MMMM d", example: "August 26" },
+];
 
 /** Markup tags, in the order they are worth learning. */
 const TAGS: { syntax: string; meaning: string }[] = [
@@ -87,7 +104,11 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	},
 	{ syntax: "<feed=3>", meaning: "Advance the paper, 1–255 lines." },
 	{ syntax: "<cut>", meaning: "Cut the paper. <cut=partial> leaves a tab." },
-	{ syntax: "&lt; and &amp;", meaning: "A literal < or &. Any other ampersand is literal text." },
+	{
+		syntax: "&lt;, &amp; and &lbrace;",
+		meaning:
+			"A literal <, & or {. Any other ampersand is literal text; &lbrace; only matters once a variable's braces are in play — see Variables below.",
+	},
 ];
 
 /**
@@ -125,6 +146,8 @@ export default async function MarkupDocsPage() {
 	const allowPlainHttp = await booleanSetting("images.allowPlainHttp");
 	const allowedHosts = await stringSetting("images.allowedRemoteHosts");
 	const acceptedFormats = await enumSetting<"png+jpeg" | "png">("assets.acceptedFormats");
+	const variablesEnabled = await booleanSetting("variables.enabled");
+	const maxVariableRefs = await integerSetting("variables.maxPerElement");
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -190,6 +213,153 @@ export default async function MarkupDocsPage() {
 					</DocSection>
 
 					<DocSection {...SECTIONS[1]}>
+						<Split>
+							<Col>
+								<P>
+									<Mono>{"{name}"}</Mono> is replaced by a configured value when the receipt compiles. It follows the
+									same slug shape a device or agent name uses — lowercase letters, digits, dashes and underscores, up to
+									64 characters, starting with a letter or number — so <Mono>{"{phone}"}</Mono> prints whatever this
+									install's <Mono>phone</Mono> variable currently holds. A name nothing defines is{" "}
+									<ErrorRef code="unknown_variable" />: a typo in a receipt has to be a failure the caller sees, not{" "}
+									<Mono>{"{phne}"}</Mono> printed literally on a customer's copy.
+								</P>
+
+								<P>
+									Only a slug-shaped name is a reference. <Mono>{"Table {1 of 4}"}</Mono> prints exactly as written,
+									because a space is not part of that shape — which is what keeps braces usable in ordinary receipt text
+									without an escape. <Mono>&amp;lbrace;</Mono> is the escape for the remaining case: printing the
+									literal characters <Mono>{"{phone}"}</Mono> on an install where <Mono>phone</Mono> really is defined.
+								</P>
+
+								<P>
+									A value is always plain text. A tag written inside one — <Mono>{"<bold>"}</Mono> in a variable's
+									value, say — prints as those visible characters and is never obeyed: the substituted text is inserted
+									as a single span, not fed back through the parser. The same holds for another reference — a value
+									holding <Mono>{"{other}"}</Mono> prints exactly those eight characters. There is no recursion anywhere
+									in this feature, deliberately: a value read once and never re-scanned is what a variable's value being
+									"returned as-is" in the code actually means, and it is what keeps one variable's printed text from
+									depending on the order another was evaluated in.
+								</P>
+
+								<P>
+									Resolution has three layers, narrowest first: a value the print job itself supplied, then this
+									printer's own override, then the variable's install-wide definition. A variable defined on the panel
+									is <strong>locked by default</strong> — a print request may only replace one whose "Overridable"
+									toggle is on; supplying a value for one that is not is <ErrorRef code="variable_not_overridable" />.
+									Only the middle layer is per-printer, and only a <Mono>STATIC</Mono> variable may carry one: a date's
+									pattern and a printer's own name mean the same thing on every printer, so only a literal value can
+									differ by printer.
+								</P>
+
+								<P>
+									A variable is one of three kinds. <Mono>STATIC</Mono> is a literal value, the only kind a printer may
+									override. <Mono>DATETIME</Mono> formats the instant the job compiles at against a{" "}
+									<Mono>date-fns</Mono> pattern, in this install's configured time zone and locale, with an optional
+									offset: <Mono>MINUTES</Mono> and <Mono>HOURS</Mono> are elapsed real time and never consult a
+									calendar, while <Mono>DAYS</Mono>, <Mono>WEEKS</Mono> and <Mono>MONTHS</Mono> are calendar arithmetic
+									done in that same zone, which is what keeps a return-by date on the same wall-clock time across a
+									daylight-saving change rather than sliding by an hour. <Mono>CONTEXT</Mono> reads a fact about the
+									print itself — the printer's name, its agent's name, or the API key that submitted the job — and is
+									empty when nothing did, since a receipt printed from the Tools tab was not submitted by one.
+								</P>
+
+								<Aside>
+									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree.
+									Several locales use different words for the two: this install's Finnish locale renders{" "}
+									<Mono>cccc</Mono> as the standalone <Mono>keskiviikko</Mono> and <Mono>EEEE</Mono> as the inflected{" "}
+									<Mono>keskiviikkona</Mono> — "on Wednesday" rather than "Wednesday". A receipt printing a bare day
+									name almost always wants <Mono>cccc</Mono>; reach for <Mono>EEEE</Mono> only inside a sentence that
+									reads correctly with the inflection.
+								</Aside>
+
+								<P>
+									<Mono>variables.enabled</Mono>, on the Settings tab, is the switch, and it ships <strong>on</strong> —{" "}
+									{variablesEnabled
+										? "as it is on this install right now"
+										: "though this install has since switched it off, so every brace below prints as plain text"}
+									. Turning it on changes what existing markup means: a slug-shaped <Mono>{"{something}"}</Mono> that
+									used to print exactly as written now resolves or fails, so a receipt written before this feature
+									existed can start answering <ErrorRef code="unknown_variable" /> the day it is switched on. Switched
+									off again, a brace is ordinary text and every receipt prints exactly as it always did.
+								</P>
+
+								<P>
+									At most {maxVariableRefs} <Mono>{"{name}"}</Mono> references are allowed in one element, past which is{" "}
+									<ErrorRef code="too_many_variable_references" /> — a bound on where the expansion happens, rather than
+									leaving the printed-lines limit to catch it afterwards.
+								</P>
+
+								<P>
+									An agent's own console does not expand any of this. Variables are resolved here, on the server, before
+									an element ever reaches the wire; the console parses markup with its own separate implementation,
+									which has never been taught what <Mono>{"{name}"}</Mono> means. A brace typed there stays literal.
+								</P>
+							</Col>
+
+							<Col>
+								<div className="min-w-0 overflow-x-auto rounded-lg border border-border">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead className="w-[90px]">Kind</TableHead>
+												<TableHead>Prints</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											<TableRow>
+												<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+													STATIC
+												</TableCell>
+												<TableCell className="text-[12px] text-muted-foreground">
+													Its configured value, unchanged. The only kind a printer may override.
+												</TableCell>
+											</TableRow>
+											<TableRow>
+												<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+													DATETIME
+												</TableCell>
+												<TableCell className="text-[12px] text-muted-foreground">
+													Its pattern, formatted against the instant the job compiles at, shifted by its offset if it
+													has one.
+												</TableCell>
+											</TableRow>
+											<TableRow>
+												<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+													CONTEXT
+												</TableCell>
+												<TableCell className="text-[12px] text-muted-foreground">
+													The printer's name, its agent's name, or the API key that submitted the job.
+												</TableCell>
+											</TableRow>
+										</TableBody>
+									</Table>
+								</div>
+
+								<div className="min-w-0 overflow-x-auto rounded-lg border border-border">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead className="w-[140px]">Pattern</TableHead>
+												<TableHead>Prints as</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{DATE_PATTERNS.map((pattern) => (
+												<TableRow key={pattern.pattern}>
+													<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+														{pattern.pattern}
+													</TableCell>
+													<TableCell className="text-[12px] text-muted-foreground">{pattern.example}</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+								</div>
+							</Col>
+						</Split>
+					</DocSection>
+
+					<DocSection {...SECTIONS[2]}>
 						<Split>
 							<Col>
 								<P>

@@ -537,11 +537,35 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								<Mono>data</Mono> is required and <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
-								<Mono>NONE</Mono>) is optional, defaulting to the device's own setting. No other field is accepted.
-								Whether a line is broken to the paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and{" "}
-								<Mono>&lt;nowrap&gt;</Mono>.
+								<Mono>data</Mono> is required; <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
+								<Mono>NONE</Mono>) and <Mono>variables</Mono>, below, are optional. <Mono>linefeed</Mono> defaults to
+								the device's own setting, and no field beyond these three is accepted. Whether a line is broken to the
+								paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and <Mono>&lt;nowrap&gt;</Mono>.
 							</P>
+
+							<P>
+								<Mono>variables</Mono> supplies values for this job's own <Mono>{"{name}"}</Mono> references — see{" "}
+								<DocLink href="/docs/markup#variables">Variables</DocLink> for the language and the three layers a value
+								can come from. Every name must be slug-shaped, or the whole request is{" "}
+								<ErrorRef code="invalid_variable_name" />; a value over the install's configured length is{" "}
+								<ErrorRef code="variable_too_long" />, and one holding a control character is{" "}
+								<ErrorRef code="invalid_variable_value" />. Those three are checked before anything is written, exactly
+								like any other malformed field. An install that does not accept values from a request at all —{" "}
+								<Mono>variables.allowRequestValues</Mono>, on the Settings tab — refuses the field outright with{" "}
+								<ErrorRef code="variables_not_allowed" />, past <Mono>variables.maxPerRequest</Mono> names is{" "}
+								<ErrorRef code="too_many_variables" />, and a name that is defined here and not marked overridable is{" "}
+								<ErrorRef code="variable_not_overridable" />.
+							</P>
+
+							<Aside>
+								<ErrorRef code="unknown_variable" /> and <ErrorRef code="too_many_variable_references" /> are different
+								from the four above: they come from compiling the markup itself rather than from reading the field, so —
+								like <Mono>unknown_tag</Mono> or <Mono>unclosed_tag</Mono> — they are only found once this job's row
+								already exists. The response is exactly the same synchronous refusal either way; the only difference is
+								that a receipt naming an undefined <Mono>{"{typo}"}</Mono> leaves a <Mono>FAILED</Mono> row behind
+								rather than never having been recorded at all, which is what decides whether an{" "}
+								<Mono>Idempotency-Key</Mono> stays free for a corrected retry — see below.
+							</Aside>
 
 							<P>
 								An optional <Mono>Idempotency-Key</Mono> header makes a retry safe. Omit it and nothing here changes.
@@ -603,6 +627,14 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   "error": "idempotency_conflict",
   "message": "Idempotency-Key '5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d' was already used with a different request body. Use a new key for a different receipt."
 }`}</CodeBlock>
+
+							<CodeBlock label="Request — supplying a variable">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+  -H "Authorization: Bearer fpk_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "data": [ "Order #{order_id}" ],
+    "variables": { "order_id": "1041" }
+  }'`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
@@ -616,17 +648,18 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								Same body a submit takes — <Mono>data</Mono> and an optional <Mono>linefeed</Mono> — compiled against
-								the named device and reported back rather than sent anywhere. No job is created, nothing is queued, and
-								the agent is never contacted: this works even while the agent is offline, since only the device's stored
-								configuration is needed.
+								Same body a submit takes — <Mono>data</Mono>, an optional <Mono>linefeed</Mono> and an optional{" "}
+								<Mono>variables</Mono> object — compiled against the named device and reported back rather than sent
+								anywhere. No job is created, nothing is queued, and the agent is never contacted: this works even while
+								the agent is offline, since only the device's stored configuration is needed.
 							</P>
 
 							<P>
 								Always <Status>200</Status>. Markup that does not compile comes back with <Mono>lines</Mono>{" "}
 								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
 								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
-								non-2xx here.
+								non-2xx here. There is no job row for a variable error to settle either way, unlike a submit:{" "}
+								<ErrorRef code="unknown_variable" /> here is simply one more entry in <Mono>errors</Mono>.
 							</P>
 
 							<P>
