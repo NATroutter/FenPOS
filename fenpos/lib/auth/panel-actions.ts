@@ -494,6 +494,15 @@ export const PANEL_ACTIONS = [
 		description: "Promoted or demoted a superuser",
 	},
 
+	{
+		id: "users:list-sessions",
+		kind: "query",
+		permission: "users:read",
+		module: "(panel)/users/actions.ts",
+		exportName: "listSessions",
+		description: "Listed an account's sessions",
+	},
+
 	// --- Roles ---
 	{
 		id: "roles:create",

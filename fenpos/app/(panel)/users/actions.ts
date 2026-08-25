@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
 	banAccount,
 	clearTwoFactor,
+	listAccountSessions,
 	requirePasswordChange,
 	revokeAccountSession,
 	revokeAccountSessions,
@@ -12,7 +13,7 @@ import {
 } from "@/lib/auth/account-security";
 import { createAccount, deleteAccount, setAccountSuperuser, updateAccount } from "@/lib/auth/account-service";
 import { setAccountPermissions, setAccountRoles } from "@/lib/auth/grant-service";
-import { panelAction } from "@/lib/auth/panel-action";
+import { panelAction, panelQuery } from "@/lib/auth/panel-action";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import type { ActionState } from "@/lib/panel/action-state";
@@ -44,6 +45,16 @@ export interface NewUserInput {
 	requirePasswordReset: boolean;
 	roleIds: string[];
 	permissions: string[];
+}
+
+/** One of an account's sessions, as the dialog lists it. */
+export interface UserSession {
+	id: string;
+	ipAddress: string | null;
+	userAgent: string | null;
+	createdAt: string;
+	updatedAt: string;
+	expiresAt: string;
 }
 
 /**
@@ -177,6 +188,38 @@ export async function unbanUser(userId: string): Promise<ActionState> {
 		revalidate,
 		target: await accountTarget(userId),
 	});
+}
+
+/**
+ * Lists the sessions an account holds.
+ *
+ * A `query` rather than a `command`: it is opened by a dialog and changes nothing, so a row per
+ * viewing would bury the revocations it sits beside. A refusal is still recorded, which is the
+ * property that matters — see the registry's own note on `kind`.
+ *
+ * @param userId the account to list
+ * @returns its sessions, most recently active first, or an empty list when refused
+ */
+export async function listSessions(userId: string): Promise<UserSession[]> {
+	return panelQuery<UserSession[]>(
+		"users:list-sessions",
+		async () => {
+			const sessions = await listAccountSessions(userId);
+			return sessions.map((session) => ({
+				id: session.id,
+				ipAddress: session.ipAddress,
+				userAgent: session.userAgent,
+				createdAt: session.createdAt.toISOString(),
+				updatedAt: session.updatedAt.toISOString(),
+				expiresAt: session.expiresAt.toISOString(),
+			}));
+		},
+		{
+			refused: () => [],
+			failed: () => [],
+			target: { kind: "user", id: userId },
+		},
+	);
 }
 
 /**
