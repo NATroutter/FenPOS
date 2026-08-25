@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { requireSession } from "@/lib/auth/require-session";
+import { panelAction, panelQuery } from "@/lib/auth/panel-action";
+import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import {
@@ -20,34 +21,31 @@ import { newWebhookSecret } from "@/lib/webhooks/signature";
 /**
  * Server actions behind the Keys tab.
  *
- * Every action re-checks the session. The panel layout already guards the page, but an action is
- * a POST endpoint in its own right: anything that trusted the layout would be callable directly
- * by anyone who knew the action id.
+ * Every action goes through the shared gate, which resolves the session, checks the permission its
+ * registry entry names, runs the body, and records the attempt. Three of them return their secret
+ * once and so go through `panelQuery` rather than `panelAction` — that is a fact about their return
+ * type only: minting, rerolling and pointing a webhook are all recorded like any other command.
+ *
+ * **No secret ever reaches the record.** Not the key, not the webhook signing secret. What is
+ * recorded is that a key was minted and what it was granted, which is what an incident is read for.
  */
+
+/** What every action here refreshes on success. */
+const revalidate = () => revalidatePath("/keys");
 
 /**
- * Runs an action, converting a failure into a message the panel can render.
+ * Shapes a failure the way this tab's one-time-secret actions report one.
  *
- * @param label short description used in the log line
- * @param work the action body
- * @returns the state to render
+ * @param error whatever the body threw
+ * @param label what to log an unexpected failure as
+ * @returns the result to render
  */
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
-
-	try {
-		await work();
-		revalidatePath("/keys");
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error(`Key action failed: ${label}`, error);
-		return { error: "Something went wrong. Check the server log." };
+function mintFailure(error: unknown, label: string): MintedKeyResult {
+	if (error instanceof ApiError) {
+		return { error: error.message, secret: null };
 	}
+	logger.error(`Key action failed: ${label}`, error);
+	return { error: "Something went wrong. Check the server log.", secret: null };
 }
 
 /** The outcome of minting or reissuing a key, carrying the one and only sight of its secret. */
@@ -70,19 +68,21 @@ export interface MintedKeyResult {
  * @returns the secret, or why it could not be created
  */
 export async function createKey(name: string, permissions: string[], deviceIds: string[]): Promise<MintedKeyResult> {
-	await requireSession();
-
-	try {
-		const key = await createApiKeyRecord(name, permissions, deviceIds);
-		revalidatePath("/keys");
-		return { error: null, secret: key.secret };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message, secret: null };
-		}
-		logger.error("Key action failed: create", error);
-		return { error: "Something went wrong. Check the server log.", secret: null };
-	}
+	return panelQuery<MintedKeyResult>(
+		"keys:create",
+		async () => {
+			const key = await createApiKeyRecord(name, permissions, deviceIds);
+			return { error: null, secret: key.secret };
+		},
+		{
+			refused: () => ({ error: REFUSAL_MESSAGE, secret: null }),
+			failed: (error) => mintFailure(error, "create"),
+			revalidate,
+			target: { kind: "api-key", label: name },
+			// What it may do, never what it is. The secret exists in one place for one moment.
+			detail: { permissions, deviceCount: deviceIds.length },
+		},
+	);
 }
 
 /**
@@ -94,7 +94,11 @@ export async function createKey(name: string, permissions: string[], deviceIds: 
  * @returns the state to render
  */
 export async function updateKey(keyId: string, permissions: string[], deviceIds: string[]): Promise<ActionState> {
-	return run("update", () => updateApiKeyGrants(keyId, permissions, deviceIds));
+	return panelAction("keys:update", () => updateApiKeyGrants(keyId, permissions, deviceIds), {
+		revalidate,
+		target: { kind: "api-key", id: keyId },
+		detail: { permissions, deviceCount: deviceIds.length },
+	});
 }
 
 /**
@@ -106,19 +110,19 @@ export async function updateKey(keyId: string, permissions: string[], deviceIds:
  * @returns the new secret, or why it could not be issued
  */
 export async function rerollKey(keyId: string): Promise<MintedKeyResult> {
-	await requireSession();
-
-	try {
-		const key = await rerollApiKeyRecord(keyId);
-		revalidatePath("/keys");
-		return { error: null, secret: key.secret };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message, secret: null };
-		}
-		logger.error("Key action failed: reroll", error);
-		return { error: "Something went wrong. Check the server log.", secret: null };
-	}
+	return panelQuery<MintedKeyResult>(
+		"keys:reroll",
+		async () => {
+			const key = await rerollApiKeyRecord(keyId);
+			return { error: null, secret: key.secret };
+		},
+		{
+			refused: () => ({ error: REFUSAL_MESSAGE, secret: null }),
+			failed: (error) => mintFailure(error, "reroll"),
+			revalidate,
+			target: { kind: "api-key", id: keyId },
+		},
+	);
 }
 
 /**
@@ -129,7 +133,10 @@ export async function rerollKey(keyId: string): Promise<MintedKeyResult> {
  * @returns the state to render
  */
 export async function renameKey(keyId: string, name: string): Promise<ActionState> {
-	return run("rename", () => renameApiKeyRecord(keyId, name));
+	return panelAction("keys:rename", () => renameApiKeyRecord(keyId, name), {
+		revalidate,
+		target: { kind: "api-key", id: keyId, label: name },
+	});
 }
 
 /**
@@ -139,7 +146,10 @@ export async function renameKey(keyId: string, name: string): Promise<ActionStat
  * @returns the state to render
  */
 export async function revokeKey(keyId: string): Promise<ActionState> {
-	return run("revoke", () => revokeApiKeyRecord(keyId));
+	return panelAction("keys:revoke", () => revokeApiKeyRecord(keyId), {
+		revalidate,
+		target: { kind: "api-key", id: keyId },
+	});
 }
 
 /**
@@ -149,7 +159,10 @@ export async function revokeKey(keyId: string): Promise<ActionState> {
  * @returns the state to render
  */
 export async function deleteKey(keyId: string): Promise<ActionState> {
-	return run("delete", () => deleteApiKeyRecord(keyId));
+	return panelAction("keys:delete", () => deleteApiKeyRecord(keyId), {
+		revalidate,
+		target: { kind: "api-key", id: keyId },
+	});
 }
 
 /**
@@ -179,28 +192,31 @@ export async function deleteKey(keyId: string): Promise<ActionState> {
  * @returns the new secret, or why it could not be registered
  */
 export async function setWebhook(apiKeyId: string, url: string): Promise<MintedKeyResult> {
-	await requireSession();
+	return panelQuery<MintedKeyResult>(
+		"keys:webhook-set",
+		async () => {
+			await assertDeliverable(url);
 
-	try {
-		await assertDeliverable(url);
+			const secret = newWebhookSecret();
+			await prisma.webhook.upsert({
+				where: { apiKeyId },
+				create: { apiKeyId, url, secret },
+				update: { url, secret },
+			});
 
-		const secret = newWebhookSecret();
-		await prisma.webhook.upsert({
-			where: { apiKeyId },
-			create: { apiKeyId, url, secret },
-			update: { url, secret },
-		});
-
-		logger.info("Webhook registered", { apiKeyId });
-		revalidatePath("/keys");
-		return { error: null, secret };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message, secret: null };
-		}
-		logger.error("Key action failed: setWebhook", error);
-		return { error: "Something went wrong. Check the server log.", secret: null };
-	}
+			logger.info("Webhook registered", { apiKeyId });
+			return { error: null, secret };
+		},
+		{
+			refused: () => ({ error: REFUSAL_MESSAGE, secret: null }),
+			failed: (error) => mintFailure(error, "setWebhook"),
+			revalidate,
+			target: { kind: "api-key", id: apiKeyId },
+			// The destination is recorded — a URL this install now talks to is exactly what an incident
+			// is read to find. The signing secret is not.
+			detail: { url },
+		},
+	);
 }
 
 /**
@@ -218,8 +234,12 @@ export async function setWebhook(apiKeyId: string, url: string): Promise<MintedK
  * @returns the state to render
  */
 export async function removeWebhook(apiKeyId: string): Promise<ActionState> {
-	return run("removeWebhook", async () => {
-		await prisma.webhook.deleteMany({ where: { apiKeyId } });
-		logger.info("Webhook removed", { apiKeyId });
-	});
+	return panelAction(
+		"keys:webhook-remove",
+		async () => {
+			await prisma.webhook.deleteMany({ where: { apiKeyId } });
+			logger.info("Webhook removed", { apiKeyId });
+		},
+		{ revalidate, target: { kind: "api-key", id: apiKeyId } },
+	);
 }
