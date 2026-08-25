@@ -265,11 +265,11 @@ export default async function MarkupDocsPage() {
 
 								<Aside>
 									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree.
-									Several locales use different words for the two: this install's Finnish locale renders{" "}
-									<Mono>cccc</Mono> as the standalone <Mono>keskiviikko</Mono> and <Mono>EEEE</Mono> as the inflected{" "}
-									<Mono>keskiviikkona</Mono> — "on Wednesday" rather than "Wednesday". A receipt printing a bare day
-									name almost always wants <Mono>cccc</Mono>; reach for <Mono>EEEE</Mono> only inside a sentence that
-									reads correctly with the inflection.
+									Several locales use different words for the two: set this install's <Mono>variables.locale</Mono> to
+									Finnish and <Mono>cccc</Mono> renders the standalone <Mono>keskiviikko</Mono> while <Mono>EEEE</Mono>{" "}
+									renders the inflected <Mono>keskiviikkona</Mono> — "on Wednesday" rather than "Wednesday". A receipt
+									printing a bare day name almost always wants <Mono>cccc</Mono>; reach for <Mono>EEEE</Mono> only
+									inside a sentence that reads correctly with the inflection.
 								</Aside>
 
 								<P>

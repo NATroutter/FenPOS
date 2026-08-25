@@ -559,7 +559,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<Aside>
 								<ErrorRef code="unknown_variable" /> and <ErrorRef code="too_many_variable_references" /> are different
-								from the four above: they come from compiling the markup itself rather than from reading the field, so —
+								from the ones above: they come from compiling the markup itself rather than from reading the field, so —
 								like <Mono>unknown_tag</Mono> or <Mono>unclosed_tag</Mono> — they are only found once this job's row
 								already exists. The response is exactly the same synchronous refusal either way; the only difference is
 								that a receipt naming an undefined <Mono>{"{typo}"}</Mono> leaves a <Mono>FAILED</Mono> row behind
