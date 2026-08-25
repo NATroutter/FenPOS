@@ -20,6 +20,19 @@ describe("readSuppliedVariables", () => {
 		throw new Error("expected a refusal");
 	};
 
+	/** The message a refusal carries, for the cases where the wording itself is what is being pinned. */
+	const messageOf = (value: unknown, cap = 200): string => {
+		try {
+			readSuppliedVariables(value, cap);
+		} catch (thrown) {
+			if (thrown instanceof ApiError) {
+				return thrown.message;
+			}
+			throw thrown;
+		}
+		throw new Error("expected a refusal");
+	};
+
 	it("is empty when the field is absent", () => {
 		expect(read(undefined)).toEqual({});
 		expect(read(null)).toEqual({});
@@ -91,6 +104,15 @@ describe("readSuppliedVariables", () => {
 			});
 		});
 
+		it("reads offset: null identically to an omitted offset", () => {
+			// Plenty of JSON serialisers emit `null` for an absent optional rather than dropping the
+			// key, and null cannot mean anything different from omission here — both mean "the instant
+			// the job compiles at".
+			expect(read({ printed_at: { pattern: "dd.MM.yyyy", offset: null } })).toEqual(
+				read({ printed_at: { pattern: "dd.MM.yyyy" } }),
+			);
+		});
+
 		it("reads a negative offset, which is a date in the past", () => {
 			expect(read({ ordered: { pattern: "dd.MM.", offset: { amount: -3, unit: "DAYS" } } })).toEqual({
 				ordered: { kind: "moment", pattern: "dd.MM.", offset: { amount: -3, unit: "DAYS" } },
@@ -107,6 +129,14 @@ describe("readSuppliedVariables", () => {
 
 		it("refuses an object with no pattern at all", () => {
 			expect(codeOf({ return_by: { offset: { amount: 14, unit: "DAYS" } } })).toBe("invalid_variable");
+		});
+
+		it("names the missing field in the message when the pattern is absent", () => {
+			expect(messageOf({ return_by: { offset: { amount: 14, unit: "DAYS" } } })).toContain("pattern");
+		});
+
+		it("names the offending field in the message when the offset amount is fractional", () => {
+			expect(messageOf({ d: { pattern: "dd", offset: { amount: 1.5, unit: "DAYS" } } })).toContain("offset.amount");
 		});
 
 		it("refuses an empty pattern", () => {
@@ -150,6 +180,15 @@ describe("readSuppliedVariables", () => {
 
 		it("refuses an array, which is an object but not this one either", () => {
 			expect(codeOf({ d: ["dd.MM.yyyy"] })).toBe("invalid_type");
+		});
+
+		it("refuses a control character inside a quoted pattern literal, at this boundary rather than the parser's", () => {
+			// The parser catches this too, but only at substitution, which on the print path is after
+			// the job row is created — this check closes that gap so a `moment` value is refused before
+			// anything is written, exactly as the `text` branch above is. `invalid_variable_value` is the
+			// same code the text path answers with for the same problem, which is what makes them
+			// symmetric.
+			expect(codeOf({ d: { pattern: `'a${String.fromCharCode(0x1b)}b'` } })).toBe("invalid_variable_value");
 		});
 
 		it("does not measure the pattern against the value cap, because the rendered text is what prints", () => {

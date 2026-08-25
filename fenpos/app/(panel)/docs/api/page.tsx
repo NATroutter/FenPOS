@@ -559,7 +559,8 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								A value is normally a string, substituted exactly as sent. It may instead be an object describing a date
-								for <em>this</em> server to compute:{" "}
+								for <em>this</em> server to compute — anything else, an array or a number among them, is{" "}
+								<ErrorRef code="invalid_type" />:{" "}
 								<Mono>{'{ "pattern": "dd.MM.yyyy", "offset": { "amount": 14, "unit": "DAYS" } }'}</Mono>. The pattern
 								and the offset are yours; the <strong>time zone and locale are this install's</strong>, and there is no
 								way to send your own. That is the point of it — a caller in another zone, or one that formats{" "}

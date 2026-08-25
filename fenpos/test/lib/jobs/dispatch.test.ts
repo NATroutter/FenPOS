@@ -361,6 +361,32 @@ describe("dispatch with variables", () => {
 		});
 	});
 
+	/**
+	 * A malformed `variables` object is caught by `readRequest`, inside `submitJob` but before
+	 * `job.create` runs — see the ordering `dispatch.ts`'s own header lays out. Pinned at this level
+	 * rather than through the route: `test/app/api/v1/print/[agent]/[device]/route.test.ts` mocks
+	 * `submitJob` entirely for its own reasons (its header explains why — the header check alone is
+	 * what those tests are about), so it never reaches this validation and cannot exercise the
+	 * no-row property. That property is what decides whether an `Idempotency-Key` stays free for a
+	 * corrected retry: a request that never became a job must leave its key exactly as free as one
+	 * that did not exist.
+	 */
+	it("refuses an object-valued variable that fails validation before any job row exists", async () => {
+		const deviceId = await connectedDevice();
+
+		const thrown = await submitJob(deviceId, {
+			data: ["Return by {return_by}"],
+			variables: { return_by: { pattern: "" } },
+		}).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(ApiError);
+		expect((thrown as ApiError).code).toBe("invalid_variable");
+		expect(await prisma.job.count()).toBe(0);
+	});
+
 	it("resolves a variable inside an image reference", async () => {
 		const deviceId = await connectedDevice();
 		await createVariable({ ...STATIC, name: "brand", value: "logo" });

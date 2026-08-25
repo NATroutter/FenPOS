@@ -290,6 +290,26 @@ describe("resolveVariables", () => {
 			await expect(resolveVariables(job({ d: moment("YYYY-MM-DD") }), NOW)).rejects.toBeInstanceOf(ApiError);
 		});
 
+		it("trims date-fns's own message before it reaches the caller, dropping the clause naming the server's clock", async () => {
+			// `date-fns` appends ` to the input <Date.toString()>; see: …` to this refusal — a clause
+			// that names the exact instant it tried to format, rendered in the host process's own local
+			// zone and, for the zone's abbreviation, whatever language the host OS happens to be set to.
+			// The `not.toContain("GMT")` assertion is the durable part: it is what would catch the
+			// server's own clock and zone leaking back into a caller's API response, regardless of what
+			// this test's own machine's zone or locale happen to be.
+			const caught = await resolveVariables(job({ bad_date: moment("YYYY-MM-DD") }), NOW).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			expect(caught).toBeInstanceOf(ApiError);
+			const message = (caught as ApiError).message;
+			expect(message).toContain("bad_date");
+			expect(message).toContain("YYYY");
+			expect(message).not.toContain("GMT");
+			expect(message).not.toContain(" to the input ");
+		});
+
 		it("refuses only that request, leaving the next job on the install printing", async () => {
 			// The containment the parent feature's Critical bug was about, restated at this seam: an
 			// unrenderable pattern is one caller's mistake, not an install-wide outage.

@@ -205,14 +205,30 @@ export const API_ERROR_STATUS = {
 	symbol_too_wide: 422,
 	/** A `{name}` naming no variable this device can resolve. See `MARKUP_ERRORS.unknownVariable`. */
 	unknown_variable: 422,
-	/** A definition that fails `variableDefinitionSchema` — a cross-field rule, or a value shape it refuses. */
+	/**
+	 * Three shapes of "this is not a date-or-definition this server can use", one code because they
+	 * share a remedy — fix what you sent and resubmit:
+	 *
+	 * - A panel definition that fails `variableDefinitionSchema` — a cross-field rule, or a value
+	 *   shape it refuses. See `variableDefinitionSchema` in `lib/variables/definition.ts`.
+	 * - A request-supplied value object that fails `dynamicValueSchema` — a missing `pattern`, a
+	 *   fractional offset amount, an unknown key. See `readSuppliedVariables` in
+	 *   `lib/variables/supplied.ts`.
+	 * - A caller-supplied pattern that shape-checks but `date-fns` cannot render, such as `YYYY`. See
+	 *   `renderSuppliedMoment` in `lib/markup/resolve-variables.ts`.
+	 */
 	invalid_variable: 422,
 	/**
-	 * A device override value that `printableValue` refuses — today, only a control character.
+	 * A control character somewhere a value's text must not carry one: a device override value, a
+	 * request-supplied *text* value, or the pattern of a request-supplied *date* value — the last
+	 * refused at the same boundary the other two are, before a job row exists, rather than left for
+	 * the markup parser to catch at substitution.
 	 *
-	 * Distinct from `invalid_variable`, which is about a whole definition failing
-	 * `variableDefinitionSchema`: a device override is a bare value, not a definition, so there is no
-	 * definition for that code to describe. See `setDeviceOverride` in `lib/variables/variable-service.ts`.
+	 * Distinct from `invalid_variable`, none of whose three meanings are about a bare value: a device
+	 * override, a supplied text value and a supplied pattern are each a value standing alone, not a
+	 * definition and not the object shape a supplied date arrives in, so there is no definition or
+	 * shape for that code to describe. See `setDeviceOverride` in `lib/variables/variable-service.ts`
+	 * and `readSuppliedVariables` in `lib/variables/supplied.ts`.
 	 */
 	invalid_variable_value: 422,
 	/** A variable value beyond the install's configured `variables.maxValueChars`. */

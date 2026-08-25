@@ -223,10 +223,34 @@ function renderSuppliedMoment(
 		return evaluateVariable(definition, now, context, formatting);
 	} catch (error) {
 		// `evaluateVariable` already names the variable in its message and says which token it could
-		// not read, so it is passed through rather than wrapped in a second sentence saying less.
-		throw new ApiError(
-			"invalid_variable",
-			error instanceof Error ? error.message : `The variable '${name}' has a pattern this server cannot format.`,
-		);
+		// not read, so it is passed through rather than wrapped in a second sentence saying less — but
+		// trimmed first, and only here. `date-fns` appends a ` to the input <Date.toString()>; see: …`
+		// clause naming the exact instant it tried to format, rendered in the host process's own local
+		// zone and, for the zone's name, whatever language the host OS is set to — which is how this
+		// server's clock, time zone and a foreign-language string could all leak into a caller's API
+		// response. `evaluate.ts` itself keeps the full message, because there it only ever reaches the
+		// logs and the panel — both this install's own, not a caller's.
+		throw new ApiError("invalid_variable", trimDateFnsMessage(error, name));
 	}
+}
+
+/**
+ * The message `renderSuppliedMoment` hands back to the caller, with `date-fns`'s own trailing clause
+ * cut off.
+ *
+ * Cuts at the first `" to the input "`, which is present in every message `date-fns` throws for a
+ * pattern it refuses. When it is absent — an error from anywhere else, or a future `date-fns`
+ * rewording that drops the clause — the message passes through unchanged, so this degrades to
+ * today's un-trimmed behaviour rather than to something empty or misleading.
+ *
+ * @param error whatever `evaluateVariable` threw
+ * @param name the variable being supplied, for the fallback when `error` carries no message at all
+ * @returns the message to report to the caller
+ */
+function trimDateFnsMessage(error: unknown, name: string): string {
+	if (!(error instanceof Error)) {
+		return `The variable '${name}' has a pattern this server cannot format.`;
+	}
+	const cutAt = error.message.indexOf(" to the input ");
+	return cutAt === -1 ? error.message : error.message.slice(0, cutAt);
 }

@@ -16,9 +16,10 @@ import { MAX_OFFSET_AMOUNT, MAX_PATTERN_CHARS, OffsetUnit } from "@/lib/variable
  * added without a matching `paths` entry fails the suite. What an entry *says* is still a human's
  * job; that it exists at all is not.
  *
- * Every enumerated value below is read from the constant that already defines it — `ConnectionStatus`,
- * `JobStatus`, `AgentStatus`, `Align`, `Linefeed`, `AssetKind`, `API_DEVICE_ACTIONS`, `PERMISSION_IDS`,
- * `API_ERROR_STATUS` — rather than typed out by hand a second time. `DeviceView.observed.connection` in
+ * Every enumerated value and every numeric bound below is read from the constant that already defines
+ * it — `ConnectionStatus`, `JobStatus`, `AgentStatus`, `Align`, `Linefeed`, `AssetKind`,
+ * `API_DEVICE_ACTIONS`, `PERMISSION_IDS`, `API_ERROR_STATUS`, `OffsetUnit`, `MAX_PATTERN_CHARS`,
+ * `MAX_OFFSET_AMOUNT` — rather than typed out by hand a second time. `DeviceView.observed.connection` in
  * `lib/api/device-view.ts` is itself declared as a loose `string`, so nothing at the type level would
  * catch this document drifting from the domain's real `ConnectionStatus` union; deriving from the
  * source of truth is the only thing that does.

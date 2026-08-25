@@ -82,8 +82,8 @@ export type ContextSource = (typeof ContextSource.values)[number];
  * The longest a `DATETIME` pattern may be, wherever one arrives from.
  *
  * Exported as a number as well as a schema because the OpenAPI document states the same bound, and
- * that document's own header promises every value in it is read from the constant that defines it
- * rather than typed out a second time.
+ * that document's own header promises every enumerated value and every numeric bound in it is read
+ * from the constant that defines it rather than typed out a second time.
  */
 export const MAX_PATTERN_CHARS = 120;
 

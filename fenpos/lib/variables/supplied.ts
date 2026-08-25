@@ -58,7 +58,12 @@ export type SuppliedValue =
 const dynamicValueSchema = z
 	.object({
 		pattern: datePatternSchema,
-		offset: z.object({ amount: offsetAmountSchema, unit: OffsetUnit.schema }).strict().optional(),
+		// `.nullish()` rather than `.optional()`: a JSON serialiser on the caller's side may well emit
+		// `offset: null` for an absent optional rather than dropping the key, and null cannot mean
+		// anything different from omission here — both mean "the instant the job compiles at". The
+		// `?? null` below already normalises the two to one internal value, so accepting both spellings
+		// costs nothing downstream.
+		offset: z.object({ amount: offsetAmountSchema, unit: OffsetUnit.schema }).strict().nullish(),
 	})
 	.strict();
 
@@ -148,11 +153,31 @@ export function readSuppliedVariables(value: unknown, maxValueChars: number): Re
 			// the same code an unrenderable pattern gets in `resolveVariables`: from the caller's side
 			// those are one problem — the definition they sent is not one this server can use — and the
 			// message carries which.
+			//
+			// The field path is interpolated alongside the message because every other refusal in this
+			// function names the exact field at fault, and `issues[0].path` is populated in every case
+			// this schema can fail — a missing `pattern`, an unknown key, a fractional `offset.amount` —
+			// so leaving it out was the odd one out rather than a saving.
+			const issue = parsed.error.issues[0];
 			throw new ApiError(
 				"invalid_variable",
 				`The value of variable '${name}' is not a date this server can compute: ${
-					parsed.error.issues[0]?.message ?? "that shape is not valid."
+					issue ? `${issue.path.join(".")}: ${issue.message}` : "that shape is not valid."
 				}`,
+			);
+		}
+
+		// The parser catches a control character inside a `'…'` literal too, but only at substitution
+		// — which on the print path is after the job row exists, unlike the text branch above, which
+		// refuses one before anything is written. Checking here closes that asymmetry: a `moment` value
+		// is refused at the same boundary a `text` value is, with the same code. A `date-fns` token
+		// expands from locale data, never from caller input, so the literal segments a pattern carries
+		// are the only place a control character could come from, and checking the pattern as written is
+		// enough — nothing rendered from it needs checking separately.
+		if (hasControlCharacter(parsed.data.pattern)) {
+			throw new ApiError(
+				"invalid_variable_value",
+				`The pattern of variable '${name}' contains a control character, which cannot be printed`,
 			);
 		}
 
