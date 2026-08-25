@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { isUniqueViolationOn } from "@/lib/db-errors";
 import { logger } from "@/lib/logger";
 import { booleanSetting } from "@/lib/settings/settings-service";
 
@@ -131,59 +132,12 @@ export async function queueJobSettled(jobId: string): Promise<void> {
 /**
  * Whether a delivery insert lost a race against another settle report for the same job.
  *
- * Matched on the error code and the constraint's own columns, deliberately narrow — the same
- * discipline `lib/jobs/idempotency.ts`'s `isIdempotencyKeyRace` follows, for the same reason: a
- * broad catch on "some insert failed" would mistake an unrelated failure for a race already won by
- * someone else, and this function already has nowhere further to report a real fault except the
- * log.
+ * Narrowness is enforced by {@link isUniqueViolationOn}, which documents why.
  *
  * @param error the value `prisma.webhookDelivery.create` threw
  * @returns true only when this is Prisma reporting exactly the `(webhookId, jobId)` unique
  *   constraint, and not some other insert failure
  */
 function isDeliveryRace(error: unknown): boolean {
-	if (typeof error !== "object" || error === null || (error as { code?: unknown }).code !== "P2002") {
-		return false;
-	}
-
-	const meta = (error as { meta?: unknown }).meta;
-	const fields = constraintFields(meta);
-	if (fields === null || fields.length !== DELIVERY_CONSTRAINT_COLUMNS.length) {
-		return false;
-	}
-
-	const columns = new Set(fields);
-	return DELIVERY_CONSTRAINT_COLUMNS.every((column) => columns.has(column));
-}
-
-/**
- * Reads the column names a `P2002`'s `meta` names, if it names any.
- *
- * The driver adapter used here (better-sqlite3, see `lib/db.ts`) reports them at
- * `meta.driverAdapterError.cause.constraint.fields` rather than the flatter `meta.target` some
- * other Prisma connectors use. Duplicated from `lib/jobs/idempotency.ts` rather than imported: that
- * module is about idempotency keys specifically, and importing a private helper out of it for an
- * unrelated constraint would tie the two together for no reason either will ever need.
- *
- * @param meta the `meta` field of a caught `PrismaClientKnownRequestError`
- * @returns the column names, or null when the shape does not carry any
- */
-function constraintFields(meta: unknown): string[] | null {
-	if (typeof meta !== "object" || meta === null) {
-		return null;
-	}
-	const driverAdapterError = (meta as { driverAdapterError?: unknown }).driverAdapterError;
-	if (typeof driverAdapterError !== "object" || driverAdapterError === null) {
-		return null;
-	}
-	const cause = (driverAdapterError as { cause?: unknown }).cause;
-	if (typeof cause !== "object" || cause === null) {
-		return null;
-	}
-	const constraint = (cause as { constraint?: unknown }).constraint;
-	if (typeof constraint !== "object" || constraint === null) {
-		return null;
-	}
-	const fields = (constraint as { fields?: unknown }).fields;
-	return Array.isArray(fields) && fields.every((field) => typeof field === "string") ? (fields as string[]) : null;
+	return isUniqueViolationOn(error, DELIVERY_CONSTRAINT_COLUMNS);
 }

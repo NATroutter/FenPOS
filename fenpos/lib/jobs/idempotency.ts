@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
+import { isUniqueViolationOn } from "@/lib/db-errors";
 import { ApiError } from "@/lib/errors";
 
 /**
@@ -128,57 +129,12 @@ const IDEMPOTENCY_CONSTRAINT_COLUMNS = ["api_key_id", "idempotency_key"];
  * unhandled, that surfaces as an opaque `internal_error`, in precisely the case this feature
  * exists to make safe.
  *
- * Matched on the error code and the constraint's own columns, deliberately narrow: the `Job` table
- * could grow another unique constraint later, and a broad `catch` on "some insert failed" would
- * mistake that unrelated failure for a replay and answer it with someone else's job.
+ * Narrowness is enforced by {@link isUniqueViolationOn}, which documents why.
  *
  * @param error the value `prisma.job.create` threw
  * @returns true only when this is Prisma reporting exactly the `(apiKeyId, idempotencyKey)` unique
  *   constraint, and not some other insert failure
  */
 export function isIdempotencyKeyRace(error: unknown): boolean {
-	if (typeof error !== "object" || error === null || (error as { code?: unknown }).code !== "P2002") {
-		return false;
-	}
-
-	const meta = (error as { meta?: unknown }).meta;
-	const fields = constraintFields(meta);
-	if (fields === null || fields.length !== IDEMPOTENCY_CONSTRAINT_COLUMNS.length) {
-		return false;
-	}
-
-	const columns = new Set(fields);
-	return IDEMPOTENCY_CONSTRAINT_COLUMNS.every((column) => columns.has(column));
-}
-
-/**
- * Reads the column names a `P2002`'s `meta` names, if it names any.
- *
- * The driver adapter used here (better-sqlite3, see `lib/db.ts`) reports them at
- * `meta.driverAdapterError.cause.constraint.fields` rather than the flatter `meta.target` some
- * other Prisma connectors use — confirmed against this project's actual client rather than
- * assumed, since guessing wrong here would make {@link isIdempotencyKeyRace} silently match
- * nothing and every race would fall through as an unhandled fault again.
- *
- * @param meta the `meta` field of a caught `PrismaClientKnownRequestError`
- * @returns the column names, or null when the shape does not carry any
- */
-function constraintFields(meta: unknown): string[] | null {
-	if (typeof meta !== "object" || meta === null) {
-		return null;
-	}
-	const driverAdapterError = (meta as { driverAdapterError?: unknown }).driverAdapterError;
-	if (typeof driverAdapterError !== "object" || driverAdapterError === null) {
-		return null;
-	}
-	const cause = (driverAdapterError as { cause?: unknown }).cause;
-	if (typeof cause !== "object" || cause === null) {
-		return null;
-	}
-	const constraint = (cause as { constraint?: unknown }).constraint;
-	if (typeof constraint !== "object" || constraint === null) {
-		return null;
-	}
-	const fields = (constraint as { fields?: unknown }).fields;
-	return Array.isArray(fields) && fields.every((field) => typeof field === "string") ? (fields as string[]) : null;
+	return isUniqueViolationOn(error, IDEMPOTENCY_CONSTRAINT_COLUMNS);
 }
