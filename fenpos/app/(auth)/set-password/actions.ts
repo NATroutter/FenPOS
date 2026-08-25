@@ -2,6 +2,9 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { recordAudit, userActor } from "@/lib/audit/audit-log";
+import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
+import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { passwordSchema } from "@/lib/auth/password";
 import { currentUser } from "@/lib/auth/require-session";
@@ -95,6 +98,15 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 	await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: false } });
 
 	logger.info("Required password change completed", { userId: user.id });
+
+	// Nothing about the password goes in `detail`. Not its length, not its strength — the row
+	// records that the account replaced it, which is the whole of what an investigation needs.
+	await recordAudit({
+		action: AUTH_AUDIT_ACTIONS.SET_PASSWORD,
+		outcome: "SUCCESS",
+		actor: userActor(user),
+		provenance: await requestProvenance(),
+	});
 
 	// Outside any try/catch: redirect() signals by throwing.
 	redirect("/dashboard");

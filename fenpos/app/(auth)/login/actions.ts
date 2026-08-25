@@ -2,6 +2,9 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { recordAudit, unknownUserActor, userActor } from "@/lib/audit/audit-log";
+import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
+import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { logger } from "@/lib/logger";
@@ -25,6 +28,21 @@ export interface SignInState {
 const REJECTION_MESSAGE = "That email address and password do not match an account.";
 
 /**
+ * Reads the submitted address for the audit row.
+ *
+ * Normalised the same way the credential check normalises it, so a row and a sign-in agree about
+ * what was tried. Returns the empty string rather than null for a submission that carried no
+ * address at all, because "somebody posted this form with no email" is itself worth recording.
+ *
+ * @param formData the submitted form
+ * @returns the normalised address, or the empty string when none was submitted
+ */
+function readEmail(formData: FormData): string {
+	const email = formData.get("email");
+	return typeof email === "string" ? email.trim().toLowerCase() : "";
+}
+
+/**
  * Verifies credentials and starts a session.
  *
  * Failures are deliberately indistinguishable: a wrong password, an address with no account, a
@@ -34,6 +52,9 @@ const REJECTION_MESSAGE = "That email address and password do not match an accou
  *
  * A banned account is refused by Better Auth itself, so the ban is enforced at the credential
  * layer rather than by a check the panel could forget to make.
+ *
+ * Every outcome is written to the audit record as well as to the log — the two are separate
+ * channels with separate audiences, and the record is the one that survives log rotation.
  *
  * @param _previous the prior form state, required by useActionState and unused
  * @param formData the submitted form
@@ -48,6 +69,13 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	if (!limit.allowed) {
 		const seconds = Math.ceil(limit.retryAfterMs / 1000);
 		logger.warn("Sign-in rate limit engaged", { address, retryAfterSeconds: seconds });
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "DENIED",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { reason: "rate-limited", retryAfterSeconds: seconds },
+			provenance: await requestProvenance(),
+		});
 		return { error: `Too many attempts. Try again in ${seconds} seconds.` };
 	}
 
@@ -55,11 +83,19 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	const password = formData.get("password");
 
 	if (typeof email !== "string" || email.trim() === "" || typeof password !== "string" || password.length === 0) {
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "DENIED",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { reason: "malformed" },
+			provenance: await requestProvenance(),
+		});
 		return { error: REJECTION_MESSAGE };
 	}
 
+	let signedIn: { user: { id: string; name: string; email: string } };
 	try {
-		await auth.api.signInEmail({
+		signedIn = await auth.api.signInEmail({
 			body: { email: email.trim().toLowerCase(), password },
 			headers: await headers(),
 		});
@@ -70,6 +106,13 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			remainingAttempts: limit.remaining,
 			reason: error instanceof Error ? error.message : String(error),
 		});
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "DENIED",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { reason: "rejected", remainingAttempts: limit.remaining },
+			provenance: await requestProvenance(),
+		});
 		return { error: REJECTION_MESSAGE };
 	}
 
@@ -78,6 +121,16 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	signInLimiter.reset(address);
 
 	logger.info("Signed in", { address, email: email.trim().toLowerCase() });
+
+	// `sessionId` stays null on this row. `signInEmail` returns a token rather than a session id,
+	// and re-reading the session in this request would not see a cookie that has not been sent yet.
+	// The user id is on the row; correlate by user and time.
+	await recordAudit({
+		action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+		outcome: "SUCCESS",
+		actor: userActor(signedIn.user),
+		provenance: await requestProvenance(),
+	});
 
 	// Outside the try/catch that would otherwise swallow it: redirect() signals by throwing.
 	redirect("/dashboard");

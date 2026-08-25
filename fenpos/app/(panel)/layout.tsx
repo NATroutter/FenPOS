@@ -6,6 +6,9 @@ import { FormatProvider } from "@/components/panel/format-provider";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { recordAudit, userActor } from "@/lib/audit/audit-log";
+import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
+import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
 import { requireSession } from "@/lib/auth/require-session";
@@ -26,7 +29,22 @@ export const dynamic = "force-dynamic";
 async function signOut(): Promise<void> {
 	"use server";
 
-	await auth.api.signOut({ headers: await headers() });
+	const requestHeaders = await headers();
+	// Read before the session is destroyed: afterwards there is no id to record and no user to
+	// attribute the row to.
+	const session = await auth.api.getSession({ headers: requestHeaders });
+
+	await auth.api.signOut({ headers: requestHeaders });
+
+	if (session?.user) {
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_OUT,
+			outcome: "SUCCESS",
+			actor: userActor(session.user),
+			provenance: await requestProvenance(session.session.id),
+		});
+	}
+
 	redirect("/login");
 }
 

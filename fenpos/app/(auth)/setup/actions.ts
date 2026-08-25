@@ -2,6 +2,9 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { recordAudit, SETUP_ACTOR } from "@/lib/audit/audit-log";
+import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
+import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { setupLimiter } from "@/lib/auth/rate-limit";
 import { completeSetup } from "@/lib/auth/setup";
@@ -48,12 +51,28 @@ export async function checkSetupKey(_previous: SetupState, formData: FormData): 
 	if (!limit.allowed) {
 		const seconds = Math.ceil(limit.retryAfterMs / 1000);
 		logger.warn("Setup key rate limit engaged", { address, retryAfterSeconds: seconds });
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_KEY,
+			outcome: "DENIED",
+			actor: SETUP_ACTOR,
+			detail: { reason: "rate-limited", retryAfterSeconds: seconds },
+			provenance: await requestProvenance(),
+		});
 		return { error: `Too many attempts. Try again in ${seconds} seconds.` };
 	}
 
 	const setupKey = formData.get("setupKey");
 	if (typeof setupKey !== "string" || !(await verifySetupKey(setupKey)) || (await isInstallClaimed())) {
 		logger.warn("Rejected setup key", { address, remainingAttempts: limit.remaining });
+		// The submitted key never goes in `detail`. `setupKey` is on the redaction list, so a mistake
+		// here would be caught — but a backstop is not a reason to hand it one.
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_KEY,
+			outcome: "DENIED",
+			actor: SETUP_ACTOR,
+			detail: { reason: "rejected", remainingAttempts: limit.remaining },
+			provenance: await requestProvenance(),
+		});
 		return { error: REJECTION_MESSAGE };
 	}
 
@@ -82,6 +101,13 @@ export async function runSetup(_previous: SetupState, formData: FormData): Promi
 	if (!limit.allowed) {
 		const seconds = Math.ceil(limit.retryAfterMs / 1000);
 		logger.warn("Setup rate limit engaged", { address, retryAfterSeconds: seconds });
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE,
+			outcome: "DENIED",
+			actor: SETUP_ACTOR,
+			detail: { reason: "rate-limited", retryAfterSeconds: seconds },
+			provenance: await requestProvenance(),
+		});
 		return { error: `Too many attempts. Try again in ${seconds} seconds.` };
 	}
 
@@ -96,11 +122,31 @@ export async function runSetup(_previous: SetupState, formData: FormData): Promi
 		typeof email !== "string" ||
 		typeof password !== "string"
 	) {
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE,
+			outcome: "DENIED",
+			actor: SETUP_ACTOR,
+			detail: { reason: "malformed" },
+			provenance: await requestProvenance(),
+		});
 		return { error: REJECTION_MESSAGE };
 	}
 
 	try {
-		await completeSetup({ setupKey, name, email, password });
+		const { userId } = await completeSetup({ setupKey, name, email, password });
+
+		// Last statement of the try, so the claim is recorded even if the convenience sign-in below
+		// fails. Sitting inside a try is safe here in a way it would not be for other code:
+		// `recordAudit` does not throw, so there is nothing for the catch to swallow.
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE,
+			outcome: "SUCCESS",
+			actor: SETUP_ACTOR,
+			// Normalised the same way `completeSetup` normalises it before storing, so the row and
+			// the account agree about the address.
+			target: { kind: "user", id: userId, label: email.trim().toLowerCase() },
+			provenance: await requestProvenance(),
+		});
 	} catch (error) {
 		if (error instanceof ApiError) {
 			// A `SetupRefusedError` carries the single indistinguishable message; anything else here
@@ -113,9 +159,24 @@ export async function runSetup(_previous: SetupState, formData: FormData): Promi
 			// malformed input whether the key is right, wrong, or the install is already claimed — so
 			// showing one discloses nothing about either.
 			logger.warn("Setup refused", { address, reason: error.message });
+			await recordAudit({
+				action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE,
+				outcome: "DENIED",
+				actor: SETUP_ACTOR,
+				detail: { reason: "refused" },
+				provenance: await requestProvenance(),
+			});
 			return { error: error.message };
 		}
 		logger.error("Setup failed unexpectedly", error, { address });
+		// The one FAILURE in this file: something broke, rather than someone being refused.
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE,
+			outcome: "FAILURE",
+			actor: SETUP_ACTOR,
+			detail: { reason: "unexpected" },
+			provenance: await requestProvenance(),
+		});
 		return { error: "Something went wrong. Check the server log." };
 	}
 
