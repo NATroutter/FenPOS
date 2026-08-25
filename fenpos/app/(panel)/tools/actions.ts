@@ -2,7 +2,8 @@
 
 import { listAssets, rasterFor } from "@/lib/assets/asset-service";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
-import { requireSession } from "@/lib/auth/require-session";
+import { panelQuery } from "@/lib/auth/panel-action";
+import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import type { Linefeed } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
@@ -139,10 +140,44 @@ export async function preview(
 	source: string,
 	linefeed: Linefeed | null = null,
 ): Promise<PreviewResult> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
+	return panelQuery<PreviewResult>("tools:preview", () => compilePreviewFor(deviceId, source, linefeed), {
+		refused: () => ({ ...BLANK_PREVIEW, errors: [previewFault(REFUSAL_MESSAGE, "insufficient_permission", 403)] }),
+		// The body catches its own failures and reports them as `errors`, so anything arriving here is
+		// something else entirely.
+		failed: () => ({
+			...BLANK_PREVIEW,
+			errors: [previewFault("Something went wrong. Check the server log.", "internal_error", 500)],
+		}),
+	});
+}
 
+/** A preview that shows nothing, carrying only whatever went wrong. */
+const BLANK_PREVIEW = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
+
+/**
+ * One entry for {@link PreviewResult}'s `errors`, for the two failures that never reach the
+ * compiler.
+ *
+ * @param message what to show above the paper
+ * @param code the contract code that best describes it
+ * @param status the status that code maps to
+ * @returns the fault to render
+ */
+function previewFault(message: string, code: string, status: number) {
+	return { code, message, status, line: null, column: null };
+}
+
+/**
+ * Compiles markup for a device and returns what it would print.
+ *
+ * Split out of the action so the gate wraps one function. Everything below is as it was.
+ *
+ * @param deviceId the device whose width and codepage to compile against
+ * @param source the markup, one element per line
+ * @param linefeed what will terminate each line, or null to use the device's own setting
+ * @returns the paper and its measurements, or everything wrong with it
+ */
+async function compilePreviewFor(deviceId: string, source: string, linefeed: Linefeed | null): Promise<PreviewResult> {
 	// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
 	// what a real request would resolve to rather than restating the device's setting. Omitted
 	// when null, because absence is how the body asks for the device's own.
@@ -192,24 +227,14 @@ export async function preview(
 			lines,
 		};
 	} catch (error) {
-		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
-
 		if (error instanceof ApiError) {
-			return { ...blank, errors: [faultOf(error)] };
+			return { ...BLANK_PREVIEW, errors: [faultOf(error)] };
 		}
 
 		logger.error("Preview failed", error);
 		return {
-			...blank,
-			errors: [
-				{
-					code: "internal_error",
-					message: "Something went wrong. Check the server log.",
-					status: 500,
-					line: null,
-					column: null,
-				},
-			],
+			...BLANK_PREVIEW,
+			errors: [previewFault("Something went wrong. Check the server log.", "internal_error", 500)],
 		};
 	}
 }
@@ -377,76 +402,93 @@ export async function printMarkup(
 	source: string,
 	linefeed: Linefeed | null = null,
 ): Promise<SendResult> {
-	await requireSession();
-
-	try {
-		const data = source.split("\n");
-		// Omitted rather than sent as null when the device's setting is wanted: the body accepts
-		// exactly `data` and `linefeed`, and "absent" is how it says "whatever the device is set to".
-		const job = await submitJob(deviceId, linefeed ? { data, linefeed } : { data });
-		return { error: null, message: `Queued ${job.id}.` };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message, message: null };
-		}
-		logger.error("Tools print failed", error);
-		return { error: "Something went wrong. Check the server log.", message: null };
-	}
+	return panelQuery<SendResult>(
+		"tools:print",
+		async () => {
+			const data = source.split("\n");
+			// Omitted rather than sent as null when the device's setting is wanted: the body accepts
+			// exactly `data` and `linefeed`, and "absent" is how it says "whatever the device is set to".
+			const job = await submitJob(deviceId, linefeed ? { data, linefeed } : { data });
+			return { error: null, message: `Queued ${job.id}.` };
+		},
+		{
+			refused: () => ({ error: REFUSAL_MESSAGE, message: null }),
+			failed: (error) => {
+				if (error instanceof ApiError) {
+					return { error: error.message, message: null };
+				}
+				logger.error("Tools print failed", error);
+				return { error: "Something went wrong. Check the server log.", message: null };
+			},
+			target: { kind: "device", id: deviceId },
+			// The markup itself stays out: a receipt is business content, and the job row already
+			// holds it under its own retention.
+			detail: { elements: source.split("\n").length },
+		},
+	);
 }
 
 /**
  * Writes raw bytes to a printer.
  *
- * Gated on holding a panel session, nothing more — no permission check, no install setting. A
- * machine client reaches the same act through `POST /api/v1/devices/{agent}/{device}/raw`, where
- * it needs `devices:raw` *and* the install's `link.allowRawApiWrites` switch, which ships off.
- * Those two gates are that route's, not this one's.
+ * Gated on `tools:raw`, held by the acting account. A machine client reaches the same act through
+ * `POST /api/v1/devices/{agent}/{device}/raw`, where it needs the API-key grant `devices:raw` *and*
+ * the install's `link.allowRawApiWrites` switch, which ships off. Those are that route's gates; the
+ * panel's is this permission.
  *
- * **This is only as strong as "there is only one account."** Right now that is true of every
- * install — `setup.ts` is the only place a user is created — so a panel session and an
- * administrator are the same thing and the gate above is a real bar. `tools:raw` is already in
- * Phase 3's permission set for exactly this reason: the moment a second account exists, holding a
- * session stops implying holding that bar, and this function needs the permission check it does
- * not have today.
+ * This used to be gated on merely holding a panel session, which was only as strong as "there is
+ * only one account" — true while `setup.ts` was the sole place a user was created, and no longer a
+ * thing to rest on now that accounts can be created and granted separately. `tools:raw` is the bar
+ * that replaced it.
  *
  * @param deviceId the device to write to
  * @param bytes the bytes to write
  * @returns what the agent reported, or why it could not be sent
  */
 export async function writeRaw(deviceId: string, bytes: number[]): Promise<SendResult> {
-	await requireSession();
+	return panelQuery<SendResult>(
+		"tools:raw",
+		async () => {
+			const device = await prisma.device.findUnique({
+				where: { id: deviceId },
+				select: { name: true, agentId: true },
+			});
+			if (!device) {
+				throw new ApiError("unknown_device", "That printer no longer exists.");
+			}
+			if (bytes.length === 0) {
+				throw new ApiError("missing_field", "There are no bytes to send.");
+			}
 
-	try {
-		const device = await prisma.device.findUnique({
-			where: { id: deviceId },
-			select: { name: true, agentId: true },
-		});
-		if (!device) {
-			throw new ApiError("unknown_device", "That printer no longer exists.");
-		}
-		if (bytes.length === 0) {
-			throw new ApiError("missing_field", "There are no bytes to send.");
-		}
+			const encoded = Buffer.from(Uint8Array.from(bytes)).toString("base64");
 
-		const encoded = Buffer.from(Uint8Array.from(bytes)).toString("base64");
+			// Logged here as well as on the agent, and now recorded a third time in the audit chain.
+			// Three records of the same act, on two machines, one of them tamper-evident.
+			logger.warn("Raw write requested from the panel", {
+				agentId: device.agentId,
+				deviceName: device.name,
+				byteCount: bytes.length,
+			});
 
-		// Logged here as well as on the agent. Two records of the same act, on two machines, is
-		// what makes this auditable if either one is later in question.
-		logger.warn("Raw write requested from the panel", {
-			agentId: device.agentId,
-			deviceName: device.name,
-			byteCount: bytes.length,
-		});
-
-		const message = await sendRawWrite(device.agentId, device.name, encoded);
-		return { error: null, message: message ?? "Sent." };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message, message: null };
-		}
-		logger.error("Raw write failed", error);
-		return { error: "Something went wrong. Check the server log.", message: null };
-	}
+			const message = await sendRawWrite(device.agentId, device.name, encoded);
+			return { error: null, message: message ?? "Sent." };
+		},
+		{
+			refused: () => ({ error: REFUSAL_MESSAGE, message: null }),
+			failed: (error) => {
+				if (error instanceof ApiError) {
+					return { error: error.message, message: null };
+				}
+				logger.error("Raw write failed", error);
+				return { error: "Something went wrong. Check the server log.", message: null };
+			},
+			target: { kind: "device", id: deviceId },
+			// How much went to that printer, and when — never the bytes. Raw ESC/POS bypasses every
+			// content check this system applies, so the bytes are neither readable nor safe to keep in
+			// a record with no delete path.
+			detail: { byteCount: bytes.length },
+		},
+	);
 }
 
 /**
@@ -483,19 +525,25 @@ export interface MarkupImage {
  * @returns every stored image, by name, with a preview where one could be rendered
  */
 export async function listMarkupImages(): Promise<MarkupImage[]> {
-	await requireSession();
-
-	const assets = await listAssets();
-	const images: MarkupImage[] = [];
-	for (const asset of assets) {
-		images.push({
-			name: asset.name,
-			width: asset.width,
-			height: asset.height,
-			preview: await pickerPreview(asset.name),
-		});
-	}
-	return images;
+	return panelQuery<MarkupImage[]>(
+		"tools:list-images",
+		async () => {
+			const assets = await listAssets();
+			const images: MarkupImage[] = [];
+			for (const asset of assets) {
+				images.push({
+					name: asset.name,
+					width: asset.width,
+					height: asset.height,
+					preview: await pickerPreview(asset.name),
+				});
+			}
+			return images;
+		},
+		// An empty picker is the right answer to both: the toolbar renders nothing rather than an
+		// error nobody can act on from inside a dropdown.
+		{ refused: () => [], failed: () => [] },
+	);
 }
 
 /**
@@ -552,16 +600,22 @@ export interface MarkupVariable {
  * @returns every defined variable, each with what it currently resolves to
  */
 export async function listMarkupVariables(): Promise<MarkupVariable[]> {
-	await requireSession();
+	return panelQuery<MarkupVariable[]>(
+		"tools:list-variables",
+		async () => {
+			const variables = await listVariables();
+			if (!(await booleanSetting("variables.enabled"))) {
+				return variables.map((variable) => toMarkupVariable(variable, UNRESOLVED));
+			}
 
-	const variables = await listVariables();
-	if (!(await booleanSetting("variables.enabled"))) {
-		return variables.map((variable) => toMarkupVariable(variable, UNRESOLVED));
-	}
+			const formatting = await printedFormatting();
 
-	const formatting = await printedFormatting();
-
-	return variables.map((variable) => toMarkupVariable(variable, resolveOne(variable, formatting, PANEL_PRINT_CONTEXT)));
+			return variables.map((variable) =>
+				toMarkupVariable(variable, resolveOne(variable, formatting, PANEL_PRINT_CONTEXT)),
+			);
+		},
+		{ refused: () => [], failed: () => [] },
+	);
 }
 
 /**
