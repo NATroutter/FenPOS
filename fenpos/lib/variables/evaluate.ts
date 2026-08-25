@@ -1,3 +1,4 @@
+import { tz } from "@date-fns/tz";
 import { add, type Locale } from "date-fns";
 import { de, enGB, enUS, fi, fr, sv } from "date-fns/locale";
 import { formatInTimeZone } from "date-fns-tz";
@@ -40,10 +41,23 @@ const LOCALES: Record<VariableLocale, Locale> = {
 	"fr-FR": fr,
 };
 
-/** `date-fns`'s `add` takes a duration keyed by unit; this is the translation. */
-const DURATION_KEY: Record<OffsetUnit, "minutes" | "hours" | "days" | "weeks" | "months"> = {
-	MINUTES: "minutes",
-	HOURS: "hours",
+/**
+ * How many milliseconds one `MINUTES`/`HOURS` offset unit is worth.
+ *
+ * These two units are elapsed real time — "in two hours" means two real hours pass, full stop —
+ * so they are added to the instant as milliseconds and never touch a calendar or a zone at all.
+ */
+const MILLIS_PER_UNIT: Record<Extract<OffsetUnit, "MINUTES" | "HOURS">, number> = {
+	MINUTES: 60_000,
+	HOURS: 3_600_000,
+};
+
+/**
+ * `date-fns`'s `add` takes a duration keyed by unit; this is the translation for the three units
+ * that are calendar arithmetic rather than elapsed time. See {@link shiftInstant} for why `DAYS`,
+ * `WEEKS` and `MONTHS` are handled separately from `MINUTES` and `HOURS`.
+ */
+const CALENDAR_DURATION_KEY: Record<Extract<OffsetUnit, "DAYS" | "WEEKS" | "MONTHS">, "days" | "weeks" | "months"> = {
 	DAYS: "days",
 	WEEKS: "weeks",
 	MONTHS: "months",
@@ -109,10 +123,10 @@ export function evaluateVariable(
 /**
  * Shifts and formats an instant.
  *
- * The shift happens on the absolute instant and the zone is applied by the formatter, which is the
- * order that makes "+1 month" mean a calendar month rather than a fixed span — `add` is
- * calendar-aware, and doing the arithmetic on a zone-shifted wall clock instead would double-count
- * a daylight-saving transition.
+ * `MINUTES` and `HOURS` are elapsed time and `DAYS`, `WEEKS` and `MONTHS` are calendar units in
+ * `formatting.timeZone` — see {@link shiftInstant} for why those are two genuinely different
+ * operations rather than one. The formatter is applied after the shift either way, once
+ * {@link shiftInstant} has produced the instant that is actually meant.
  *
  * @param definition the variable, whose `pattern` is non-null by validation
  * @param now the instant to render
@@ -121,10 +135,7 @@ export function evaluateVariable(
  * @throws Error naming the variable if the pattern is not one `date-fns` accepts
  */
 function formatMoment(definition: VariableDefinition, now: Date, formatting: Formatting): string {
-	const shifted =
-		definition.offsetAmount !== null && definition.offsetUnit !== null
-			? add(now, { [DURATION_KEY[definition.offsetUnit]]: definition.offsetAmount })
-			: now;
+	const shifted = shiftInstant(definition, now, formatting);
 
 	try {
 		return formatInTimeZone(shifted, formatting.timeZone, definition.pattern ?? "", {
@@ -142,4 +153,52 @@ function formatMoment(definition: VariableDefinition, now: Date, formatting: For
 			{ cause: error },
 		);
 	}
+}
+
+/**
+ * Applies a `DATETIME` variable's offset, if it has one.
+ *
+ * `MINUTES` and `HOURS` are elapsed real time: "in two hours" means two real hours pass regardless
+ * of what any clock on the wall does in between, so they are added to the instant as milliseconds
+ * and never consult a zone.
+ *
+ * `DAYS`, `WEEKS` and `MONTHS` are calendar units, and a calendar only exists inside a zone: "in
+ * fourteen days" means the same wall-clock time, fourteen calendar days later, *in the shop's own
+ * zone* — that is what a shop means by a return-by date, and it is what keeps that date from
+ * sliding by an hour, and twice a year possibly a day, across a daylight-saving transition.
+ *
+ * The obvious-looking alternative — call `date-fns`'s plain `add`, on the theory that shifting the
+ * absolute instant first and formatting into the zone afterward avoids exactly that sliding — is
+ * the bug this replaced. `add`'s day/week/month arithmetic is calendar-aware, but the calendar it
+ * consults is read off the `Date` object's local getters and setters, which are bound to
+ * *whichever zone the host process happens to be running in* — not `formatting.timeZone`, and not
+ * anything this function's four arguments carry. Two hosts running the identical build with the
+ * identical arguments would print a different hour for the same receipt, decided by an OS setting
+ * neither host owner would think to check. Binding the arithmetic to `formatting.timeZone`
+ * explicitly, via `@date-fns/tz`'s `in` context, is what makes the answer depend on the zone the
+ * shop configured and nothing else — do not simplify this back to a bare `add(now, ...)`.
+ *
+ * @param definition the variable, carrying the offset to apply, if any
+ * @param now the instant to shift
+ * @param formatting supplies the zone `DAYS`/`WEEKS`/`MONTHS` arithmetic runs in
+ * @returns the shifted instant, or `now` unchanged if the variable carries no offset
+ */
+function shiftInstant(definition: VariableDefinition, now: Date, formatting: Formatting): Date {
+	if (definition.offsetAmount === null || definition.offsetUnit === null) {
+		return now;
+	}
+
+	if (definition.offsetUnit === "MINUTES" || definition.offsetUnit === "HOURS") {
+		return new Date(now.getTime() + definition.offsetAmount * MILLIS_PER_UNIT[definition.offsetUnit]);
+	}
+
+	const inShopZone = add(
+		now,
+		{ [CALENDAR_DURATION_KEY[definition.offsetUnit]]: definition.offsetAmount },
+		{ in: tz(formatting.timeZone) },
+	);
+	// `add` with an `in` context returns a `TZDate`, not a plain `Date`. Its instant is exactly what
+	// is wanted, but re-wrapping it keeps this function's return type — and every caller's
+	// assumptions about what a `Date` supports — the same regardless of which branch ran.
+	return new Date(inShopZone.getTime());
 }
