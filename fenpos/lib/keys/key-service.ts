@@ -32,6 +32,10 @@ export interface ApiKeySummary {
 	permissions: Permission[];
 	/** The devices this key may print to, by id and name. */
 	devices: { id: string; name: string; agentName: string }[];
+	/** Who minted it. Null for a key created before the columns existed. */
+	createdByUserId: string | null;
+	/** What they were called at the time. Kept even after that account is deleted. */
+	createdByName: string | null;
 }
 
 /** A newly minted key, with the one and only sight of its secret. */
@@ -70,6 +74,8 @@ export async function listApiKeys(): Promise<ApiKeySummary[]> {
 			name: entry.device.name,
 			agentName: entry.device.agent.name,
 		})),
+		createdByUserId: row.createdByUserId,
+		createdByName: row.createdByName,
 	}));
 }
 
@@ -79,10 +85,16 @@ export async function listApiKeys(): Promise<ApiKeySummary[]> {
  * @param rawName what to call it in the panel
  * @param permissions what it may do
  * @param deviceIds which printers it may address
+ * @param createdBy the account minting it, recorded by id and by name
  * @returns the new key's id and its secret
  * @throws ApiError when the name or a permission is not valid
  */
-export async function createApiKey(rawName: string, permissions: string[], deviceIds: string[]): Promise<MintedKey> {
+export async function createApiKey(
+	rawName: string,
+	permissions: string[],
+	deviceIds: string[],
+	createdBy: { id: string; name: string },
+): Promise<MintedKey> {
 	const name = parseName(rawName);
 	const granted = parsePermissions(permissions);
 
@@ -98,6 +110,8 @@ export async function createApiKey(rawName: string, permissions: string[], devic
 			name,
 			keyHash: hashSecret(secret),
 			maskedHint: secret.slice(-HINT_LENGTH),
+			createdByUserId: createdBy.id,
+			createdByName: createdBy.name,
 			permissions: { create: granted.map((permission) => ({ permission })) },
 			devices: { create: deviceIds.map((deviceId) => ({ deviceId })) },
 		},

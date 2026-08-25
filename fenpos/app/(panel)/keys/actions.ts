@@ -70,8 +70,8 @@ export interface MintedKeyResult {
 export async function createKey(name: string, permissions: string[], deviceIds: string[]): Promise<MintedKeyResult> {
 	return panelQuery<MintedKeyResult>(
 		"keys:create",
-		async () => {
-			const key = await createApiKeyRecord(name, permissions, deviceIds);
+		async (user) => {
+			const key = await createApiKeyRecord(name, permissions, deviceIds, { id: user.id, name: user.name });
 			return { error: null, secret: key.secret };
 		},
 		{
