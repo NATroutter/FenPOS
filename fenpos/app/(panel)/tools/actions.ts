@@ -14,6 +14,10 @@ import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/ma
 import { type CompileSettings, layOut } from "@/lib/markup/compiler";
 import { imageGeometry } from "@/lib/markup/images";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
+import { booleanSetting, enumSetting } from "@/lib/settings/settings-service";
+import type { VariableKind } from "@/lib/variables/definition";
+import { evaluateVariable, type Formatting, type PrintContext, type VariableLocale } from "@/lib/variables/evaluate";
+import { listVariables, type StoredVariable } from "@/lib/variables/variable-service";
 
 /**
  * Server actions behind the Tools tab.
@@ -505,4 +509,91 @@ async function pickerPreview(name: string): Promise<string | null> {
 		logger.error(`Could not render a picker preview of asset '${name}'`, error);
 		return null;
 	}
+}
+
+/** Shown in place of a value that cannot currently be computed. Never what actually prints. */
+const UNRESOLVED = "—";
+
+/** One defined variable, as the markup toolbar's `{name}` picker shows it. */
+export interface MarkupVariable {
+	name: string;
+	kind: VariableKind;
+	/**
+	 * What it resolves to right now.
+	 *
+	 * {@link UNRESOLVED} while `variables.enabled` is off — a brace is ordinary text in that state,
+	 * so a computed value here would promise a substitution that will not happen — and the same for
+	 * a `DATETIME` row whose pattern `date-fns` can no longer read, which `evaluateVariable` reports
+	 * by throwing rather than by returning text.
+	 */
+	resolves: string;
+	description: string | null;
+}
+
+/**
+ * Lists defined variables, for the toolbar's `{name}` picker.
+ *
+ * Modelled on `previewMoment` in `app/(panel)/variables/actions.ts` rather than on
+ * `listMarkupImages` above: what is being computed here is one variable's current text, the same
+ * job that action already does for a single `DATETIME` pattern, not a per-item side artefact like a
+ * thumbnail. The synthetic context matches the Variables tab's own table — an empty printer name
+ * rather than a real device, because composing markup on this tab has no device chosen yet either.
+ *
+ * Each variable is evaluated on its own rather than through `resolveVariables`, so one row with an
+ * unformattable pattern loses only its own column instead of the whole picker's.
+ *
+ * @returns every defined variable, each with what it currently resolves to
+ */
+export async function listMarkupVariables(): Promise<MarkupVariable[]> {
+	await requireSession();
+
+	const variables = await listVariables();
+	if (!(await booleanSetting("variables.enabled"))) {
+		return variables.map((variable) => toMarkupVariable(variable, UNRESOLVED));
+	}
+
+	const formatting: Formatting = {
+		timeZone: await printedTimeZone(),
+		locale: await enumSetting<VariableLocale>("variables.locale"),
+	};
+	const context: PrintContext = { deviceName: "—", agentName: "—", apiKeyName: null };
+
+	return variables.map((variable) => toMarkupVariable(variable, resolveOne(variable, formatting, context)));
+}
+
+/**
+ * Evaluates one variable for the picker, honestly reporting a value that cannot be computed rather
+ * than throwing through it.
+ *
+ * @param variable the variable to evaluate
+ * @param formatting the zone and locale a `DATETIME` renders in
+ * @param context the synthetic print context the picker evaluates against
+ * @returns the rendered text, or {@link UNRESOLVED} if `evaluateVariable` throws
+ */
+function resolveOne(variable: StoredVariable, formatting: Formatting, context: PrintContext): string {
+	try {
+		return evaluateVariable(variable, new Date(), context, formatting);
+	} catch (error) {
+		logger.error(`Could not resolve variable '${variable.name}' for the Tools picker`, error);
+		return UNRESOLVED;
+	}
+}
+
+function toMarkupVariable(variable: StoredVariable, resolves: string): MarkupVariable {
+	return { name: variable.name, kind: variable.kind, resolves, description: variable.description };
+}
+
+/**
+ * Resolves `variables.timezone` to an IANA zone.
+ *
+ * A small copy of the same three lines in `lib/markup/resolve-variables.ts` and
+ * `app/(panel)/variables/actions.ts` — see the latter's own copy for why duplicating them here
+ * keeps three call sites that need this and nothing else from sharing a dependency none of them
+ * otherwise needs.
+ *
+ * @returns the zone to format printed dates in
+ */
+async function printedTimeZone(): Promise<string> {
+	const configured = await enumSetting<string>("variables.timezone");
+	return configured === "system" ? Intl.DateTimeFormat().resolvedOptions().timeZone : configured;
 }

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
@@ -36,8 +36,9 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 	fetchRemoteImage,
 }));
 
-const { listMarkupImages, preview } = await import("@/app/(panel)/tools/actions");
+const { listMarkupImages, listMarkupVariables, preview } = await import("@/app/(panel)/tools/actions");
 const { createAsset, rasterFor } = await import("@/lib/assets/asset-service");
+const { createVariable } = await import("@/lib/variables/variable-service");
 
 const QR_CONTENT = "https://cafe.example/o/123";
 
@@ -327,5 +328,43 @@ describe("listMarkupImages", () => {
 
 		expect(listed).toBeDefined();
 		expect(listed?.preview).toBeNull();
+	});
+});
+
+/**
+ * What the markup toolbar's `{name}` picker is shown.
+ *
+ * `variables.enabled` ships on, so with a clean `Setting` table these resolve the same way a
+ * receipt would — no setup beyond defining the variable itself. Both tables are cleared before
+ * each test: `Variable.name` is unique, and `resolve-variables.test.ts` defines a `phone` of its
+ * own in the same shared test database, so a leftover row from another file would either collide
+ * on the name or leave `variables.enabled` at whatever a previous test last set it to.
+ */
+describe("listMarkupVariables", () => {
+	beforeEach(async () => {
+		await prisma.variable.deleteMany();
+		await prisma.setting.deleteMany();
+	});
+
+	it("lists defined variables with what each resolves to", async () => {
+		await createVariable({
+			name: "phone",
+			kind: "STATIC",
+			value: "010-1234567",
+			pattern: null,
+			offsetAmount: null,
+			offsetUnit: null,
+			source: null,
+			overridable: false,
+			description: "Shop phone",
+		});
+
+		const listed = await listMarkupVariables();
+
+		expect(listed).toEqual([{ name: "phone", kind: "STATIC", resolves: "010-1234567", description: "Shop phone" }]);
+	});
+
+	it("is empty when none are defined", async () => {
+		expect(await listMarkupVariables()).toEqual([]);
 	});
 });

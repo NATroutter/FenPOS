@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listMarkupImages, type MarkupImage } from "@/app/(panel)/tools/actions";
+import {
+	listMarkupImages,
+	listMarkupVariables,
+	type MarkupImage,
+	type MarkupVariable,
+} from "@/app/(panel)/tools/actions";
 import { DitheredImage } from "@/components/panel/dithered-image";
 import {
 	NumberField,
@@ -31,14 +36,16 @@ import { BarcodeSystem } from "@/lib/domain/enums";
  * The tags whose usefulness depends on something the toolbar cannot guess.
  *
  * The rest of the toolbar writes a tag and gets out of the way, because there is nothing to decide:
- * `<bold>` is `<bold>`. These six carry a payload or a number that has to come from somewhere, and
+ * `<bold>` is `<bold>`. These seven carry a payload or a number that has to come from somewhere, and
  * typing `<barcode=CODE128></barcode>` by hand means knowing the symbology's name and that it belongs
  * in the argument rather than the content. That is what this dialog is for.
  *
  * `<image>` is the one that could not be done any other way: an image is referenced by a name stored
- * on the server, so the only alternative to a picker is remembering what the Assets tab calls it.
+ * on the server, so the only alternative to a picker is remembering what the Assets tab calls it. A
+ * variable is the same argument a second time: it too is a name defined elsewhere — on the Variables
+ * tab rather than Assets — and it is not even a tag, so there is no markup to learn by heart at all.
  */
-export type InsertTag = "image" | "barcode" | "qr" | "pdf417" | "feed" | "fill";
+export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill";
 
 /** What the dialog asks for, and how it explains itself, per tag. */
 const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
@@ -46,6 +53,11 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
 		title: "Insert an image",
 		description:
 			"Pick a stored image, or give a URL. Stored images are referenced by name, so the receipt carries the name rather than the picture.",
+	},
+	variable: {
+		title: "Insert a variable",
+		description:
+			"Pick a value defined on the Variables tab. The receipt carries the name, and the value is filled in when it prints — so changing it later is one edit rather than one per receipt.",
 	},
 	barcode: {
 		title: "Insert a barcode",
@@ -101,6 +113,8 @@ export function InsertDialog({
 	const [content, setContent] = useState("");
 	const [images, setImages] = useState<MarkupImage[] | null>(null);
 	const [loading, setLoading] = useState(false);
+	const [variables, setVariables] = useState<MarkupVariable[] | null>(null);
+	const [loadingVariables, setLoadingVariables] = useState(false);
 
 	// Reset per opening, so a dialog never opens showing what was typed into it last time — for
 	// `<image>` in particular, a stale name is a receipt that references the wrong picture.
@@ -126,6 +140,18 @@ export function InsertDialog({
 			.then(setImages)
 			.finally(() => setLoading(false));
 	}, [tag, images, loading]);
+
+	// Same reasoning as the image library above: fetched once per opening and kept, because a
+	// variable's definition changes on the Variables tab, not while this dialog is open.
+	useEffect(() => {
+		if (tag !== "variable" || variables !== null || loadingVariables) {
+			return;
+		}
+		setLoadingVariables(true);
+		listMarkupVariables()
+			.then(setVariables)
+			.finally(() => setLoadingVariables(false));
+	}, [tag, variables, loadingVariables]);
 
 	if (!tag) {
 		return null;
@@ -169,6 +195,10 @@ export function InsertDialog({
 								width={amount}
 								onWidth={setAmount}
 							/>
+						) : null}
+
+						{tag === "variable" ? (
+							<VariableFields variables={variables} loading={loadingVariables} name={content} onName={setContent} />
 						) : null}
 
 						{tag === "barcode" ? (
@@ -353,6 +383,74 @@ function ImageFields({
 				min={1}
 				max={100}
 			/>
+		</>
+	);
+}
+
+/**
+ * The defined variables, picked by name.
+ *
+ * A picker rather than a free-text field, unlike {@link ImageFields}'s name box: a variable that
+ * does not exist is refused when the receipt prints, so there is no equivalent of an image's URL —
+ * every legal value here is already one of these rows, and typing a name the Variables tab has never
+ * heard of can only produce `unknown_variable` later. Each row shows what it currently resolves to,
+ * the same figure the Variables tab's own table shows, so choosing one is choosing a value rather
+ * than guessing at a name.
+ */
+function VariableFields({
+	variables,
+	loading,
+	name,
+	onName,
+}: {
+	variables: MarkupVariable[] | null;
+	loading: boolean;
+	name: string;
+	onName: (next: string) => void;
+}) {
+	return (
+		<>
+			{loading ? (
+				<div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+					<Spinner className="size-3.5" />
+					Reading the variables…
+				</div>
+			) : null}
+
+			{variables && variables.length > 0 ? (
+				<Field>
+					<FieldLabel>Defined variables</FieldLabel>
+					<div className="flex max-h-64 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-2">
+						{variables.map((variable) => (
+							<button
+								key={variable.name}
+								type="button"
+								onClick={() => onName(variable.name)}
+								className={`flex flex-col items-start gap-0.5 rounded-md border p-2 text-left transition-colors hover:bg-muted/40 ${
+									name === variable.name ? "border-primary bg-primary/5" : "border-border"
+								}`}
+							>
+								<div className="flex w-full items-center gap-2">
+									<span className="font-mono text-[12px]">{`{${variable.name}}`}</span>
+									<span className="text-[10.5px] uppercase tracking-wide text-subtle-foreground">{variable.kind}</span>
+									<span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">
+										{variable.resolves}
+									</span>
+								</div>
+								{variable.description ? (
+									<span className="text-[11px] text-muted-foreground">{variable.description}</span>
+								) : null}
+							</button>
+						))}
+					</div>
+				</Field>
+			) : null}
+
+			{variables && variables.length === 0 ? (
+				<p className="text-[12px] text-muted-foreground">
+					No variables are defined yet. Define one on the Variables tab first.
+				</p>
+			) : null}
 		</>
 	);
 }

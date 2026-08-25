@@ -7,6 +7,7 @@ import {
 	AlignCenter,
 	Bold,
 	BookOpen,
+	Braces,
 	CaseSensitive,
 	ChevronDown,
 	CircleAlert,
@@ -46,7 +47,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Linefeed } from "@/lib/domain/enums";
-import { markupEdit } from "@/lib/markup/editing";
+import { markupEdit, variableEdit } from "@/lib/markup/editing";
 
 /** How long the editor sits still before a preview is compiled. */
 const DEBOUNCE_MS = 300;
@@ -294,6 +295,15 @@ interface TagChoice {
 	argument?: string;
 	note?: string;
 	/**
+	 * Shown before the label, for the one or two entries worth picking out of the list at a glance.
+	 *
+	 * Not every entry carries one — most are read by their name — but a variable reference is not a
+	 * tag at all, and the {@link Braces} icon is what the sidebar already uses for the tab that
+	 * defines them, so the same icon here is what says "this leads somewhere else" before the
+	 * description has to.
+	 */
+	icon?: ReactNode;
+	/**
 	 * Opens {@link InsertDialog} instead of writing the tag straight away.
 	 *
 	 * For the tags that are useless without something only the operator knows — which image, which
@@ -352,6 +362,13 @@ const INSERT_CHOICES: TagChoice[] = [
 	{ label: "Barcode", tag: "barcode", prompt: "barcode", note: "Choose a symbology and content" },
 	{ label: "PDF417", tag: "pdf417", prompt: "pdf417", note: "Choose what it encodes" },
 	{ label: "Image", tag: "image", prompt: "image", note: "Pick a stored image, or give a URL" },
+	{
+		label: "Variable",
+		tag: "variable",
+		prompt: "variable",
+		note: "Pick a value defined on the Variables tab",
+		icon: <Braces className="size-3.5" />,
+	},
 	{ label: "Wrap", tag: "wrap", note: "Break this line at the paper width" },
 	{ label: "No wrap", tag: "nowrap", note: "Print this line as written" },
 ];
@@ -392,11 +409,15 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 	 * `changeByRange` applies the same edit to every cursor, so a multi-cursor selection styles each
 	 * of its ranges rather than only the last.
 	 *
-	 * @param name the tag to write
+	 * `name === "variable"` is the one case not dispatched to {@link markupEdit}: `{name}` is not a
+	 * tag, so `tagByName` would find nothing and the insertion would silently do nothing. It goes to
+	 * {@link variableEdit} instead, which places the caret the same way a void tag's insertion does.
+	 *
+	 * @param name the tag to write, or `"variable"` to insert `{content}` as a variable reference
 	 * @param argument its argument, for tags that take one
 	 * @param content what it should enclose, when that came from a dialog rather than from the
 	 *   selection — the two are alternatives, and a dialog's answer wins because the person just
-	 *   typed it
+	 *   typed it. For `"variable"`, this is the variable's name rather than enclosed text.
 	 */
 	const applyTag = useCallback((name: string, argument?: string, content?: string) => {
 		const view = editor.current?.view;
@@ -408,7 +429,11 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 		view.dispatch(
 			state.update(
 				state.changeByRange((range) => {
-					const edit = markupEdit(name, content ?? state.sliceDoc(range.from, range.to), argument);
+					const selected = state.sliceDoc(range.from, range.to);
+					const edit =
+						name === "variable" && content !== undefined
+							? variableEdit(content, selected)
+							: markupEdit(name, content ?? selected, argument);
 					if (!edit) {
 						return { range };
 					}
@@ -745,7 +770,10 @@ function TagMenu({
 						className="flex-col items-start gap-0.5 text-[12.5px]"
 						onClick={() => (choice.prompt && onPrompt ? onPrompt(choice.prompt) : onPick(choice.tag, choice.argument))}
 					>
-						<span>{choice.label}</span>
+						<span className="flex items-center gap-1.5">
+							{choice.icon}
+							{choice.label}
+						</span>
 						{choice.note ? <span className="font-mono text-[11px] text-subtle-foreground">{choice.note}</span> : null}
 					</DropdownMenuItem>
 				))}

@@ -65,3 +65,21 @@ export function markupEdit(name: string, selected: string, argument?: string): M
 		selectionTo: open.length + selected.length,
 	};
 }
+
+/**
+ * Works out the edit for inserting a variable reference.
+ *
+ * `{name}` is not a tag — `tagByName` knows nothing about it, because it belongs to a different
+ * addressing scheme with its own delimiters, and adding it to {@link TAGS} would misdescribe it as
+ * one. It behaves like a void tag once written, though: it stands alone, encloses nothing, and there
+ * is nothing to see it applied to, so this follows {@link markupEdit}'s own rule for a void tag —
+ * appended after whatever was selected, caret left past it — rather than inventing a second one.
+ *
+ * @param name the variable's name, exactly as stored
+ * @param selected the text currently selected, empty for a bare caret
+ * @returns the edit to apply
+ */
+export function variableEdit(name: string, selected: string): MarkupEdit {
+	const insert = `${selected}{${name}}`;
+	return { insert, selectionFrom: insert.length, selectionTo: insert.length };
+}
