@@ -98,8 +98,17 @@ model Session {
 /// For email and password there is exactly one row per user and `password` holds the argon2id hash
 /// — Better Auth's own default hasher is replaced in `lib/auth/auth.ts`. The OAuth token columns
 /// are unused and stay because the adapter expects them.
+///
+/// `issuer` is the column the library actually keys an account by, not `providerId`. Two rows can
+/// share a `providerId` — a second OAuth app against the same social provider, say — but the pair
+/// `[issuer, accountId]` is what `findAccountByKey` looks up and what has to stay unique, so that is
+/// where the constraint sits. For the credential provider every row gets the same constant,
+/// `local:credential`, which is why the column reads as a redundant copy of `providerId` in a
+/// single-provider install today: it is not one, it is the join key `linkAccount` and sign-in use,
+/// and dropping it would only fail once a second provider existed to collide on `providerId` alone.
 model Account {
   id                    String    @id
+  issuer                String
   accountId             String
   providerId            String
   userId                String
@@ -114,6 +123,7 @@ model Account {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
+  @@unique([issuer, accountId])
   @@index([userId])
   @@map("account")
 }

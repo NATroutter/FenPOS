@@ -23,30 +23,18 @@ describe("auth instance", () => {
 	});
 
 	/**
-	 * Not an end-to-end write, and this is deliberate — see below.
+	 * Not an end-to-end write — see `account-schema.test.ts` for that.
 	 *
-	 * The brief's third fallback: `auth.api.createUser` (admin) and `auth.api.setPassword`
-	 * (server-only) both turned out reachable server-side without a session — the refusal the
-	 * brief anticipated does not happen in installed better-auth 1.7.1. What blocks every write
-	 * path instead is a schema mismatch this task is not scoped to fix: `@better-auth/core`'s
-	 * `accountSchema` (`node_modules/better-auth/dist/db/schema/account.mjs`, source at
-	 * `@better-auth/core/src/db/schema/account.ts`) declares `issuer` as a required, non-nullable
-	 * column that every account-linking call populates with `createLocalAccountIssuer("credential")`
-	 * (`"local:credential"`) — but the `Account` model Task 3 migrated has no `issuer` column at
-	 * all. `auth.api.createUser` reaches `internalAdapter.linkAccount`, which throws a Prisma
-	 * validation error ("Unknown argument `issuer`") before a row is ever written. Reads fail the
-	 * same way from the other side: `auth.api.signInEmail` matches a credential account by
-	 * `account.issuer === "local:credential"`, so even a credential account inserted directly
-	 * through Prisma is invisible to sign-in, because the column — and therefore the property —
-	 * does not exist. This is not an authorization gap `headers` or an internal context can route
-	 * around; it is a column absent from the migrated table, out of scope for lib/auth/auth.ts.
-	 *
-	 * What is provable without a schema change is that `auth.ts` wires `emailAndPassword.password`
-	 * to `hashPassword`/`verifyPassword` from `lib/auth/password.ts` rather than Better Auth's own
-	 * default (scrypt) — reproduced here by calling that exact function. `password.test.ts` already
-	 * covers `hashPassword`'s behaviour in depth; what this test adds is that it is the function
-	 * `auth.ts` actually configures, so a hand-rolled or swapped-back default hasher here is what
-	 * would make this test fail.
+	 * That test now covers the full `createUser` → `signInEmail` round trip through the real
+	 * `Account` table (Task 3b added the `issuer` column that `@better-auth/cli@1.4.21`'s
+	 * schema dump omitted, which is what made that round trip impossible when this test was
+	 * first written). What this test adds beyond it is narrower and cheaper: that `auth.ts`
+	 * wires `emailAndPassword.password` to `hashPassword`/`verifyPassword` from
+	 * `lib/auth/password.ts` rather than Better Auth's own default (scrypt) — reproduced here by
+	 * calling that exact function directly, without the cost of a full sign-in. `password.test.ts`
+	 * already covers `hashPassword`'s behaviour in depth; what this test adds is that it is the
+	 * function `auth.ts` actually configures, so a hand-rolled or swapped-back default hasher here
+	 * is what would make this test fail.
 	 */
 	it("hashes with the argon2id hasher auth.ts wires into emailAndPassword.password", async () => {
 		const stored = await hashPassword("a-long-enough-password");
