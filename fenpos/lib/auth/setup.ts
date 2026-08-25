@@ -1,5 +1,5 @@
 import "server-only";
-import { createLocalAccountIssuer } from "better-auth";
+import { credentialAccountRow } from "@/lib/auth/credential-account";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
 import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { hashSecret, secretsMatch } from "@/lib/auth/secrets";
@@ -71,18 +71,6 @@ export class SetupRefusedError extends ApiError {
 
 /** The setup key row is a singleton, kept so by its fixed primary key. */
 const SETUP_KEY_ROW_ID = 1;
-
-/**
- * Better Auth's identifier for an email-and-password credential.
- *
- * `createLocalAccountIssuer` is Better Auth's own function for deriving this value — imported
- * rather than duplicated, so this module cannot drift from whatever the library decides an
- * "issuer" is. Every credential-account write inside the library (`sign-up.mjs`, `password.mjs`,
- * `update-user.mjs`) calls it with the provider id `"credential"`; the `account-schema.test.ts`
- * test pins the result of that call against this same constant, so a library upgrade that changes
- * the value fails a test here instead of failing silently at sign-in.
- */
-const CREDENTIAL_ISSUER = createLocalAccountIssuer("credential");
 
 /**
  * Creates the first superuser and seals setup.
@@ -162,20 +150,7 @@ export async function completeSetup(input: SetupInput): Promise<{ userId: string
 			select: { id: true },
 		});
 
-		await tx.account.create({
-			data: {
-				id: crypto.randomUUID(),
-				userId: user.id,
-				issuer: CREDENTIAL_ISSUER,
-				// Better Auth's identifier for an email-and-password credential. It looks these
-				// rows up by this exact value, so it is not ours to choose.
-				providerId: "credential",
-				accountId: user.id,
-				password: passwordHash,
-				createdAt: now,
-				updatedAt: now,
-			},
-		});
+		await tx.account.create({ data: credentialAccountRow(user.id, passwordHash, now) });
 
 		// The seal itself. In the same transaction as the user, so there is no instant at which
 		// one exists without the other.
