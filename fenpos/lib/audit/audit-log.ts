@@ -1,18 +1,21 @@
 import "server-only";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
 import { NO_PROVENANCE, type RequestProvenance } from "@/lib/audit/provenance";
+import { sweepAuditNow } from "@/lib/audit/retention";
+import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
 import { prisma } from "@/lib/db";
 import { isUniqueViolationOn } from "@/lib/db-errors";
 import type { AuditOutcome } from "@/lib/domain/audit";
 import { logger } from "@/lib/logger";
 import { redact } from "@/lib/redact";
+import { globalAuditSettings } from "@/lib/settings/settings-service";
 
 /**
  * Writing the audit record.
  *
- * This is the only writer. There is no update path and no delete path, here or anywhere in the
- * application — the sole deletion that will ever exist is the retention sweep arriving in phase 5,
- * which runs oldest-first and re-anchors the chain behind it.
+ * This is the only writer. There is no update path and no delete path here — the sole deletion that
+ * exists anywhere is `lib/audit/retention.ts`, which runs oldest-first and re-anchors the chain
+ * behind it, and which this module triggers by write count.
  *
  * **It never throws.** A line lost is a nuisance; an action refused because its audit row would not
  * store is a fault; and an action that happened and then threw on the way out is the worst of the
@@ -116,11 +119,16 @@ const MAX_DETAIL_CHARS = 8_000;
 const CHAIN_CONSTRAINT_COLUMNS = ["prev_hash"] as const;
 
 /**
- * Records one event.
+ * Appends one event to the chain, without triggering retention.
+ *
+ * The half of {@link recordAudit} that writes. Exported for exactly one caller: the retention sweep,
+ * whose own row must not trigger another sweep — which is what going back through `recordAudit`
+ * would do, once per sweep, forever. Nothing else should call this; a caller that skips retention is
+ * a caller that lets the table grow past its bounds.
  *
  * @param input the event
  */
-export async function recordAudit(input: AuditEventInput): Promise<void> {
+export async function appendEvent(input: AuditEventInput): Promise<void> {
 	try {
 		const provenance = input.provenance ?? NO_PROVENANCE;
 		const fields = {
@@ -167,6 +175,25 @@ export async function recordAudit(input: AuditEventInput): Promise<void> {
 }
 
 /**
+ * Records one event, and sweeps if enough have accumulated since the last sweep.
+ *
+ * The entry point every caller but the sweep itself uses. Retention is counted in writes rather than
+ * scheduled on a timer, so a quiet install does no work at all and a busy one sweeps in proportion to
+ * what it is producing — the same shape `lib/logs/ingest.ts` uses for `LogEntry`, and for the same
+ * reason.
+ *
+ * The sweep is not awaited. It is bookkeeping behind an event that has already been written, and the
+ * caller is usually a request on its way out; making a print wait for the deletion of two hundred
+ * thousand rows would be paying for tidiness with latency. {@link maybeSweep} never throws.
+ *
+ * @param input the event
+ */
+export async function recordAudit(input: AuditEventInput): Promise<void> {
+	await appendEvent(input);
+	void maybeSweep();
+}
+
+/**
  * Redacts and encodes `detail`.
  *
  * Redaction runs before encoding rather than on the finished string, so a secret is removed as a
@@ -203,4 +230,67 @@ async function tailHash(): Promise<string> {
 	}
 	const anchor = await prisma.auditAnchor.findUnique({ where: { id: 1 }, select: { hash: true } });
 	return anchor?.hash ?? GENESIS_HASH;
+}
+
+/**
+ * How many events this process has recorded, and how often it currently intends to sweep.
+ *
+ * Both reset by a restart, which is harmless: the counter decides when to *look*, and the sweep
+ * itself decides what to do based on what is actually in the table.
+ */
+const globalForAudit = globalThis as unknown as {
+	fenposAuditWrites: number | undefined;
+	fenposAuditSweepEvery: number | undefined;
+};
+
+/**
+ * `audit.sweepEvery`'s declared minimum, used until a real value has been read.
+ *
+ * The floor rather than the fallback, so the very first check of a process can only ever come
+ * *sooner* than configured, never later.
+ */
+const MINIMUM_SWEEP_EVERY = 50;
+
+/**
+ * Sweeps every `audit.sweepEvery` recorded events.
+ *
+ * The interval is cached rather than read per event, and that is why this reads as awkwardly as it
+ * does: it runs on the way out of every recorded action, so reading four settings to decide "not this
+ * time" would put a database round trip behind every audit row in the system. The cached value is
+ * refreshed each time a sweep is actually due, so a changed interval takes effect at the next sweep
+ * rather than at the next restart. `lib/logs/ingest.ts` caches its own settings for the same reason,
+ * one layer up.
+ *
+ * **Never throws**, for the reason the module comment gives: this runs behind an event that has
+ * already been written, and a failed sweep is a table that is briefly larger than its bounds, while a
+ * thrown one would surface as a failure of whatever action happened to be the five-hundredth.
+ */
+async function maybeSweep(): Promise<void> {
+	try {
+		const writes = (globalForAudit.fenposAuditWrites ?? 0) + 1;
+		globalForAudit.fenposAuditWrites = writes;
+
+		if (writes % (globalForAudit.fenposAuditSweepEvery ?? MINIMUM_SWEEP_EVERY) !== 0) {
+			return;
+		}
+
+		const { retentionDays, maxRecords, sweepEvery } = await globalAuditSettings();
+		globalForAudit.fenposAuditSweepEvery = sweepEvery;
+
+		const outcome = await sweepAuditNow({ retentionDays, maxRecords });
+		if (outcome === null) {
+			return;
+		}
+
+		// Through `appendEvent`, not `recordAudit`: a sweep row that advanced the counter again would
+		// sweep on every `sweepEvery`-th sweep, forever.
+		await appendEvent({
+			action: AUDIT_SWEEP_ACTION,
+			outcome: "SUCCESS",
+			actor: SYSTEM_ACTOR,
+			detail: { removed: outcome.removed, anchoredAt: outcome.anchoredAt, retentionDays, maxRecords },
+		});
+	} catch (error) {
+		logger.error("Could not sweep the audit record", error);
+	}
 }
