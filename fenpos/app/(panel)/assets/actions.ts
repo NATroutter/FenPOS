@@ -14,7 +14,8 @@ import {
 	replaceAssetFromUrl as replaceStoredAssetFromUrl,
 	requireWithinByteCap,
 } from "@/lib/assets/asset-service";
-import { requireSession } from "@/lib/auth/require-session";
+import { type PanelActionOptions, panelAction } from "@/lib/auth/panel-action";
+import type { PanelActionId } from "@/lib/auth/panel-actions";
 import { ApiError } from "@/lib/errors";
 import { pushConfigToEveryAgent } from "@/lib/link/agent-connection";
 import { logger } from "@/lib/logger";
@@ -22,65 +23,66 @@ import { logger } from "@/lib/logger";
 /**
  * Server actions behind the Assets tab.
  *
- * Every action re-checks the session. The panel layout already guards the page, but an action is a
- * POST endpoint in its own right: anything that trusted the layout would be callable directly by
- * anyone who knew the action id. That matters more here than elsewhere, because these two actions
- * are the only ones in the panel that accept a file and the only ones that make this server fetch a
- * URL somebody else chose.
+ * Every action goes through the shared gate, which resolves the session, checks the permission its
+ * registry entry names, runs the body, and records the attempt. That matters more here than
+ * elsewhere, because these are the only actions in the panel that accept a file and the only ones
+ * that make this server fetch a URL somebody else chose.
  */
 
 /**
- * Runs an action, converting a failure into a message the panel can render.
+ * Runs an asset action through the gate, keeping the two things this tab does that others do not.
  *
- * @param label short description used in the log line
+ * **An unexpected failure is logged here and never allowed to travel.** `importAsset` is where an
+ * operator types a URL, and a URL is exactly where credentials get embedded. `safeUrl` strips them
+ * from everything that reaches an `ApiError`, but a failure inside `fetchRemoteImage` arrives as an
+ * undici error whose message and `cause` chain can still be carrying the address as it was written.
+ * Three rounds of fixes went into keeping credentials out of the logs; the audit record is a fourth
+ * door, and one with no delete path behind it. So the original error is logged as name, message and
+ * stack — never the object, so the cause chain is dropped — and what is rethrown for the gate to
+ * record is a bare sentence carrying nothing an operator typed.
+ *
+ * **The agent fan-out runs only after a success, and is scheduled rather than awaited.** Every
+ * action here changes the image library, and every connected agent holds a copy of it dithered for
+ * its own paper, so each has to be sent a fresh configuration rather than waiting for its next
+ * reconnect. That work scales with how many agents are connected and how many images are stored,
+ * and none of it is work the operator who pressed Upload is waiting for: their file is already
+ * saved.
+ *
+ * @param id the action's registry id
  * @param work the action body
+ * @param options what to name in the record
  * @returns the state to render
  */
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
+async function assetAction(
+	id: PanelActionId,
+	work: () => Promise<void>,
+	options: Omit<PanelActionOptions, "revalidate"> = {},
+): Promise<ActionState> {
+	const state = await panelAction(
+		id,
+		async () => {
+			try {
+				await work();
+			} catch (error) {
+				if (error instanceof ApiError) {
+					throw error;
+				}
+				logger.error(`Asset action failed: ${id}`, undefined, {
+					failure: error instanceof Error ? error.name : typeof error,
+					reason: error instanceof Error ? error.message : "unknown failure",
+					stack: error instanceof Error ? error.stack : undefined,
+				});
+				throw new Error("The asset operation failed. See the server log.");
+			}
+		},
+		{ ...options, revalidate: () => revalidatePath("/assets") },
+	);
 
-	try {
-		await work();
-		revalidatePath("/assets");
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		// The message and the stack, never the error object. `importAsset` is where an operator types
-		// a URL, and a URL is exactly where credentials get embedded. `safeUrl` strips them from
-		// everything that reaches an `ApiError`, but a failure inside `fetchRemoteImage` arrives as an
-		// undici error whose `cause` chain can still be carrying the address as it was written — and
-		// `logger.error`'s second argument serialises that whole chain into a line the panel displays.
-		// Three rounds of fixes went into keeping credentials out of these logs; this is the door they
-		// were still open at.
-		//
-		// The name, the message and the stack are all kept, so what is actually given up is the cause
-		// chain — which is the part that carries the untrusted URL and the part least often needed to
-		// find a fault. A genuine failure still logs its type, its wording and where it was raised.
-		logger.error(`Asset action failed: ${label}`, undefined, {
-			failure: error instanceof Error ? error.name : typeof error,
-			reason: error instanceof Error ? error.message : "unknown failure",
-			stack: error instanceof Error ? error.stack : undefined,
-		});
-		return { error: "Something went wrong. Check the server log." };
+	if (state.error === null) {
+		after(pushConfigToEveryAgent);
 	}
 
-	// Every action here changes the image library, and every connected agent holds a copy of it
-	// dithered for its own paper — so each one has to be sent a fresh configuration, rather than the
-	// change waiting for whenever that agent next reconnects.
-	//
-	// **Scheduled rather than awaited, and deliberately outside the try.** Fanning out is work that
-	// scales with how many agents are connected and how many images are stored, and none of it is
-	// work the operator who pressed Upload is waiting for: their file is already saved. Leaving it on
-	// the response path made an upload's latency somebody else's printer count. Being outside the
-	// try is the other half: a sync that failed must not report "something went wrong" for an upload
-	// that plainly succeeded, and that must be true by construction rather than because
-	// `pushDeviceConfig` happens to swallow its own errors today.
-	after(pushConfigToEveryAgent);
-
-	return { error: null };
+	return state;
 }
 
 /**
@@ -98,16 +100,22 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
  * @returns the state to render
  */
 export async function uploadAsset(formData: FormData): Promise<ActionState> {
-	return run("upload", async () => {
-		const file = formData.get("file");
-		if (!(file instanceof File) || file.size === 0) {
-			throw new ApiError("missing_field", "Choose an image to upload.");
-		}
-		await requireWithinByteCap(file.size);
+	const name = formData.get("name");
+	return assetAction(
+		"assets:upload",
+		async () => {
+			const file = formData.get("file");
+			if (!(file instanceof File) || file.size === 0) {
+				throw new ApiError("missing_field", "Choose an image to upload.");
+			}
+			await requireWithinByteCap(file.size);
 
-		const name = formData.get("name");
-		await createAsset(typeof name === "string" ? name : "", Buffer.from(await file.arrayBuffer()));
-	});
+			await createAsset(typeof name === "string" ? name : "", Buffer.from(await file.arrayBuffer()));
+		},
+		// The name and nothing else. The bytes are already in the asset table, and a base64 slice of
+		// an image in an append-only record is neither readable nor worth keeping.
+		{ target: { kind: "asset", label: typeof name === "string" ? name : null } },
+	);
 }
 
 /**
@@ -118,9 +126,15 @@ export async function uploadAsset(formData: FormData): Promise<ActionState> {
  * @returns the state to render
  */
 export async function importAsset(name: string, url: string): Promise<ActionState> {
-	return run("import", async () => {
-		await importAssetFromUrl(name, url);
-	});
+	return assetAction(
+		"assets:import",
+		async () => {
+			await importAssetFromUrl(name, url);
+		},
+		// The URL is deliberately absent: this is the one field an operator types that routinely
+		// carries credentials, and the record has no delete path. The name says which image it became.
+		{ target: { kind: "asset", label: name } },
+	);
 }
 
 /**
@@ -136,9 +150,13 @@ export async function importAsset(name: string, url: string): Promise<ActionStat
  * @returns the state to render
  */
 export async function renameAsset(id: string, name: string): Promise<ActionState> {
-	return run("rename", async () => {
-		await renameStoredAsset(id, name);
-	});
+	return assetAction(
+		"assets:rename",
+		async () => {
+			await renameStoredAsset(id, name);
+		},
+		{ target: { kind: "asset", id, label: name } },
+	);
 }
 
 /**
@@ -152,16 +170,20 @@ export async function renameAsset(id: string, name: string): Promise<ActionState
  * @returns the state to render
  */
 export async function replaceAsset(formData: FormData): Promise<ActionState> {
-	return run("replace", async () => {
-		const file = formData.get("file");
-		if (!(file instanceof File) || file.size === 0) {
-			throw new ApiError("missing_field", "Choose an image to upload.");
-		}
-		await requireWithinByteCap(file.size);
+	const id = formData.get("id");
+	return assetAction(
+		"assets:replace",
+		async () => {
+			const file = formData.get("file");
+			if (!(file instanceof File) || file.size === 0) {
+				throw new ApiError("missing_field", "Choose an image to upload.");
+			}
+			await requireWithinByteCap(file.size);
 
-		const id = formData.get("id");
-		await replaceStoredAsset(typeof id === "string" ? id : "", Buffer.from(await file.arrayBuffer()));
-	});
+			await replaceStoredAsset(typeof id === "string" ? id : "", Buffer.from(await file.arrayBuffer()));
+		},
+		{ target: { kind: "asset", id: typeof id === "string" ? id : null } },
+	);
 }
 
 /**
@@ -172,9 +194,14 @@ export async function replaceAsset(formData: FormData): Promise<ActionState> {
  * @returns the state to render
  */
 export async function replaceAssetFromUrl(id: string, url: string): Promise<ActionState> {
-	return run("replace from url", async () => {
-		await replaceStoredAssetFromUrl(id, url);
-	});
+	return assetAction(
+		"assets:replace-from-url",
+		async () => {
+			await replaceStoredAssetFromUrl(id, url);
+		},
+		// The URL stays out, for the reason `importAsset` gives.
+		{ target: { kind: "asset", id } },
+	);
 }
 
 /**
@@ -184,5 +211,5 @@ export async function replaceAssetFromUrl(id: string, url: string): Promise<Acti
  * @returns the state to render
  */
 export async function removeAsset(id: string): Promise<ActionState> {
-	return run("delete", () => deleteAsset(id));
+	return assetAction("assets:delete", () => deleteAsset(id), { target: { kind: "asset", id } });
 }

@@ -2,9 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { requireSession } from "@/lib/auth/require-session";
-import { ApiError } from "@/lib/errors";
-import { logger } from "@/lib/logger";
+import { panelAction, panelQuery } from "@/lib/auth/panel-action";
+import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import type { OffsetUnit, VariableDefinition } from "@/lib/variables/definition";
 import { evaluateVariable } from "@/lib/variables/evaluate";
 import { PANEL_PRINT_CONTEXT, printedFormatting } from "@/lib/variables/formatting";
@@ -17,26 +16,12 @@ import {
 /**
  * Server actions behind the Variables tab.
  *
- * Every action re-checks the session. The panel layout already guards the page, but an action is a
- * POST endpoint in its own right: anything that trusted the layout would be callable directly by
- * anyone who knew the action id.
+ * Every action goes through the shared gate, which resolves the session, checks the permission its
+ * registry entry names, runs the body, and records the attempt.
  */
 
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
-	await requireSession();
-
-	try {
-		await work();
-		revalidatePath("/variables");
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error(`Variable action failed: ${label}`, error);
-		return { error: "Something went wrong. Check the server log." };
-	}
-}
+/** What every action here refreshes on success. */
+const revalidate = () => revalidatePath("/variables");
 
 /**
  * Creates a variable.
@@ -50,9 +35,15 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
  * @returns the state to render
  */
 export async function createVariable(input: VariableDefinition): Promise<ActionState> {
-	return run("create", async () => {
-		await createVariableRecord(input);
-	});
+	return panelAction(
+		"variables:create",
+		async () => {
+			await createVariableRecord(input);
+		},
+		// The name and kind; never the value. A static variable's value is whatever an operator typed
+		// and often the shop's own phone number or address.
+		{ revalidate, target: { kind: "variable", label: input.name }, detail: { kind: input.kind } },
+	);
 }
 
 /**
@@ -63,9 +54,13 @@ export async function createVariable(input: VariableDefinition): Promise<ActionS
  * @returns the state to render
  */
 export async function updateVariable(id: string, input: VariableDefinition): Promise<ActionState> {
-	return run("update", async () => {
-		await updateVariableRecord(id, input);
-	});
+	return panelAction(
+		"variables:update",
+		async () => {
+			await updateVariableRecord(id, input);
+		},
+		{ revalidate, target: { kind: "variable", id, label: input.name }, detail: { kind: input.kind } },
+	);
 }
 
 /**
@@ -78,7 +73,10 @@ export async function updateVariable(id: string, input: VariableDefinition): Pro
  * @returns the state to render
  */
 export async function removeVariable(id: string): Promise<ActionState> {
-	return run("remove", () => deleteVariable(id));
+	return panelAction("variables:delete", () => deleteVariable(id), {
+		revalidate,
+		target: { kind: "variable", id },
+	});
 }
 
 /** What the dialog's live `DATETIME` preview renders. */
@@ -110,8 +108,30 @@ export async function previewMoment(
 	offsetAmount: number | null,
 	offsetUnit: OffsetUnit | null,
 ): Promise<MomentPreview> {
-	await requireSession();
+	return panelQuery<MomentPreview>("variables:preview", () => renderMoment(pattern, offsetAmount, offsetUnit), {
+		refused: () => ({ text: null, error: REFUSAL_MESSAGE }),
+		// A bad pattern is a result this action reports, not a failure of the action — it is caught
+		// inside `renderMoment` and returned. Anything reaching here is something else entirely.
+		failed: () => ({ text: null, error: "That pattern could not be formatted." }),
+	});
+}
 
+/**
+ * Renders the pattern, or says why it could not be.
+ *
+ * Split out of the action so the gate wraps one function rather than a body with two exits. An
+ * empty pattern is not an error: there is simply nothing yet to show.
+ *
+ * @param pattern the candidate `date-fns` pattern, as typed so far
+ * @param offsetAmount the offset to apply before formatting, or null for none
+ * @param offsetUnit the unit that offset is counted in, or null when there is no offset
+ * @returns the rendered text, or the message naming why the pattern could not be read
+ */
+async function renderMoment(
+	pattern: string,
+	offsetAmount: number | null,
+	offsetUnit: OffsetUnit | null,
+): Promise<MomentPreview> {
 	if (pattern.trim() === "") {
 		return { text: null, error: null };
 	}
