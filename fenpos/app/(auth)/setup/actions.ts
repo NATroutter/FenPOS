@@ -103,9 +103,15 @@ export async function runSetup(_previous: SetupState, formData: FormData): Promi
 		await completeSetup({ setupKey, name, email, password });
 	} catch (error) {
 		if (error instanceof ApiError) {
-			// A `SetupRefusedError` already carries the single indistinguishable message; a
-			// validation failure carries its own, which is safe to show because the caller has
-			// already proved they hold the key by getting past the seal's first condition.
+			// A `SetupRefusedError` carries the single indistinguishable message; anything else here
+			// is one of `completeSetup`'s own validation failures (a missing name, a missing email, a
+			// password that fails `passwordSchema`) and is shown as its own text. That might look
+			// like it depends on the caller having already proved they hold the key, but it does not:
+			// `completeSetup` runs these validations before it opens the transaction that checks the
+			// key, so a wrong or absent key can reach one of these messages too. What actually makes
+			// them safe to disclose is that they fire unconditionally — the same message for the same
+			// malformed input whether the key is right, wrong, or the install is already claimed — so
+			// showing one discloses nothing about either.
 			logger.warn("Setup refused", { address, reason: error.message });
 			return { error: error.message };
 		}
