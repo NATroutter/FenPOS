@@ -10,6 +10,7 @@ import {
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Fill, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
+import { hasControlCharacter, VARIABLE_REFERENCE } from "@/lib/variables/definition";
 
 /**
  * Turns one `data` element into a line of styled spans and directives.
@@ -102,14 +103,31 @@ interface OpenBlock {
 }
 
 /**
+ * The variable values one compile may substitute.
+ *
+ * Handed in rather than read, because this parser is synchronous and the values are database rows —
+ * the same reason `<image>` geometry arrives through `CompileSettings`. See `resolveVariables` in
+ * `lib/markup/resolve-variables.ts` for where it is built.
+ */
+export interface VariableContext {
+	/** Every name this compile can resolve, already flattened across the three layers. */
+	values: ReadonlyMap<string, string>;
+	/** How many references one element may contain. */
+	maxPerElement: number;
+}
+
+/**
  * Parses one element of the request's `data` array.
  *
  * @param source the element text, as supplied by the client
+ * @param variables the values `{name}` references may resolve to, or null to read braces as
+ *        ordinary text — which is what `variables.enabled: false` means, and what every caller
+ *        meant before variables existed
  * @returns the parsed line; a blank element yields a line with no spans
  * @throws MarkupError if the element is malformed, carrying the column at fault
  */
-export function parseMarkup(source: string | null | undefined): Line {
-	return new Parser(source ?? "").run();
+export function parseMarkup(source: string | null | undefined, variables?: VariableContext | null): Line {
+	return new Parser(source ?? "", variables ?? null).run();
 }
 
 /**
@@ -171,8 +189,15 @@ class Parser {
 
 	private index = 0;
 
-	constructor(source: string) {
+	/** The values `{name}` may resolve to, or null when braces are ordinary text. */
+	private readonly variables: VariableContext | null;
+
+	/** How many references this element has substituted, checked against the context's limit. */
+	private substitutions = 0;
+
+	constructor(source: string, variables: VariableContext | null) {
 		this.source = source;
+		this.variables = variables;
 	}
 
 	run(): Line {
@@ -182,6 +207,8 @@ class Parser {
 				this.readTag();
 			} else if (current === "&") {
 				this.readEntity();
+			} else if (current === "{") {
+				this.readVariable();
 			} else {
 				this.readText(current);
 			}
@@ -229,10 +256,15 @@ class Parser {
 	}
 
 	/**
-	 * Decodes `&lt;` and `&amp;`.
+	 * Decodes `&lt;`, `&amp;` and `&lbrace;`.
 	 *
 	 * Any other ampersand is literal text, because receipts legitimately contain "Fish & Chips"
 	 * and rejecting that would be surprising.
+	 *
+	 * `&lbrace;` joined the other two with variables. It is needed far less often than they are —
+	 * a brace is only special when it opens a slug-shaped name that closes, so `{1 of 4}` needs no
+	 * escaping — but without it there would be no way at all to print the characters `{phone}` on an
+	 * install where `phone` is defined.
 	 */
 	private readEntity(): void {
 		if (this.source.startsWith("&lt;", this.index)) {
@@ -243,22 +275,91 @@ class Parser {
 			this.emitEntity("&", 5);
 			return;
 		}
+		if (this.source.startsWith("&lbrace;", this.index)) {
+			this.emitEntity("{", 8);
+			return;
+		}
 		this.readText("&");
 	}
 
 	/**
-	 * Emits one decoded entity as a span of its own.
+	 * Substitutes `{name}`, or leaves the brace as text.
+	 *
+	 * Only a slug-shaped name is a reference. Anything else — `Table {1 of 4}`, an unclosed brace, a
+	 * name with a space in it — falls through to {@link readText} and prints, which is what keeps
+	 * braces usable in ordinary receipt text without an escape. `&lbrace;` exists for the remaining
+	 * case: printing something that *is* name-shaped.
+	 *
+	 * A name that is shaped like a reference but resolves to nothing is refused rather than printed.
+	 * A typo in a receipt has to be a failure the caller sees, not `{phne}` on a customer's copy.
+	 */
+	private readVariable(): void {
+		const match = this.variables ? VARIABLE_REFERENCE.exec(this.source.slice(this.index)) : null;
+		if (!this.variables || !match) {
+			this.readText("{");
+			return;
+		}
+
+		const name = match[1];
+		const column = this.index + 1;
+		const value = this.variables.values.get(name);
+
+		if (value === undefined) {
+			throw new MarkupError(
+				MARKUP_ERRORS.unknownVariable,
+				column,
+				name,
+				`No variable named '${name}' is defined for this printer`,
+			);
+		}
+
+		this.substitutions++;
+		if (this.substitutions > this.variables.maxPerElement) {
+			throw new MarkupError(
+				MARKUP_ERRORS.tooManyVariableReferences,
+				column,
+				name,
+				`At most ${this.variables.maxPerElement} variable references are allowed in one element`,
+			);
+		}
+
+		// **This check is the boundary, not a nicety.** `readText` refuses a control character as it
+		// scans, but `emitEntity` never has — the only things it has ever emitted are `<` and `&`,
+		// neither of which can be one. A variable's value is arbitrary text from a database row or a
+		// request body, so emitting it unchecked would open a path straight through this parser's
+		// stated guarantee: a value holding an ESC would reach the printer as a command. Values are
+		// checked at write time too, but this is the check that has to be right.
+		if (hasControlCharacter(value)) {
+			throw new MarkupError(
+				MARKUP_ERRORS.controlCharacter,
+				column,
+				name,
+				`The value of '${name}' contains a control character, which cannot be printed`,
+			);
+		}
+
+		this.emitEntity(value, match[0].length);
+	}
+
+	/**
+	 * Emits one decoded entity, or one substituted variable value, as a span of its own.
 	 *
 	 * Isolating it keeps every other span's characters contiguous in the source, which is what
-	 * lets a column be reported exactly: an entity consumes more source characters than it
-	 * produces, so a span spanning one could not be measured by simple arithmetic.
+	 * lets a column be reported exactly: both an entity and a reference consume more source
+	 * characters than they produce, so a span spanning one could not be measured by simple
+	 * arithmetic. A variable makes that gap far wider than `&amp;` ever did — a four-character
+	 * `{x}` can produce two hundred — which is the same property, only more so.
 	 *
-	 * Inside a block the decoded character joins the symbol's content instead. A URL carrying a
-	 * query string is the ordinary case — `&amp;` is the only way to write its separator — so the
-	 * entity has to survive into the encoded payload rather than into a span.
+	 * Inside a block the decoded text joins the symbol's content instead. A URL carrying a
+	 * query string is the ordinary case — `&amp;` is the only way to write its separator — and
+	 * `<qr>{site}</qr>` is the variable equivalent.
 	 *
-	 * @param decoded the character the entity stands for
-	 * @param sourceLength how many source characters the entity occupies
+	 * Emitting nothing when the text is empty, rather than pushing an empty span: a variable whose
+	 * value is legitimately blank must not leave a span behind, because `isDirectiveOnly` reads a
+	 * line's spans to decide whether it advances the paper.
+	 *
+	 * @param decoded the character the entity stands for, or the variable's value
+	 * @param sourceLength how many source characters it occupies
 	 */
 	private emitEntity(decoded: string, sourceLength: number): void {
 		this.requireInsideLineScope(this.index + 1);
@@ -268,7 +369,9 @@ class Parser {
 			return;
 		}
 		this.flushPending();
-		this.spans.push({ text: decoded, style: this.style, sourceColumn: this.index + 1 });
+		if (decoded.length > 0) {
+			this.spans.push({ text: decoded, style: this.style, sourceColumn: this.index + 1 });
+		}
 		this.index += sourceLength;
 	}
 

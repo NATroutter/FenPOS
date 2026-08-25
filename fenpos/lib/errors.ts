@@ -203,6 +203,10 @@ export const API_ERROR_STATUS = {
 	 * Not `413`: the remedy is a smaller module size or a different symbology, not less content.
 	 */
 	symbol_too_wide: 422,
+	/** A `{name}` naming no variable this device can resolve. See `MARKUP_ERRORS.unknownVariable`. */
+	unknown_variable: 422,
+	/** More `{name}` references in one element than the install allows. See `MARKUP_ERRORS.tooManyVariableReferences`. */
+	too_many_variable_references: 422,
 	/**
 	 * An `<image>` naming the application's own logo at a width nothing was bundled for.
 	 *

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { isDirectiveOnly, type Line, PLAIN } from "@/lib/markup/model";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
 
 /**
  * Leaves `symbolGeometry` real for every test but one.
@@ -376,6 +376,140 @@ describe("parseMarkup", () => {
 	it("rejects delete and C1 controls", () => {
 		expect(error(`a${String.fromCharCode(0x7f)}b`).code).toBe(MARKUP_ERRORS.controlCharacter);
 		expect(error(`a${String.fromCharCode(0x85)}b`).code).toBe(MARKUP_ERRORS.controlCharacter);
+	});
+
+	// -----------------------------------------------------------------------
+	// Variables
+	// -----------------------------------------------------------------------
+
+	describe("variables", () => {
+		const context = (entries: Record<string, string>, maxPerElement = 100): VariableContext => ({
+			values: new Map(Object.entries(entries)),
+			maxPerElement,
+		});
+
+		/** Parses with a context and returns the error, failing the test if the parse succeeded. */
+		const variableError = (source: string, variables: VariableContext): MarkupError => {
+			try {
+				parseMarkup(source, variables);
+			} catch (thrown) {
+				if (thrown instanceof MarkupError) {
+					return thrown;
+				}
+				throw thrown;
+			}
+			throw new Error(`expected '${source}' to be rejected`);
+		};
+
+		it("substitutes a value", () => {
+			const line = parseMarkup("Call {phone}", context({ phone: "010-1234567" }));
+
+			expect(plainText(line)).toBe("Call 010-1234567");
+		});
+
+		it("leaves braces alone when no context is given, which is the feature switched off", () => {
+			const line = parseMarkup("Call {phone}");
+
+			expect(plainText(line)).toBe("Call {phone}");
+		});
+
+		it("prints a tag inside a value as characters rather than obeying it", () => {
+			const line = parseMarkup("{store}", context({ store: "<b>FenPOS</b>" }));
+
+			expect(plainText(line)).toBe("<b>FenPOS</b>");
+			expect(line.spans.every((span) => span.style.bold === false)).toBe(true);
+		});
+
+		it("keeps a substituted value in its own span, carrying the reference's column", () => {
+			const line = parseMarkup("ab{x}cd", context({ x: "VALUE" }));
+
+			const substituted = line.spans.find((span) => span.text === "VALUE");
+			expect(substituted).toBeDefined();
+			expect(substituted?.sourceColumn).toBe(3);
+		});
+
+		it("reports the column of text after a substitution against the source, not the output", () => {
+			const line = parseMarkup("{x}tail", context({ x: "a much longer value" }));
+
+			const tail = line.spans.find((span) => span.text === "tail");
+			expect(tail?.sourceColumn).toBe(4);
+		});
+
+		it("carries the style the reference was written in", () => {
+			const line = parseMarkup("<bold>{x}</bold>", context({ x: "BOLD" }));
+
+			expect(line.spans[0].text).toBe("BOLD");
+			expect(line.spans[0].style.bold).toBe(true);
+		});
+
+		it("substitutes inside a block tag, so a QR can carry a configured URL", () => {
+			const line = parseMarkup("<qr>{site}</qr>", context({ site: "https://fenpos.fi" }));
+
+			const qr = line.directives.find((directive) => directive.kind === "QR");
+			expect(qr).toMatchObject({ content: "https://fenpos.fi" });
+			expect(isDirectiveOnly(line)).toBe(true);
+		});
+
+		it("substitutes an image reference", () => {
+			const line = parseMarkup("<image>{brand}</image>", context({ brand: "logo" }));
+
+			expect(line.directives[0]).toMatchObject({ kind: "IMAGE", ref: "logo" });
+		});
+
+		it("refuses an unknown name, naming it and its column", () => {
+			const fault = variableError("Call {phne}", context({ phone: "010" }));
+
+			expect(fault.code).toBe(MARKUP_ERRORS.unknownVariable);
+			expect(fault.column).toBe(6);
+			expect(fault.detail).toBe("phne");
+		});
+
+		it("leaves text that is not name-shaped alone", () => {
+			const line = parseMarkup("Table {1 of 4}", context({ phone: "010" }));
+
+			expect(plainText(line)).toBe("Table {1 of 4}");
+		});
+
+		it("leaves an unclosed brace alone", () => {
+			const line = parseMarkup("50% {off", context({ off: "x" }));
+
+			expect(plainText(line)).toBe("50% {off");
+		});
+
+		it("prints a literal reference written with &lbrace;", () => {
+			const line = parseMarkup("&lbrace;phone}", context({ phone: "010-1234567" }));
+
+			expect(plainText(line)).toBe("{phone}");
+		});
+
+		it("decodes &lbrace; even with no variable context", () => {
+			expect(plainText(parseMarkup("&lbrace;x}"))).toBe("{x}");
+		});
+
+		it("refuses a value carrying a control character, at the reference's column", () => {
+			const fault = variableError("ab{bad}", context({ bad: `x${String.fromCharCode(0x1b)}y` }));
+
+			expect(fault.code).toBe(MARKUP_ERRORS.controlCharacter);
+			expect(fault.column).toBe(3);
+		});
+
+		it("refuses more references in one element than the limit allows", () => {
+			const fault = variableError("{x}{x}{x}", context({ x: "a" }, 2));
+
+			expect(fault.code).toBe(MARKUP_ERRORS.tooManyVariableReferences);
+		});
+
+		it("counts references against the limit rather than distinct names", () => {
+			const line = parseMarkup("{x}{x}", context({ x: "a" }, 2));
+
+			expect(plainText(line)).toBe("aa");
+		});
+
+		it("substitutes an empty value without producing a phantom span", () => {
+			const line = parseMarkup("a{x}b", context({ x: "" }));
+
+			expect(plainText(line)).toBe("ab");
+		});
 	});
 });
 

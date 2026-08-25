@@ -38,6 +38,24 @@ export const MARKUP_ERRORS = {
 	 * see `PrintCompiler.countTextLines` for what that costs and why it is accepted.
 	 */
 	symbolTooWide: "symbol_too_wide",
+	/**
+	 * A `{name}` naming no variable this device can resolve.
+	 *
+	 * Server-only, for the same reason {@link MARKUP_ERRORS.symbolTooWide} is: resolving a name needs
+	 * the `variables` table and the device's own overrides, and the agent's parser has neither. A
+	 * compiled job crosses the link with every reference already substituted into spans, so the agent
+	 * never meets a reference and cannot raise this. Markup parsed on the agent's own console leaves
+	 * braces as ordinary text — which is what this system does anyway when the feature is off.
+	 */
+	unknownVariable: "unknown_variable",
+	/**
+	 * More `{name}` references in one element than `variables.maxPerElement` allows.
+	 *
+	 * Deliberately not the same code as the request-level `too_many_variables`, which counts entries
+	 * in the body's `variables` object. One is about how much a caller supplied, the other about how
+	 * much one line asks to expand; a client branching on the code has to be able to tell them apart.
+	 */
+	tooManyVariableReferences: "too_many_variable_references",
 	/** A character that would be interpreted by the printer as a command. */
 	controlCharacter: "control_character",
 } as const;
