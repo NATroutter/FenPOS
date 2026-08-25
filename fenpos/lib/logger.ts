@@ -1,6 +1,7 @@
 import "server-only";
 import type { LogLevel } from "@/lib/domain/enums";
 import { isProduction } from "@/lib/env";
+import { redact } from "@/lib/redact";
 
 /**
  * Structured process logging for the server.
@@ -15,28 +16,6 @@ import { isProduction } from "@/lib/env";
 
 /** Structured fields attached to a log line. Values must already be safe to record. */
 export type LogContext = Record<string, unknown>;
-
-/**
- * Field names whose values are never written, whatever a caller passes.
- *
- * A redaction list is a backstop rather than a policy: callers are expected not to pass
- * secrets at all. It exists because the cost of one accidental token in a log file is far
- * higher than the cost of checking a handful of keys on every line.
- */
-const REDACTED_KEYS: readonly string[] = [
-	"token",
-	"tokenhash",
-	"password",
-	"passwordhash",
-	"apikey",
-	"keyhash",
-	"secret",
-	"authorization",
-	"cookie",
-	"code",
-	"codehash",
-	"codeplain",
-];
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	DEBUG: 10,
@@ -89,36 +68,6 @@ export function setMinimumLevel(level: LogLevel): void {
  */
 export function resetMinimumLevel(): void {
 	minimumLevel = BUILT_IN_MINIMUM_LEVEL;
-}
-
-/**
- * Replaces the values of sensitive keys with a marker, recursively.
- *
- * Matching is case-insensitive and ignores separators, so `api_key`, `apiKey`, and `APIKEY`
- * are all caught. Depth is bounded because a cyclic or deeply nested object passed by
- * mistake must not turn a log call into a stack overflow.
- *
- * @param value the value to sanitise
- * @param depth current recursion depth, used to enforce the bound
- * @returns a structurally similar value with sensitive fields replaced
- */
-function redact(value: unknown, depth = 0): unknown {
-	if (depth > 6) {
-		return "[truncated]";
-	}
-	if (Array.isArray(value)) {
-		return value.map((entry) => redact(entry, depth + 1));
-	}
-	if (value !== null && typeof value === "object") {
-		const source = value as Record<string, unknown>;
-		const output: Record<string, unknown> = {};
-		for (const [key, entry] of Object.entries(source)) {
-			const normalised = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-			output[key] = REDACTED_KEYS.includes(normalised) ? "[redacted]" : redact(entry, depth + 1);
-		}
-		return output;
-	}
-	return value;
 }
 
 /**
