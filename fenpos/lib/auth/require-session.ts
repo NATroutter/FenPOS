@@ -1,27 +1,93 @@
 import "server-only";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { getCurrentSession } from "@/lib/auth/session-cookie";
+import { auth } from "@/lib/auth/auth";
+import { isInstallClaimed } from "@/lib/auth/setup-key";
 
 /**
- * Sends the caller to sign-in unless the request carries a valid administrator session.
+ * The panel's session gate.
  *
- * Every panel action calls this. The layout already guards the page, but an action is a POST
- * endpoint in its own right: anything that trusted the layout would be callable directly by
- * anyone who knew the action id. Authorisation belongs at the action, not at the page that
- * happens to render its button.
+ * Every panel page and every server action calls this. The layout already guards the page, but an
+ * action is a POST endpoint in its own right: anything that trusted the layout would be callable
+ * directly by anyone who knew the action id. Authorisation belongs at the action, not at the page
+ * that happens to render its button.
  *
  * **It redirects rather than returning an error.** Each tab used to keep its own copy of this
- * check, throwing an `ApiError` that the action's own catch turned into a toast — so a session
- * that expired while the panel sat open produced "Not signed in." over a screen still showing
- * agents, printers and keys, and an operator who dismissed it was left looking at a panel where
- * nothing worked and nothing said why. There is one thing to do when the session is gone, and
- * the panel should just do it.
+ * check, throwing an error that the action's own catch turned into a toast — so a session that
+ * expired while the panel sat open produced "Not signed in." over a screen still showing agents,
+ * printers and keys, and an operator who dismissed it was left looking at a panel where nothing
+ * worked and nothing said why. There is one thing to do when the session is gone, and the panel
+ * should just do it.
  *
  * `redirect` signals by throwing, so this must be called **outside** any `try` that catches
  * broadly — a catch that swallowed it would reinstate the behaviour this exists to remove.
  */
-export async function requireSession(): Promise<void> {
-	if (!(await getCurrentSession())) {
-		redirect("/login");
+
+/** The signed-in user, as every panel page and action needs them. */
+export interface PanelUser {
+	id: string;
+	name: string;
+	email: string;
+	/** Bypasses every permission check. */
+	isSuperuser: boolean;
+	/** True while the account owes a password change and can reach nothing but the page that takes it. */
+	mustChangePassword: boolean;
+}
+
+/**
+ * Resolves the current request's user without redirecting.
+ *
+ * For the few callers that must distinguish "nobody is signed in" from "somebody is" and act on
+ * the difference — the sign-in page deciding whether to bounce an already-authenticated visitor,
+ * and the setup route deciding what to render. Everything else wants {@link requireSession}.
+ *
+ * @returns the signed-in user, or null
+ */
+export async function currentUser(): Promise<PanelUser | null> {
+	const session = await auth.api.getSession({ headers: await headers() });
+	if (!session?.user) {
+		return null;
 	}
+
+	const user = session.user;
+	return {
+		id: user.id,
+		name: user.name,
+		email: user.email,
+		// Read through Boolean rather than trusted as typed: these arrive from a database column
+		// that SQLite stores as an integer, and a null from a row written before the column
+		// existed must read as "no", never as "unknown" and certainly never as "yes".
+		isSuperuser: Boolean(user.isSuperuser),
+		mustChangePassword: Boolean(user.mustChangePassword),
+	};
+}
+
+/**
+ * Sends the caller away unless the request carries a usable session.
+ *
+ * "Usable" is stricter than "authenticated": a user who owes a password change holds a valid
+ * session and still reaches nothing but the page that takes the new password. That gate lives
+ * here, rather than at sign-in, because this is what every panel page and action is behind — so a
+ * URL typed straight into the address bar is caught too, and so a forced reset cannot be walked
+ * around by knowing an action id.
+ *
+ * An unauthenticated caller on an install with no accounts goes to `/setup` rather than `/login`,
+ * because there is nothing to sign in to yet and a sign-in form that can never succeed is a dead
+ * end. That is a routing convenience only — the seal in `setup.ts` is what actually decides
+ * whether setup may proceed.
+ *
+ * @returns the signed-in user; never null
+ */
+export async function requireSession(): Promise<PanelUser> {
+	const user = await currentUser();
+
+	if (!user) {
+		redirect((await isInstallClaimed()) ? "/login" : "/setup");
+	}
+
+	if (user.mustChangePassword) {
+		redirect("/set-password");
+	}
+
+	return user;
 }
