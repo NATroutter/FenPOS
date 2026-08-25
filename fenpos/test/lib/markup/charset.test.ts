@@ -80,6 +80,57 @@ describe("validateCharset", () => {
 		expect(plainText(line)).toBe("ok");
 	});
 
+	// -----------------------------------------------------------------------
+	// Characters that arrived by substitution
+	// -----------------------------------------------------------------------
+
+	/**
+	 * A value is arbitrary text from a database row, so it is exactly the text most likely to hold a
+	 * character the shop's printer cannot represent — and the least likely for the caller to be able
+	 * to find, since it does not appear in the element they wrote at all.
+	 */
+	describe("a character that came from a variable", () => {
+		const substituted = (markup: string, value: string): UnsupportedCharacterError => {
+			const line = parseMarkup(markup, { values: new Map([["x", value]]), maxPerElement: 10 });
+			try {
+				validateCharset(line, "CP437", "REJECT");
+			} catch (thrown) {
+				if (thrown instanceof UnsupportedCharacterError) {
+					return thrown;
+				}
+				throw thrown;
+			}
+			throw new Error(`expected '${markup}' with value '${value}' to be rejected`);
+		};
+
+		/**
+		 * The column names the reference, not a position counted through the value's own characters.
+		 *
+		 * `{x}` occupies three columns; `Kahvi €` is seven characters, and the euro is the seventh of
+		 * them. Counting forward reported column 7 of a three-column element — a position that does
+		 * not exist, in the field a client uses to underline the mistake for its user.
+		 */
+		it("reports the reference's column rather than one past the end of the element", () => {
+			const thrown = substituted("{x}", "Kahvi €");
+
+			expect(thrown.character).toBe("€");
+			expect(thrown.column).toBe(1);
+		});
+
+		it("names the variable, since the column can no longer say where inside the value", () => {
+			expect(substituted("ab{x}", "€").variable).toBe("x");
+		});
+
+		it("leaves the variable null for a character the caller actually typed", () => {
+			expect(rejection("€10", "CP437").variable).toBeNull();
+		});
+
+		/** The reference's own column is still exact, which is what makes the answer useful at all. */
+		it("points at the brace, wherever in the element it was written", () => {
+			expect(substituted("<bold>ab</bold>{x}", "€").column).toBe(16);
+		});
+	});
+
 	it("preserves styling and directives", () => {
 		const line = validate("<bold>ok</bold><feed=2>", "CP858", "REJECT");
 

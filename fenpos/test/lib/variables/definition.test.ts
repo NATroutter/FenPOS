@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { nameSchema } from "@/lib/domain/naming";
+import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { parseMarkup } from "@/lib/markup/parser";
 import {
 	ContextSource,
 	hasControlCharacter,
+	isControlCharacter,
 	MAX_VALUE_CHARS_CEILING,
 	OffsetUnit,
-	VARIABLE_REFERENCE,
 	VariableKind,
 	variableDefinitionSchema,
+	variableReferenceAt,
 } from "@/lib/variables/definition";
 
 describe("variable value sets", () => {
@@ -206,9 +209,9 @@ describe("hasControlCharacter", () => {
 	});
 });
 
-describe("VARIABLE_REFERENCE", () => {
+describe("variableReferenceAt", () => {
 	const nameIn = (source: string): string | null => {
-		const match = VARIABLE_REFERENCE.exec(source);
+		const match = variableReferenceAt(source, 0);
 		return match ? match[1] : null;
 	};
 
@@ -242,5 +245,64 @@ describe("VARIABLE_REFERENCE", () => {
 
 	it("stops at nameSchema's length ceiling rather than matching forever", () => {
 		expect(nameIn(`{${"a".repeat(65)}}`)).toBeNull();
+	});
+
+	/**
+	 * The parser asks about the position it is standing on, so a reference further along the string
+	 * is not an answer to its question. The underlying regex is sticky, which is exactly what gives
+	 * this property — and what would silently break it if a caller reached the regex directly and
+	 * left `lastIndex` behind, which is why the regex is not exported.
+	 */
+	it("matches only at the position given, not the next one along", () => {
+		expect(variableReferenceAt("ab{phone}", 2)?.[1]).toBe("phone");
+		expect(variableReferenceAt("ab{phone}", 0)).toBeNull();
+		expect(variableReferenceAt("ab{phone}", 1)).toBeNull();
+	});
+
+	/** A stale `lastIndex` from an earlier match is the whole failure mode; two calls in a row pin it. */
+	it("gives the same answer however many times it is called", () => {
+		expect(variableReferenceAt("{phone}", 0)?.[1]).toBe("phone");
+		expect(variableReferenceAt("{phone}", 0)?.[1]).toBe("phone");
+		expect(variableReferenceAt("{time_hm}", 0)?.[1]).toBe("time_hm");
+	});
+});
+
+/**
+ * The two spellings of "the printer would obey this" that used to exist, pinned to each other.
+ *
+ * `parser.ts` refuses a control character while scanning markup; `hasControlCharacter` refuses one
+ * inside a variable's value before it is substituted. They guard the same sink, and the second
+ * exists only because a substituted value never passes through the first. When they were two
+ * separate range expressions — `code === 0x7f || (code >= 0x80 && code <= 0x9f)` in one file,
+ * `code >= 0x7f && code <= 0x9f` in the other — nothing asserted they agreed, so a byte refused
+ * when an author typed it could have become reachable by putting it in a variable's value. They are
+ * now one predicate, and this walks the boundaries of every range to say so.
+ */
+describe("the control-character rule is one rule", () => {
+	/** Parsing markup made of this one character: whichever error it raises, or null if it parsed. */
+	const parserVerdict = (code: number): string | null => {
+		try {
+			parseMarkup(`a${String.fromCharCode(code)}b`);
+			return null;
+		} catch (error) {
+			return error instanceof MarkupError ? error.code : "other";
+		}
+	};
+
+	// Every edge of C0, DEL and C1, plus the first printable character on either side of each.
+	const BOUNDARIES = [0x00, 0x09, 0x1f, 0x20, 0x21, 0x7e, 0x7f, 0x80, 0x9f, 0xa0, 0xa1];
+
+	it.each(BOUNDARIES)("agrees across the substitution boundary at U+%i", (code) => {
+		const character = String.fromCharCode(code);
+		const refusedWhenTyped = parserVerdict(code) === MARKUP_ERRORS.controlCharacter;
+
+		expect(isControlCharacter(character)).toBe(refusedWhenTyped);
+		expect(hasControlCharacter(`x${character}y`)).toBe(refusedWhenTyped);
+	});
+
+	it("still refuses tab, DEL and the C1 range, so this is not vacuously true", () => {
+		expect(BOUNDARIES.filter((code) => isControlCharacter(String.fromCharCode(code)))).toEqual([
+			0x00, 0x09, 0x1f, 0x7f, 0x80, 0x9f,
+		]);
 	});
 });

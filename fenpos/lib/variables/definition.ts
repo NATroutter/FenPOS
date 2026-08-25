@@ -66,10 +66,21 @@ export type ContextSource = (typeof ContextSource.values)[number];
 export const MAX_VALUE_CHARS_CEILING = 4096;
 
 /**
- * A variable reference at the start of the given text.
+ * A variable reference, matched at exactly the position the caller is standing on.
  *
- * Anchored, so the parser can test the position it is standing on without scanning ahead. The name
- * pattern mirrors `NAME_PATTERN` in `lib/domain/naming.ts` and is bounded at that module's
+ * Sticky rather than anchored with `^`, and that is a performance property rather than a stylistic
+ * one. An anchored pattern can only be applied to a string that *starts* where the match must start,
+ * so the parser had to hand it `source.slice(index)` — a fresh copy of the remaining element on
+ * every `{` it passed. `maxLineChars` is operator-configurable to 10,000, at which an element of
+ * `{{{{…` costs tens of millions of character copies for a line nobody would ever print. `y` lets
+ * `exec` start at an offset instead, so nothing is copied.
+ *
+ * Kept private and reached through {@link variableReferenceAt} because a sticky regex carries
+ * `lastIndex` between calls: a second consumer that called `exec` without setting it first would get
+ * answers about a position it never asked about, intermittently and only once some other caller had
+ * matched. The helper owns that field, so no caller has to know it exists.
+ *
+ * The name pattern mirrors `NAME_PATTERN` in `lib/domain/naming.ts` and is bounded at that module's
  * {@link MAX_NAME_LENGTH}, so anything this matches is a name that could legally exist — a test
  * pins the two together. Bounding matters beyond tidiness: without it, `{` followed by a thousand
  * legal characters would match, only to be refused as unknown one step later.
@@ -77,22 +88,59 @@ export const MAX_VALUE_CHARS_CEILING = 4096;
  * Text that is not name-shaped is not a reference at all, which is what keeps `Table {1 of 4}`
  * printable without an escape.
  */
-export const VARIABLE_REFERENCE = /^\{([a-z0-9][a-z0-9_-]{0,63})\}/;
+const VARIABLE_REFERENCE = /\{([a-z0-9][a-z0-9_-]{0,63})\}/y;
+
+/**
+ * Matches a `{name}` reference beginning at exactly `index`, and nowhere else.
+ *
+ * Anchored at the position given rather than searching forward from it: the parser is standing on a
+ * `{` and is asking what that particular brace is, so a reference found three characters later would
+ * be the wrong answer.
+ *
+ * @param source the element text
+ * @param index 0-based position the reference must begin at
+ * @returns the match — `[0]` the whole reference, `[1]` the name — or null when this position does
+ *          not begin one
+ */
+export function variableReferenceAt(source: string, index: number): RegExpExecArray | null {
+	VARIABLE_REFERENCE.lastIndex = index;
+	return VARIABLE_REFERENCE.exec(source);
+}
+
+/**
+ * Whether one character is one the printer would read as a command rather than print.
+ *
+ * C0 (including tab, whose behaviour depends on printer-side tab stops the agent does not manage),
+ * DEL, and C1.
+ *
+ * **This is the only statement of that rule.** {@link hasControlCharacter} below and `isControl` in
+ * `lib/markup/parser.ts` are both defined in terms of it, and neither restates the ranges. They used
+ * to: two spellings of the same set, in the two files that between them decide what may reach a
+ * printer, with nothing asserting they agreed. They did agree — but if they ever drifted, a byte
+ * refused when an author typed it into markup would become reachable by putting it in a variable's
+ * value, which is precisely the hole the substitution check exists to close. A test pins the two
+ * callers together across the boundary values.
+ *
+ * @param character a single character; a surrogate pair is never a control character either way
+ * @returns true when it must not reach the printer
+ */
+export function isControlCharacter(character: string): boolean {
+	const code = character.codePointAt(0) ?? 0;
+	return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+}
 
 /**
  * Whether text contains a character the printer would read as a command.
  *
- * C0 (except nothing — not even tab, which ESC/POS treats as a horizontal-tab command), DEL, and
- * C1. The same set `parser.ts`'s own `isControl` refuses while scanning; this exists because a
- * variable's value never passes through that scan.
+ * The same rule {@link isControlCharacter} states, applied across a whole string. This exists
+ * because a variable's value never passes through the parser's own character-by-character scan.
  *
  * @param text the candidate value
  * @returns true if any character would be interpreted rather than printed
  */
 export function hasControlCharacter(text: string): boolean {
 	for (const character of text) {
-		const code = character.codePointAt(0) ?? 0;
-		if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+		if (isControlCharacter(character)) {
 			return true;
 		}
 	}

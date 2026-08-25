@@ -41,12 +41,31 @@ export interface Span {
 	/**
 	 * 1-based column in the original element where this run began.
 	 *
-	 * Exact only while the span is as the parser produced it: the parser starts a new span at
-	 * every entity, so a span's characters are always contiguous in the source. After wrapping
-	 * has split spans the value becomes approximate, which is acceptable because every error
-	 * that reports a column is raised before wrapping runs.
+	 * Exact for the span's *first* character while the span is as the parser produced it: the parser
+	 * starts a new span at every entity, so a span's characters are always contiguous in the source.
+	 * After wrapping has split spans the value becomes approximate, which is acceptable because every
+	 * error that reports a column is raised before wrapping runs.
+	 *
+	 * Whether the later characters have exact columns too depends on {@link Span.expandedFrom}, and
+	 * that is what {@link columnAt} exists to decide — never read this field and add an offset to it
+	 * by hand.
 	 */
 	sourceColumn: number;
+	/**
+	 * The variable name whose value this span holds, when it was substituted rather than typed.
+	 *
+	 * Absent for every span the author actually wrote, which is nearly all of them. Present only for
+	 * `{name}` substitution, and present because such a span is the one place where a character's
+	 * column cannot be computed: `{x}` occupies three columns of source and may produce two hundred
+	 * characters of output, so counting forward from `sourceColumn` runs off the end of an element
+	 * that was never that long. An entity is not marked — `&amp;` produces exactly one character, so
+	 * its only offset is zero and the arithmetic cannot overshoot.
+	 *
+	 * The name travels with it so a failure inside a substituted value can still be attributed:
+	 * `charset.ts` puts it in the error's `detail`, which is the caller's replacement for a column
+	 * that no longer means anything.
+	 */
+	expandedFrom?: string;
 }
 
 /**
@@ -173,12 +192,21 @@ export interface Line {
 /**
  * Returns the 1-based source column of the character at an offset within a span.
  *
+ * **A substituted span reports its reference's column for every character it holds**, rather than
+ * counting forward through characters the author never wrote. `{x}` is three columns of source; a
+ * value of `Kahvi ☕` is seven characters of output. Adding the offset would report column 7 for an
+ * element only three columns long — a position that does not exist, handed to someone told this API
+ * points at the exact character at fault. Pointing at the reference is the honest answer: it is
+ * where the caller has to look, and it is a column their element actually has. What character
+ * inside the value went wrong is carried in the error's `detail` instead, by way of
+ * {@link Span.expandedFrom}.
+ *
  * @param span the span
  * @param offset 0-based index into the span's text
  * @returns the corresponding column in the original element
  */
 export function columnAt(span: Span, offset: number): number {
-	return span.sourceColumn + offset;
+	return span.expandedFrom === undefined ? span.sourceColumn + offset : span.sourceColumn;
 }
 
 /**

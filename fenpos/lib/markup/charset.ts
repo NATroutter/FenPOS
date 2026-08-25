@@ -174,7 +174,10 @@ function convert(span: Span, codepage: Codepage, policy: UnsupportedPolicy): str
 			}
 		} else {
 			if (policy === "REJECT") {
-				throw new UnsupportedCharacterError(character, columnAt(span, offset), codepage);
+				// `columnAt` rather than `span.sourceColumn + offset`: inside a substituted value the
+				// second is a column the element does not have. The variable's name goes with the error
+				// in its place, so the caller is still told where to look.
+				throw new UnsupportedCharacterError(character, columnAt(span, offset), codepage, span.expandedFrom ?? null);
 			}
 			if (rewritten === null) {
 				rewritten = text.slice(0, offset);

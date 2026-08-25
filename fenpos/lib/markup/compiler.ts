@@ -400,6 +400,10 @@ function translate(error: unknown, line: number): unknown {
 			column: error.column,
 			character: error.character,
 			codepage: error.codepage,
+			// Only when the character came out of a substituted value. `detail` is where every other
+			// positional failure puts the token at fault, and here it is what stands in for a column
+			// that can only point at the reference rather than into the value behind it.
+			...(error.variable === null ? {} : { detail: error.variable }),
 		});
 	}
 	return error;

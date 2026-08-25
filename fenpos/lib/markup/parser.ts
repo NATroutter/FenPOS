@@ -10,7 +10,7 @@ import {
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Fill, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
-import { hasControlCharacter, VARIABLE_REFERENCE } from "@/lib/variables/definition";
+import { hasControlCharacter, isControlCharacter, variableReferenceAt } from "@/lib/variables/definition";
 
 /**
  * Turns one `data` element into a line of styled spans and directives.
@@ -294,7 +294,7 @@ class Parser {
 	 * A typo in a receipt has to be a failure the caller sees, not `{phne}` on a customer's copy.
 	 */
 	private readVariable(): void {
-		const match = this.variables ? VARIABLE_REFERENCE.exec(this.source.slice(this.index)) : null;
+		const match = this.variables ? variableReferenceAt(this.source, this.index) : null;
 		if (!this.variables || !match) {
 			this.readText("{");
 			return;
@@ -338,7 +338,7 @@ class Parser {
 			);
 		}
 
-		this.emitEntity(value, match[0].length);
+		this.emitEntity(value, match[0].length, name);
 	}
 
 	/**
@@ -348,20 +348,29 @@ class Parser {
 	 * lets a column be reported exactly: both an entity and a reference consume more source
 	 * characters than they produce, so a span spanning one could not be measured by simple
 	 * arithmetic. A variable makes that gap far wider than `&amp;` ever did — a four-character
-	 * `{x}` can produce two hundred — which is the same property, only more so.
+	 * `{x}` can produce two hundred — which is why a substituted span is additionally marked with
+	 * the name that produced it: within it there is no arithmetic that can be right, and `columnAt`
+	 * reads the mark to stop trying. An entity needs no mark, because one source token becoming
+	 * exactly one character leaves offset zero as the only offset there is.
 	 *
 	 * Inside a block the decoded text joins the symbol's content instead. A URL carrying a
 	 * query string is the ordinary case — `&amp;` is the only way to write its separator — and
 	 * `<qr>{site}</qr>` is the variable equivalent.
 	 *
-	 * Emitting nothing when the text is empty, rather than pushing an empty span: a variable whose
-	 * value is legitimately blank must not leave a span behind, because `isDirectiveOnly` reads a
-	 * line's spans to decide whether it advances the paper.
+	 * **Emitting nothing when the text is empty, rather than pushing an empty span.** A variable
+	 * whose value is legitimately blank must not leave a span behind, because two checks decide
+	 * what a line is by counting `spans`, not by measuring their text: `verifyBlockScope` refuses a
+	 * rule or a symbol that shares its element with any span at all, and `requireLineOwnerCanOpen`
+	 * refuses `<align>` or `<wrap>` opening after one. A zero-width span would be content to both
+	 * of them, so `{blank}<hr>` would stop printing and start failing as `invalid_rule_scope`.
+	 * (`isDirectiveOnly` is *not* the reason, though it reads the same field: it asks whether every
+	 * span is empty, and a lone empty span already satisfies that.)
 	 *
 	 * @param decoded the character the entity stands for, or the variable's value
 	 * @param sourceLength how many source characters it occupies
+	 * @param expandedFrom the variable name, when this is a substitution rather than an entity
 	 */
-	private emitEntity(decoded: string, sourceLength: number): void {
+	private emitEntity(decoded: string, sourceLength: number, expandedFrom?: string): void {
 		this.requireInsideLineScope(this.index + 1);
 		if (this.block) {
 			this.block.spec.content += decoded;
@@ -370,7 +379,12 @@ class Parser {
 		}
 		this.flushPending();
 		if (decoded.length > 0) {
-			this.spans.push({ text: decoded, style: this.style, sourceColumn: this.index + 1 });
+			this.spans.push({
+				text: decoded,
+				style: this.style,
+				sourceColumn: this.index + 1,
+				...(expandedFrom === undefined ? {} : { expandedFrom }),
+			});
 		}
 		this.index += sourceLength;
 	}
@@ -970,15 +984,19 @@ class Parser {
 /**
  * Returns whether a character would be consumed by the printer as a command rather than printed.
  *
- * Covers C0 (including tab, whose behaviour depends on printer-side tab stops that the agent
- * does not manage), DEL, and C1.
+ * Delegates rather than restating the ranges, and that is the point of it. This check and
+ * `hasControlCharacter`'s — the one applied to a variable's value before it is substituted — are the
+ * two halves of one rule, and they guard the same sink: whatever this refuses when an author types
+ * it must also be refused when a database row supplies it, or the substitution path becomes a way
+ * around the scan. Two spellings of the same set is how that stops being true without anyone
+ * noticing, so there is one spelling, in `lib/variables/definition.ts`, and a test pins both callers
+ * to it across the boundary values.
  *
  * @param value the character to test
  * @returns true when it must not reach the printer
  */
 function isControl(value: string): boolean {
-	const code = value.charCodeAt(0);
-	return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+	return isControlCharacter(value);
 }
 
 /**

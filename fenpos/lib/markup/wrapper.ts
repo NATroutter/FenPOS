@@ -1,4 +1,4 @@
-import type { Line, Span, SpanStyle } from "@/lib/markup/model";
+import { columnAt, type Line, type Span, type SpanStyle } from "@/lib/markup/model";
 
 /**
  * Splits a line so it fits the paper width.
@@ -47,7 +47,15 @@ export function wrapLine(line: Line, columns: number): Line[] {
 	return toLines(rows, line);
 }
 
-/** Expands the line's spans into one entry per character, carrying its style forward. */
+/**
+ * Expands the line's spans into one entry per character, carrying its style forward.
+ *
+ * Columns come from `columnAt` rather than from adding the offset directly, so that a character
+ * substituted in from a variable's value keeps its reference's column instead of one counted through
+ * text the author never wrote. Nothing downstream of wrapping raises a positional error today, but
+ * the number is carried this far and manufacturing a wrong one on the way is not worth the two
+ * characters it saves.
+ */
 function flatten(line: Line): Cell[] {
 	const cells: Cell[] = [];
 	for (const span of line.spans) {
@@ -55,7 +63,7 @@ function flatten(line: Line): Cell[] {
 			cells.push({
 				character: span.text[offset],
 				style: span.style,
-				sourceColumn: span.sourceColumn + offset,
+				sourceColumn: columnAt(span, offset),
 			});
 		}
 	}

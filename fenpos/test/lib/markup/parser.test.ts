@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
-import { isDirectiveOnly, type Line, PLAIN } from "@/lib/markup/model";
+import { columnAt, isDirectiveOnly, type Line, PLAIN, type Span } from "@/lib/markup/model";
 import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
 
 /**
@@ -505,10 +505,67 @@ describe("parseMarkup", () => {
 			expect(plainText(line)).toBe("aa");
 		});
 
+		/**
+		 * Asserted on `spans.length`, not on the joined text.
+		 *
+		 * `plainText` concatenates every span's text, so an empty span is invisible to it — the
+		 * assertion `plainText(line) === "ab"` passes whether or not the guard exists, which made the
+		 * test named for this behaviour prove nothing. The span count is what the guard is actually
+		 * about, and two checks read it: `verifyBlockScope` and `requireLineOwnerCanOpen` both ask
+		 * `spans.length`, not whether the spans hold any characters.
+		 */
 		it("substitutes an empty value without producing a phantom span", () => {
 			const line = parseMarkup("a{x}b", context({ x: "" }));
 
 			expect(plainText(line)).toBe("ab");
+			expect(line.spans).toHaveLength(2);
+			expect(line.spans.map((span) => span.text)).toEqual(["a", "b"]);
+		});
+
+		/** What the phantom span would cost: a rule beside an empty value stops printing and starts failing. */
+		it("lets an empty value share its element with a rule", () => {
+			const line = parseMarkup("{blank}<hr>", context({ blank: "" }));
+
+			expect(line.spans).toHaveLength(0);
+			expect(line.directives).toEqual([{ kind: "RULE" }]);
+		});
+
+		/**
+		 * The column of a character *inside* a substituted value.
+		 *
+		 * `columnAt` reports the reference's own column for every character of a substituted span,
+		 * rather than counting forward from it. The arithmetic that used to run — `sourceColumn +
+		 * offset` — is exact for `&amp;`, which turns five source characters into one, but a variable
+		 * reverses that ratio: `{x}` is three columns of source and this value is seven characters, so
+		 * counting forward reports column 7 for an element three columns long. A position the element
+		 * does not have is worse than no position, in an API whose whole promise is that the column
+		 * points at the character to fix.
+		 */
+		it("reports a character inside a substituted value at the reference's column, not past the element", () => {
+			const line = parseMarkup("{x}", context({ x: "Kahvi ☕" }));
+
+			const span = line.spans[0];
+			expect(span.text).toBe("Kahvi ☕");
+			expect(span.expandedFrom).toBe("x");
+			expect(columnAt(span, 0)).toBe(1);
+			expect(columnAt(span, 6)).toBe(1);
+		});
+
+		/** Text the author wrote still counts forward, which is what makes the case above a special case. */
+		it("still counts forward through a span the author typed", () => {
+			const line = parseMarkup("Kahvi", context({}));
+
+			expect(line.spans[0].expandedFrom).toBeUndefined();
+			expect(columnAt(line.spans[0], 3)).toBe(4);
+		});
+
+		/** An entity produces exactly one character, so offset zero is the only offset and stays exact. */
+		it("leaves an entity's column exact, because one token becomes one character", () => {
+			const line = parseMarkup("ab&amp;cd");
+
+			const entity = line.spans.find((span) => span.text === "&");
+			expect(entity?.expandedFrom).toBeUndefined();
+			expect(columnAt(entity as Span, 0)).toBe(3);
 		});
 	});
 });

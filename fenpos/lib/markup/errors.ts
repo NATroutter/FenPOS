@@ -98,23 +98,41 @@ export class UnsupportedCharacterError extends Error {
 	/** The character that cannot be represented. */
 	readonly character: string;
 
-	/** 1-based character position within the element. */
+	/**
+	 * 1-based character position within the element.
+	 *
+	 * Points at the character itself for text the caller wrote. For a character that arrived by
+	 * substitution it points at the `{name}` reference instead — see `columnAt` in
+	 * `lib/markup/model.ts` for why a position inside a substituted value is not a position the
+	 * element has — and {@link UnsupportedCharacterError.variable} names which one.
+	 */
 	readonly column: number;
 
 	/** The codepage that cannot represent it. */
 	readonly codepage: string;
 
-	constructor(character: string, column: number, codepage: string) {
+	/**
+	 * The variable whose value carried the character, or null when the caller typed it themselves.
+	 *
+	 * What replaces the exactness {@link UnsupportedCharacterError.column} cannot have here: the
+	 * column says which reference, this says which variable's value to go and fix.
+	 */
+	readonly variable: string | null;
+
+	constructor(character: string, column: number, codepage: string, variable: string | null = null) {
 		super(
 			`Character '${character}' (U+${character
 				.codePointAt(0)
 				?.toString(16)
 				.toUpperCase()
-				.padStart(4, "0")}) cannot be printed in codepage ${codepage}`,
+				.padStart(4, "0")}) cannot be printed in codepage ${codepage}${
+				variable === null ? "" : `; it came from the value of '${variable}'`
+			}`,
 		);
 		this.name = "UnsupportedCharacterError";
 		this.character = character;
 		this.column = column;
 		this.codepage = codepage;
+		this.variable = variable;
 	}
 }
