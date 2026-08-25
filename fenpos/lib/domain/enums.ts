@@ -21,10 +21,14 @@ import { z } from "zod";
  * anything crossing a trust boundary), and a type guard (for narrowing values read from the
  * database, which Prisma types as plain `string`).
  *
+ * Exported so a domain module with no agent counterpart — `lib/domain/audit.ts` — can declare its
+ * own sets in the same shape without joining this file, whose contract is that every set here
+ * mirrors a Java enum.
+ *
  * @param values the permitted values, which must match the corresponding Java enum
  * @returns the value tuple, its Zod schema, and a type guard over it
  */
-function closedSet<const T extends readonly [string, ...string[]]>(values: T) {
+export function closedSet<const T extends readonly [string, ...string[]]>(values: T) {
 	const schema = z.enum(values);
 	return {
 		values,
