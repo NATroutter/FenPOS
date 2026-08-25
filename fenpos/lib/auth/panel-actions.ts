@@ -494,6 +494,32 @@ export const PANEL_ACTIONS = [
 		description: "Promoted or demoted a superuser",
 	},
 
+	// --- Roles ---
+	{
+		id: "roles:create",
+		kind: "command",
+		permission: "roles:create",
+		module: "(panel)/roles/actions.ts",
+		exportName: "createRole",
+		description: "Created a role",
+	},
+	{
+		id: "roles:update",
+		kind: "command",
+		permission: "roles:update",
+		module: "(panel)/roles/actions.ts",
+		exportName: "updateRole",
+		description: "Changed a role's permissions or membership",
+	},
+	{
+		id: "roles:delete",
+		kind: "command",
+		permission: "roles:delete",
+		module: "(panel)/roles/actions.ts",
+		exportName: "deleteRole",
+		description: "Deleted a role",
+	},
+
 	// --- Settings ---
 	{
 		id: "settings:save",
