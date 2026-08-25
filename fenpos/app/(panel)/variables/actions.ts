@@ -119,11 +119,31 @@ export async function previewMoment(
 		const text = evaluateVariable(definition, new Date(), PANEL_PRINT_CONTEXT, await printedFormatting());
 		return { text, error: null };
 	} catch (error) {
-		// `evaluateVariable` throws a message naming the variable when `date-fns` refuses the
-		// pattern — `YYYY` and `DD` are the common mistakes for `yyyy` and `dd`. That message is
-		// exactly what the operator needs to see while they are still typing it. The same throw is
-		// what `requireValid` turns into a refusal on save, so what is shown here is not merely
-		// advice: a pattern this reports an error for is one the dialog will not let through.
-		return { text: null, error: error instanceof Error ? error.message : "That pattern could not be formatted." };
+		// `date-fns`'s own words are what the operator needs: `YYYY` and `DD` are the common mistakes
+		// for `yyyy` and `dd`, and its message names the token and the replacement. The same throw is
+		// what `requireValid` turns into a refusal on save, so this is not merely advice — a pattern
+		// reported as an error here is one the dialog will not let through.
+		//
+		// Unwrapped to the `cause` rather than reported as thrown. `evaluateVariable` prefixes its
+		// message with the variable's name, which is right when a receipt fails to print and the
+		// operator has to work out *which* of their variables carries the bad pattern — but wrong
+		// here, where the definition is a throwaway this function built a moment ago and named
+		// `preview`. Reporting it verbatim put "Variable 'preview' has a pattern this system cannot
+		// format" in front of an operator editing a variable called something else entirely.
+		return { text: null, error: patternProblem(error) };
 	}
+}
+
+/**
+ * The part of a formatting failure worth showing beside the pattern field.
+ *
+ * @param error whatever `evaluateVariable` threw
+ * @returns the underlying formatter's message, or a plain fallback
+ */
+function patternProblem(error: unknown): string {
+	const cause = error instanceof Error ? error.cause : null;
+	if (cause instanceof Error) {
+		return cause.message;
+	}
+	return error instanceof Error ? error.message : "That pattern could not be formatted.";
 }

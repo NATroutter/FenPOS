@@ -35,11 +35,28 @@ import {
  * Pattern presets for a `DATETIME` variable, offered as one-click buttons beside the field.
  *
  * `cccc`, not `EEEE`, for the bare day name. `date-fns` renders `EEEE` as the "formatting" form,
- * which several locales inflect for use inside a sentence — Finnish gives "keskiviikkona" ("on
- * Wednesday") where `cccc`'s standalone form gives "keskiviikko". A receipt printing a bare day
- * name wants the standalone form; this was found the hard way while building the evaluator.
+ * which languages that inflect weekdays use inside a date phrase — it carries the sense of *on*
+ * that day rather than naming it — while `cccc` is the standalone form a calendar prints on its
+ * own. The two are identical in English, so the wrong one costs nothing until the locale changes
+ * and every receipt quietly starts reading like a fragment of a sentence. See
+ * `test/lib/variables/evaluate.test.ts` for the case that pins the difference.
  */
 const PATTERN_PRESETS = ["HH:mm", "HH:mm:ss", "dd.MM.yyyy", "dd.MM.yyyy HH:mm", "cccc", "yyyy-MM-dd"] as const;
+
+/**
+ * Lower-case unit names for the offset picker.
+ *
+ * Exists so the trigger reads the same as the list below it. Base UI puts the raw stored value in
+ * the trigger unless the root is handed a value-to-label map, so a list rendering `value.toLowerCase()`
+ * with no `items` showed "minutes" in the menu and "MINUTES" on the closed control.
+ */
+const UNIT_LABELS: Record<OffsetUnit, string> = {
+	MINUTES: "minutes",
+	HOURS: "hours",
+	DAYS: "days",
+	WEEKS: "weeks",
+	MONTHS: "months",
+};
 
 /** How long to wait after the last keystroke before asking the server to render the preview. */
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -104,7 +121,6 @@ export function VariableDialog({
 	});
 
 	const kind = useWatch({ control: form.control, name: "kind" });
-	const name = useWatch({ control: form.control, name: "name" });
 	const pattern = useWatch({ control: form.control, name: "pattern" });
 	const offsetAmount = useWatch({ control: form.control, name: "offsetAmount" });
 	const offsetUnit = useWatch({ control: form.control, name: "offsetUnit" });
@@ -136,15 +152,24 @@ export function VariableDialog({
 	// `evaluateVariable` and the zone/locale it renders in are both server-side — this dialog has
 	// no idea what `variables.timezone` or `variables.locale` are set to. Debounced so a pattern
 	// typed character by character fires one request per pause rather than one per keystroke.
+	//
+	// **Keyed on `open` as well, and that is a correctness fix rather than an optimisation.** This
+	// component is mounted once per row of the table, not only while its dialog is up. Without
+	// `open` in the dependencies the effect fired a single time at mount — dialog shut, nobody
+	// looking — and then never again for an existing variable: opening one calls `reset`, which
+	// clears the preview and re-seeds the form with the values it already held, so not one of the
+	// watched fields changes and the effect has no reason to run a second time. The preview sat at
+	// "—" for the whole editing session. Creating a variable concealed the bug, because choosing
+	// DATETIME changes `kind` and re-triggers this on the way in.
 	useEffect(() => {
-		if (kind !== "DATETIME") {
+		if (!open || kind !== "DATETIME") {
 			return;
 		}
 		const timer = setTimeout(() => {
 			void previewMoment(pattern ?? "", offsetAmount, offsetUnit).then(setPreview);
 		}, PREVIEW_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [kind, pattern, offsetAmount, offsetUnit]);
+	}, [open, kind, pattern, offsetAmount, offsetUnit]);
 
 	const close = (): void => setOpen(false);
 
@@ -187,9 +212,15 @@ export function VariableDialog({
 			<DialogContent className="sm:max-w-[560px]">
 				<DialogHeader>
 					<DialogTitle>{variableId ? "Edit variable" : "New variable"}</DialogTitle>
+					{/* Deliberately says nothing about the name being typed. An earlier version echoed it
+					    back as `{name}` here, which meant this paragraph re-wrapped on almost every
+					    keystroke and shoved the fields below it up and down while the operator was still
+					    typing. A description that moves while you write is worse than one that tells you
+					    slightly less — and the field itself is directly beneath, already in the same
+					    monospace the receipt will use. */}
 					<DialogDescription>
-						Written as <span className="font-mono">{`{${name || "name"}}`}</span> in a receipt's markup, and filled in
-						with what is defined here when the receipt is printed.
+						Referenced by name in a receipt's markup, and filled in with what is defined here when the receipt is
+						printed.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
@@ -203,11 +234,16 @@ export function VariableDialog({
 
 						<Field>
 							<FieldLabel>Kind</FieldLabel>
+							{/* Every `Select` below passes `items`, and that is what puts the label in the trigger
+							    rather than the stored value. Without it Base UI shows the raw union member — "STATIC"
+							    on the closed control above a list reading "Static text". See the note on `Select` in
+							    components/ui/select.tsx. */}
 							<Controller
 								control={form.control}
 								name="kind"
 								render={({ field }) => (
 									<Select
+										items={KIND_LABELS}
 										value={field.value}
 										disabled={saving}
 										onValueChange={(next) => {
@@ -317,6 +353,7 @@ export function VariableDialog({
 											<Field>
 												<FieldLabel>Unit</FieldLabel>
 												<Select
+													items={UNIT_LABELS}
 													value={field.value ?? "MINUTES"}
 													disabled={saving}
 													onValueChange={(next) => {
@@ -331,7 +368,7 @@ export function VariableDialog({
 													<SelectContent>
 														{OffsetUnit.values.map((value) => (
 															<SelectItem key={value} value={value}>
-																{value.toLowerCase()}
+																{UNIT_LABELS[value]}
 															</SelectItem>
 														))}
 													</SelectContent>
@@ -355,6 +392,7 @@ export function VariableDialog({
 									<Field>
 										<FieldLabel>Source</FieldLabel>
 										<Select
+											items={CONTEXT_LABELS}
 											value={field.value ?? "DEVICE_NAME"}
 											disabled={saving}
 											onValueChange={(next) => {
