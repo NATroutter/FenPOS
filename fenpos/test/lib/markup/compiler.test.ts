@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema } from "@/lib/link/protocol";
 import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";

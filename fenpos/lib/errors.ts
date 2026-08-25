@@ -217,7 +217,22 @@ export const API_ERROR_STATUS = {
 	invalid_variable_value: 422,
 	/** A variable value beyond the install's configured `variables.maxValueChars`. */
 	variable_too_long: 422,
-	/** Defining one more variable than the install's configured `variables.maxCount` allows. */
+	/**
+	 * Too many variables — and this code means one of two different countings, so both are written
+	 * down here.
+	 *
+	 * Defining one more variable than `variables.maxCount` allows, raised by `createVariable`; or a
+	 * print request carrying more names in its `variables` object than `variables.maxPerRequest`
+	 * allows, raised by `resolveVariables`. One is about the table's size, the other about one
+	 * request's payload, and a caller who reads only the first will be puzzled by the second.
+	 *
+	 * They share a code because they share a remedy from the caller's side — send or keep fewer — and
+	 * because this file freezes these strings as public API contract: splitting them now would mean a
+	 * new code for a case that already answers `422 too_many_variables` in the field. Note that
+	 * `too_many_variable_references`, which counts `{name}` references inside one element, is
+	 * deliberately *not* one of these: that is a fact about the markup rather than about how many
+	 * values exist, and the spec calls out that the two must not share a code.
+	 */
 	too_many_variables: 422,
 	/**
 	 * A device override attempted on a variable that is not `STATIC`.

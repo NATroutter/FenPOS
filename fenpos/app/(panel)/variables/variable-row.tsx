@@ -61,7 +61,13 @@ export function VariableRow({ variable }: { variable: VariableRowData }) {
 		<TableRow>
 			<TableCell className="font-mono text-[12.5px]">{`{${variable.name}}`}</TableCell>
 			<TableCell className="text-[12.5px]">{KIND_LABELS[variable.kind]}</TableCell>
-			<TableCell className="max-w-[220px] truncate font-mono text-[12px] text-subtle-foreground">
+			{/* Titled for the same reason the description cell below is: the column is truncated, and a
+			    static value or a formatted date is exactly the kind of thing an operator needs to read
+			    in full to tell whether it is right. */}
+			<TableCell
+				className="max-w-[220px] truncate font-mono text-[12px] text-subtle-foreground"
+				title={variable.resolvesTo ?? undefined}
+			>
 				{variable.resolvesTo ?? "—"}
 			</TableCell>
 			<TableCell>

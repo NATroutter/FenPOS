@@ -30,8 +30,16 @@ import { queueJobSettled } from "@/lib/webhooks/notify";
  * immediately with the reason, which is a state an operator can read rather than one that looks
  * like a printer taking its time.
  *
- * Content problems are raised before any row exists at all. A request refused for bad markup
- * never becomes a job, because it never was one.
+ * **Which content problems precede the row, and which do not.** Everything checked from the body
+ * alone — its shape, its limits, the `variables` object, and the `<image>` fetches — is refused
+ * before `job.create` runs, so those never become a job. Markup errors are not: `compile` needs the
+ * job's id, and the database is what generates it, so an unknown tag, an unclosed one, a control
+ * character, an unknown variable or a symbol wider than the paper can only be discovered once the
+ * row is there — and each settles that row as `FAILED` with its code. This has always been true and
+ * was not changed by variables; the caller gets the same refusal, with its line and column, either
+ * way. Making these precede the row too means generating the id in application code first, which is
+ * the same refactor the `lines: null` window below names, and it should be done for all of them at
+ * once or not at all.
  */
 
 /** A job that was accepted for printing. */
@@ -97,8 +105,9 @@ export async function submitJob(
 
 	const maxVariableValueChars = await integerSetting("variables.maxValueChars");
 
-	// Validated before anything is written. A request that cannot be printed never becomes a
-	// job, so the job table is a record of work that was genuinely accepted.
+	// The body's shape and its limits, before anything is written. A request malformed at this level
+	// never becomes a job. Its markup is a separate question, settled later and on a job row — see
+	// this file's header.
 	const request = readRequest(body, limits, deviceSettings, maxVariableValueChars);
 
 	const link = getLink(device.agentId);
@@ -128,9 +137,10 @@ export async function submitJob(
 
 	// The one stage of accepting a job that waits on something outside this server: an `<image>`
 	// naming a URL is fetched here, so a host that will not answer fails the submission — naming the
-	// element at fault — rather than a job already recorded and sent. Still before the row
-	// exists, like every other content problem, and last among the checks that can refuse without
-	// one, so neither an oversized body nor a disconnected agent costs a fetch.
+	// element at fault — rather than a job already recorded and sent. Still before the row exists,
+	// and last among the checks that can refuse without one, so neither an oversized body nor a
+	// disconnected agent costs a fetch. The markup's own errors are not in that set: they need
+	// `compile`, which needs the job's id.
 	const settings: CompileSettings = {
 		...deviceSettings,
 		variables,
@@ -168,9 +178,13 @@ export async function submitJob(
 		// it for a window this narrow.
 		await prisma.job.update({ where: { id: job.id }, data: { lines: compiled.lines.length } });
 	} catch (error) {
-		// Only the post-wrap limit, or the write above, can fail here; everything cheaper was
-		// checked before the row existed. The row is settled rather than deleted so the failure is
-		// visible in the panel.
+		// Every markup content error lands here, not only the post-wrap limit: `compile` is where
+		// each element is finally parsed, so `unknown_tag`, `unclosed_tag`, `control_character`,
+		// `unknown_variable`, `symbol_too_wide` and `unsupported_character` all reach this handler,
+		// alongside `too_many_output_lines` and a failure of the write above. What was checked before
+		// the row existed is the body's shape and limits and the image fetches — not its markup. The
+		// row is settled rather than deleted so the failure is visible in the panel, with the code the
+		// caller was given.
 		await fail(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
 		throw error;
 	}
