@@ -1,6 +1,6 @@
 import "server-only";
 
-import { enumSetting } from "@/lib/settings/settings-service";
+import { enumSetting, stringSetting } from "@/lib/settings/settings-service";
 import type { Formatting, PrintContext, VariableLocale } from "@/lib/variables/evaluate";
 
 /**
@@ -49,6 +49,62 @@ export async function printedFormatting(): Promise<Formatting> {
 }
 
 /**
+ * Paper widths in millimetres, by printable column count.
+ *
+ * Only the two widths this system actually supports, and deliberately a lookup rather than
+ * arithmetic: the relationship between columns and millimetres is a property of the printer's font
+ * and head, not a formula, and a receipt printer configured to some third column count is not
+ * evidence of a third paper size. An unrecognised count yields null, which prints as nothing —
+ * better than confidently stating a width the paper does not have.
+ */
+const PAPER_WIDTH_MM: Readonly<Record<number, string>> = { 42: "80mm", 32: "58mm" };
+
+/** The device and agent rows a print context is built from. */
+export interface PrintTarget {
+	name: string;
+	columns: number;
+	codepage: string;
+	agent: { name: string; hostname: string | null; platform: string | null; agentVersion: string | null };
+}
+
+/**
+ * Builds the context a `CONTEXT` variable reads for one real print.
+ *
+ * Shared by the print path and the API preview path so the two cannot disagree about what a receipt
+ * says — a preview whose context differs from the print's is a preview that lies, and this feature
+ * already shipped one such bug when the preview route dropped the API key it had just authenticated.
+ *
+ * @param target the device being printed to, with its agent
+ * @param apiKeyName the key that submitted the job, or null when the panel did
+ * @param idempotencyKey the caller’s own `Idempotency-Key` header, or null when they sent none
+ * @returns the context to hand `resolveVariables`
+ */
+export async function printContextFor(
+	target: PrintTarget,
+	apiKeyName: string | null,
+	idempotencyKey: string | null = null,
+): Promise<PrintContext> {
+	// Read rather than passed in: it is install-wide, so every caller would otherwise read it and
+	// they would all read the same row. Empty means unset, which is a null here — `evaluateVariable`
+	// renders that as nothing rather than as the word "null".
+	const publicUrl = await stringSetting("server.publicUrl");
+
+	return {
+		deviceName: target.name,
+		paperColumns: String(target.columns),
+		paperWidth: PAPER_WIDTH_MM[target.columns] ?? null,
+		codepage: target.codepage,
+		agentName: target.agent.name,
+		agentHostname: target.agent.hostname,
+		agentPlatform: target.agent.platform,
+		agentVersion: target.agent.agentVersion,
+		apiKeyName,
+		idempotencyKey,
+		serverUrl: publicUrl.trim() === "" ? null : publicUrl,
+	};
+}
+
+/**
  * The print context the panel evaluates a variable against when there is no print.
  *
  * The Variables table, the `DATETIME` dialog's live preview and the Tools tab's `{name}` picker all
@@ -63,6 +119,18 @@ export async function printedFormatting(): Promise<Formatting> {
  */
 export const PANEL_PRINT_CONTEXT: PrintContext = Object.freeze({
 	deviceName: "—",
+	paperColumns: null,
+	paperWidth: null,
+	codepage: null,
 	agentName: "—",
+	agentHostname: null,
+	agentPlatform: null,
+	agentVersion: null,
 	apiKeyName: null,
+	idempotencyKey: null,
+	// Null rather than the configured address, even though this one *is* knowable without a printer.
+	// Reading it would make this constant a database read, and the panel shows these values beside a
+	// column already headed with an em dash for everything else a print would supply. One row quietly
+	// resolving while its neighbours do not is more confusing than none of them resolving.
+	serverUrl: null,
 });

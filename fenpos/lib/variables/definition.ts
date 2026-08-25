@@ -47,14 +47,35 @@ export type OffsetUnit = (typeof OffsetUnit.values)[number];
 /**
  * What a `CONTEXT` variable reads.
  *
- * `JOB_ID` is deliberately absent. Every source here is known before the job row exists, which is
- * what lets variables resolve alongside images and before anything is written; the job's id is not,
- * because `dispatch.ts` lets the database generate it and calls `compile` only afterwards. Adding it
- * means generating the id in application code first — a change worth making on its own merits, since
- * `dispatch.ts` already names it as the fix for the `lines: null` window it documents, and not one to
- * smuggle in here.
+ * Grouped by what each describes — the printer, the machine driving it, who asked, and the install —
+ * because that is the order the panel's picker lists them in and the order an operator scanning the
+ * list thinks in.
+ *
+ * **Every source here is knowable before the job row exists**, and that is the membership rule rather
+ * than an accident. Variables resolve ahead of `resolveImages`, which itself runs before anything is
+ * written, because an `<image>{logo}</image>` names no image until substitution has happened. A
+ * source that could only be read afterwards would have to be threaded through a different seam
+ * entirely.
+ *
+ * `JOB_ID` is the one that fails that rule and is deliberately still absent: `dispatch.ts` lets the
+ * database mint the id and calls `compile` only afterwards, so adding it means generating the id in
+ * application code first. That is a change worth making on its own merits — `dispatch.ts` already
+ * names it as the fix for the `lines: null` window it documents — and not one to smuggle in beside a
+ * list of fields that were free.
  */
-export const ContextSource = closedSet(["DEVICE_NAME", "AGENT_NAME", "API_KEY_NAME"] as const);
+export const ContextSource = closedSet([
+	"DEVICE_NAME",
+	"PAPER_COLUMNS",
+	"PAPER_WIDTH",
+	"CODEPAGE",
+	"AGENT_NAME",
+	"AGENT_HOSTNAME",
+	"AGENT_PLATFORM",
+	"AGENT_VERSION",
+	"API_KEY_NAME",
+	"IDEMPOTENCY_KEY",
+	"SERVER_URL",
+] as const);
 export type ContextSource = (typeof ContextSource.values)[number];
 
 /**

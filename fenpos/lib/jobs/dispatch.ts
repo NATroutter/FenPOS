@@ -16,6 +16,7 @@ import {
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
+import { printContextFor } from "@/lib/variables/formatting";
 import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
@@ -69,7 +70,7 @@ export async function submitJob(
 ): Promise<SubmittedJob> {
 	const device = await prisma.device.findUnique({
 		where: { id: deviceId },
-		include: { agent: { select: { name: true } } },
+		include: { agent: { select: { name: true, hostname: true, platform: true, agentVersion: true } } },
 	});
 
 	if (!device) {
@@ -131,7 +132,7 @@ export async function submitJob(
 	// step below reaches out over the network.
 	const variables = await resolveVariables({
 		deviceId: device.id,
-		context: { deviceName: device.name, agentName: device.agent.name, apiKeyName },
+		context: await printContextFor(device, apiKeyName, idempotency?.key ?? null),
 		supplied: request.variables,
 	});
 

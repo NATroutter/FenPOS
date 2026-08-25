@@ -63,12 +63,43 @@ const CALENDAR_DURATION_KEY: Record<Extract<OffsetUnit, "DAYS" | "WEEKS" | "MONT
 	MONTHS: "months",
 };
 
-/** Facts about the print a `CONTEXT` variable can read. */
+/**
+ * Facts about the print a `CONTEXT` variable can read.
+ *
+ * Every field is a `string | null` rather than its natural type — `paperColumns` is a number on the
+ * device row — because a `CONTEXT` variable's whole job is to put text on paper, and formatting it
+ * here keeps `evaluateVariable`'s switch a lookup rather than a second place that decides how a
+ * number should read. `null` means "genuinely not known", which is not the same as an empty string
+ * an operator configured, and is what the panel's own stand-in context uses for fields no printer
+ * has yet supplied.
+ */
 export interface PrintContext {
 	deviceName: string;
+	/** Printable columns, as text: "42" or "32". */
+	paperColumns: string | null;
+	/** Human-readable paper width derived from the column count: "80mm" or "58mm". */
+	paperWidth: string | null;
+	/** The device's configured codepage, e.g. "CP858". */
+	codepage: string | null;
 	agentName: string;
+	/** The machine the agent runs on, as it reported at connect. Null until it has connected once. */
+	agentHostname: string | null;
+	/** The agent's operating system, as it reported at connect. */
+	agentPlatform: string | null;
+	/** The agent build currently running. */
+	agentVersion: string | null;
 	/** Null when the panel submitted the job rather than an API key. */
 	apiKeyName: string | null;
+	/**
+	 * The caller’s own `Idempotency-Key` header, when they sent one.
+	 *
+	 * The caller’s reference rather than this server’s: it is already meaningful in their system,
+	 * which is what makes it the useful thing to print in a support footer. Null on a preview, on a
+	 * panel print, and on any request that sent no header — which is most of them.
+	 */
+	idempotencyKey: string | null;
+	/** This install's public address, from `server.publicUrl`. Null when it has not been set. */
+	serverUrl: string | null;
 }
 
 /** How a `DATETIME` variable is rendered. */
@@ -104,16 +135,35 @@ export function evaluateVariable(
 			return formatMoment(definition, now, formatting);
 
 		case "CONTEXT":
+			// Every branch collapses a null to an empty string, and that is the deliberate rule for
+			// this whole kind. A receipt printed from the Tools page genuinely was not submitted by a
+			// key; an agent that has never connected has told us no hostname. Inventing a word for
+			// either — "panel", "unknown" — would put text on paper that names nothing, and an
+			// operator would have no way to tell it from a value someone configured. An empty span
+			// is the honest answer, and it is why `PrintContext` carries nulls rather than defaults.
 			switch (definition.source) {
 				case "DEVICE_NAME":
 					return context.deviceName;
+				case "PAPER_COLUMNS":
+					return context.paperColumns ?? "";
+				case "PAPER_WIDTH":
+					return context.paperWidth ?? "";
+				case "CODEPAGE":
+					return context.codepage ?? "";
 				case "AGENT_NAME":
 					return context.agentName;
+				case "AGENT_HOSTNAME":
+					return context.agentHostname ?? "";
+				case "AGENT_PLATFORM":
+					return context.agentPlatform ?? "";
+				case "AGENT_VERSION":
+					return context.agentVersion ?? "";
 				case "API_KEY_NAME":
-					// Empty rather than a placeholder like "panel". A receipt printed from the Tools
-					// page genuinely was not submitted by a key, and inventing a name for that would
-					// put a word on the paper that names nothing.
 					return context.apiKeyName ?? "";
+				case "IDEMPOTENCY_KEY":
+					return context.idempotencyKey ?? "";
+				case "SERVER_URL":
+					return context.serverUrl ?? "";
 				default:
 					return "";
 			}

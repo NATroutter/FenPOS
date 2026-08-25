@@ -44,7 +44,7 @@ const SECTIONS = [
  * Common `date-fns` patterns a `DATETIME` variable might carry, and what each prints.
  *
  * Rendered against a fixed Wednesday (2026-08-26) in `en-US`, which is why `cccc` and `EEEE`
- * agree here — see the aside beside this table for the locale where they do not.
+ * agree here — see the aside beside this table for when they do not.
  */
 const DATE_PATTERNS: { pattern: string; example: string }[] = [
 	{ pattern: "yyyy-MM-dd", example: "2026-08-26" },
@@ -259,17 +259,23 @@ export default async function MarkupDocsPage() {
 									calendar, while <Mono>DAYS</Mono>, <Mono>WEEKS</Mono> and <Mono>MONTHS</Mono> are calendar arithmetic
 									done in that same zone, which is what keeps a return-by date on the same wall-clock time across a
 									daylight-saving change rather than sliding by an hour. <Mono>CONTEXT</Mono> reads a fact about the
-									print itself — the printer's name, its agent's name, or the API key that submitted the job — and is
-									empty when nothing did, since a receipt printed from the Tools tab was not submitted by one.
+									print itself: the printer's name, its paper width in columns or millimetres, its codepage; the agent's
+									name, hostname, operating system or version; the name of the API key that submitted the job; or this
+									install's own address. Any of them prints as nothing when the print does not know it — a receipt
+									composed on the Tools tab was submitted by no key, and an agent that has never connected has reported
+									no hostname — because an empty span is honest where an invented word like "unknown" would be
+									indistinguishable from a value someone configured.
 								</P>
 
 								<Aside>
-									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree.
-									Several locales use different words for the two: set this install's <Mono>variables.locale</Mono> to
-									Finnish and <Mono>cccc</Mono> renders the standalone <Mono>keskiviikko</Mono> while <Mono>EEEE</Mono>{" "}
-									renders the inflected <Mono>keskiviikkona</Mono> — "on Wednesday" rather than "Wednesday". A receipt
-									printing a bare day name almost always wants <Mono>cccc</Mono>; reach for <Mono>EEEE</Mono> only
-									inside a sentence that reads correctly with the inflection.
+									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree —
+									both give <Mono>Wednesday</Mono>. They part company in languages that inflect a weekday depending on
+									where it sits in a sentence: <Mono>cccc</Mono> asks for the standalone name, the one a calendar prints
+									on its own, while <Mono>EEEE</Mono> asks for the form used inside a date phrase, which in those
+									languages carries the sense of <em>on</em> that day rather than naming it. A receipt printing a bare
+									day name almost always wants <Mono>cccc</Mono>; reach for <Mono>EEEE</Mono> only inside a sentence
+									that reads correctly with that form. On an install left at an English locale the choice makes no
+									visible difference, which is exactly why it is worth getting right before the locale changes.
 								</Aside>
 
 								<P>

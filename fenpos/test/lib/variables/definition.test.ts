@@ -23,7 +23,20 @@ describe("variable value sets", () => {
 	});
 
 	it("names only the context sources known before a job row exists", () => {
-		expect(ContextSource.values).toEqual(["DEVICE_NAME", "AGENT_NAME", "API_KEY_NAME"]);
+		// Grouped by what each describes: the printer, the machine driving it, who asked, the install.
+		expect(ContextSource.values).toEqual([
+			"DEVICE_NAME",
+			"PAPER_COLUMNS",
+			"PAPER_WIDTH",
+			"CODEPAGE",
+			"AGENT_NAME",
+			"AGENT_HOSTNAME",
+			"AGENT_PLATFORM",
+			"AGENT_VERSION",
+			"API_KEY_NAME",
+			"IDEMPOTENCY_KEY",
+			"SERVER_URL",
+		]);
 	});
 
 	it("does not admit JOB_ID, which is deferred", () => {

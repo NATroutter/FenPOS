@@ -36,8 +36,16 @@ export const KIND_LABELS: Record<VariableKind, string> = {
  */
 export const CONTEXT_LABELS: Record<ContextSource, string> = {
 	DEVICE_NAME: "Printer name",
+	PAPER_COLUMNS: "Paper width in columns",
+	PAPER_WIDTH: "Paper width in millimetres",
+	CODEPAGE: "Printer codepage",
 	AGENT_NAME: "Agent name",
+	AGENT_HOSTNAME: "Agent hostname",
+	AGENT_PLATFORM: "Agent operating system",
+	AGENT_VERSION: "Agent version",
 	API_KEY_NAME: "API key name",
+	IDEMPOTENCY_KEY: "Caller’s idempotency key",
+	SERVER_URL: "This install's address",
 };
 
 /** A variable as this row and the dialog it opens both need it, serialised for the client boundary. */

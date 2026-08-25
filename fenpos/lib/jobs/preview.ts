@@ -17,6 +17,7 @@ import type { VariableContext } from "@/lib/markup/parser";
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
+import { printContextFor } from "@/lib/variables/formatting";
 
 /**
  * Compiling a receipt without printing it.
@@ -123,7 +124,7 @@ export async function compilePreviewWithContext(
 	try {
 		const device = await prisma.device.findUnique({
 			where: { id: deviceId },
-			include: { agent: { select: { name: true } } },
+			include: { agent: { select: { name: true, hostname: true, platform: true, agentVersion: true } } },
 		});
 		if (!device) {
 			throw new ApiError("unknown_device", "That printer no longer exists.");
@@ -192,7 +193,7 @@ export async function compilePreviewWithContext(
 		try {
 			variables = await resolveVariables({
 				deviceId: device.id,
-				context: { deviceName: device.name, agentName: device.agent.name, apiKeyName },
+				context: await printContextFor(device, apiKeyName),
 				supplied: request.variables,
 			});
 		} catch (error) {

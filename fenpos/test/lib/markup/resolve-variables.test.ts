@@ -26,7 +26,19 @@ describe("resolveVariables", () => {
 
 	const job = (supplied: Record<string, string> = {}) => ({
 		deviceId,
-		context: { deviceName: "counter", agentName: "helsinki", apiKeyName: "till-1" },
+		context: {
+			deviceName: "counter",
+			paperColumns: "42",
+			paperWidth: "80mm",
+			codepage: "CP858",
+			agentName: "counter-pi",
+			agentHostname: "counter-pi.local",
+			agentPlatform: "linux",
+			agentVersion: "1.4.0",
+			apiKeyName: "till-1",
+			idempotencyKey: "order-1041",
+			serverUrl: "https://print.example.test",
+		},
 		supplied,
 	});
 
@@ -37,7 +49,7 @@ describe("resolveVariables", () => {
 		await prisma.agent.deleteMany();
 		await prisma.setting.deleteMany();
 
-		const agent = await prisma.agent.create({ data: { name: "helsinki" } });
+		const agent = await prisma.agent.create({ data: { name: "counter-pi" } });
 		const device = await prisma.device.create({ data: { agentId: agent.id, name: "counter", port: "COM1" } });
 		deviceId = device.id;
 	});

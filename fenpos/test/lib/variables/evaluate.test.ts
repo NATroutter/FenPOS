@@ -12,7 +12,19 @@ import { evaluateVariable, type Formatting, type PrintContext } from "@/lib/vari
  */
 const NOW = new Date("2026-08-25T21:07:03.000Z");
 
-const CONTEXT: PrintContext = { deviceName: "counter", agentName: "helsinki", apiKeyName: "till-1" };
+const CONTEXT: PrintContext = {
+	deviceName: "counter",
+	paperColumns: "42",
+	paperWidth: "80mm",
+	codepage: "CP858",
+	agentName: "counter-pi",
+	agentHostname: "counter-pi.local",
+	agentPlatform: "linux",
+	agentVersion: "1.4.0",
+	apiKeyName: "till-1",
+	idempotencyKey: "order-1041",
+	serverUrl: "https://print.example.test",
+};
 const HELSINKI: Formatting = { timeZone: "Europe/Helsinki", locale: "fi-FI" };
 const UTC: Formatting = { timeZone: "UTC", locale: "en-US" };
 
@@ -62,12 +74,29 @@ describe("evaluateVariable", () => {
 
 		it("writes day names in the configured locale", () => {
 			const day = definition({ kind: "DATETIME", pattern: "EEEE" });
+
 			expect(evaluateVariable(day, NOW, CONTEXT, UTC)).toBe("Tuesday");
-			// date-fns's `EEEE` token renders in Finnish's grammatical "formatting" context, which
-			// inflects the weekday name ("keskiviikkona", roughly "on Wednesday") rather than using
-			// the standalone nominative ("keskiviikko", which `cccc` would produce). Verified against
-			// date-fns's own fi locale data, not assumed.
-			expect(evaluateVariable(day, NOW, CONTEXT, HELSINKI)).toBe("keskiviikkona");
+			// A locale actually reaches the formatter, rather than every locale rendering as English.
+			expect(evaluateVariable(day, NOW, CONTEXT, HELSINKI)).not.toBe("Wednesday");
+		});
+
+		it("distinguishes the standalone day name from the one used inside a date phrase", () => {
+			// Asserted as a difference rather than as two literal words, deliberately. `EEEE` renders
+			// in the "formatting" grammatical context and `cccc` in the standalone one, so a locale
+			// that inflects weekdays returns different text for the two — which is the whole reason
+			// the panel's presets offer `cccc` for a bare day name. Naming the expected words would
+			// mean writing a language this product does not speak into its test suite, and would also
+			// pin the assertion to one release of date-fns's locale data; asserting that they differ
+			// tests the mechanism instead of the vocabulary.
+			//
+			// English cannot show this: `EEEE` and `cccc` agree there, which is exactly the trap.
+			const phrase = definition({ kind: "DATETIME", pattern: "EEEE" });
+			const standalone = definition({ kind: "DATETIME", pattern: "cccc" });
+
+			expect(evaluateVariable(phrase, NOW, CONTEXT, UTC)).toBe(evaluateVariable(standalone, NOW, CONTEXT, UTC));
+			expect(evaluateVariable(phrase, NOW, CONTEXT, HELSINKI)).not.toBe(
+				evaluateVariable(standalone, NOW, CONTEXT, HELSINKI),
+			);
 		});
 
 		it("applies a positive offset in days", () => {
@@ -201,6 +230,55 @@ describe("evaluateVariable", () => {
 	});
 
 	describe("context", () => {
+		it.each([
+			["DEVICE_NAME", "counter"],
+			["PAPER_COLUMNS", "42"],
+			["PAPER_WIDTH", "80mm"],
+			["CODEPAGE", "CP858"],
+			["AGENT_NAME", "counter-pi"],
+			["AGENT_HOSTNAME", "counter-pi.local"],
+			["AGENT_PLATFORM", "linux"],
+			["AGENT_VERSION", "1.4.0"],
+			["API_KEY_NAME", "till-1"],
+			["IDEMPOTENCY_KEY", "order-1041"],
+			["SERVER_URL", "https://print.example.test"],
+		] as const)("reads %s from the print", (source, expected) => {
+			expect(evaluateVariable(definition({ kind: "CONTEXT", source }), NOW, CONTEXT, UTC)).toBe(expected);
+		});
+
+		it.each([
+			"PAPER_COLUMNS",
+			"PAPER_WIDTH",
+			"CODEPAGE",
+			"AGENT_HOSTNAME",
+			"AGENT_PLATFORM",
+			"AGENT_VERSION",
+			"API_KEY_NAME",
+			"IDEMPOTENCY_KEY",
+			"SERVER_URL",
+		] as const)("renders %s as nothing when the print does not know it, rather than inventing a word", (source) => {
+			const unknown = {
+				...CONTEXT,
+				[source === "PAPER_COLUMNS"
+					? "paperColumns"
+					: source === "PAPER_WIDTH"
+						? "paperWidth"
+						: source === "CODEPAGE"
+							? "codepage"
+							: source === "AGENT_HOSTNAME"
+								? "agentHostname"
+								: source === "AGENT_PLATFORM"
+									? "agentPlatform"
+									: source === "AGENT_VERSION"
+										? "agentVersion"
+										: source === "API_KEY_NAME"
+											? "apiKeyName"
+											: source === "IDEMPOTENCY_KEY"
+												? "idempotencyKey"
+												: "serverUrl"]: null,
+			};
+			expect(evaluateVariable(definition({ kind: "CONTEXT", source }), NOW, unknown, UTC)).toBe("");
+		});
 		it("reads the device name", () => {
 			const result = evaluateVariable(definition({ kind: "CONTEXT", source: "DEVICE_NAME" }), NOW, CONTEXT, UTC);
 			expect(result).toBe("counter");
@@ -208,7 +286,7 @@ describe("evaluateVariable", () => {
 
 		it("reads the agent name", () => {
 			const result = evaluateVariable(definition({ kind: "CONTEXT", source: "AGENT_NAME" }), NOW, CONTEXT, UTC);
-			expect(result).toBe("helsinki");
+			expect(result).toBe("counter-pi");
 		});
 
 		it("reads the key name", () => {
