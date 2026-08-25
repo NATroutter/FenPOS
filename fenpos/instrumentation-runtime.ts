@@ -76,10 +76,12 @@ async function announceSetupKey(): Promise<void> {
 /**
  * One-time housekeeping at boot.
  *
- * Every step is individually guarded and none is fatal. None of this is required for the
- * server to serve correctly — expiry is enforced on the read path, and a stale agent status
- * corrects itself as soon as that agent reconnects — so refusing to start over a housekeeping
- * error would turn a cosmetic problem into an outage.
+ * Every step is individually guarded and none is fatal. Neither task here is required for the
+ * server to serve correctly: a stale agent status corrects itself as soon as that agent
+ * reconnects, and an expired pairing code already fails its own expiry check on the read path
+ * (see `redeemPairingCode` in `lib/agents/pairing.ts`), so leaving one unpurged is cosmetic
+ * clutter, not a live credential. Refusing to start over a housekeeping error would therefore
+ * turn a cosmetic problem into an outage.
  */
 async function runMaintenance(): Promise<void> {
 	try {
