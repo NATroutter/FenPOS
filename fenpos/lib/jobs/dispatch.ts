@@ -14,6 +14,7 @@ import {
 	readRequest,
 } from "@/lib/markup/compiler";
 import { resolveImages } from "@/lib/markup/resolve-images";
+import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
 import { queueJobSettled } from "@/lib/webhooks/notify";
 
@@ -58,7 +59,10 @@ export async function submitJob(
 	apiKeyId: string | null = null,
 	idempotency?: { key: string; hash: string },
 ): Promise<SubmittedJob> {
-	const device = await prisma.device.findUnique({ where: { id: deviceId } });
+	const device = await prisma.device.findUnique({
+		where: { id: deviceId },
+		include: { agent: { select: { name: true } } },
+	});
 
 	if (!device) {
 		throw new ApiError("unknown_device", "That printer no longer exists.");
@@ -91,9 +95,11 @@ export async function submitJob(
 		maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
 	};
 
+	const maxVariableValueChars = await integerSetting("variables.maxValueChars");
+
 	// Validated before anything is written. A request that cannot be printed never becomes a
 	// job, so the job table is a record of work that was genuinely accepted.
-	const request = readRequest(body, limits, deviceSettings);
+	const request = readRequest(body, limits, deviceSettings, maxVariableValueChars);
 
 	const link = getLink(device.agentId);
 	if (!link) {
@@ -103,6 +109,23 @@ export async function submitJob(
 		throw new ApiError("agent_offline", "That agent is not connected, so it cannot print.");
 	}
 
+	// Only when a key submitted the job. A print from the panel has no key to name, so it pays
+	// nothing for this — and `evaluateVariable` renders the null as an empty string rather than
+	// inventing a word for "nobody".
+	const apiKeyName = apiKeyId
+		? ((await prisma.apiKey.findUnique({ where: { id: apiKeyId }, select: { name: true } }))?.name ?? null)
+		: null;
+
+	// Variables before images, and that order is load-bearing rather than tidy: `resolveImages`
+	// parses each element to find what it must fetch, and `<image>{logo}</image>` names no image
+	// until this has run. Cheap enough to sit here regardless — these are database rows, while the
+	// step below reaches out over the network.
+	const variables = await resolveVariables({
+		deviceId: device.id,
+		context: { deviceName: device.name, agentName: device.agent.name, apiKeyName },
+		supplied: request.variables,
+	});
+
 	// The one stage of accepting a job that waits on something outside this server: an `<image>`
 	// naming a URL is fetched here, so a host that will not answer fails the submission — naming the
 	// element at fault — rather than a job already recorded and sent. Still before the row
@@ -110,7 +133,8 @@ export async function submitJob(
 	// one, so neither an oversized body nor a disconnected agent costs a fetch.
 	const settings: CompileSettings = {
 		...deviceSettings,
-		images: await resolveImages(request.data, deviceSettings.columns),
+		variables,
+		images: await resolveImages(request.data, deviceSettings.columns, variables),
 	};
 
 	const job = await prisma.job.create({

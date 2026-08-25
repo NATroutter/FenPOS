@@ -59,8 +59,8 @@ beforeAll(async () => {
 const COLUMNS = 42;
 const PAPER_DOTS = 504;
 
-/** Resolves for {@link COLUMNS}, which is what almost every case here wants. */
-const resolve = (data: string[]) => resolveImages(data, COLUMNS);
+/** Resolves for {@link COLUMNS}, which is what almost every case here wants. No variable context: these cases are about images, not substitution. */
+const resolve = (data: string[]) => resolveImages(data, COLUMNS, null);
 
 /**
  * A receipt naming `count` distinct URLs, one per element.
@@ -502,7 +502,7 @@ describe("dots that have to travel with the job", () => {
 	it("keys a raster by the printed width, which follows the device's paper", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages(["<image>https://x.test/l.png</image>"], 32);
+		const images = await resolveImages(["<image>https://x.test/l.png</image>"], 32, null);
 
 		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])]).toEqual([384]);
 	});
@@ -582,10 +582,11 @@ describe("dots that have to travel with the job", () => {
 				defaultWrap: true,
 				defaultLinefeed: "LF",
 				images,
+				variables: null,
 			};
 			const limits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
 
-			const request = readRequest({ data: ["<image>fenpos</image>"], linefeed: "LF" }, limits, settings);
+			const request = readRequest({ data: ["<image>fenpos</image>"], linefeed: "LF" }, limits, settings, 200);
 			const job = compile("job-1", "kitchen", request, limits, settings);
 
 			expect(compiledJobSchema.safeParse(job).success).toBe(true);

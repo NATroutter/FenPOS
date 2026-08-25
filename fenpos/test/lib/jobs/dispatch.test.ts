@@ -3,9 +3,11 @@ import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
+import type { CompiledJob } from "@/lib/link/protocol";
 import { FrameTooLargeError, JOB_LIMITS, serialiseServerFrame } from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
 import { setSetting } from "@/lib/settings/settings-service";
+import { createVariable } from "@/lib/variables/variable-service";
 
 /**
  * The one dispatch failure that costs more than the job it belongs to.
@@ -221,5 +223,114 @@ describe("submitJob", () => {
 		// less than the built-in 512 default would have kept, so this is the setting's effect
 		// and not merely a length that happens to fit under both.
 		expect(job.errorMessage).toHaveLength(128);
+	});
+});
+
+/**
+ * Variables resolved and substituted on the dispatch path.
+ *
+ * The property worth pinning here is the ordering: `resolveVariables` has to run before
+ * `resolveImages`, because an `<image>` reference can itself be a variable. A dispatch that got this
+ * backwards would fail an `<image>{brand}</image>` as an unknown image reference literally named
+ * `{brand}`, rather than resolving the name first and only then discovering whether that name is a
+ * known image.
+ */
+describe("dispatch with variables", () => {
+	let link: AgentLink | null = null;
+	let lastJob: CompiledJob | null = null;
+
+	beforeEach(async () => {
+		if (link) {
+			unregisterLink(link);
+			link = null;
+		}
+		lastJob = null;
+		await prisma.job.deleteMany();
+		await prisma.deviceVariable.deleteMany();
+		await prisma.variable.deleteMany();
+		await prisma.device.deleteMany();
+		await prisma.agent.deleteMany();
+	});
+
+	/** The last job handed to `link.send`, or null if none was sent yet this test. */
+	const sentJob = () => lastJob;
+
+	/** Creates an agent with one connected device, recording whatever job it is sent. */
+	async function connectedDevice(): Promise<string> {
+		const agent = await prisma.agent.create({
+			data: { name: "kitchen", tokenHash: hashSecret("t"), status: "ONLINE" },
+			select: { id: true },
+		});
+		const device = await prisma.device.create({
+			data: { agentId: agent.id, name: "till", port: "COM3", defaultWrap: false },
+			select: { id: true },
+		});
+
+		link = {
+			agentId: agent.id,
+			agentName: "kitchen",
+			connectedAt: new Date(),
+			send(frame) {
+				if (frame.type === "job.dispatch") {
+					lastJob = frame.job;
+				}
+				return true;
+			},
+			close() {},
+		};
+		registerLink(link);
+
+		return device.id;
+	}
+
+	const STATIC = {
+		kind: "STATIC" as const,
+		pattern: null,
+		offsetAmount: null,
+		offsetUnit: null,
+		source: null,
+		overridable: false,
+		description: null,
+	};
+
+	it("substitutes an install-wide value into a submitted job", async () => {
+		const deviceId = await connectedDevice();
+		await createVariable({ ...STATIC, name: "phone", value: "010-1234567" });
+
+		const job = await submitJob(deviceId, { data: ["Call {phone}"] });
+
+		expect(
+			sentJob()
+				?.lines[0].spans.map((span) => span.text)
+				.join(""),
+		).toBe("Call 010-1234567");
+		expect(job.lines).toBe(1);
+	});
+
+	/**
+	 * Not caught before the row exists, unlike the request-shape and image failures above it in this
+	 * file: `unknown_variable` is raised by `parseMarkup` inside `compile`, and `compile` needs the
+	 * job's own id — so, like every other markup content error (an unknown tag, an unclosed one), it
+	 * can only be discovered once the row is there to fail. Settled the same way the wire's own
+	 * refusals are settled below, rather than left `QUEUED`.
+	 */
+	it("refuses a job naming a variable that does not exist, and settles the job rather than leaving it queued", async () => {
+		const deviceId = await connectedDevice();
+
+		await expect(submitJob(deviceId, { data: ["{nope}"] })).rejects.toMatchObject({ code: "unknown_variable" });
+
+		const [job] = await prisma.job.findMany();
+		expect(job).toMatchObject({ status: "FAILED", errorCode: "unknown_variable" });
+	});
+
+	it("resolves a variable inside an image reference", async () => {
+		const deviceId = await connectedDevice();
+		await createVariable({ ...STATIC, name: "brand", value: "logo" });
+
+		// Fails as an unknown asset, not as an unknown image reference named "{brand}" — which is what
+		// proves resolveVariables ran before resolveImages.
+		await expect(submitJob(deviceId, { data: ["<image>{brand}</image>"] })).rejects.toMatchObject({
+			message: expect.stringContaining("logo"),
+		});
 	});
 });

@@ -7,8 +7,9 @@ import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/mar
 import { resolveFills } from "@/lib/markup/fill";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
+import { readSuppliedVariables } from "@/lib/variables/supplied";
 
 /**
  * Turns a request body into a job an agent can print, or explains precisely why it cannot.
@@ -42,7 +43,7 @@ const RULE_CHARACTER = "-";
  * it was removed: a caller still sending it would have got silently wrapped output and no way
  * to find out why. The same strictness catches every other typo that used to be swallowed.
  */
-const ALLOWED_FIELDS = new Set(["data", "linefeed"]);
+const ALLOWED_FIELDS = new Set(["data", "linefeed", "variables"]);
 
 /** Limits applied to one request. */
 export interface CompileLimits {
@@ -77,12 +78,24 @@ export interface DeviceSettings {
  */
 export interface CompileSettings extends DeviceSettings {
 	images: ResolvedImages;
+	/**
+	 * The values `{name}` may resolve to, or null when variables are switched off.
+	 *
+	 * Nullable where `images` is required, and the asymmetry is deliberate. An absent image map would
+	 * compile a receipt whose images cost nothing — a job accepted against a budget it was never
+	 * measured for, which is a wrong answer wearing a default's clothes. Null here is not an absence
+	 * of information: it is the complete meaning "braces are ordinary text", which is what
+	 * `variables.enabled: false` says and what every receipt did before this feature existed.
+	 */
+	variables: VariableContext | null;
 }
 
 /** What a caller asked to print, after the request body has been read. */
 export interface PrintRequest {
 	data: string[];
 	linefeed: Linefeed;
+	/** Values the caller supplied for this job. Empty when they supplied none. */
+	variables: Record<string, string>;
 }
 
 /**
@@ -95,13 +108,26 @@ export interface PrintRequest {
  * the images are resolved: what a request refers to cannot be known until its markup has been read,
  * and reading it is what this does.
  *
+ * The `variables` field is read here rather than left for `resolveVariables`, and by a function that
+ * imports nothing `server-only`: shape and per-value checks — a malformed name, a value over the
+ * length cap, a control character — belong with the rest of the body's limit checks, before any
+ * element is parsed and before a database is ever consulted. `readSuppliedVariables` comes from
+ * `@/lib/variables/supplied`, never from `resolve-variables.ts`, precisely so this file stays free of
+ * Prisma; see that module's own header for why.
+ *
  * @param body the parsed JSON body
  * @param limits the limits to apply
  * @param settings the device's print settings, supplying defaults
+ * @param maxVariableValueChars the install's cap on one supplied variable value's length
  * @returns the request, validated
  * @throws ApiError when the body is malformed or exceeds a limit
  */
-export function readRequest(body: unknown, limits: CompileLimits, settings: DeviceSettings): PrintRequest {
+export function readRequest(
+	body: unknown,
+	limits: CompileLimits,
+	settings: DeviceSettings,
+	maxVariableValueChars: number,
+): PrintRequest {
 	if (typeof body !== "object" || body === null || Array.isArray(body)) {
 		throw new ApiError("invalid_json", "Body must be a JSON object");
 	}
@@ -114,7 +140,7 @@ export function readRequest(body: unknown, limits: CompileLimits, settings: Devi
 				"unknown_field",
 				key === "wrap"
 					? "'wrap' is no longer a request field. Use the <wrap> and <nowrap> tags, which apply to one line."
-					: `Unknown field '${key}'; this request accepts 'data' and 'linefeed'`,
+					: `Unknown field '${key}'; this request accepts 'data', 'linefeed' and 'variables'`,
 			);
 		}
 	}
@@ -157,6 +183,7 @@ export function readRequest(body: unknown, limits: CompileLimits, settings: Devi
 	return {
 		data: elements,
 		linefeed: readLinefeed(record.linefeed, settings),
+		variables: readSuppliedVariables(record.variables, maxVariableValueChars),
 	};
 }
 
@@ -227,7 +254,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 	for (let index = 0; index < request.data.length; index++) {
 		const lineNumber = index + 1;
 		try {
-			const parsed = parseMarkup(request.data[index]);
+			const parsed = parseMarkup(request.data[index], settings.variables);
 			requireSymbolsFitThePaper(parsed, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
 			// After this line no fill remains, which is what lets the wrapper, the wire types and
@@ -283,16 +310,26 @@ export function countOutputLines(request: PrintRequest, settings: CompileSetting
  * *before* the images are resolved, which is what it is worth: markup with an unclosed tag has no
  * business making this server fetch a URL, and the person fixing it should not wait for one either.
  *
+ * Takes `variables` as its own parameter rather than through `CompileSettings` for the same reason:
+ * `resolveVariables` — a database read — has to finish before this runs, since `unknown_variable` is
+ * one of the errors it must be able to report, but resolving images has not happened yet and may
+ * never need to.
+ *
  * @param request the validated request
  * @param settings the device's print settings
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off
  * @returns every element error, in element order; empty when the markup is sound
  */
-export function collectElementErrors(request: PrintRequest, settings: DeviceSettings): ApiError[] {
+export function collectElementErrors(
+	request: PrintRequest,
+	settings: DeviceSettings,
+	variables: VariableContext | null,
+): ApiError[] {
 	const errors: ApiError[] = [];
 
 	for (let index = 0; index < request.data.length; index++) {
 		try {
-			const parsed = parseMarkup(request.data[index]);
+			const parsed = parseMarkup(request.data[index], variables);
 			// Collected alongside the parse failures, so the preview shows an over-wide symbol as a
 			// refusal while it is being written rather than only when the job is submitted.
 			requireSymbolsFitThePaper(parsed, settings.columns);

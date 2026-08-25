@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
 import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -135,6 +135,11 @@ export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
  * @param data the request's elements, exactly as the caller wrote them
  * @param columns the target device's width in printer columns, which decides both the paper width
  *        a stored raster was synced at and the dot widths the tags ask for
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off. An
+ *        `<image>` reference can itself be a variable — `<image>{logo}</image>` names nothing at all
+ *        until this has been substituted — so this pre-pass has to parse with the same context the
+ *        compile will use, or the references it finds here are not the ones the compile actually
+ *        meets. Passed straight to {@link collect}, which is the only place it is read.
  * @returns each reference in them, mapped to the image's own pixel dimensions and to any dots that
  *          must travel inside the job
  * @throws ApiError if the request names more remote URLs than {@link maxRemoteReferences} allows —
@@ -143,8 +148,12 @@ export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
  *         fetched or read as one; for the last two the element it was written on travels in
  *         `details.line`
  */
-export async function resolveImages(data: readonly string[], columns: number): Promise<ResolvedImages> {
-	const queue = [...collect(data, columns)];
+export async function resolveImages(
+	data: readonly string[],
+	columns: number,
+	variables: VariableContext | null,
+): Promise<ResolvedImages> {
+	const queue = [...collect(data, columns, variables)];
 	await requireWithinRemoteLimit(queue);
 
 	// Read once per request rather than once per remote reference: `fetchRemoteImage` needs three
@@ -224,11 +233,18 @@ interface ImageUse {
  * and if it ever missed a real one the compile would fail loudly rather than print an image nothing
  * had charged for.
  *
+ * Parses with `variables`, the same context the compile itself will use. `<image>{logo}</image>`
+ * names no reference at all until `{logo}` has been substituted, so a scan that parsed without it
+ * would collect the literal text `{logo}` — resolve nothing under the name the compile actually
+ * needs — and the request would fail as an unknown image called `{logo}` instead of whatever `logo`
+ * itself turns out to be.
+ *
  * @param data the request's elements
  * @param columns the target device's width in printer columns
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off
  * @returns each reference, mapped to how the request uses it
  */
-function collect(data: readonly string[], columns: number): Map<string, ImageUse> {
+function collect(data: readonly string[], columns: number, variables: VariableContext | null): Map<string, ImageUse> {
 	const references = new Map<string, ImageUse>();
 
 	for (let index = 0; index < data.length; index++) {
@@ -238,7 +254,7 @@ function collect(data: readonly string[], columns: number): Map<string, ImageUse
 
 		let directives: ReturnType<typeof parseMarkup>["directives"];
 		try {
-			directives = parseMarkup(data[index]).directives;
+			directives = parseMarkup(data[index], variables).directives;
 		} catch {
 			continue;
 		}

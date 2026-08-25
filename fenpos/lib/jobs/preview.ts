@@ -13,17 +13,19 @@ import {
 	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
+import type { VariableContext } from "@/lib/markup/parser";
 import { resolveImages } from "@/lib/markup/resolve-images";
-import { globalLimits } from "@/lib/settings/settings-service";
+import { resolveVariables } from "@/lib/markup/resolve-variables";
+import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
 
 /**
  * Compiling a receipt without printing it.
  *
  * **The same path a print takes, stopped one step short of the wire.** That is the whole value of a
- * preview: `readRequest`, the element checks, image resolution and `compile` all run exactly as they
- * do for a real submission, so what comes back is what the printer would produce rather than an
- * approximation of it. A preview built from a second, simpler code path would agree with the printer
- * right up until the day it mattered.
+ * preview: `readRequest`, variable resolution, the element checks, image resolution and `compile` all
+ * run exactly as they do for a real submission, so what comes back is what the printer would produce
+ * rather than an approximation of it. A preview built from a second, simpler code path would agree
+ * with the printer right up until the day it mattered.
  *
  * Lifted out of the Tools tab's server action, where it was reachable only from a browser session.
  * The panel keeps its presentation layer — a symbol's measured height, the block markers it draws —
@@ -113,7 +115,10 @@ export interface PreviewWithContext {
  */
 export async function compilePreviewWithContext(deviceId: string, body: unknown): Promise<PreviewWithContext> {
 	try {
-		const device = await prisma.device.findUnique({ where: { id: deviceId } });
+		const device = await prisma.device.findUnique({
+			where: { id: deviceId },
+			include: { agent: { select: { name: true } } },
+		});
 		if (!device) {
 			throw new ApiError("unknown_device", "That printer no longer exists.");
 		}
@@ -148,13 +153,15 @@ export async function compilePreviewWithContext(deviceId: string, body: unknown)
 				linefeed,
 			}) as const;
 
+		const maxVariableValueChars = await integerSetting("variables.maxValueChars");
+
 		// Request-level validation first, and on its own: it fails for the body as a whole — too many
 		// elements, too many characters — which is one problem, not one per line. The body's own
 		// linefeed choice, if any, has not been validated yet at this point, so there is nothing sound
 		// to report beyond the device's default.
 		let request: PrintRequest;
 		try {
-			request = readRequest(body, limits, deviceSettings);
+			request = readRequest(body, limits, deviceSettings, maxVariableValueChars);
 		} catch (error) {
 			return {
 				preview: { ...measured(deviceSettings.defaultLinefeed), errors: [faultOf(error)] },
@@ -163,7 +170,23 @@ export async function compilePreviewWithContext(deviceId: string, body: unknown)
 			};
 		}
 
-		const elementErrors = collectElementErrors(request, deviceSettings);
+		// Resolved before the element errors, even though it is a database read and they are not:
+		// `collectElementErrors` parses every element, and `unknown_variable` is one of the errors it
+		// has to be able to report. A preview from the Tools page was not submitted by a key, so
+		// `apiKeyName` is honestly null here — `evaluateVariable` renders that as an empty string
+		// rather than inventing a word for "nobody".
+		let variables: VariableContext | null;
+		try {
+			variables = await resolveVariables({
+				deviceId: device.id,
+				context: { deviceName: device.name, agentName: device.agent.name, apiKeyName: null },
+				supplied: request.variables,
+			});
+		} catch (error) {
+			return { preview: { ...measured(request.linefeed), errors: [faultOf(error)] }, request, settings: null };
+		}
+
+		const elementErrors = collectElementErrors(request, deviceSettings, variables);
 		if (elementErrors.length > 0) {
 			return {
 				preview: { ...measured(request.linefeed), errors: elementErrors.map(faultOf) },
@@ -177,7 +200,11 @@ export async function compilePreviewWithContext(deviceId: string, body: unknown)
 		// the caller's to fix like any other, so it is reported beside them and the measurements stay.
 		let settings: CompileSettings;
 		try {
-			settings = { ...deviceSettings, images: await resolveImages(request.data, deviceSettings.columns) };
+			settings = {
+				...deviceSettings,
+				variables,
+				images: await resolveImages(request.data, deviceSettings.columns, variables),
+			};
 		} catch (error) {
 			return { preview: { ...measured(request.linefeed), errors: [faultOf(error)] }, request, settings: null };
 		}

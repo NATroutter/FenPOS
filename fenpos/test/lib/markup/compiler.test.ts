@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema } from "@/lib/link/protocol";
 import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
@@ -11,6 +11,9 @@ import {
 	countTextLines,
 	readRequest,
 } from "@/lib/markup/compiler";
+
+/** The value-length cap `readRequest` enforces on a supplied `variables` field. Not itself under test here. */
+const MAX_VARIABLE_VALUE_CHARS = 200;
 
 /**
  * Behavioural tests for the compile pipeline.
@@ -28,6 +31,7 @@ describe("compile pipeline", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: new Map(),
+		variables: null,
 	};
 
 	const limits: CompileLimits = {
@@ -39,7 +43,7 @@ describe("compile pipeline", () => {
 
 	/** Runs a body through both stages, as a request handler does. */
 	const run = (body: unknown) => {
-		const request = readRequest(body, limits, settings);
+		const request = readRequest(body, limits, settings, MAX_VARIABLE_VALUE_CHARS);
 		return compile("job-1", "kitchen", request, limits, settings);
 	};
 
@@ -234,7 +238,7 @@ describe("compile pipeline", () => {
 		/** Compiles against the ten-column fixture, with the device default under test. */
 		const wrapping = (body: unknown, defaultWrap = true) => {
 			const merged = { ...settings, defaultWrap };
-			return compile("job", "kitchen", readRequest(body, roomy, merged), roomy, merged);
+			return compile("job", "kitchen", readRequest(body, roomy, merged, MAX_VARIABLE_VALUE_CHARS), roomy, merged);
 		};
 
 		it("leaves a <nowrap> line intact while its neighbours wrap", () => {
@@ -260,7 +264,13 @@ describe("compile pipeline", () => {
 			const merged = { ...settings, defaultWrap: false };
 
 			expect(() =>
-				compile("job", "kitchen", readRequest({ data: ["<wrap>ab ab ab ab</wrap>"] }, tight, merged), tight, merged),
+				compile(
+					"job",
+					"kitchen",
+					readRequest({ data: ["<wrap>ab ab ab ab</wrap>"] }, tight, merged, MAX_VARIABLE_VALUE_CHARS),
+					tight,
+					merged,
+				),
 			).toThrow(ApiError);
 		});
 	});
@@ -307,7 +317,7 @@ describe("compile pipeline", () => {
 	});
 
 	it("fills the same markup differently for a narrower device", () => {
-		const request = readRequest({ data: ["a<fill>b"] }, limits, settings);
+		const request = readRequest({ data: ["a<fill>b"] }, limits, settings, MAX_VARIABLE_VALUE_CHARS);
 		const narrow = compile("job-1", "kitchen", request, limits, { ...settings, columns: 6 });
 
 		expect(printed(narrow.lines[0])).toBe(`a${" ".repeat(4)}b`);
@@ -332,7 +342,11 @@ describe("compile pipeline", () => {
 	 * to be checkable before the column count exists. That is why the charset pass runs first.
 	 */
 	it("reports an unprintable fill character with no column count in hand", () => {
-		const errors = collectElementErrors({ data: ["a<fill=€>b"], linefeed: "LF" }, { ...settings, codepage: "CP437" });
+		const errors = collectElementErrors(
+			{ data: ["a<fill=€>b"], linefeed: "LF", variables: {} },
+			{ ...settings, codepage: "CP437" },
+			null,
+		);
 
 		expect(errors).toHaveLength(1);
 		expect(errors[0].code).toBe("unsupported_character");
@@ -366,6 +380,7 @@ describe("block line budget", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: IMAGES,
+		variables: null,
 	};
 
 	/**
@@ -379,9 +394,9 @@ describe("block line budget", () => {
 	const WIDE_SETTINGS: CompileSettings = { ...SETTINGS, columns: 42 };
 
 	it("charges a QR code its printed height, not one line", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, WIDE_SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, WIDE_SETTINGS);
 		const withQr = countOutputLines(
-			{ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF" },
+			{ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
 		);
 		expect(withQr - plain).toBeGreaterThan(1);
@@ -405,7 +420,7 @@ describe("block line budget", () => {
 		const element = "<align=center><qr=8>https://example.com/o/1</qr></align>";
 		const thrown = (() => {
 			try {
-				countOutputLines({ data: ["Hello", element], linefeed: "LF" }, SETTINGS);
+				countOutputLines({ data: ["Hello", element], linefeed: "LF", variables: {} }, SETTINGS);
 				return null;
 			} catch (error) {
 				return error as ApiError;
@@ -419,17 +434,17 @@ describe("block line budget", () => {
 		expect(thrown?.message).toMatch(/200 dots wide, more than the 120/);
 
 		// The same symbol on paper wide enough for it compiles, so this is the width and not the tag.
-		expect(() => countOutputLines({ data: [element], linefeed: "LF" }, WIDE_SETTINGS)).not.toThrow();
+		expect(() => countOutputLines({ data: [element], linefeed: "LF", variables: {} }, WIDE_SETTINGS)).not.toThrow();
 	});
 
 	it("charges a drawer pulse nothing, because it prints nothing", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
-		const withDrawer = countOutputLines({ data: ["Hello", "<drawer>"], linefeed: "LF" }, SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
+		const withDrawer = countOutputLines({ data: ["Hello", "<drawer>"], linefeed: "LF", variables: {} }, SETTINGS);
 		expect(withDrawer).toBe(plain);
 	});
 
 	it("charges a barcode and a PDF417 symbol exactly their measured height", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, WIDE_SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, WIDE_SETTINGS);
 
 		const barcodeHeight = symbolGeometry({
 			kind: "BARCODE",
@@ -437,13 +452,16 @@ describe("block line budget", () => {
 			content: "1234567890128",
 		}).heightLines;
 		const withBarcode = countOutputLines(
-			{ data: ["Hello", "<barcode=EAN13>1234567890128</barcode>"], linefeed: "LF" },
+			{ data: ["Hello", "<barcode=EAN13>1234567890128</barcode>"], linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
 		);
 		expect(withBarcode - plain).toBe(barcodeHeight);
 
 		const pdf417Height = symbolGeometry({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 }).heightLines;
-		const withPdf417 = countOutputLines({ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF" }, WIDE_SETTINGS);
+		const withPdf417 = countOutputLines(
+			{ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF", variables: {} },
+			WIDE_SETTINGS,
+		);
 		expect(withPdf417 - plain).toBe(pdf417Height);
 	});
 
@@ -453,28 +471,35 @@ describe("block line budget", () => {
 	// exists to add, because leaving a known undercount inside the function being rewritten here
 	// is worse than the small behaviour change of charging a rule what it actually costs.
 	it("charges a rule one line, since it prints as a full line of dashes", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
-		const withRule = countOutputLines({ data: ["Hello", "<hr>"], linefeed: "LF" }, SETTINGS);
+		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
+		const withRule = countOutputLines({ data: ["Hello", "<hr>"], linefeed: "LF", variables: {} }, SETTINGS);
 		expect(withRule - plain).toBe(1);
 	});
 
 	it("charges an image the paper its dots will cover", () => {
 		// 120 dots wide, so 240 dots tall, which is ten lines of 24.
-		expect(countOutputLines({ data: ["<image>logo</image>"], linefeed: "LF" }, SETTINGS)).toBe(10);
+		expect(countOutputLines({ data: ["<image>logo</image>"], linefeed: "LF", variables: {} }, SETTINGS)).toBe(10);
 	});
 
 	it("charges a half-width image half the paper", () => {
-		expect(countOutputLines({ data: ["<image=50>logo</image>"], linefeed: "LF" }, SETTINGS)).toBe(5);
+		expect(countOutputLines({ data: ["<image=50>logo</image>"], linefeed: "LF", variables: {} }, SETTINGS)).toBe(5);
 	});
 
 	it("charges a URL image from its own dimensions, the same as a stored one", () => {
 		// Landscape, so at full width it is half as tall as the paper is wide: 60 dots, three lines.
-		expect(countOutputLines({ data: ["<image>https://x.test/l.png?v=2</image>"], linefeed: "LF" }, SETTINGS)).toBe(3);
+		expect(
+			countOutputLines({ data: ["<image>https://x.test/l.png?v=2</image>"], linefeed: "LF", variables: {} }, SETTINGS),
+		).toBe(3);
 	});
 
 	it("refuses a job whose images do not fit, the same as one whose text does not", () => {
 		const limits: CompileLimits = { maxLines: 5, maxLineChars: 40, maxTotalChars: 100, maxOutputLines: 9 };
-		const request = readRequest({ data: ["<image>logo</image>"], linefeed: "LF" }, limits, SETTINGS);
+		const request = readRequest(
+			{ data: ["<image>logo</image>"], linefeed: "LF" },
+			limits,
+			SETTINGS,
+			MAX_VARIABLE_VALUE_CHARS,
+		);
 
 		expect(() => compile("job-1", "kitchen", request, limits, SETTINGS)).toThrow(ApiError);
 	});
@@ -485,12 +510,14 @@ describe("block line budget", () => {
 	 * failing, because the job would print an image the budget never counted.
 	 */
 	it("refuses to charge an image nobody resolved, rather than charging it nothing", () => {
-		expect(() => countOutputLines({ data: ["<image>missing</image>"], linefeed: "LF" }, SETTINGS)).toThrow(/missing/);
+		expect(() =>
+			countOutputLines({ data: ["<image>missing</image>"], linefeed: "LF", variables: {} }, SETTINGS),
+		).toThrow(/missing/);
 	});
 
 	it("charges a line carrying both text and a drawer pulse exactly one line", () => {
-		const withText = countOutputLines({ data: ["Hello"], linefeed: "LF" }, SETTINGS);
-		const withTextAndDrawer = countOutputLines({ data: ["Hello<drawer>"], linefeed: "LF" }, SETTINGS);
+		const withText = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
+		const withTextAndDrawer = countOutputLines({ data: ["Hello<drawer>"], linefeed: "LF", variables: {} }, SETTINGS);
 		expect(withTextAndDrawer).toBe(withText);
 	});
 
@@ -508,6 +535,7 @@ describe("block line budget", () => {
 			},
 			limits,
 			WIDE_SETTINGS,
+			MAX_VARIABLE_VALUE_CHARS,
 		);
 		const job = compile("job-1", "kitchen", request, limits, WIDE_SETTINGS);
 
@@ -558,12 +586,13 @@ describe("images on the wire", () => {
 			// A URL, whose dots can never be pre-synced.
 			["https://x.test/l.png", { width: 240, height: 120, inline: new Map([[120, raster(120, 60)]]) }],
 		]),
+		variables: null,
 	};
 
 	const limits: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 40 };
 
 	const directivesFor = (element: string) => {
-		const request = readRequest({ data: [element], linefeed: "LF" }, limits, SETTINGS);
+		const request = readRequest({ data: [element], linefeed: "LF" }, limits, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
 		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 		return job.lines[0].directives;
@@ -603,5 +632,74 @@ describe("images on the wire", () => {
 	 */
 	it("refuses to name a width nobody synced, rather than sending a reference the agent cannot resolve", () => {
 		expect(() => directivesFor("<image=50>stamp</image>")).toThrow(/stamp/);
+	});
+});
+
+/**
+ * Substitution inside the compile itself, once `settings.variables` carries a context.
+ *
+ * 42 columns rather than the ten-column fixture above: the wrapping case needs paper wide enough
+ * that a substituted value's length, not some incidental tag, is what decides whether it wraps.
+ */
+describe("compiling with variables", () => {
+	const limits = (): CompileLimits => ({
+		maxLines: 5,
+		maxLineChars: 200,
+		maxTotalChars: 500,
+		maxOutputLines: 10,
+	});
+
+	const settings = (): CompileSettings => ({
+		columns: 42,
+		codepage: "CP858",
+		onUnsupported: "REJECT",
+		defaultWrap: true,
+		defaultLinefeed: "LF",
+		images: new Map(),
+		variables: null,
+	});
+
+	const withVariables = (entries: Record<string, string>): CompileSettings => ({
+		...settings(),
+		variables: { values: new Map(Object.entries(entries)), maxPerElement: 100 },
+	});
+
+	it("substitutes into a compiled line", () => {
+		const job = compile(
+			"j",
+			"counter",
+			{ data: ["Call {phone}"], linefeed: "LF", variables: {} },
+			limits(),
+			withVariables({ phone: "010" }),
+		);
+
+		expect(job.lines[0].spans.map((span) => span.text).join("")).toBe("Call 010");
+	});
+
+	it("leaves braces alone when the compile has no variable context", () => {
+		const job = compile(
+			"j",
+			"counter",
+			{ data: ["Call {phone}"], linefeed: "LF", variables: {} },
+			limits(),
+			settings(),
+		);
+
+		expect(job.lines[0].spans.map((span) => span.text).join("")).toBe("Call {phone}");
+	});
+
+	it("charges a substituted line the width it actually prints", () => {
+		const long = "x".repeat(60);
+		const job = compile(
+			"j",
+			"counter",
+			{ data: ["{v}"], linefeed: "LF", variables: {} },
+			limits(),
+			withVariables({ v: long }),
+		);
+
+		// 60 characters across 42 columns wraps to two lines. If this is one, the wrapper ran before
+		// substitution and the paper's width was measured against the wrong text.
+		expect(job.lines).toHaveLength(2);
 	});
 });
