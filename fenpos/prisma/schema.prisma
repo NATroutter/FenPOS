@@ -18,52 +18,161 @@ datasource db {
   provider = "sqlite"
 }
 
-/// Singleton row holding the administrator record for this install: the one credential and
-/// the identity that goes with it. The two live together because there is exactly one
-/// administrator to have either, and nothing else yet needs to read one without the other.
-/// Kept a singleton by the fixed primary key rather than by convention.
-model AdminAuth {
-  id                Int      @id @default(1)
-  passwordHash      String   @map("password_hash")
-  /// Shown in the sidebar footer and used for the avatar's initial. Non-null with a default so
-  /// the one existing row migrates without a backfill and the footer always has something to draw.
-  displayName       String   @default("Administrator") @map("display_name")
-  /// Optional, and meaningfully so: "not set" is what a fresh install has, and it is what selects
-  /// the locally drawn initial over a Gravatar request.
-  email             String?
-  /// True while the password is the one generated at first boot. While set, the panel is
-  /// unreachable: signing in leads only to the page that replaces this password.
-  isGenerated       Boolean  @default(false) @map("is_generated")
-  /// The generated password in the clear, so it can be reprinted on every start for as long
-  /// as it is still in use — an operator who missed the first boot's output should not have
-  /// to reset the install to get back in.
-  ///
-  /// Deleted the moment an operator sets their own password, and never written for one they
-  /// chose. It is readable in the database until then, which is the price of reprinting it;
-  /// the same value is already in the startup log, and it cannot be used to reach anything
-  /// except the page that replaces it.
-  generatedPassword String?  @map("generated_password")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+/// A panel user.
+///
+/// Owned by Better Auth: every column below the FenPOS block is its schema, and renaming one
+/// breaks the adapter's queries rather than producing a type error. These five models were emitted
+/// by `@better-auth/cli generate` against better-auth 1.7.1 and are transcribed verbatim, which is
+/// why they carry camelCase columns while the rest of this file is snake_case — a hand-applied
+/// style layer would turn every future regeneration into a merge conflict.
+///
+/// There is no self-registration path. A row is created by first-run setup or by the admin
+/// plugin's `createUser`, and by nothing else — `emailAndPassword.disableSignUp` in
+/// `lib/auth/auth.ts` is what makes that true rather than merely intended.
+model User {
+  id               String      @id
+  name             String
+  email            String
+  emailVerified    Boolean     @default(false)
+  /// Better Auth's own avatar field. Unused: FenPOS serves avatars from its own table so the bytes
+  /// live in the same file as everything else that is backed up.
+  image            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  @@map("admin_auth")
+  // --- twoFactor plugin ---
+  twoFactorEnabled Boolean?    @default(false)
+
+  // --- admin plugin ---
+  /// Better Auth's own role string, read only by the admin plugin's endpoints. FenPOS
+  /// authorisation reads `isSuperuser` and, from Phase 3, the permission tables. The two must not
+  /// be mistaken for one another.
+  role             String?
+  banned           Boolean?    @default(false)
+  banReason        String?
+  banExpires       DateTime?
+
+  // --- FenPOS ---
+  /// Bypasses every permission check. Written by first-run setup, and afterwards only by another
+  /// superuser. Declared to Better Auth with `input: false`, so no request body can set it.
+  isSuperuser        Boolean @default(false)
+  /// Blocks every panel route except the one that replaces the password. Set by the "Require
+  /// password reset" checkbox at creation, or by the force-reset action later.
+  mustChangePassword Boolean @default(false)
+
+  sessions   Session[]
+  accounts   Account[]
+  twofactors TwoFactor[]
+
+  @@unique([email])
+  @@map("user")
 }
 
-/// An authenticated admin browser session.
+/// An authenticated browser session.
 ///
-/// Stored server-side rather than encoded in a self-contained cookie so that sign-out and
-/// password changes revoke immediately instead of waiting for expiry. Only the hash of the
-/// session token is persisted: a database read must not yield usable credentials.
+/// A row rather than a self-contained signed cookie, and that is the property this whole rebuild
+/// was chosen around: signing out, changing a password, or banning an account revokes access at
+/// once instead of leaving a valid token in the wild until it expires. For a panel that can pause
+/// printers and write raw bytes to hardware, that trade is the right way round.
 model Session {
-  id         String   @id @default(cuid())
-  tokenHash  String   @unique @map("token_hash")
-  createdAt  DateTime @default(now()) @map("created_at")
-  expiresAt  DateTime @map("expires_at")
-  lastSeenAt DateTime @default(now()) @map("last_seen_at")
-  userAgent  String?  @map("user_agent")
-  ipAddress  String?  @map("ip_address")
+  id             String   @id
+  expiresAt      DateTime
+  token          String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ipAddress      String?
+  userAgent      String?
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Set by the admin plugin while an administrator is impersonating this user. Non-null means the
+  /// session is not what it appears to be, which is exactly what the audit log needs to say.
+  impersonatedBy String?
 
-  @@index([expiresAt])
-  @@map("sessions")
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+/// One authentication method belonging to one user.
+///
+/// For email and password there is exactly one row per user and `password` holds the argon2id hash
+/// — Better Auth's own default hasher is replaced in `lib/auth/auth.ts`. The OAuth token columns
+/// are unused and stay because the adapter expects them.
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+/// Short-lived verification tokens Better Auth issues internally.
+///
+/// Nothing in FenPOS sends email, so this holds only what the two-factor flow puts there.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+/// One user's TOTP enrolment, their recovery codes, and the lockout state guarding both.
+///
+/// Wired in Phase 6. The table ships now so that adding the two-factor plugin later needs no second
+/// migration touching the user table — which is also why the columns Phase 6 will use are present
+/// in full rather than trimmed to the two that look essential today.
+model TwoFactor {
+  id                      String    @id
+  secret                  String
+  backupCodes             String
+  userId                  String
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verified                Boolean?  @default(true)
+  failedVerificationCount Int?      @default(0)
+  lockedUntil             DateTime?
+
+  @@index([secret])
+  @@index([userId])
+  @@map("twoFactor")
+}
+
+/// The credential that claims an unconfigured install.
+///
+/// A singleton by fixed primary key, holding only a hash: unlike the administrator password this
+/// replaces, the plaintext is never stored. While the install is unclaimed the key is regenerated
+/// on every boot, so an operator who missed the startup message restarts to get a fresh one — which
+/// is why storing the plaintext in order to reprint it, as `admin_auth` did, is no longer
+/// necessary. A key someone glimpsed dies at the next restart.
+///
+/// The row's existence is one half of the condition under which setup is permitted; the other half
+/// is that no user exists. `completeSetup` (`lib/auth/setup.ts`) checks both inside one transaction
+/// and deletes this row in the same one, which is what makes setup unrepeatable.
+///
+/// Snake_case columns, unlike the five models above: nothing regenerates this one, so it follows
+/// the house style the rest of this file uses.
+model SetupKey {
+  id        Int      @id @default(1)
+  keyHash   String   @map("key_hash")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("setup_key")
 }
 
 /// A printer agent: one machine with printers attached, at one physical location.
