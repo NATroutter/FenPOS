@@ -6,6 +6,7 @@ import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 const INITIAL_STATE: SignInState = { error: null };
@@ -22,6 +23,20 @@ export function LoginForm() {
 	return (
 		<form action={formAction} className="flex flex-col gap-5">
 			<Field>
+				<FieldLabel htmlFor="email">Email</FieldLabel>
+				<Input
+					id="email"
+					name="email"
+					type="email"
+					autoComplete="username"
+					// The page exists to accept credentials, so focusing the first field costs a
+					// keyboard user nothing.
+					autoFocus
+					required
+				/>
+			</Field>
+
+			<Field>
 				<FieldLabel htmlFor="password">Password</FieldLabel>
 				<PasswordInput
 					id="password"
@@ -29,8 +44,6 @@ export function LoginForm() {
 					autoComplete="current-password"
 					placeholder="••••••••••••"
 					className="font-mono"
-					// The page exists to accept one value, so focusing it costs a keyboard user nothing.
-					autoFocus
 					required
 				/>
 			</Field>
