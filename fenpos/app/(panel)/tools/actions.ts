@@ -14,9 +14,10 @@ import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/ma
 import { type CompileSettings, layOut } from "@/lib/markup/compiler";
 import { imageGeometry } from "@/lib/markup/images";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
-import { booleanSetting, enumSetting } from "@/lib/settings/settings-service";
+import { booleanSetting } from "@/lib/settings/settings-service";
 import type { VariableKind } from "@/lib/variables/definition";
-import { evaluateVariable, type Formatting, type PrintContext, type VariableLocale } from "@/lib/variables/evaluate";
+import { evaluateVariable, type Formatting, type PrintContext } from "@/lib/variables/evaluate";
+import { PANEL_PRINT_CONTEXT, printedFormatting } from "@/lib/variables/formatting";
 import { listVariables, type StoredVariable } from "@/lib/variables/variable-service";
 
 /**
@@ -536,8 +537,9 @@ export interface MarkupVariable {
  * Modelled on `previewMoment` in `app/(panel)/variables/actions.ts` rather than on
  * `listMarkupImages` above: what is being computed here is one variable's current text, the same
  * job that action already does for a single `DATETIME` pattern, not a per-item side artefact like a
- * thumbnail. The synthetic context matches the Variables tab's own table — an empty printer name
- * rather than a real device, because composing markup on this tab has no device chosen yet either.
+ * thumbnail. The synthetic context is `PANEL_PRINT_CONTEXT`, the one every panel surface shares — a
+ * placeholder printer name rather than a real device, because composing markup on this tab has no
+ * device chosen yet either.
  *
  * Each variable is evaluated on its own rather than through `resolveVariables`, so one row with an
  * unformattable pattern loses only its own column instead of the whole picker's.
@@ -552,13 +554,9 @@ export async function listMarkupVariables(): Promise<MarkupVariable[]> {
 		return variables.map((variable) => toMarkupVariable(variable, UNRESOLVED));
 	}
 
-	const formatting: Formatting = {
-		timeZone: await printedTimeZone(),
-		locale: await enumSetting<VariableLocale>("variables.locale"),
-	};
-	const context: PrintContext = { deviceName: "—", agentName: "—", apiKeyName: null };
+	const formatting = await printedFormatting();
 
-	return variables.map((variable) => toMarkupVariable(variable, resolveOne(variable, formatting, context)));
+	return variables.map((variable) => toMarkupVariable(variable, resolveOne(variable, formatting, PANEL_PRINT_CONTEXT)));
 }
 
 /**
@@ -581,19 +579,4 @@ function resolveOne(variable: StoredVariable, formatting: Formatting, context: P
 
 function toMarkupVariable(variable: StoredVariable, resolves: string): MarkupVariable {
 	return { name: variable.name, kind: variable.kind, resolves, description: variable.description };
-}
-
-/**
- * Resolves `variables.timezone` to an IANA zone.
- *
- * A small copy of the same three lines in `lib/markup/resolve-variables.ts` and
- * `app/(panel)/variables/actions.ts` — see the latter's own copy for why duplicating them here
- * keeps three call sites that need this and nothing else from sharing a dependency none of them
- * otherwise needs.
- *
- * @returns the zone to format printed dates in
- */
-async function printedTimeZone(): Promise<string> {
-	const configured = await enumSetting<string>("variables.timezone");
-	return configured === "system" ? Intl.DateTimeFormat().resolvedOptions().timeZone : configured;
 }

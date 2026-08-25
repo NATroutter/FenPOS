@@ -5,9 +5,9 @@ import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { enumSetting } from "@/lib/settings/settings-service";
 import type { OffsetUnit, VariableDefinition } from "@/lib/variables/definition";
-import { evaluateVariable, type Formatting, type VariableLocale } from "@/lib/variables/evaluate";
+import { evaluateVariable } from "@/lib/variables/evaluate";
+import { PANEL_PRINT_CONTEXT, printedFormatting } from "@/lib/variables/formatting";
 import { createVariable, deleteVariable, updateVariable } from "@/lib/variables/variable-service";
 
 /**
@@ -83,9 +83,9 @@ export interface MomentPreview {
  * install's configured zone and locale, which are settings, and an empty pattern is not an error
  * here the way it is in {@link saveVariable} — there is simply nothing yet to show.
  *
- * The synthetic context mirrors the one the Variables page resolves the table against — a printer
- * name of "—" rather than a real device, because a pattern preview has no printer in mind and a
- * `DATETIME` variable never reads the context anyway.
+ * The synthetic context is the one every panel surface shares — see `PANEL_PRINT_CONTEXT` — a
+ * printer name of "—" rather than a real device, because a pattern preview has no printer in mind
+ * and a `DATETIME` variable never reads the context anyway.
  *
  * @param pattern the candidate `date-fns` pattern, as typed so far
  * @param offsetAmount the offset to apply before formatting, or null for none
@@ -116,36 +116,14 @@ export async function previewMoment(
 	};
 
 	try {
-		const formatting: Formatting = {
-			timeZone: await printedTimeZone(),
-			locale: await enumSetting<VariableLocale>("variables.locale"),
-		};
-		const text = evaluateVariable(
-			definition,
-			new Date(),
-			{ deviceName: "—", agentName: "—", apiKeyName: null },
-			formatting,
-		);
+		const text = evaluateVariable(definition, new Date(), PANEL_PRINT_CONTEXT, await printedFormatting());
 		return { text, error: null };
 	} catch (error) {
 		// `evaluateVariable` throws a message naming the variable when `date-fns` refuses the
 		// pattern — `YYYY` and `DD` are the common mistakes for `yyyy` and `dd`. That message is
-		// exactly what the operator needs to see while they are still typing it.
+		// exactly what the operator needs to see while they are still typing it. The same throw is
+		// what `requireValid` turns into a refusal on save, so what is shown here is not merely
+		// advice: a pattern this reports an error for is one the dialog will not let through.
 		return { text: null, error: error instanceof Error ? error.message : "That pattern could not be formatted." };
 	}
-}
-
-/**
- * Resolves `variables.timezone` to an IANA zone.
- *
- * A small copy of `printedTimeZone` in `lib/markup/resolve-variables.ts`, which is not exported —
- * that module resolves a real job's variables and this one is rendering a preview for a form that
- * has not been saved yet, so duplicating three lines here keeps the two call sites from having to
- * share a dependency neither otherwise needs.
- *
- * @returns the zone to format printed dates in
- */
-async function printedTimeZone(): Promise<string> {
-	const configured = await enumSetting<string>("variables.timezone");
-	return configured === "system" ? Intl.DateTimeFormat().resolvedOptions().timeZone : configured;
 }
