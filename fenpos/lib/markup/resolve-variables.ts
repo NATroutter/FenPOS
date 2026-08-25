@@ -4,8 +4,10 @@ import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import type { VariableContext } from "@/lib/markup/parser";
 import { booleanSetting, integerSetting } from "@/lib/settings/settings-service";
-import { evaluateVariable, type PrintContext } from "@/lib/variables/evaluate";
+import type { VariableDefinition } from "@/lib/variables/definition";
+import { evaluateVariable, type Formatting, type PrintContext } from "@/lib/variables/evaluate";
 import { printedFormatting } from "@/lib/variables/formatting";
+import { requireValueWithinCap, type SuppliedValue } from "@/lib/variables/supplied";
 import { listDeviceOverrides, listVariables } from "@/lib/variables/variable-service";
 
 /**
@@ -26,8 +28,14 @@ import { listDeviceOverrides, listVariables } from "@/lib/variables/variable-ser
 export interface JobVariables {
 	deviceId: string;
 	context: PrintContext;
-	/** Values the request carried, if any. Names here need not exist as variables. */
-	supplied: Readonly<Record<string, string>>;
+	/**
+	 * Values the request carried, if any. Names here need not exist as variables.
+	 *
+	 * A value is either literal text or a date the caller described and this install renders — see
+	 * `SuppliedValue`. Both are the same field of the same request, and both obey the same gates
+	 * below; what differs is only that one of them is not text until this function makes it text.
+	 */
+	supplied: Readonly<Record<string, SuppliedValue>>;
 }
 
 /**
@@ -103,18 +111,37 @@ export async function resolveVariables(job: JobVariables, now: Date = new Date()
 		}
 	}
 
+	// Read once and only if a date actually needs it. Every other value in this loop is already text,
+	// and the overwhelming majority of jobs send none of these at all, so the common path pays nothing
+	// for a setting it does not consult.
+	let maxValueChars: number | null = null;
+
 	for (const [name, value] of supplied) {
 		// A name nothing defines is allowed through: requiring a panel row for every per-job value
 		// would mean a panel change every time the caller's receipts grow a field. A *defined* name is
 		// another matter — that is a value this install has an opinion about, and the opinion is the
-		// `overridable` flag.
+		// `overridable` flag. It applies to a date the caller described exactly as it does to text:
+		// what is being replaced is the install's answer for that name, whoever computes it.
 		if (definedNames.has(name) && !overridable.has(name)) {
 			throw new ApiError(
 				"variable_not_overridable",
 				`The variable '${name}' is defined here and is not marked as overridable, so a print request cannot replace it.`,
 			);
 		}
-		values.set(name, value);
+
+		if (value.kind === "text") {
+			values.set(name, value.text);
+			continue;
+		}
+
+		const rendered = renderSuppliedMoment(name, value, now, job.context, formatting);
+		maxValueChars ??= await integerSetting("variables.maxValueChars");
+		// The *rendered* text, not the pattern. `readSuppliedVariables` deliberately left this
+		// unmeasured because no clock exists in that module, and a pattern's length is the wrong thing
+		// to measure anyway: `'……'` puts quoted literal text on paper, so a short pattern can render
+		// long. Capping here is what stops an object bypassing the limit every string obeys.
+		requireValueWithinCap(name, rendered, maxValueChars);
+		values.set(name, rendered);
 	}
 
 	return { values, maxPerElement: await integerSetting("variables.maxPerElement") };
@@ -140,5 +167,66 @@ async function requireSuppliedValuesAllowed(count: number): Promise<void> {
 	const cap = await integerSetting("variables.maxPerRequest");
 	if (count > cap) {
 		throw new ApiError("too_many_variables", `At most ${cap} variable values are allowed per request, got ${count}.`);
+	}
+}
+
+/**
+ * Renders a date the caller described.
+ *
+ * Built into a `VariableDefinition` and handed to `evaluateVariable` — the same function a
+ * panel-defined `DATETIME` goes through, against the same `now` and the same `formatting` — rather
+ * than formatting here. That is the whole point: a caller-supplied pattern and a panel-defined one
+ * cannot diverge in behaviour if there is only one implementation, offset arithmetic and DST
+ * handling included.
+ *
+ * The throw is deliberate, and deliberately unlike the `catch` in the loop above. That one swallows a
+ * broken *stored* row, because a row is the install's and one of them must not take down every print
+ * on it. This one is the *caller's* own pattern, arriving with the request it belongs to: refusing
+ * tells them what is wrong with what they sent, and it refuses nothing else — the next job on this
+ * install, and every job that sent no pattern, is untouched.
+ *
+ * @param name the variable being supplied, for the message and for the definition's own name field
+ * @param value the pattern and optional offset the request carried
+ * @param now the job's single instant
+ * @param context the print's facts; unused by a `DATETIME`, and passed only because
+ *        `evaluateVariable` takes one
+ * @param formatting the install's zone and locale — never the caller's
+ * @returns the formatted text
+ * @throws ApiError when the pattern is not one `date-fns` accepts
+ */
+function renderSuppliedMoment(
+	name: string,
+	value: Extract<SuppliedValue, { kind: "moment" }>,
+	now: Date,
+	context: PrintContext,
+	formatting: Formatting,
+): string {
+	const definition: VariableDefinition = {
+		name,
+		kind: "DATETIME",
+		value: null,
+		pattern: value.pattern,
+		// The one place the nested `offset` becomes the flat pair the definition uses. Nesting is what
+		// makes "an amount without a unit" unrepresentable in a request; the pair is what the stored
+		// shape has always been, and `evaluateVariable` reads that.
+		offsetAmount: value.offset?.amount ?? null,
+		offsetUnit: value.offset?.unit ?? null,
+		source: null,
+		// Nothing reads this — the gate has already been passed by the time this is called — but a
+		// definition claiming to be locked while standing in for a value a request supplied would be a
+		// lie to whoever reads it next.
+		overridable: true,
+		description: null,
+	};
+
+	try {
+		return evaluateVariable(definition, now, context, formatting);
+	} catch (error) {
+		// `evaluateVariable` already names the variable in its message and says which token it could
+		// not read, so it is passed through rather than wrapped in a second sentence saying less.
+		throw new ApiError(
+			"invalid_variable",
+			error instanceof Error ? error.message : `The variable '${name}' has a pattern this server cannot format.`,
+		);
 	}
 }
