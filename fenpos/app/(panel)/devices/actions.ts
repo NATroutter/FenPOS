@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
-import { requireSession } from "@/lib/auth/require-session";
+import { panelAction, panelQuery } from "@/lib/auth/panel-action";
+import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import {
 	createDevice as createDeviceRecord,
 	type DeviceInput,
@@ -20,36 +21,20 @@ import { setDeviceOverride } from "@/lib/variables/variable-service";
 /**
  * Server actions behind the Devices tab.
  *
- * Every action re-checks the session. The panel layout already guards the page, but an action
- * is a POST endpoint in its own right: anything that trusted the layout would be callable
- * directly by anyone who knew the action id.
+ * Every action goes through the shared gate, which resolves the session, checks the permission its
+ * registry entry names, runs the body, and records the attempt.
  */
 
 /**
- * Runs an action, converting a failure into a message the panel can render.
+ * What every action here refreshes on success.
  *
- * @param label short description used in the log line
- * @param work the action body
- * @returns the state to render
+ * Both tabs, because a printer's state is rendered on each: the Devices tab lists it directly, and
+ * the Agents tab counts and summarises the printers behind each agent.
  */
-async function run(label: string, work: () => Promise<void>): Promise<ActionState> {
-	// Outside the try: an absent session redirects, and `redirect` signals by throwing. Catching
-	// it here would turn being signed out into a toast over a panel that no longer works.
-	await requireSession();
-
-	try {
-		await work();
-		revalidatePath("/devices");
-		revalidatePath("/agents");
-		return { error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { error: error.message };
-		}
-		logger.error(`Device action failed: ${label}`, error);
-		return { error: "Something went wrong. Check the server log." };
-	}
-}
+const revalidate = () => {
+	revalidatePath("/devices");
+	revalidatePath("/agents");
+};
 
 /**
  * Adds a printer behind an agent.
@@ -59,9 +44,13 @@ async function run(label: string, work: () => Promise<void>): Promise<ActionStat
  * @returns the state to render
  */
 export async function createDevice(agentId: string, input: DeviceInput): Promise<ActionState> {
-	return run("create", async () => {
-		await createDeviceRecord(agentId, input);
-	});
+	return panelAction(
+		"devices:create",
+		async () => {
+			await createDeviceRecord(agentId, input);
+		},
+		{ revalidate, target: { kind: "device", label: input.name } },
+	);
 }
 
 /**
@@ -72,7 +61,10 @@ export async function createDevice(agentId: string, input: DeviceInput): Promise
  * @returns the state to render
  */
 export async function updateDevice(deviceId: string, input: DeviceInput): Promise<ActionState> {
-	return run("update", () => updateDeviceRecord(deviceId, input));
+	return panelAction("devices:update", () => updateDeviceRecord(deviceId, input), {
+		revalidate,
+		target: { kind: "device", id: deviceId, label: input.name },
+	});
 }
 
 /**
@@ -82,7 +74,10 @@ export async function updateDevice(deviceId: string, input: DeviceInput): Promis
  * @returns the state to render
  */
 export async function deleteDevice(deviceId: string): Promise<ActionState> {
-	return run("delete", () => deleteDeviceRecord(deviceId));
+	return panelAction("devices:delete", () => deleteDeviceRecord(deviceId), {
+		revalidate,
+		target: { kind: "device", id: deviceId },
+	});
 }
 
 /**
@@ -96,11 +91,17 @@ export async function deleteDevice(deviceId: string): Promise<ActionState> {
  * @returns the state to render
  */
 export async function setPaused(deviceId: string, paused: boolean): Promise<ActionState> {
-	return run(paused ? "pause" : "resume", async () => {
-		const device = await requireDevice(deviceId);
-		await setDevicePaused(deviceId, paused);
-		await sendDeviceCommand(device.agentId, paused ? "device.pause" : "device.resume", device.name);
-	});
+	return panelAction(
+		"devices:pause",
+		async () => {
+			const device = await requireDevice(deviceId);
+			await setDevicePaused(deviceId, paused);
+			await sendDeviceCommand(device.agentId, paused ? "device.pause" : "device.resume", device.name);
+		},
+		// The boolean is recorded rather than split into two action ids: "who paused the kitchen
+		// printer on Friday" is the question this row exists to answer.
+		{ revalidate, target: { kind: "device", id: deviceId }, detail: { paused } },
+	);
 }
 
 /**
@@ -114,10 +115,14 @@ export async function setPaused(deviceId: string, paused: boolean): Promise<Acti
  * @returns the state to render
  */
 export async function setConnected(deviceId: string, connected: boolean): Promise<ActionState> {
-	return run(connected ? "connect" : "disconnect", async () => {
-		const device = await requireDevice(deviceId);
-		await sendDeviceCommand(device.agentId, connected ? "device.connect" : "device.disconnect", device.name);
-	});
+	return panelAction(
+		"devices:connect",
+		async () => {
+			const device = await requireDevice(deviceId);
+			await sendDeviceCommand(device.agentId, connected ? "device.connect" : "device.disconnect", device.name);
+		},
+		{ revalidate, target: { kind: "device", id: deviceId }, detail: { connected } },
+	);
 }
 
 /**
@@ -127,10 +132,14 @@ export async function setConnected(deviceId: string, connected: boolean): Promis
  * @returns the state to render
  */
 export async function clearQueue(deviceId: string): Promise<ActionState> {
-	return run("clear queue", async () => {
-		const device = await requireDevice(deviceId);
-		await sendDeviceCommand(device.agentId, "device.clearQueue", device.name);
-	});
+	return panelAction(
+		"devices:clear-queue",
+		async () => {
+			const device = await requireDevice(deviceId);
+			await sendDeviceCommand(device.agentId, "device.clearQueue", device.name);
+		},
+		{ revalidate, target: { kind: "device", id: deviceId } },
+	);
 }
 
 /**
@@ -144,10 +153,14 @@ export async function clearQueue(deviceId: string): Promise<ActionState> {
  * @returns the state to render
  */
 export async function printTestPage(deviceId: string): Promise<ActionState> {
-	return run("test page", async () => {
-		const device = await requireDevice(deviceId);
-		await sendDeviceCommand(device.agentId, "device.test", device.name);
-	});
+	return panelAction(
+		"devices:test-page",
+		async () => {
+			const device = await requireDevice(deviceId);
+			await sendDeviceCommand(device.agentId, "device.test", device.name);
+		},
+		{ revalidate, target: { kind: "device", id: deviceId } },
+	);
 }
 
 /**
@@ -169,7 +182,13 @@ export async function saveDeviceOverride(
 	variableId: string,
 	value: string | null,
 ): Promise<ActionState> {
-	return run("override variable", () => setDeviceOverride(deviceId, variableId, value));
+	return panelAction("devices:override", () => setDeviceOverride(deviceId, variableId, value), {
+		revalidate,
+		target: { kind: "device", id: deviceId },
+		// The variable is named; the value it was given is not. An override carries whatever an
+		// operator typed, and a receipt's contents are not what this row exists to hold.
+		detail: { variableId, cleared: value === null },
+	});
 }
 
 /** The result of asking an agent what ports it can see. */
@@ -188,15 +207,15 @@ export interface ScanResult {
  * @returns the ports it reported, or why it could not be asked
  */
 export async function scanAgentPorts(agentId: string): Promise<ScanResult> {
-	await requireSession();
-
-	try {
-		return { ports: await scanPorts(agentId), error: null };
-	} catch (error) {
-		if (error instanceof ApiError) {
-			return { ports: [], error: error.message };
-		}
-		logger.error("Port scan failed", error);
-		return { ports: [], error: "Something went wrong. Check the server log." };
-	}
+	return panelQuery<ScanResult>("devices:scan-ports", async () => ({ ports: await scanPorts(agentId), error: null }), {
+		refused: () => ({ ports: [], error: REFUSAL_MESSAGE }),
+		failed: (error) => {
+			if (error instanceof ApiError) {
+				return { ports: [], error: error.message };
+			}
+			logger.error("Port scan failed", error);
+			return { ports: [], error: "Something went wrong. Check the server log." };
+		},
+		target: { kind: "agent", id: agentId },
+	});
 }
