@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { AuditEventInput } from "@/lib/audit/audit-log";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
-import type { RequestProvenance } from "@/lib/audit/provenance";
+import { NO_PROVENANCE } from "@/lib/audit/provenance-shape";
 import { isUniqueViolationOn } from "@/lib/db-errors";
 import { redact } from "@/lib/redact";
 
@@ -86,16 +86,6 @@ const MAX_DETAIL_CHARS = 8_000;
 
 /** The unique constraint a losing writer hits, in database naming. */
 const CHAIN_CONSTRAINT_COLUMNS = ["prev_hash"] as const;
-
-/**
- * What a caller outside any request — the CLI included — gets when it passes no `provenance`.
- *
- * Not imported from `lib/audit/provenance.ts`: that module also opens with `import "server-only"`,
- * which would throw the moment a script loaded this one. The value is the same one `NO_PROVENANCE`
- * names there, kept in sync by hand — the type import above still ties this literal to that module's
- * shape, so a field added to `RequestProvenance` fails to compile here until it is added below too.
- */
-const NO_PROVENANCE: RequestProvenance = { ipAddress: null, userAgent: null, sessionId: null };
 
 /**
  * Redacts and encodes `detail`.

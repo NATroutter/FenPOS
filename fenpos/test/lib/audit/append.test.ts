@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appendAuditEvent } from "@/lib/audit/append";
 import { CLI_ACTOR } from "@/lib/audit/audit-log";
 import { GENESIS_HASH } from "@/lib/audit/chain";
@@ -16,6 +16,7 @@ describe("appendAuditEvent", () => {
 	beforeEach(async () => {
 		await prisma.auditEvent.deleteMany({});
 		await prisma.auditAnchor.deleteMany({});
+		vi.restoreAllMocks();
 	});
 
 	it("links the first row to the genesis hash", async () => {
@@ -78,5 +79,31 @@ describe("appendAuditEvent", () => {
 		});
 
 		expect((await verifyAuditChain(prisma)).ok).toBe(true);
+	});
+
+	it("rejects rather than swallows when the write fails", async () => {
+		// The contract the CLI is written against: `audit-log.ts`'s `appendEvent` is what swallows
+		// and logs, and it can only do that because this rejects instead of doing it itself.
+		vi.spyOn(prisma.auditEvent, "create").mockRejectedValue(new Error("disk is full"));
+
+		await expect(
+			appendAuditEvent(prisma, {
+				action: "recover:doomed",
+				outcome: "SUCCESS",
+				actor: CLI_ACTOR,
+				provenance: NO_PROVENANCE,
+			}),
+		).rejects.toThrow("disk is full");
+	});
+
+	it("defaults to no provenance when the caller passes none", async () => {
+		// Every other case in this file passes `provenance` explicitly; this is the one that reaches
+		// the `?? NO_PROVENANCE` fallback the CLI actually relies on.
+		await appendAuditEvent(prisma, { action: "recover:no-provenance", outcome: "SUCCESS", actor: CLI_ACTOR });
+
+		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "asc" } });
+		expect(row.ipAddress).toBeNull();
+		expect(row.userAgent).toBeNull();
+		expect(row.sessionId).toBeNull();
 	});
 });
