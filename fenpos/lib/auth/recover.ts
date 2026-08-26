@@ -217,9 +217,9 @@ async function recordFailure(
  * @param email the address naming the account
  * @param perform the change itself, given the resolved account id and the normalised address
  * @returns whatever `perform` returns
- * @throws Error naming "no account" when the address matches nothing; whatever `perform` throws
- *   otherwise; or, only when the `FAILURE` row itself cannot be written, a combined error carrying
- *   `perform`'s own failure as its `cause`
+ * @throws {@link RecoveryRefusal} naming the address when it matches nothing; whatever `perform`
+ *   throws otherwise; or, only when the `FAILURE` row itself cannot be written, a combined error
+ *   carrying `perform`'s own failure as its `cause`
  */
 async function recoverAccount<T>(
 	prisma: PrismaClient,
@@ -231,15 +231,21 @@ async function recoverAccount<T>(
 	const user = await prisma.user.findFirst({ where: { email: normalized }, select: { id: true } });
 
 	if (!user) {
+		// A RecoveryRefusal, not a plain Error: an address matching nothing is exactly the "one kind of
+		// failure it expects" the module comment promises every export throws this for. The row's
+		// `reason` is this refusal's own message rather than a second, separately maintained "no
+		// account" literal — one text instead of two that could drift apart, and nothing new to leak:
+		// the address it names is already sitting in `target.label` on the same row.
+		const refusal = new RecoveryRefusal(`No account found for '${normalized}'.`);
 		await appendAuditEvent(prisma, {
 			action,
 			outcome: "FAILURE",
 			actor: CLI_RECOVERY_ACTOR,
 			target: { kind: "user", label: normalized },
-			detail: { reason: "no account" },
+			detail: { reason: refusal.message },
 			provenance: NO_PROVENANCE,
 		} satisfies AuditEventInput);
-		throw new Error(`No account found for '${normalized}'.`);
+		throw refusal;
 	}
 
 	let result: T;
@@ -314,7 +320,8 @@ function mintPassword(): string {
  * @param prisma the client to write through
  * @param email the account's address
  * @returns the minted password, in plaintext, exactly once — the caller must print it and discard it
- * @throws Error when the address matches no account, or the account has no password credential
+ * @throws {@link RecoveryRefusal} when the address matches no account, or the account has no
+ *   password credential
  */
 export async function resetPassword(prisma: PrismaClient, email: string): Promise<string> {
 	return recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD, email, async (userId, normalizedEmail) => {
@@ -348,7 +355,7 @@ export async function resetPassword(prisma: PrismaClient, email: string): Promis
  *
  * @param prisma the client to write through
  * @param email the account's address
- * @throws Error when the address matches no account
+ * @throws {@link RecoveryRefusal} when the address matches no account
  */
 export async function clearTwoFactor(prisma: PrismaClient, email: string): Promise<void> {
 	await recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.CLEAR_TWO_FACTOR, email, async (userId) => {
@@ -369,7 +376,7 @@ export async function clearTwoFactor(prisma: PrismaClient, email: string): Promi
  *
  * @param prisma the client to write through
  * @param email the account's address
- * @throws Error when the address matches no account
+ * @throws {@link RecoveryRefusal} when the address matches no account
  */
 export async function unlockAccount(prisma: PrismaClient, email: string): Promise<void> {
 	await recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.UNLOCK, email, async (userId) => {

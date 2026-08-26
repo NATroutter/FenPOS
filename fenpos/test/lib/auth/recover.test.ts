@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAuditChain } from "@/lib/audit/verify";
 import { credentialAccountRow } from "@/lib/auth/credential-account";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import { clearAllowlist, clearTwoFactor, listAccounts, resetPassword, unlockAccount } from "@/lib/auth/recover";
+import {
+	clearAllowlist,
+	clearTwoFactor,
+	listAccounts,
+	RecoveryRefusal,
+	resetPassword,
+	unlockAccount,
+} from "@/lib/auth/recover";
 import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
 import { prisma } from "@/lib/db";
 import { setSetting, stringSetting } from "@/lib/settings/settings-service";
@@ -134,6 +141,18 @@ describe("recovery", () => {
 		expect(await prisma.auditEvent.count()).toBe(1);
 		const row = await prisma.auditEvent.findFirstOrThrow();
 		expect(row.outcome).toBe("FAILURE");
+	});
+
+	it("throws RecoveryRefusal, naming the address, for an address matching no account", async () => {
+		// The CLI-visible half of the guarantee the module comment makes: a caller can `instanceof`
+		// this to print "that address is not right" rather than "check the logs" — and the typo'd
+		// address, the commonest mistake, has to actually be in the message for that to be useful at
+		// the worst possible moment.
+		await expect(resetPassword(prisma, "TYPO'd-Address@Example.Test")).rejects.toSatisfy((error: unknown) => {
+			expect(error).toBeInstanceOf(RecoveryRefusal);
+			expect((error as Error).message).toContain("typo'd-address@example.test");
+			return true;
+		});
 	});
 
 	it("refuses an account with no credential, and never lets the audit row carry a hash", async () => {
