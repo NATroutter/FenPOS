@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/auth";
 import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { accountPasswordExpired } from "@/lib/auth/password-history";
+import { keepSessionAlive } from "@/lib/auth/session-policy";
 import { isInstallClaimed } from "@/lib/auth/setup-key";
 import { prisma } from "@/lib/db";
 import { getClientAddress } from "@/lib/request-context";
@@ -115,6 +116,18 @@ export async function requireSession(): Promise<PanelUser> {
 		// The session is destroyed, not merely redirected. `/login` bounces an authenticated visitor to
 		// `/dashboard`, so sending a still-valid session there would loop between the two forever — and
 		// a session from an address that may no longer reach this install is the honest thing to end.
+		await auth.api.signOut({ headers: await headers() });
+		redirect("/login");
+	}
+
+	// After the allowlist, before the password check: both of the first two end the session outright,
+	// and there is no sense asking whether a password has expired on a session that is not going to
+	// continue. This is also the call that marks the session as seen, so it must run on every
+	// request that reaches here — including the ones that go on to redirect for a password change.
+	if (!(await keepSessionAlive(user.sessionId))) {
+		// Destroyed rather than redirected, for the reason the allowlist branch above gives: `/login`
+		// bounces an authenticated visitor to `/dashboard`, and a session left alive would loop
+		// between the two.
 		await auth.api.signOut({ headers: await headers() });
 		redirect("/login");
 	}

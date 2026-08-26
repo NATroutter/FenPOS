@@ -693,9 +693,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.lastSeenRefreshMinutes",
 		label: "Session activity refresh",
 		description:
-			"Not applied in this release — Better Auth's own session `updateAge` (fixed in `auth.ts`) " +
-			"controls this write-rate concern now, so this value is stored but ignored; changing it does " +
-			"nothing until Phase 6 (auth hardening) wires it back in.",
+			"How stale a session's last-seen time may get before it is written again. Only the inactivity " +
+			"timeout reads it, so this exists to bound how often a busy panel writes to the session row — " +
+			"it is a write-rate control, not a security setting. Never set it above the inactivity timeout: " +
+			"a session would be judged idle on a time that had not been refreshed yet.",
 		category: "security",
 		type: "integer",
 		min: 1,
