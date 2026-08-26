@@ -87,6 +87,101 @@ export async function currentUser(): Promise<PanelUser | null> {
 }
 
 /**
+ * What the gates below decided about a session that is genuinely signed in.
+ *
+ * A verdict rather than a redirect, because not every caller can redirect. `/api/events` holds a
+ * connection a browser's `EventSource` opened expecting `text/event-stream`, and a redirect there is
+ * followed and delivered as HTML on that connection — so it has to refuse with a status code
+ * instead. Before this existed it repeated the one gate it knew about by hand and silently missed
+ * the three that were added around it, including the two-factor enrolment gate that `auth.require2fa`
+ * is bought for. Naming the verdicts is what makes "every gate, everywhere" structural: a gate added
+ * to {@link sessionVerdict} reaches both callers, and a new verdict is a compile error in the
+ * `switch` below until somebody says what to do about it.
+ */
+export type SessionVerdict =
+	| "allowed"
+	| "password-change-owed"
+	| "address-not-allowed"
+	| "idle-too-long"
+	| "password-expired"
+	| "enrolment-owed";
+
+/**
+ * Runs every gate a signed-in session must still pass, and says which one stopped it.
+ *
+ * Takes the user rather than resolving one, so a caller that has already paid for `currentUser` does
+ * not pay twice — and so this stays about the gates rather than about authentication.
+ *
+ * **Not free of side effects, deliberately.** It marks the session as seen, and it sets the
+ * forced-reset flag on an account whose password has just expired. Both are things that must happen
+ * on every request that reaches the panel, which is exactly the set of requests this runs on.
+ *
+ * It does *not* destroy sessions. Ending one writes a cookie, and what that should mean differs by
+ * caller: a page redirects to `/login` and must not leave a live session behind to bounce back, while
+ * a streaming route simply refuses and lets the next navigation deal with it.
+ *
+ * @param user the signed-in user, from {@link currentUser}
+ * @param options `skipEnrolmentGate` skips the last gate only — see {@link requireSession}
+ * @returns `"allowed"`, or the gate that turned the session away
+ */
+export async function sessionVerdict(
+	user: PanelUser,
+	options: { skipEnrolmentGate?: boolean } = {},
+): Promise<SessionVerdict> {
+	if (user.mustChangePassword) {
+		return "password-change-owed";
+	}
+
+	// Re-checked on every request, not only at sign-in. Checking only at sign-in would leave an
+	// operator who signed in from home before the allowlist was tightened working until their session
+	// lapsed, which is the opposite of what tightening one is for.
+	const { ipAllowlist } = await globalSignInPolicy();
+	if (!addressAllowed(await getClientAddress(), ipAllowlist)) {
+		return "address-not-allowed";
+	}
+
+	// After the allowlist, before the password check: both of the first two end the session outright,
+	// and there is no sense asking whether a password has expired on a session that is not going to
+	// continue. This is also the call that marks the session as seen, so it must run on every request
+	// that reaches here — including the ones that go on to redirect because the password has just
+	// expired, two branches below. (The `mustChangePassword` branch above short-circuits before this
+	// and always has: a session held by an account that already owes a change is not being used.)
+	if (!(await keepSessionAlive(user.sessionId))) {
+		return "idle-too-long";
+	}
+
+	// An expired password **sets the forced-reset flag** rather than merely redirecting, and that is
+	// load-bearing: `/set-password` bounces anyone whose `mustChangePassword` is false to `/dashboard`,
+	// so a bare redirect here would put the two pages in an infinite loop. Setting the flag makes
+	// expiry converge with the mechanism that already exists — the page renders, the action clears the
+	// flag once the new password is stored, and the audit trail says what it always said.
+	//
+	// Written on a read path, once: the `mustChangePassword` branch above short-circuits every request
+	// after this one, so this costs a single write at the moment the password expires.
+	if (await accountPasswordExpired(user.id)) {
+		await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: true } });
+		return "password-expired";
+	}
+
+	// Last of the gates, and deliberately: a forced password change outranks it, because
+	// `/set-password` is reachable without a second factor and enrolling one while owing a password
+	// change would leave the account holding a factor for a password it is about to replace.
+	//
+	// The flag is consulted before the setting is read, so `&&` short-circuits: an account that
+	// already has one is not asked again, and an install that does not require two factors — the
+	// default — pays one settings read and no more.
+	//
+	// Skippable, and only by this one condition — see `skipEnrolmentGate` on `requireSession`.
+	// Everything before this point still ran: an account on a disallowed address or past its
+	// inactivity timeout is still turned away before it ever reaches the actions this flag exists for.
+	if (!options.skipEnrolmentGate && !user.twoFactorEnabled && (await booleanSetting("auth.require2fa"))) {
+		return "enrolment-owed";
+	}
+
+	return "allowed";
+}
+
+/**
  * Sends the caller away unless the request carries a usable session.
  *
  * "Usable" is stricter than "authenticated": a user who owes a password change holds a valid
@@ -99,6 +194,9 @@ export async function currentUser(): Promise<PanelUser | null> {
  * because there is nothing to sign in to yet and a sign-in form that can never succeed is a dead
  * end. That is a routing convenience only — the seal in `setup.ts` is what actually decides
  * whether setup may proceed.
+ *
+ * The gates themselves live in {@link sessionVerdict}; what is here is only what to *do* about each
+ * answer, which is the half that cannot be shared with a caller that must not redirect.
  *
  * @param options `skipEnrolmentGate` exists for exactly one caller: `panel-action.ts`'s `gate`,
  *   for the two actions that are how enrolment happens (`self:begin-2fa`, `self:confirm-2fa`). Those
@@ -115,61 +213,21 @@ export async function requireSession(options: { skipEnrolmentGate?: boolean } = 
 		redirect((await isInstallClaimed()) ? "/login" : "/setup");
 	}
 
-	if (user.mustChangePassword) {
-		redirect("/set-password");
-	}
-
-	// Re-checked on every request, not only at sign-in. Checking only at sign-in would leave an
-	// operator who signed in from home before the allowlist was tightened working until their session
-	// lapsed, which is the opposite of what tightening one is for.
-	const { ipAllowlist } = await globalSignInPolicy();
-	if (!addressAllowed(await getClientAddress(), ipAllowlist)) {
+	switch (await sessionVerdict(user, options)) {
+		case "allowed":
+			return user;
+		case "password-change-owed":
+		case "password-expired":
+			redirect("/set-password");
 		// The session is destroyed, not merely redirected. `/login` bounces an authenticated visitor to
 		// `/dashboard`, so sending a still-valid session there would loop between the two forever — and
-		// a session from an address that may no longer reach this install is the honest thing to end.
-		await auth.api.signOut({ headers: await authHeaders() });
-		redirect("/login");
+		// a session from an address that may no longer reach this install, or one that has sat past its
+		// inactivity timeout, is the honest thing to end.
+		case "address-not-allowed":
+		case "idle-too-long":
+			await auth.api.signOut({ headers: await authHeaders() });
+			redirect("/login");
+		case "enrolment-owed":
+			redirect("/enrol-2fa");
 	}
-
-	// After the allowlist, before the password check: both of the first two end the session outright,
-	// and there is no sense asking whether a password has expired on a session that is not going to
-	// continue. This is also the call that marks the session as seen, so it must run on every
-	// request that reaches here — including the ones that go on to redirect for a password change.
-	if (!(await keepSessionAlive(user.sessionId))) {
-		// Destroyed rather than redirected, for the reason the allowlist branch above gives: `/login`
-		// bounces an authenticated visitor to `/dashboard`, and a session left alive would loop
-		// between the two.
-		await auth.api.signOut({ headers: await authHeaders() });
-		redirect("/login");
-	}
-
-	// An expired password **sets the forced-reset flag** rather than merely redirecting, and that is
-	// load-bearing: `/set-password` bounces anyone whose `mustChangePassword` is false to `/dashboard`,
-	// so a bare redirect here would put the two pages in an infinite loop. Setting the flag makes
-	// expiry converge with the mechanism that already exists — the page renders, the action clears the
-	// flag once the new password is stored, and the audit trail says what it always said.
-	//
-	// Written on a read path, once: the `mustChangePassword` branch above short-circuits every request
-	// after this one, so this costs a single write at the moment the password expires.
-	if (await accountPasswordExpired(user.id)) {
-		await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: true } });
-		redirect("/set-password");
-	}
-
-	// Last of the gates, and deliberately: a forced password change outranks it, because
-	// `/set-password` is reachable without a second factor and enrolling one while owing a password
-	// change would leave the account holding a factor for a password it is about to replace.
-	//
-	// The flag is consulted before the setting is read, so `&&` short-circuits: an account that
-	// already has one is not asked again, and an install that does not require two factors — the
-	// default — pays one settings read and no more.
-	//
-	// Skippable, and only by this one condition — see `skipEnrolmentGate` above. Everything before
-	// this point still ran: an account on a disallowed address or past its inactivity timeout is
-	// still turned away before it ever reaches the actions this flag exists for.
-	if (!options.skipEnrolmentGate && !user.twoFactorEnabled && (await booleanSetting("auth.require2fa"))) {
-		redirect("/enrol-2fa");
-	}
-
-	return user;
 }

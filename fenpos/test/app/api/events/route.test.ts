@@ -14,8 +14,10 @@ import { settled } from "@/test/settled";
  * pass against the route's old hardcoded twenty-five seconds.
  *
  * The gate tests below exist because this route cannot use `requireSession` — see the route's own
- * comment — and so repeats `requireSession`'s `mustChangePassword` check by hand. A mocked
- * `currentUser` that always reports "no change owed" would let that repetition rot silently.
+ * comment — and once repeated `requireSession`'s `mustChangePassword` check by hand, missing the
+ * three gates added around it. Only `currentUser` is stubbed here: `sessionVerdict` is the real one,
+ * against the real database, so a gate this route stops running is a failure in this file rather
+ * than a hole nobody notices.
  */
 const currentUser = vi.fn<() => Promise<PanelUser | null>>(async () => ({
 	id: "test-user",
@@ -26,12 +28,25 @@ const currentUser = vi.fn<() => Promise<PanelUser | null>>(async () => ({
 	sessionId: "session-test-user",
 	twoFactorEnabled: false,
 }));
-vi.mock("@/lib/auth/require-session", () => ({ currentUser: () => currentUser() }));
+vi.mock("@/lib/auth/require-session", async (importActual) => ({
+	...(await importActual<typeof import("@/lib/auth/require-session")>()),
+	currentUser: () => currentUser(),
+}));
+
+// `sessionVerdict` reads the caller's address for the allowlist gate, and `next/headers` raises
+// outside a live request. A fixed address stands in, so the allowlist tests below turn on what is
+// configured rather than on what the runtime could see.
+vi.mock("@/lib/request-context", () => ({
+	getClientAddress: async () => "203.0.113.30",
+	getUserAgent: async () => "vitest",
+}));
 
 const { GET } = await import("@/app/api/events/route");
 
 beforeEach(async () => {
 	await prisma.setting.deleteMany();
+	await prisma.session.deleteMany();
+	await prisma.user.deleteMany();
 	currentUser.mockReset().mockResolvedValue({
 		id: "test-user",
 		name: "Test User",
@@ -72,6 +87,72 @@ describe("GET /api/events session gate", () => {
 
 		expect(response.status).toBe(401);
 		expect(await response.json()).toEqual({ error: "missing_key", message: "Not signed in." });
+	});
+
+	/**
+	 * The gate `auth.require2fa` is bought for. An account with a password and no authenticator is
+	 * refused every panel page on such an install; the stream carries more than any of those pages
+	 * shows, so a stolen password must not reach it either.
+	 */
+	it("refuses an account with no authenticator while two-factor is required", async () => {
+		await setSetting("auth.require2fa", true);
+
+		const response = await GET(new Request("https://fenpos.test/api/events"));
+
+		expect(response.status).toBe(401);
+	});
+
+	it("admits an enrolled account while two-factor is required", async () => {
+		await setSetting("auth.require2fa", true);
+		currentUser.mockResolvedValue({
+			id: "test-user",
+			name: "Test User",
+			email: "test@example.com",
+			isSuperuser: true,
+			mustChangePassword: false,
+			sessionId: "session-test-user",
+			twoFactorEnabled: true,
+		});
+
+		const abort = new AbortController();
+		const response = await GET(new Request("https://fenpos.test/api/events", { signal: abort.signal }));
+
+		expect(response.status).toBe(200);
+		abort.abort();
+	});
+
+	it("refuses a session that has sat past the inactivity timeout", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		const staleAt = new Date(Date.now() - 40 * 60 * 1000);
+		await prisma.user.create({ data: { id: "test-user", name: "Test User", email: "test@example.com" } });
+		await prisma.session.create({
+			data: {
+				id: "session-test-user",
+				token: "t-session-test-user",
+				userId: "test-user",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				createdAt: staleAt,
+				updatedAt: staleAt,
+				lastSeenAt: staleAt,
+			},
+		});
+
+		const response = await GET(new Request("https://fenpos.test/api/events"));
+
+		expect(response.status).toBe(401);
+	});
+
+	/**
+	 * Pre-existing before this route shared the panel's gates, and closed by sharing them: tightening
+	 * the allowlist ends panel sessions on their next request, and left alone this stream would have
+	 * gone on feeding an address the install no longer accepts.
+	 */
+	it("refuses a caller whose address no longer qualifies", async () => {
+		await setSetting("auth.ipAllowlist", "10.0.0.0/8");
+
+		const response = await GET(new Request("https://fenpos.test/api/events"));
+
+		expect(response.status).toBe(401);
 	});
 });
 
