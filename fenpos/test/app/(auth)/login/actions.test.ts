@@ -323,17 +323,20 @@ describe("two-factor at sign-in", () => {
 
 		const setCookies = responseHeaders.getSetCookie();
 		if (setCookies.length > 0) {
+			// `...rest` rather than a destructured second element, in both loops below: Better Auth's
+			// cookie values are URL-encoded today, so splitting on the first "=" happens to work, but a
+			// value that ever contained an unencoded "=" would otherwise be silently truncated.
 			const jar = new Map<string, string>();
 			for (const pair of (await headersMock()).get("cookie")?.split("; ") ?? []) {
-				const [name, value] = pair.split("=");
+				const [name, ...rest] = pair.split("=");
 				if (name) {
-					jar.set(name, value ?? "");
+					jar.set(name, rest.join("="));
 				}
 			}
 			for (const setCookie of setCookies) {
-				const [name, value] = (setCookie.split(";")[0] ?? "").split("=");
+				const [name, ...rest] = (setCookie.split(";")[0] ?? "").split("=");
 				if (name) {
-					jar.set(name, value ?? "");
+					jar.set(name, rest.join("="));
 				}
 			}
 			headersMock.mockResolvedValue(
@@ -459,6 +462,11 @@ describe("two-factor at sign-in", () => {
 		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 		expect(row.action).toBe("auth:two-factor");
 		expect(row.outcome).toBe("DENIED");
+		// The property under test: nothing about whose account this was reaches the row. Asserting only
+		// `action`/`outcome` above would stay green even if the actor carried the submitted email.
+		expect(row.actorUserId).toBeNull();
+		expect(row.actorEmail).toBe("");
+		expect(row.detail).not.toContain("000000");
 	});
 
 	it("signs in on a real code", async () => {
@@ -493,5 +501,47 @@ describe("two-factor at sign-in", () => {
 		);
 		const state = await verifyTwoFactor({ error: null, twoFactorRequired: true }, form({ code: recoveryCodes[0] }));
 		expect(state.error).not.toBeNull();
+
+		// `state.error` alone is satisfied by any refusal, including one where the challenge cookie
+		// itself was never examined — which this second round is at genuine risk of, since (unlike the
+		// first) nothing signs out between challenges here, so the jar now carries a rotated session
+		// cookie and `withCookieHandoff` is doing more merging than on the first pass. Proving the spent
+		// code specifically, rather than the challenge generally, needs a code that is still good: a
+		// *different* recovery code against the very same live challenge must still redirect.
+		await expect(
+			verifyTwoFactor({ error: null, twoFactorRequired: true }, form({ code: recoveryCodes[1] })),
+		).rejects.toThrow("REDIRECT:/dashboard");
+	});
+
+	it("keeps the session the second factor just issued, even under a cap the eviction order would miss", async () => {
+		const secret = await enrolledUser("capped@example.test", "correct horse battery staple");
+		const user = await prisma.user.findFirstOrThrow({ where: { email: "capped@example.test" } });
+
+		// Stamped as seen an hour in the *future*, so the ordinary "most recently seen survives"
+		// ordering in `enforceSessionCap` would rank this ahead of the session `verifyTwoFactor` is
+		// about to create — the only thing that can save the new session here is `keepSessionId`
+		// pinning it, which is exactly the property this test exists to catch a regression in.
+		await prisma.session.create({
+			data: {
+				id: "capped-decoy",
+				token: "capped-decoy-token",
+				userId: user.id,
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				lastSeenAt: new Date(Date.now() + 60 * 60 * 1000),
+			},
+		});
+		await setSetting("auth.maxConcurrentSessions", 1);
+
+		await signIn(
+			{ error: null, twoFactorRequired: false },
+			form({ email: "capped@example.test", password: "correct horse battery staple" }),
+		);
+		await expect(
+			verifyTwoFactor({ error: null, twoFactorRequired: true }, form({ code: totp(secret) })),
+		).rejects.toThrow("REDIRECT:/dashboard");
+
+		const left = await prisma.session.findMany({ where: { userId: user.id }, select: { id: true } });
+		expect(left).toHaveLength(1);
+		expect(left[0]?.id).not.toBe("capped-decoy");
 	});
 });

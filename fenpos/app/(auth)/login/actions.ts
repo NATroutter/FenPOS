@@ -171,6 +171,18 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	// it against them would lock accounts for having a slow phone.
 	signInLimiter.reset(address);
 
+	// `signedIn` carries no user id on the deferral arm — the plugin's response there is exactly
+	// `{ twoFactorRedirect: true, twoFactorMethods }` — so the account is looked up by the address
+	// already validated above. Done ahead of the branch, so both arms benefit: the full-success arm
+	// no longer needs its own lookup, either.
+	const passwordAccount = await prisma.user.findFirst({
+		where: { email: email.trim().toLowerCase() },
+		select: { id: true },
+	});
+	if (passwordAccount) {
+		await clearFailedSignIns(passwordAccount.id);
+	}
+
 	// Better Auth defers instead of returning a session when the account carries a second factor. It
 	// has already set its own challenge cookie by this point; nothing here has to carry state.
 	if ("twoFactorRedirect" in signedIn && signedIn.twoFactorRedirect) {
@@ -191,8 +203,6 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		// that a plugin adding a third arm is a refusal rather than a crash on `signedIn.user`.
 		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
-
-	await clearFailedSignIns(signedIn.user.id);
 
 	// After the session exists, so the new one is counted and protected. `signInEmail` returns the
 	// session's token rather than its row, so the row is found by that unique column and its id is
@@ -227,9 +237,15 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
  * Deliberately **not** rate-limited by address the way the password step is: the throttle was
  * already cleared when the password was accepted, and an attacker who has reached this step holds a
  * valid password, so the thing worth counting is codes against this challenge rather than requests
- * from this address. The challenge cookie the plugin issued is short-lived, which is what bounds it.
- * If a run of `auth:two-factor` DENIED rows ever shows this being ground at, a per-challenge counter
- * is the fix, not a per-address one.
+ * from this address. That counting already exists and this action does not need to add it: the
+ * plugin caps attempts *per challenge* at five (`beginAttempt(5)` in
+ * `two-factor/{totp,backup-codes}/index.mjs`), destroying the challenge cookie once they are spent,
+ * and separately caps them *per account, across challenges* at ten consecutive failures
+ * (`accountLockout`, `two-factor/verify-two-factor.mjs`) — a budget `lib/auth/auth.ts` leaves at the
+ * plugin's default rather than overriding, so this reasoning depends on it staying that way. The
+ * challenge cookie's own short life is not what bounds this: `signInLimiter.reset(address)` above
+ * fires on every accepted password, so a password-holder can mint a fresh ten-minute challenge
+ * indefinitely without ever tripping the address throttle. The account lockout is the real ceiling.
  *
  * @param _previous the prior form state, required by useActionState and unused
  * @param formData the submitted form
@@ -240,6 +256,16 @@ export async function verifyTwoFactor(_previous: SignInState, formData: FormData
 	const code = typeof submitted === "string" ? submitted.trim() : "";
 
 	if (code === "") {
+		// Matches the malformed-submission branch in `signIn`: a direct POST with no `code` is a
+		// submission this file's own header says to expect, and it should leave the same kind of
+		// trace an empty email/password does there.
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.TWO_FACTOR,
+			outcome: "DENIED",
+			actor: unknownUserActor(""),
+			detail: { reason: "malformed" },
+			provenance: await requestProvenance(),
+		});
 		return { error: "Enter the code from your authenticator.", twoFactorRequired: true };
 	}
 

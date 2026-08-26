@@ -614,7 +614,7 @@ export const PANEL_ACTIONS = [
 	},
 
 	// --- No session to check a permission against. The setup pair is governed by the seal in
-	// `lib/auth/setup.ts` instead. All four already write their own audit rows, so the gate does not
+	// `lib/auth/setup.ts` instead. All five already write their own audit rows, so the gate does not
 	// touch them — they are here to be accounted for, not to be wrapped.
 	{
 		id: "auth:sign-in",
