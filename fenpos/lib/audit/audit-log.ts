@@ -1,13 +1,11 @@
 import "server-only";
-import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
-import { NO_PROVENANCE, type RequestProvenance } from "@/lib/audit/provenance";
+import { appendAuditEvent } from "@/lib/audit/append";
+import type { RequestProvenance } from "@/lib/audit/provenance";
 import { sweepAuditNow } from "@/lib/audit/retention";
 import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
 import { prisma } from "@/lib/db";
-import { isUniqueViolationOn } from "@/lib/db-errors";
 import type { AuditOutcome } from "@/lib/domain/audit";
 import { logger } from "@/lib/logger";
-import { redact } from "@/lib/redact";
 import { globalAuditSettings } from "@/lib/settings/settings-service";
 
 /**
@@ -103,22 +101,6 @@ export interface AuditEventInput {
 }
 
 /**
- * How many times a losing writer re-reads the tail and tries again.
- *
- * Bounded rather than unbounded because this runs on the way out of a real request: a writer that
- * kept retrying under sustained contention would hold the request open indefinitely, which is the
- * failure this module's whole "never throws" posture exists to avoid. Five is generous — losing
- * five in a row means five other events committed while this one was being written.
- */
-const MAX_CHAIN_ATTEMPTS = 5;
-
-/** Where `detail` is truncated. Bounds the row against a caller passing something enormous. */
-const MAX_DETAIL_CHARS = 8_000;
-
-/** The unique constraint a losing writer hits, in database naming. */
-const CHAIN_CONSTRAINT_COLUMNS = ["prev_hash"] as const;
-
-/**
  * Appends one event to the chain, without triggering retention.
  *
  * The half of {@link recordAudit} that writes. Exported for exactly one caller: the retention sweep,
@@ -126,47 +108,17 @@ const CHAIN_CONSTRAINT_COLUMNS = ["prev_hash"] as const;
  * would do, once per sweep, forever. Nothing else should call this; a caller that skips retention is
  * a caller that lets the table grow past its bounds.
  *
+ * The write itself — the field list, the hashing, the `prevHash` retry — lives in
+ * `lib/audit/append.ts`, so the same chaining logic runs whether the caller is a request or
+ * `pnpm auth:recover`. What stays here is the swallow: `append.ts` cannot import `lib/logger.ts`,
+ * which itself opens with `import "server-only"` and would break the very script `append.ts` exists
+ * to serve, so the catch that makes this "never throw" lives on this side of the call instead.
+ *
  * @param input the event
  */
 export async function appendEvent(input: AuditEventInput): Promise<void> {
 	try {
-		const provenance = input.provenance ?? NO_PROVENANCE;
-		const fields = {
-			// Captured here and written explicitly, never left to the column's default: the hash
-			// covers this value, so the timestamp hashed and the timestamp stored must be one value
-			// rather than two readings of the clock.
-			at: new Date(),
-			actorKind: input.actor.kind,
-			actorUserId: input.actor.kind === "USER" ? input.actor.userId : null,
-			actorName: input.actor.kind === "USER" ? input.actor.name : null,
-			actorEmail: input.actor.kind === "USER" ? input.actor.email : null,
-			apiKeyId: input.actor.kind === "API_KEY" ? input.actor.apiKeyId : null,
-			apiKeyName: input.actor.kind === "API_KEY" ? input.actor.apiKeyName : null,
-			action: input.action,
-			targetKind: input.target?.kind ?? null,
-			targetId: input.target?.id ?? null,
-			targetLabel: input.target?.label ?? null,
-			outcome: input.outcome,
-			detail: encodeDetail(input.detail),
-			ipAddress: provenance.ipAddress,
-			userAgent: provenance.userAgent,
-			sessionId: provenance.sessionId,
-		};
-
-		for (let attempt = 1; attempt <= MAX_CHAIN_ATTEMPTS; attempt++) {
-			// Re-read on every attempt: losing the constraint means somebody else's row is now the
-			// tail, and chaining onto the stale one would lose the same race again.
-			const prevHash = await tailHash();
-
-			try {
-				await prisma.auditEvent.create({ data: { ...fields, prevHash, hash: hashEvent(fields, prevHash) } });
-				return;
-			} catch (error) {
-				if (!isUniqueViolationOn(error, CHAIN_CONSTRAINT_COLUMNS) || attempt === MAX_CHAIN_ATTEMPTS) {
-					throw error;
-				}
-			}
-		}
+		await appendAuditEvent(prisma, input);
 	} catch (error) {
 		// Swallowed on purpose — see the module comment. Logged with the action so an event missing
 		// from the record is diagnosable rather than merely absent.
@@ -191,45 +143,6 @@ export async function appendEvent(input: AuditEventInput): Promise<void> {
 export async function recordAudit(input: AuditEventInput): Promise<void> {
 	await appendEvent(input);
 	void maybeSweep();
-}
-
-/**
- * Redacts and encodes `detail`.
- *
- * Redaction runs before encoding rather than on the finished string, so a secret is removed as a
- * value rather than matched as text — the same rule `logger.ts` follows, through the same module,
- * which is what stops the two from disagreeing about what is unsafe to record.
- *
- * @param detail the caller's fields, or undefined
- * @returns the JSON text to store, or null when there is nothing to store
- */
-function encodeDetail(detail: Record<string, unknown> | undefined): string | null {
-	if (detail === undefined) {
-		return null;
-	}
-	return JSON.stringify(redact(detail)).slice(0, MAX_DETAIL_CHARS);
-}
-
-/**
- * What the next row must name as its predecessor.
- *
- * Three-deep, and the middle step is the one that matters. After a retention sweep that removed every
- * row, the table is empty but `AuditAnchor` holds the last swept event — and `verifyAuditChain` starts
- * its walk from that anchor and requires the oldest surviving row's `prevHash` to equal it
- * (`verify.ts`). Falling straight through to genesis there would make an untouched chain report
- * `anchor-mismatch`: the record accusing itself of tampering, with no tampering to find.
- *
- * Genesis is reached only on an install that has never recorded and never swept.
- *
- * @returns the tail row's hash, else the anchor's, else {@link GENESIS_HASH}
- */
-async function tailHash(): Promise<string> {
-	const tail = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { hash: true } });
-	if (tail) {
-		return tail.hash;
-	}
-	const anchor = await prisma.auditAnchor.findUnique({ where: { id: 1 }, select: { hash: true } });
-	return anchor?.hash ?? GENESIS_HASH;
 }
 
 /**
