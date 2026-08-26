@@ -24,7 +24,12 @@ import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
  * into might be exactly the attempt this record needs to catch. Every write goes through
  * {@link appendAuditEvent}, which throws on failure rather than swallowing it — a recovery tool that
  * silently failed to record a credential reset is the exact failure the audit chain exists to
- * prevent.
+ * prevent. That row is necessarily written *after* the change it describes rather than inside the same
+ * transaction: {@link appendAuditEvent} takes a `PrismaClient`, not a transaction client, because the
+ * chain it maintains has to see every writer's commits in order, including ones from other calls
+ * interleaved with this one — a transaction client can only see its own. There is therefore a real,
+ * if narrow, window between a change committing and its row existing; nothing below closes it, and
+ * `resetPassword`'s own doc comment says so again where it matters most.
  *
  * **This re-expresses, rather than reuses, `lib/auth/account-security.ts`.** That module already
  * implements almost every operation here, but it opens with `import "server-only"` and calls through
@@ -110,27 +115,103 @@ function normalizeEmail(email: string): string {
 }
 
 /**
+ * A refusal this module authored itself, thrown from inside a `perform` callback passed to
+ * {@link recoverAccount}.
+ *
+ * The one kind of error whose message reaches a `FAILURE` row's `detail.reason` verbatim — see
+ * {@link recordFailure} for why everything else does not. Every message given to this class is
+ * therefore text this module wrote deliberately for the row, never a value read back from elsewhere,
+ * exactly the discipline `appendAuditEvent`'s callers are expected to hold everywhere else.
+ */
+class RecoveryRefusal extends Error {}
+
+/**
+ * What a `FAILURE` row's `detail.reason` says when `perform` threw something other than a
+ * {@link RecoveryRefusal}.
+ *
+ * Never that exception's own `.message`. A `PrismaClientValidationError` on `resetPassword`'s
+ * credential update, for one plausible example, embeds the arguments it choked on — which include the
+ * freshly minted argon2 hash — and `redact()` only catches secrets it recognises by field *name*; a
+ * hash sitting inside a stringified error message would pass straight through it into a table with no
+ * edit path. The original error is not lost — {@link recoverAccount} still rethrows it to the caller
+ * unchanged — it is only kept out of the one place that cannot be corrected afterwards.
+ */
+const UNEXPECTED_FAILURE_REASON = "an unexpected error; see the command's own output";
+
+/**
+ * Writes the `FAILURE` row for a `perform` that threw, after the account was already resolved.
+ *
+ * Split out of {@link recoverAccount} so the double-failure case has somewhere to keep both errors:
+ * if the append itself throws — {@link appendAuditEvent} is designed to, rather than swallow a write
+ * it could not make — `error` is not lost behind it. It becomes the thrown result's `cause`, so a
+ * caller inspecting the exception still finds what `perform` actually failed with, even though that
+ * never reached the row.
+ *
+ * @param prisma the client to write through
+ * @param action which {@link RECOVERY_AUDIT_ACTIONS} this is
+ * @param userId the resolved account
+ * @param normalizedEmail the address, already normalised
+ * @param error what `perform` threw
+ * @throws Error combining both failures, only when the append itself also fails
+ */
+async function recordFailure(
+	prisma: PrismaClient,
+	action: string,
+	userId: string,
+	normalizedEmail: string,
+	error: unknown,
+): Promise<void> {
+	const reason = error instanceof RecoveryRefusal ? error.message : UNEXPECTED_FAILURE_REASON;
+
+	try {
+		await appendAuditEvent(prisma, {
+			action,
+			outcome: "FAILURE",
+			actor: CLI_RECOVERY_ACTOR,
+			target: { kind: "user", id: userId, label: normalizedEmail },
+			detail: { reason },
+			provenance: NO_PROVENANCE,
+		} satisfies AuditEventInput);
+	} catch (auditError) {
+		throw new Error(
+			`Recovery failed for '${normalizedEmail}' and the failure could not be recorded to the audit ` +
+				`trail: ${auditError instanceof Error ? auditError.message : String(auditError)}`,
+			{ cause: error },
+		);
+	}
+}
+
+/**
  * Runs one recovery operation against the account an address resolves to, writing exactly one audit
- * row: `FAILURE` when the address matches nothing or `perform` throws, `SUCCESS` otherwise.
+ * row per outcome: a `FAILURE` row before throwing when the address matches nothing or `perform`
+ * throws, a `SUCCESS` row after `perform` returns.
  *
  * Centralising this is what makes "every operation writes a row, including refusals" true by
- * construction rather than by five separate call sites remembering to do it. `perform`'s own thrown
- * message is recorded as `detail.reason` on the `FAILURE` row — never anything else about the
- * failure, and in particular never a value `perform` minted, so a caller that must keep something out
- * of the record keeps it out of the error message it throws.
+ * construction rather than by five separate call sites remembering to do it.
+ *
+ * **Two things this deliberately does not do, both following from {@link appendAuditEvent}'s own
+ * "throws rather than swallows".** First, the `SUCCESS` append runs *after* `perform`'s own
+ * `try`/`catch` has already exited — not inside it — so an append failure there propagates as itself
+ * rather than being caught and recorded as a contradictory `FAILURE` row for a change that already
+ * committed (and, for `resetPassword`, a minted password the caller would then never receive even
+ * though it now works). Second, `perform`'s own thrown message reaches the row only when it is a
+ * {@link RecoveryRefusal} — see {@link recordFailure} and {@link UNEXPECTED_FAILURE_REASON} for why an
+ * arbitrary exception's message does not.
  *
  * @param prisma the client to read and write through
  * @param action which {@link RECOVERY_AUDIT_ACTIONS} this is
  * @param email the address naming the account
- * @param perform the change itself, given the resolved account id
+ * @param perform the change itself, given the resolved account id and the normalised address
  * @returns whatever `perform` returns
- * @throws Error naming "no account" when the address matches nothing, or whatever `perform` throws
+ * @throws Error naming "no account" when the address matches nothing; whatever `perform` throws
+ *   otherwise; or, only when the `FAILURE` row itself cannot be written, a combined error carrying
+ *   `perform`'s own failure as its `cause`
  */
 async function recoverAccount<T>(
 	prisma: PrismaClient,
 	action: string,
 	email: string,
-	perform: (userId: string) => Promise<T>,
+	perform: (userId: string, normalizedEmail: string) => Promise<T>,
 ): Promise<T> {
 	const normalized = normalizeEmail(email);
 	const user = await prisma.user.findFirst({ where: { email: normalized }, select: { id: true } });
@@ -147,27 +228,22 @@ async function recoverAccount<T>(
 		throw new Error(`No account found for '${normalized}'.`);
 	}
 
+	let result: T;
 	try {
-		const result = await perform(user.id);
-		await appendAuditEvent(prisma, {
-			action,
-			outcome: "SUCCESS",
-			actor: CLI_RECOVERY_ACTOR,
-			target: { kind: "user", id: user.id, label: normalized },
-			provenance: NO_PROVENANCE,
-		} satisfies AuditEventInput);
-		return result;
+		result = await perform(user.id, normalized);
 	} catch (error) {
-		await appendAuditEvent(prisma, {
-			action,
-			outcome: "FAILURE",
-			actor: CLI_RECOVERY_ACTOR,
-			target: { kind: "user", id: user.id, label: normalized },
-			detail: { reason: error instanceof Error ? error.message : "unknown error" },
-			provenance: NO_PROVENANCE,
-		} satisfies AuditEventInput);
+		await recordFailure(prisma, action, user.id, normalized, error);
 		throw error;
 	}
+
+	await appendAuditEvent(prisma, {
+		action,
+		outcome: "SUCCESS",
+		actor: CLI_RECOVERY_ACTOR,
+		target: { kind: "user", id: user.id, label: normalized },
+		provenance: NO_PROVENANCE,
+	} satisfies AuditEventInput);
+	return result;
 }
 
 /**
@@ -211,7 +287,15 @@ function mintPassword(): string {
  * live on someone else's screen. Unlike `setAccountPassword`, the new password is never checked
  * against `passwordSchema` or recorded through `recordPasswordChange` — recovery mints its own value
  * deliberately outside the reuse history an operator's own choices are held to, and its length alone
- * already clears any configured minimum (see {@link mintPassword}).
+ * already clears any configured minimum (see {@link mintPassword}). One consequence of skipping
+ * `recordPasswordChange` is worth naming: `auth.passwordExpiryDays`' clock is keyed off that history,
+ * so a recovery reset does not restart it the way an ordinary password change would.
+ * `mustChangePassword` still blocks the account from reaching anything else in the meantime, so this
+ * is a gap only until the very next sign-in — but it is a real one, not covered by anything else here.
+ *
+ * The row this writes lands after the transaction below commits, not inside it — see the module
+ * comment's note on that window. Between the two, the credential is already replaced and the minted
+ * password already works, but no row says so yet.
  *
  * @param prisma the client to write through
  * @param email the account's address
@@ -219,9 +303,7 @@ function mintPassword(): string {
  * @throws Error when the address matches no account, or the account has no password credential
  */
 export async function resetPassword(prisma: PrismaClient, email: string): Promise<string> {
-	const normalized = normalizeEmail(email);
-
-	return recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD, email, async (userId) => {
+	return recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD, email, async (userId, normalizedEmail) => {
 		const minted = mintPassword();
 		const passwordHash = await hashPassword(minted);
 
@@ -231,7 +313,7 @@ export async function resetPassword(prisma: PrismaClient, email: string): Promis
 				data: { password: passwordHash, updatedAt: new Date() },
 			});
 			if (count === 0) {
-				throw new Error(`Account '${normalized}' has no password credential to reset.`);
+				throw new RecoveryRefusal(`Account '${normalizedEmail}' has no password credential to reset.`);
 			}
 			await tx.user.update({ where: { id: userId }, data: { mustChangePassword: true } });
 			await tx.session.deleteMany({ where: { userId } });
@@ -303,6 +385,14 @@ const IP_ALLOWLIST_SETTING_KEY = "auth.ipAllowlist";
  * as one `setSetting` wrote would. The empty string is `auth.ipAllowlist`'s own built-in meaning of
  * "no restriction" (see its `SETTINGS` entry), so writing it is exactly what "clear" means for this
  * setting; no other validation applies to it.
+ *
+ * **This is the one export that does not share {@link recoverAccount}'s guarantee.** There is no
+ * account to resolve or refuse against, so it does not go through that helper: the row it writes
+ * carries no `target`, and the `upsert` above is not wrapped in a `try` the way `perform` callbacks
+ * effectively are — an `upsert` failure here throws bare, with no `FAILURE` row behind it. That is
+ * still defensible on its own terms, unlike a silent version of the same gap elsewhere in this file
+ * would be: nothing changed, so there is nothing a row would be correcting the record about, and a
+ * setting is not an account whose compromise this record exists to help investigate.
  *
  * @param prisma the client to write through
  */

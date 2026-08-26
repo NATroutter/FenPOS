@@ -136,6 +136,26 @@ describe("recovery", () => {
 		expect(row.outcome).toBe("FAILURE");
 	});
 
+	it("refuses an account with no credential, and never lets the audit row carry a hash", async () => {
+		// A `User` row with no `Account` row at all — never went through `credentialUser`, so there is
+		// no credential for `resetPassword` to update. This is the one path in the whole module that
+		// mints a password, hashes it, and *then* fails: the exact shape a leak would take if a raw
+		// exception's message ever reached the row.
+		await prisma.user.create({
+			data: { id: "no-credential", name: "No Credential", email: "nocred@example.test" },
+		});
+
+		await expect(resetPassword(prisma, "nocred@example.test")).rejects.toThrow(/no password credential/i);
+
+		expect(await prisma.auditEvent.count()).toBe(1);
+		const row = await prisma.auditEvent.findFirstOrThrow();
+		expect(row.outcome).toBe("FAILURE");
+		const serialized = JSON.stringify(row);
+		// Neither the plaintext (unknowable here, since resetPassword never returned it) nor the
+		// argon2id marker every hash this module writes begins with may appear in the stored row.
+		expect(serialized).not.toContain("$argon2id$");
+	});
+
 	it("leaves the chain verifiable after every operation", async () => {
 		await credentialUser("chain@example.test", "old password entirely");
 		await resetPassword(prisma, "chain@example.test");
