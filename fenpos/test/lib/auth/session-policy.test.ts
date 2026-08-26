@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { keepSessionAlive } from "@/lib/auth/session-policy";
+import { enforceSessionCap, keepSessionAlive } from "@/lib/auth/session-policy";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -80,5 +80,75 @@ describe("keepSessionAlive", () => {
 	it("says no to a session that is not there", async () => {
 		await setSetting("auth.idleTimeoutMinutes", 30);
 		expect(await keepSessionAlive("missing")).toBe(false);
+	});
+});
+
+describe("enforceSessionCap", () => {
+	/** `count` sessions for one user, oldest-seen first. */
+	async function sessions(userId: string, count: number): Promise<string[]> {
+		await prisma.user.create({
+			data: { id: userId, name: userId, email: `${userId}@example.test`, emailVerified: false },
+		});
+		const ids: string[] = [];
+		for (let index = 0; index < count; index += 1) {
+			const at = new Date(Date.now() - (count - index) * 60 * 1000);
+			const id = `${userId}-${index}`;
+			await prisma.session.create({
+				data: {
+					id,
+					token: `t-${id}`,
+					userId,
+					expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+					createdAt: at,
+					updatedAt: at,
+					lastSeenAt: at,
+				},
+			});
+			ids.push(id);
+		}
+		return ids;
+	}
+
+	beforeEach(async () => {
+		await prisma.session.deleteMany({});
+		await prisma.user.deleteMany({});
+		await setSetting("auth.maxConcurrentSessions", 0);
+	});
+
+	it("deletes nothing when the cap is unlimited", async () => {
+		const ids = await sessions("cap-off", 6);
+		expect(await enforceSessionCap("cap-off", ids[5])).toBe(0);
+		expect(await prisma.session.count({ where: { userId: "cap-off" } })).toBe(6);
+	});
+
+	it("deletes nothing while the account is under the cap", async () => {
+		await setSetting("auth.maxConcurrentSessions", 3);
+		const ids = await sessions("cap-under", 3);
+		expect(await enforceSessionCap("cap-under", ids[2])).toBe(0);
+	});
+
+	it("evicts the least recently seen sessions once the cap is exceeded", async () => {
+		await setSetting("auth.maxConcurrentSessions", 2);
+		const ids = await sessions("cap-over", 5);
+		expect(await enforceSessionCap("cap-over", ids[4])).toBe(3);
+		const left = await prisma.session.findMany({ where: { userId: "cap-over" }, select: { id: true } });
+		expect(left.map((row) => row.id).sort()).toEqual([ids[3], ids[4]].sort());
+	});
+
+	it("never evicts the session that was just created, however old its stamp looks", async () => {
+		await setSetting("auth.maxConcurrentSessions", 1);
+		const ids = await sessions("cap-keep", 3);
+		// ids[0] is the *oldest* — pass it as the one to keep and it must survive anyway.
+		await enforceSessionCap("cap-keep", ids[0]);
+		const left = await prisma.session.findMany({ where: { userId: "cap-keep" }, select: { id: true } });
+		expect(left.map((row) => row.id)).toEqual([ids[0]]);
+	});
+
+	it("touches nobody else's sessions", async () => {
+		await setSetting("auth.maxConcurrentSessions", 1);
+		const mine = await sessions("cap-mine", 3);
+		await sessions("cap-theirs", 3);
+		await enforceSessionCap("cap-mine", mine[2]);
+		expect(await prisma.session.count({ where: { userId: "cap-theirs" } })).toBe(3);
 	});
 });

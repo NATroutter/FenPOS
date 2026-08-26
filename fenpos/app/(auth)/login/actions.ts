@@ -9,6 +9,7 @@ import { auth } from "@/lib/auth/auth";
 import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth/lockout";
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
+import { enforceSessionCap } from "@/lib/auth/session-policy";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
 import { globalSignInPolicy } from "@/lib/settings/settings-service";
@@ -160,6 +161,12 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	// window once they get it right — nor stay one failure away from a lock.
 	signInLimiter.reset(address);
 	await clearFailedSignIns(signedIn.user.id);
+
+	// After the session exists, so the new one is counted and protected. The session id is not
+	// available here — `signInEmail` returns a token rather than a row — so nothing is pinned, and
+	// the newest session survives on its stamp alone. It was written milliseconds ago; every other
+	// session the account holds was written on a different request.
+	await enforceSessionCap(signedIn.user.id, null);
 
 	logger.info("Signed in", { address, email: email.trim().toLowerCase() });
 
