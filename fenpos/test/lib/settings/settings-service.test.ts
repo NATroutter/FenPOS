@@ -22,6 +22,7 @@ import {
 	globalLogIngestSettings,
 	globalPasswordLifetime,
 	globalPasswordPolicy,
+	globalSessionPolicy,
 	globalSignInPolicy,
 	integerSetting,
 	listSettings,
@@ -308,6 +309,9 @@ describe("setting definitions", () => {
 			"auth.lockoutAfterFailures": "integer",
 			"auth.lockoutMinutes": "integer",
 			"auth.ipAllowlist": "string",
+			"auth.require2fa": "boolean",
+			"auth.idleTimeoutMinutes": "integer",
+			"auth.maxConcurrentSessions": "integer",
 			"audit.retentionDays": "integer",
 			"audit.maxRecords": "integer",
 			"audit.sweepEvery": "integer",
@@ -359,6 +363,26 @@ describe("setting definitions", () => {
 
 		expect(stored?.value).toBe(250);
 		expect(stored?.overridden).toBe(true);
+	});
+
+	describe("globalSessionPolicy", () => {
+		it("returns the fallbacks as milliseconds and seconds", async () => {
+			const policy = await globalSessionPolicy();
+			expect(policy.sessionSeconds).toBe(12 * 60 * 60);
+			expect(policy.idleTimeoutMs).toBe(0);
+			expect(policy.lastSeenRefreshMs).toBe(5 * 60 * 1000);
+			expect(policy.maxConcurrentSessions).toBe(0);
+		});
+
+		it("converts a stored idle timeout from minutes", async () => {
+			await setSetting("auth.idleTimeoutMinutes", 30);
+			expect((await globalSessionPolicy()).idleTimeoutMs).toBe(30 * 60 * 1000);
+		});
+
+		it("converts a stored session lifetime from hours", async () => {
+			await setSetting("auth.sessionHours", 4);
+			expect((await globalSessionPolicy()).sessionSeconds).toBe(4 * 60 * 60);
+		});
 	});
 });
 
