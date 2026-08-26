@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
@@ -19,6 +20,9 @@ import {
 	globalJobSettings,
 	globalLimits,
 	globalLogIngestSettings,
+	globalPasswordLifetime,
+	globalPasswordPolicy,
+	globalSignInPolicy,
 	integerSetting,
 	listSettings,
 	SETTING_KEYS,
@@ -198,6 +202,54 @@ describe("setting definitions", () => {
 		]);
 	});
 
+	it("requires nothing of a password but its length", async () => {
+		// Composition rules push people toward `Password1!` and away from the long passphrases that are
+		// actually stronger. They exist for installs that answer to a policy demanding them.
+		const policy = await globalPasswordPolicy();
+
+		expect(policy.minimumLength).toBe(MINIMUM_PASSWORD_LENGTH);
+		expect(policy.requireMixedCase).toBe(false);
+		expect(policy.requireDigit).toBe(false);
+		expect(policy.requireSymbol).toBe(false);
+	});
+
+	it("locks nobody out and restricts no address by default", async () => {
+		// A lockout is a denial-of-service primitive handed to anyone who knows an email address, and a
+		// misconfigured allowlist locks every administrator out of a LAN appliance with no offline
+		// remedy until phase 8.
+		const policy = await globalSignInPolicy();
+
+		expect(policy.lockoutAfterFailures).toBe(0);
+		expect(policy.ipAllowlist).toBe("");
+	});
+
+	it("expires no password and remembers none by default", async () => {
+		const lifetime = await globalPasswordLifetime();
+
+		expect(lifetime.expiryDays).toBe(0);
+		expect(lifetime.reuseCount).toBe(0);
+	});
+
+	it("honours an override on each of the three readers", async () => {
+		await setSetting("auth.requireDigit", true);
+		await setSetting("auth.lockoutAfterFailures", 5);
+		await setSetting("auth.passwordReuseCount", 3);
+
+		expect((await globalPasswordPolicy()).requireDigit).toBe(true);
+		expect((await globalSignInPolicy()).lockoutAfterFailures).toBe(5);
+		expect((await globalPasswordLifetime()).reuseCount).toBe(3);
+	});
+
+	it("never lets a stored minimum fall below the built-in floor", async () => {
+		// `setSetting`'s own `min` refuses this on write; the floor here is what protects against a row
+		// written before that bound existed, or edited around it.
+		await prisma.setting.create({
+			data: { key: "auth.minimumPasswordLength", value: JSON.stringify(4) },
+		});
+
+		expect((await globalPasswordPolicy()).minimumLength).toBe(MINIMUM_PASSWORD_LENGTH);
+	});
+
 	it("defaults page-view recording to off", async () => {
 		// Not the reading the spec's phrasing implies, and deliberately so. `router.refresh()` re-runs a
 		// route's server component, so a live tab produces page views at event rate rather than at
@@ -248,6 +300,14 @@ describe("setting definitions", () => {
 			"auth.signInAttemptsPerMinute": "integer",
 			"auth.minimumPasswordLength": "integer",
 			"auth.lastSeenRefreshMinutes": "integer",
+			"auth.requireMixedCase": "boolean",
+			"auth.requireDigit": "boolean",
+			"auth.requireSymbol": "boolean",
+			"auth.passwordReuseCount": "integer",
+			"auth.passwordExpiryDays": "integer",
+			"auth.lockoutAfterFailures": "integer",
+			"auth.lockoutMinutes": "integer",
+			"auth.ipAllowlist": "string",
 			"audit.retentionDays": "integer",
 			"audit.maxRecords": "integer",
 			"audit.sweepEvery": "integer",

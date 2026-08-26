@@ -1,5 +1,5 @@
 import "server-only";
-import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { MINIMUM_PASSWORD_LENGTH, type PasswordPolicy } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
@@ -256,6 +256,14 @@ export const SETTING_KEYS = [
 	"auth.signInAttemptsPerMinute",
 	"auth.minimumPasswordLength",
 	"auth.lastSeenRefreshMinutes",
+	"auth.requireMixedCase",
+	"auth.requireDigit",
+	"auth.requireSymbol",
+	"auth.passwordReuseCount",
+	"auth.passwordExpiryDays",
+	"auth.lockoutAfterFailures",
+	"auth.lockoutMinutes",
+	"auth.ipAllowlist",
 	"audit.retentionDays",
 	"audit.maxRecords",
 	"audit.sweepEvery",
@@ -691,6 +699,89 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 120,
 		fallback: 5,
 		unit: "minutes",
+	},
+	{
+		key: "auth.requireMixedCase",
+		label: "Require mixed case",
+		description:
+			"Whether a password must contain both an upper-case and a lower-case letter. Off by default: composition rules push people toward Password1! and away from the long passphrases that are actually stronger.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "auth.requireDigit",
+		label: "Require a digit",
+		description: "Whether a password must contain a digit. Off by default, for the reason mixed case is.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "auth.requireSymbol",
+		label: "Require a symbol",
+		description:
+			"Whether a password must contain a character that is neither a letter nor a digit. A space does not count — spaces are what make a passphrase readable.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "auth.passwordReuseCount",
+		label: "Passwords remembered",
+		description:
+			"How many of an account's previous passwords it may not return to. Zero remembers none. Each one costs a hash verification when a password is changed, which is why this is not unbounded.",
+		category: "security",
+		type: "integer",
+		min: 0,
+		max: 24,
+		fallback: 0,
+		unit: "passwords",
+	},
+	{
+		key: "auth.passwordExpiryDays",
+		label: "Password lifetime",
+		description:
+			"How long a password may go unchanged before the account is required to replace it. Zero never expires — which current guidance prefers, since forced rotation mostly produces the same password with a rising number on the end.",
+		category: "security",
+		type: "integer",
+		min: 0,
+		max: 3_650,
+		fallback: 0,
+		unit: "days",
+	},
+	{
+		key: "auth.lockoutAfterFailures",
+		label: "Lock out after",
+		description:
+			"Consecutive failed sign-ins before an account is locked. Zero never locks. This is a per-account limit, separate from the per-address throttle above, which stays on regardless: one defends a password, the other defends the server.",
+		category: "security",
+		type: "integer",
+		min: 0,
+		max: 100,
+		fallback: 0,
+		unit: "attempts",
+	},
+	{
+		key: "auth.lockoutMinutes",
+		label: "Lockout duration",
+		description: "How long a locked account stays locked. It clears itself; nobody has to unlock it.",
+		category: "security",
+		type: "integer",
+		min: 1,
+		max: 1_440,
+		fallback: 15,
+		unit: "minutes",
+	},
+	{
+		key: "auth.ipAllowlist",
+		label: "Address allowlist",
+		description:
+			"Addresses and CIDR ranges that may sign in, separated by commas or newlines. Empty allows every address. Checked at sign-in and again on every panel request, so tightening it ends sessions that no longer qualify. Set this wrongly and nobody can sign in.",
+		category: "security",
+		type: "string",
+		maxLength: 2_000,
+		fallback: "",
 	},
 	{
 		key: "audit.retentionDays",
@@ -1264,6 +1355,75 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 		maxRecords: value("logs.maxRecords"),
 		maxMessageChars: value("logs.maxMessageChars"),
 		sweepEvery: value("logs.sweepEvery"),
+	};
+}
+
+/**
+ * The password policy in force, as `passwordSchema` wants it.
+ *
+ * `minimumLength` is floored at `MINIMUM_PASSWORD_LENGTH` rather than trusted from storage: the
+ * setting's own `min` enforces it on write, and this makes a row written before that bound existed —
+ * or edited around it — unable to weaken the floor `setup.ts` relies on.
+ *
+ * @returns the policy in force install-wide
+ */
+export async function globalPasswordPolicy(): Promise<PasswordPolicy> {
+	const settings = await listSettings();
+	const flag = (key: SettingKey): boolean => narrow(settings, key, "boolean") as boolean;
+
+	return {
+		minimumLength: Math.max(
+			MINIMUM_PASSWORD_LENGTH,
+			narrow(settings, "auth.minimumPasswordLength", "integer") as number,
+		),
+		requireMixedCase: flag("auth.requireMixedCase"),
+		requireDigit: flag("auth.requireDigit"),
+		requireSymbol: flag("auth.requireSymbol"),
+	};
+}
+
+/** What governs whether a sign-in attempt may proceed at all, before any credential is examined. */
+export interface GlobalSignInPolicy {
+	/** `auth.lockoutAfterFailures`: consecutive failures before an account locks. Zero never locks. */
+	lockoutAfterFailures: number;
+	/** `auth.lockoutMinutes`: how long a lock lasts. */
+	lockoutMinutes: number;
+	/** `auth.ipAllowlist`: raw, as stored. Empty allows every address. */
+	ipAllowlist: string;
+}
+
+/**
+ * The sign-in gates, read as one object.
+ *
+ * One call because both gates run on the same path, in the same request, before any credential is
+ * examined — and two `listSettings()` reads where one would do is a round trip on the hot path of the
+ * one endpoint an attacker is deliberately hammering.
+ *
+ * @returns the lockout and allowlist settings in force
+ */
+export async function globalSignInPolicy(): Promise<GlobalSignInPolicy> {
+	const settings = await listSettings();
+	return {
+		lockoutAfterFailures: narrow(settings, "auth.lockoutAfterFailures", "integer") as number,
+		lockoutMinutes: narrow(settings, "auth.lockoutMinutes", "integer") as number,
+		ipAllowlist: narrow(settings, "auth.ipAllowlist", "string") as string,
+	};
+}
+
+/**
+ * How long a password lasts and how many are remembered.
+ *
+ * Separate from {@link globalPasswordPolicy} because these two govern a password's *history* rather
+ * than its *shape*, and they are read on different paths: the shape wherever a password is validated,
+ * the history only where one is changed or a session is resumed.
+ *
+ * @returns the reuse and expiry settings in force
+ */
+export async function globalPasswordLifetime(): Promise<{ reuseCount: number; expiryDays: number }> {
+	const settings = await listSettings();
+	return {
+		reuseCount: narrow(settings, "auth.passwordReuseCount", "integer") as number,
+		expiryDays: narrow(settings, "auth.passwordExpiryDays", "integer") as number,
 	};
 }
 

@@ -10,13 +10,13 @@ import { auth } from "@/lib/auth/auth";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { panelAction, panelSelf } from "@/lib/auth/panel-action";
 import { passwordSchema } from "@/lib/auth/password";
-import { DEFAULT_PASSWORD_POLICY, MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
+import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { PermissionDeniedError } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { clearSetting, integerSetting, SETTINGS, setSetting } from "@/lib/settings/settings-service";
+import { clearSetting, globalPasswordPolicy, SETTINGS, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Server actions behind the Settings tab.
@@ -165,10 +165,8 @@ export async function changePassword(current: string, next: string): Promise<Act
 			// direct call to this action, and Better Auth's own `changePassword` enforces only its own
 			// built-in bounds — it knows nothing about the install's configured
 			// `auth.minimumPasswordLength`.
-			const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-			const parsed = passwordSchema({ ...DEFAULT_PASSWORD_POLICY, minimumLength: minimumPasswordLength }).safeParse(
-				next,
-			);
+			const policy = await globalPasswordPolicy();
+			const parsed = passwordSchema(policy).safeParse(next);
 			if (!parsed.success) {
 				throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 			}
