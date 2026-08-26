@@ -40,12 +40,21 @@ export default async function EnrolTwoFactorPage() {
 		redirect("/set-password");
 	}
 
-	// Both directions matter. Somebody who has just enrolled must not be held here, and somebody who
-	// typed the URL on an install that does not require a second factor should set one up from their
-	// profile like everyone else rather than through a gate page with no way back.
-	if (user.twoFactorEnabled || !(await booleanSetting("auth.require2fa"))) {
+	// Somebody who typed the URL on an install that does not require a second factor should set one up
+	// from their profile like everyone else, rather than through a gate page.
+	if (!(await booleanSetting("auth.require2fa"))) {
 		redirect("/dashboard");
 	}
+
+	// **An enrolled account is deliberately not redirected away.** Confirming an enrolment writes a
+	// new session cookie, and Next re-renders the current route before replying — this route, now
+	// seeing `twoFactorEnabled` true. A redirect here would fire on that render and unmount
+	// `TwoFactorPanel` along with the only display of the recovery codes there will ever be, on the
+	// one flow `auth.require2fa` compels. Rendering the panel with the new flag instead leaves the
+	// component in place, so its "last chance" screen survives and the operator dismisses it. The way
+	// on is inside the panel — see its `gate` prop — because only it knows whether the codes are still
+	// on the screen.
+	const enrolled = user.twoFactorEnabled;
 
 	return (
 		<main className="flex min-h-screen items-center justify-center p-6">
@@ -53,13 +62,15 @@ export default async function EnrolTwoFactorPage() {
 				<BrandMark className="mb-5" />
 				<Card>
 					<CardHeader>
-						<CardTitle>Set up two-factor</CardTitle>
+						<CardTitle>{enrolled ? "Two-factor is on" : "Set up two-factor"}</CardTitle>
 						<CardDescription>
-							This install requires an authenticator app. Setting one up is the last thing between you and the panel.
+							{enrolled
+								? "Keep your recovery codes somewhere safe — they are the only way back in if you lose the app."
+								: "This install requires an authenticator app. Setting one up is the last thing between you and the panel."}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<TwoFactorPanel enabled={false} />
+						<TwoFactorPanel enabled={enrolled} gate />
 					</CardContent>
 				</Card>
 			</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { confirmTwoFactor, startTwoFactor, stopTwoFactor } from "@/app/(panel)/settings/actions";
@@ -29,8 +30,20 @@ import { Spinner } from "@/components/ui/spinner";
  * after that means an administrator has to clear the enrolment. The third state below is what
  * replaces that: two-factor is on, the codes are still there, and the operator says when they are
  * done with them.
+ *
+ * Keeping that promise on `/enrol-2fa` is what `gate` is for. Confirming writes a new session cookie,
+ * which makes Next re-render the current route before replying (see `lib/auth/auth-headers.ts`), and
+ * a gate page that redirected an enrolled account to `/dashboard` would take this component down
+ * mid-render — codes and all, on the one flow `auth.require2fa` compels. So the page stays put and
+ * hands the decision here instead: the codes are dismissed by the operator, and dismissing them is
+ * what goes on to the panel.
+ *
+ * @param enabled whether the account already has a confirmed authenticator
+ * @param gate true when this is `/enrol-2fa` rather than the profile dialog: the operator is being
+ *   held here until they enrol, so there is no "turn it off" to offer and there has to be a way on
  */
-export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
+export function TwoFactorPanel({ enabled, gate = false }: { enabled: boolean; gate?: boolean }) {
+	const router = useRouter();
 	const [password, setPassword] = useState("");
 	const [code, setCode] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -112,9 +125,32 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 						onClick={() => {
 							setRecoveryCodes(null);
 							setJustEnrolled(false);
+							// On the gate page there is nothing behind this screen to go back to — the operator
+							// was sent here instead of the panel — so dismissing the codes is what lets them in.
+							if (gate) {
+								router.push("/dashboard");
+							}
 						}}
 					>
-						I have written these down
+						{gate ? "I have written these down — continue" : "I have written these down"}
+					</Button>
+				</div>
+			</div>
+		);
+	}
+
+	// Only reachable on the gate page by an operator who is already enrolled: a fresh visit after the
+	// codes were dismissed, or a reload of this page. The profile dialog's "turn it off" form would be
+	// wrong here — the install requires a factor, so removing one would send them straight back.
+	if (enabled && gate) {
+		return (
+			<div className="flex min-w-0 flex-1 flex-col gap-4">
+				<p className="text-sm text-muted-foreground">
+					Two-factor is on. This account now asks for a code from your authenticator every time you sign in.
+				</p>
+				<div>
+					<Button type="button" onClick={() => router.push("/dashboard")}>
+						Continue to the panel
 					</Button>
 				</div>
 			</div>
