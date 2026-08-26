@@ -3,13 +3,12 @@ import { prisma } from "@/lib/db";
 import { globalSessionPolicy } from "@/lib/settings/settings-service";
 
 /**
- * How long a session may sit still, and how many an account may hold.
+ * How long a session may sit still.
  *
- * Both are FenPOS's rules rather than Better Auth's. The library has no inactivity concept at all —
- * its `updateAge` controls how often an expiry is *extended*, not when a quiet session dies — and
- * its session limit, where one exists, refuses the new session rather than retiring an old one,
- * which is the wrong trade on a till. Keeping both here means the reasoning is in one place and
- * the enforcement is somewhere a test can call.
+ * This is FenPOS's own rule rather than Better Auth's. The library has no inactivity concept at
+ * all — its `updateAge` controls how often an expiry is *extended*, not when a quiet session dies.
+ * Keeping the reasoning here means it lives in one place, and enforcing it here means it is
+ * somewhere a test can call.
  */
 
 /**
