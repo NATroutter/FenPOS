@@ -23,6 +23,9 @@ vi.mock("@/lib/request-context", () => ({
 const currentSessionUser = vi.fn();
 vi.mock("@/lib/auth/require-session", () => ({
 	requireSession: async () => currentSessionUser(),
+	// No session ever rotates in this file's actions, so the audit row's session id is whatever
+	// `panel-action.ts`'s `record()` was already carrying — see `currentSessionId`'s own doc.
+	currentSessionId: async (fallback: string) => fallback,
 }));
 
 const { panelAction } = await import("@/lib/auth/panel-action");

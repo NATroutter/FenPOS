@@ -15,8 +15,15 @@ vi.mock("@/lib/request-context", () => ({
 }));
 
 const currentSessionUser = vi.fn();
+// Identity by default — record() asks for the live session id and gets back exactly the fallback it
+// was given, matching a request whose session was never rotated. The one test below that overrides
+// this proves record() actually uses what it is handed rather than always falling back to
+// `user.sessionId`, which is `currentSessionId`'s own behaviour and is proved for real in
+// `require-session.test.ts` — this file only has to prove `record()` calls it and uses the answer.
+const liveSessionId = vi.fn(async (fallback: string) => fallback);
 vi.mock("@/lib/auth/require-session", () => ({
 	requireSession: async (options?: { skipEnrolmentGate?: boolean }) => currentSessionUser(options),
+	currentSessionId: async (fallback: string) => liveSessionId(fallback),
 }));
 
 const { panelAction, panelQuery, panelSelf } = await import("@/lib/auth/panel-action");
@@ -65,6 +72,7 @@ async function reset() {
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});
 	currentSessionUser.mockReset();
+	liveSessionId.mockReset().mockImplementation(async (fallback: string) => fallback);
 }
 
 describe("panelAction", () => {
@@ -94,6 +102,26 @@ describe("panelAction", () => {
 
 		const row = await lastEvent();
 		expect(row.sessionId).toBe(user.sessionId);
+	});
+
+	/**
+	 * `changePassword`, `self:confirm-2fa` and `self:end-2fa` all rotate the caller's own session as
+	 * part of their work, so `user.sessionId` — resolved by `gate()` before the body ran — names a row
+	 * that no longer exists by the time this writes. `record()` asks `currentSessionId` for the
+	 * session the request holds *now* instead of trusting that stale value; this proves it uses the
+	 * answer rather than always falling back to `user.sessionId`, which every other test in this file
+	 * would still pass even if `record()` ignored it entirely.
+	 */
+	it("names the session the action rotated onto, not the one the gate resolved", async () => {
+		const user = await account("s-rotated", true);
+		currentSessionUser.mockResolvedValue(user);
+		liveSessionId.mockResolvedValue("rotated-away-from-s-rotated");
+
+		await panelAction("agents:delete", async () => undefined);
+
+		const row = await lastEvent();
+		expect(row.sessionId).toBe("rotated-away-from-s-rotated");
+		expect(row.sessionId).not.toBe(user.sessionId);
 	});
 
 	it("refuses a caller who holds nothing, without running the body", async () => {

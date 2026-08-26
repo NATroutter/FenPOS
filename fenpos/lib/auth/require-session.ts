@@ -87,6 +87,35 @@ export async function currentUser(): Promise<PanelUser | null> {
 }
 
 /**
+ * The session id the request is holding **right now**, read fresh rather than trusted from a
+ * {@link PanelUser} resolved earlier in the same request.
+ *
+ * Exists for the audit trail. Three panel actions rotate the caller's session as part of doing their
+ * own work — `changePassword`'s `revokeOtherSessions: true`, and `verifyTOTP`/`disableTwoFactor`
+ * behind `self:confirm-2fa` and `self:end-2fa` — so a `PanelUser` resolved before any of those ran
+ * still carries the session id the rotation is about to delete. `panel-action.ts`'s `record()` calls
+ * this after the action's body has run, so the row it writes names whichever session the request
+ * ends up on. Read through {@link authHeaders} for the same reason {@link currentUser} is: a
+ * rotation is a cookie write, and `headers()` alone still shows the cookie the request arrived with.
+ *
+ * **Never throws.** Falls back to `fallback` on any failure to read the live session — most notably
+ * having no request scope at all, the same condition `requestProvenance` exists to absorb — and also
+ * when the live read finds nobody signed in, which none of the three actions above should ever
+ * produce: each of them keeps the caller signed in, just under a different session.
+ *
+ * @param fallback the session id to report if the live read fails or names no session
+ * @returns the session id the request is holding now
+ */
+export async function currentSessionId(fallback: string): Promise<string> {
+	try {
+		const session = await auth.api.getSession({ headers: await authHeaders() });
+		return session?.session.id ?? fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+/**
  * What the gates below decided about a session that is genuinely signed in.
  *
  * A verdict rather than a redirect, because not every caller can redirect. `/api/events` holds a

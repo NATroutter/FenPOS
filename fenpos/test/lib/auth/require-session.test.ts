@@ -36,7 +36,7 @@ vi.mock("@/lib/auth/auth", () => ({
 const claimed = vi.fn();
 vi.mock("@/lib/auth/setup-key", () => ({ isInstallClaimed: () => claimed() }));
 
-const { currentUser, requireSession } = await import("@/lib/auth/require-session");
+const { currentSessionId, currentUser, requireSession } = await import("@/lib/auth/require-session");
 const { prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 
@@ -91,6 +91,40 @@ describe("requireSession", () => {
 
 		await expect(currentUser()).resolves.toBeNull();
 		expect(redirected).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * `panel-action.ts`'s `record()` calls this after an action's body has run, to name the session the
+ * request ends up on rather than the one `gate()` resolved before the body could rotate it —
+ * `changePassword`, `self:confirm-2fa` and `self:end-2fa` all do that. `getSession` stands in for the
+ * live cookie read `authHeaders()` would otherwise do, so these prove the fallback logic without
+ * needing a real rotation.
+ */
+describe("currentSessionId", () => {
+	beforeEach(() => {
+		getSession.mockReset();
+	});
+
+	it("reports the session the live cookie names now, not the fallback it was given", async () => {
+		getSession.mockResolvedValue({
+			session: { id: "sess-after-rotation" },
+			user: { id: "u1", name: "Owner", email: "owner@example.com", isSuperuser: true, mustChangePassword: false },
+		});
+
+		await expect(currentSessionId("sess-before-rotation")).resolves.toBe("sess-after-rotation");
+	});
+
+	it("falls back when the live read finds nobody signed in", async () => {
+		getSession.mockResolvedValue(null);
+
+		await expect(currentSessionId("sess-before-rotation")).resolves.toBe("sess-before-rotation");
+	});
+
+	it("falls back rather than throwing when the live read itself fails", async () => {
+		getSession.mockRejectedValue(new Error("no request scope"));
+
+		await expect(currentSessionId("sess-before-rotation")).resolves.toBe("sess-before-rotation");
 	});
 });
 
