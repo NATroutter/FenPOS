@@ -12,6 +12,9 @@ describe("keepSessionAlive", () => {
 		await prisma.user.deleteMany({});
 		await setSetting("auth.idleTimeoutMinutes", 0);
 		await setSetting("auth.lastSeenRefreshMinutes", 5);
+		// Named rather than left to the fallback: the cap is the *other* reader of `lastSeenAt`, and
+		// these tests are about what happens with only the timeout in play.
+		await setSetting("auth.maxConcurrentSessions", 0);
 	});
 
 	/** A session row `minutesAgo` since it was last seen. Returns that timestamp for callers that need it. */
@@ -75,6 +78,23 @@ describe("keepSessionAlive", () => {
 		// implicit would have Prisma stamp it with the current time and defeat the point of this row.
 		await prisma.session.update({ where: { id: "legacy" }, data: { lastSeenAt: null, updatedAt: at } });
 		expect(await keepSessionAlive("legacy")).toBe(false);
+	});
+
+	/**
+	 * Both intervals set to the same number of minutes, which the settings page allows and an operator
+	 * reading "refresh the last-seen time every ten minutes, end a session after ten idle minutes"
+	 * would think reasonable. Unclamped, the refresh only fires in the millisecond before the timeout
+	 * does, so a panel in constant use is signed out on the interval anyway.
+	 */
+	it("refreshes well before the timeout when both intervals are set the same", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 10);
+		await setSetting("auth.lastSeenRefreshMinutes", 10);
+		await sessionLastSeen("tie", 6);
+
+		expect(await keepSessionAlive("tie")).toBe(true);
+
+		const row = await prisma.session.findUniqueOrThrow({ where: { id: "tie" } });
+		expect(Date.now() - (row.lastSeenAt?.getTime() ?? 0)).toBeLessThan(5000);
 	});
 
 	it("says no to a session that is not there", async () => {
@@ -174,6 +194,49 @@ describe("enforceSessionCap", () => {
 		await enforceSessionCap("cap-keep", ids[0]);
 		const left = await prisma.session.findMany({ where: { userId: "cap-keep" }, select: { id: true } });
 		expect(left.map((row) => row.id)).toEqual([ids[0]]);
+	});
+
+	/**
+	 * The default install: a cap set, no inactivity timeout.
+	 *
+	 * The ordering test above builds its `lastSeenAt` values by hand, so it proves only that
+	 * `enforceSessionCap` sorts on the column — never that anything keeps the column current. This one
+	 * goes through the real refresh path instead, which is where the two settings meet: with the
+	 * timeout off, `keepSessionAlive` used to return before reading or writing anything, every stamp
+	 * stayed frozen at creation, and "least recently used" degenerated into "oldest". The session an
+	 * operator was actively using was then the first one evicted.
+	 */
+	it("evicts by use, not by age, when there is no inactivity timeout", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 0);
+		await setSetting("auth.maxConcurrentSessions", 1);
+		await prisma.user.create({
+			data: { id: "cap-lru", name: "cap-lru", email: "cap-lru@example.test", emailVerified: false },
+		});
+		const quiet = (id: string, minutesAgo: number) => {
+			const at = new Date(Date.now() - minutesAgo * 60 * 1000);
+			return prisma.session.create({
+				data: {
+					id,
+					token: `t-${id}`,
+					userId: "cap-lru",
+					expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+					createdAt: at,
+					updatedAt: at,
+					lastSeenAt: at,
+				},
+			});
+		};
+		// Opened first, and the one still in front of somebody.
+		await quiet("cap-lru-older", 180);
+		// Opened later, then abandoned.
+		await quiet("cap-lru-newer", 90);
+
+		// The request that arrives on the older session is what makes it the recently used one.
+		expect(await keepSessionAlive("cap-lru-older")).toBe(true);
+
+		expect(await enforceSessionCap("cap-lru", null)).toBe(1);
+		const left = await prisma.session.findMany({ where: { userId: "cap-lru" }, select: { id: true } });
+		expect(left.map((row) => row.id)).toEqual(["cap-lru-older"]);
 	});
 
 	it("touches nobody else's sessions", async () => {

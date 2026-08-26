@@ -705,10 +705,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.lastSeenRefreshMinutes",
 		label: "Session activity refresh",
 		description:
-			"How stale a session's last-seen time may get before it is written again. Only the inactivity " +
-			"timeout reads it, so this exists to bound how often a busy panel writes to the session row — " +
-			"it is a write-rate control, not a security setting. Never set it above the inactivity timeout: " +
-			"a session would be judged idle on a time that had not been refreshed yet.",
+			"How stale a session's last-seen time may get before it is written again. The inactivity timeout " +
+			"measures against it and the per-account session limit orders by it, so this exists only to bound " +
+			"how often a busy panel writes to the session row — it is a write-rate control, not a security " +
+			"setting. Setting it at or above the inactivity timeout would have sessions judged idle on a time " +
+			"that had not been refreshed yet, so it is capped at half the timeout when one is set.",
 		category: "security",
 		type: "integer",
 		min: 1,
@@ -1489,7 +1490,10 @@ export interface GlobalSessionPolicy {
 	sessionSeconds: number;
 	/** `auth.idleTimeoutMinutes` as milliseconds. Zero never ends a session for inactivity. */
 	idleTimeoutMs: number;
-	/** `auth.lastSeenRefreshMinutes` as milliseconds. How stale `Session.lastSeenAt` may get before it is rewritten. */
+	/**
+	 * `auth.lastSeenRefreshMinutes` as milliseconds. How stale `Session.lastSeenAt` may get before it
+	 * is rewritten, before `session-policy.ts` clamps it against the inactivity timeout.
+	 */
 	lastSeenRefreshMs: number;
 	/** `auth.maxConcurrentSessions`. Zero is unlimited. */
 	maxConcurrentSessions: number;
