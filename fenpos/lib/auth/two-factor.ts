@@ -29,8 +29,9 @@ export interface Enrolment {
 	/**
 	 * One-time codes that stand in for the authenticator.
 	 *
-	 * Returned once and never again: the plugin stores them hashed, so there is nothing to show a
-	 * second time. An operator who does not write them down and then loses their phone needs an
+	 * Returned once and never again: the plugin stores them encrypted at rest (`auth.ts` pins
+	 * `storeBackupCodes: "encrypted"`), and there is no panel path that decrypts and re-displays
+	 * them. An operator who does not write them down and then loses their phone needs an
 	 * administrator to clear the enrolment.
 	 */
 	recoveryCodes: string[];
@@ -45,15 +46,28 @@ export interface Enrolment {
  * closes the dialog is left with the account they started with rather than locked out by a secret
  * their phone never finished accepting.
  *
+ * **Refused outright when the account already has a verified enrolment.** The plugin does not
+ * treat a second `enableTwoFactor` as a no-op: it replaces the existing secret and recovery codes
+ * in place, `verified: true`, live, with no confirmation step. A stale tab still showing the
+ * "set up" screen could otherwise mint a fresh secret that takes effect at once and silently
+ * strands the operator's already-working authenticator. Turning the existing one off first, via
+ * {@link endEnrolment}, is the only path back in.
+ *
  * The password is required even though the caller holds a session, for the reason
  * `changePassword` asks for it: a session left open on an unattended machine is the case this
  * defends against, and adding a second factor from one would lock the real owner out.
  *
  * @param password the caller's current password
  * @returns the URI, its QR, and the recovery codes
- * @throws ApiError when the password is wrong, or the plugin enrols by a method this install cannot use
+ * @throws ApiError when the account is already enrolled, the password is wrong, or the plugin
+ *   enrols by a method this install cannot use
  */
 export async function beginEnrolment(password: string): Promise<Enrolment> {
+	const session = await auth.api.getSession({ headers: await headers() });
+	if (session?.user.twoFactorEnabled) {
+		throw new ApiError("already_enrolled", "Two-factor is already on. Turn it off before setting up a new one.");
+	}
+
 	let result: Awaited<ReturnType<typeof auth.api.enableTwoFactor>>;
 	try {
 		result = await auth.api.enableTwoFactor({
@@ -73,7 +87,19 @@ export async function beginEnrolment(password: string): Promise<Enrolment> {
 		throw new ApiError("invalid_type", "This install can only enrol an authenticator app.");
 	}
 
-	return { totpUri: result.totpURI, qrSvg: totpQr(result.totpURI), recoveryCodes: result.backupCodes };
+	let qrSvg: string;
+	try {
+		qrSvg = totpQr(result.totpURI);
+	} catch {
+		// Kept inside its own try, throwing a fixed message rather than letting bwip-js's own message
+		// through: `result.totpURI` carries the secret this call just minted, and an error here is
+		// the one failure in this module that would otherwise put that URI's text into whatever
+		// catches it — including `panelQuery`'s failure handler, which writes `error.message` into an
+		// append-only audit row.
+		throw new ApiError("internal_error", "Could not prepare the QR code for this enrolment.");
+	}
+
+	return { totpUri: result.totpURI, qrSvg, recoveryCodes: result.backupCodes };
 }
 
 /**

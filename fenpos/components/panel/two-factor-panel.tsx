@@ -13,17 +13,16 @@ import { Spinner } from "@/components/ui/spinner";
 /**
  * Enrolling an authenticator, in the three states the flow actually has.
  *
- * Shared by the profile dialog and by `/enrol-2fa`, which is the page an install that requires two
- * factors sends an un-enrolled operator to. One component because the two are the same three steps
- * with a different frame around them, and two copies would drift the moment one gained a hint the
- * other did not.
+ * Rendered by the profile dialog's Two-factor category, as a standalone component rather than
+ * markup inline in the dialog — the three states are enough logic that keeping them here is what
+ * lets the dialog's own switch stay a one-line case per category.
  *
  * The QR arrives as markup from the server and is inlined. It is drawn by bwip-js from a URI the
  * server has just minted — not fetched, not from a third party, and never sent anywhere. That is
  * the whole reason it is not an `<img src="https://...">` to a QR service, which is how a shared
  * secret ends up in somebody else's access log.
  */
-export function TwoFactorPanel({ enabled, onChanged }: { enabled: boolean; onChanged?: () => void }) {
+export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 	const [password, setPassword] = useState("");
 	const [code, setCode] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -60,7 +59,6 @@ export function TwoFactorPanel({ enabled, onChanged }: { enabled: boolean; onCha
 			setRecoveryCodes(null);
 			setCode("");
 			toast.success("Two-factor is on.");
-			onChanged?.();
 		});
 	};
 
@@ -74,7 +72,6 @@ export function TwoFactorPanel({ enabled, onChanged }: { enabled: boolean; onCha
 			}
 			setPassword("");
 			toast.success("Two-factor is off.");
-			onChanged?.();
 		});
 	};
 
@@ -139,7 +136,8 @@ export function TwoFactorPanel({ enabled, onChanged }: { enabled: boolean; onCha
 					</ul>
 					<FieldDescription>
 						Write these down now. Each one signs you in once if you lose the app, and they are not shown again — the
-						panel keeps only hashes. Without them, an administrator has to clear the enrolment for you.
+						panel stores them encrypted, not in the clear. Without them, an administrator has to clear the enrolment for
+						you.
 					</FieldDescription>
 				</Field>
 

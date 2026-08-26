@@ -145,6 +145,12 @@ export const auth = betterAuth({
 			// the base URL, which on a LAN install is an IP address — three of those on one phone are
 			// indistinguishable.
 			issuer: "FenPOS",
+			backupCodeOptions: {
+				// The plugin's own default, named here rather than left implicit. Ten codes are a full
+				// second-factor bypass each, so this line is the one place an upgrade that ever changed
+				// that default would be caught by a reviewer instead of by an attacker.
+				storeBackupCodes: "encrypted",
+			},
 		}),
 		// Must be last. It wraps the handlers that follow it to write `Set-Cookie` through
 		// Next's cookie store, so anything registered after it would not get that treatment.

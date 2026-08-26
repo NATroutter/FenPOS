@@ -91,6 +91,27 @@ describe("two-factor enrolment", () => {
 		await expect(beginEnrolment("not the password")).rejects.toThrow();
 	});
 
+	/**
+	 * The plugin does not treat a second `enableTwoFactor` as a no-op: it replaces an already-verified
+	 * enrolment's secret and codes in place, `verified: true`, live, with no confirmation step. A
+	 * stale tab still showing the "set up" screen could otherwise mint a fresh secret that takes
+	 * effect at once and silently strand the operator's already-working authenticator.
+	 */
+	it("refuses to re-enrol an account that already has a verified authenticator", async () => {
+		const { user } = await signedInUser("already@example.test", "correct horse battery staple");
+		const enrolment = await beginEnrolment("correct horse battery staple");
+		const secret = new URL(enrolment.totpUri).searchParams.get("secret") ?? "";
+		await confirmEnrolment(totp(secret));
+		// `confirmEnrolment` just rotated the session — see `refreshSession`'s doc comment.
+		await refreshSession(user.id);
+
+		await expect(beginEnrolment("correct horse battery staple")).rejects.toThrow(/already/i);
+
+		// The refused attempt must not have disturbed the working enrolment.
+		const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+		expect(Boolean(row.twoFactorEnabled)).toBe(true);
+	});
+
 	it("clears the enrolment and its rows on the way out", async () => {
 		const { user } = await signedInUser("off@example.test", "correct horse battery staple");
 		const enrolment = await beginEnrolment("correct horse battery staple");

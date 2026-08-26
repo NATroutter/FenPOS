@@ -34,6 +34,22 @@ vi.mock("@/lib/auth/auth", async (importOriginal) => {
 	};
 });
 
+// Real by default — every test but one wants the genuine bwip-js drawing. Flipped to throw for the
+// single test below that exercises `beginEnrolment`'s own try/catch around `totpQr`, which is the
+// one branch that would otherwise let an unsanitised error message reach the audit row.
+let totpQrShouldFail = false;
+vi.mock("@/lib/auth/totp-qr", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/auth/totp-qr")>();
+	return {
+		totpQr: (uri: string) => {
+			if (totpQrShouldFail) {
+				throw new Error("bwip-js blew up: otpauth://totp/should-never-reach-an-audit-row");
+			}
+			return actual.totpQr(uri);
+		},
+	};
+});
+
 const SESSION_USER = {
 	id: "u1",
 	name: "NATroutter",
@@ -61,6 +77,7 @@ beforeEach(async () => {
 	// Reset to the file's default of "no session cookie" between tests — a two-factor test that ran
 	// before this one may have pointed it at a real account's cookie via `signedInUser`.
 	headersMock.mockReset().mockResolvedValue(new Headers());
+	totpQrShouldFail = false;
 
 	await prisma.session.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -244,11 +261,43 @@ describe("two-factor actions", () => {
 		const secret = new URL(result.enrolment?.totpUri ?? "otpauth://x").searchParams.get("secret") ?? "";
 
 		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		// Asserted before the containment checks below: without this, a run that wrote no row at all
+		// (or the wrong one) would fall through to `JSON.stringify(undefined)` / an empty
+		// `recoveryCodes ?? []` loop and pass having checked nothing.
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(result.enrolment?.recoveryCodes.length).toBeGreaterThan(0);
+
 		const serialised = JSON.stringify(row);
 		expect(serialised).not.toContain(secret);
 		for (const code of result.enrolment?.recoveryCodes ?? []) {
 			expect(serialised).not.toContain(code);
 		}
+	});
+
+	/**
+	 * The success path above only ever writes an empty `{}` detail, so it cannot catch a leak on the
+	 * one branch that writes free-form text: `beginEnrolment`'s own try/catch around `totpQr`, added
+	 * because a QR-drawing failure used to escape unwrapped, carrying whatever bwip-js said about the
+	 * URI it failed on — a URI that holds the secret this call just minted — straight into
+	 * `panelQuery`'s `{ error: error.message }` failure detail. `totpQrShouldFail` forces that
+	 * failure *after* `enableTwoFactor` has already minted a real URI, so this actually exercises the
+	 * branch rather than the password-refusal path the other failure test already covers.
+	 */
+	it("keeps a QR-drawing failure after the secret is minted out of the audit row too", async () => {
+		await signedInUser("tfa-qrfail@example.test", "correct horse battery staple");
+		totpQrShouldFail = true;
+
+		const result = await startTwoFactor("correct horse battery staple");
+		expect(result.error).not.toBeNull();
+		expect(result.enrolment).toBeNull();
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(row?.outcome).toBe("FAILURE");
+
+		const serialised = JSON.stringify(row);
+		expect(serialised).not.toContain("bwip-js blew up");
+		expect(serialised).not.toContain("otpauth://");
 	});
 
 	it("records a refused confirmation as DENIED, not as a success", async () => {
