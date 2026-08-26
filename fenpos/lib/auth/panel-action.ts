@@ -4,7 +4,7 @@ import { requestProvenance } from "@/lib/audit/provenance";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelActionId, panelActionEntry } from "@/lib/auth/panel-actions";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
-import { type PanelUser, requireSession } from "@/lib/auth/require-session";
+import { currentSessionId, type PanelUser, requireSession } from "@/lib/auth/require-session";
 import { ApiError } from "@/lib/errors";
 import type { ActionState } from "@/lib/panel/action-state";
 
@@ -43,6 +43,24 @@ export interface PanelActionOptions {
 type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: PanelUser; permission: string };
 
 /**
+ * The two actions that are how enrolling a second factor happens.
+ *
+ * `/enrol-2fa` renders `TwoFactorPanel` for an account that has none, on an install that requires
+ * one — precisely the condition `requireSession`'s own enrolment gate redirects on. Gating these
+ * two the ordinary way would make that redirect fire on their very first call, so `startTwoFactor`
+ * would hand the page a redirect instead of a QR. `requireSession`'s `skipEnrolmentGate` exists for
+ * exactly this set, and only for it — every other gate it runs still applies.
+ *
+ * `self:end-2fa` (turning a second factor *off*) is deliberately not here. Reaching it means
+ * `user.twoFactorEnabled` is already true, at which point `!user.twoFactorEnabled` is false and the
+ * enrolment gate was never going to fire regardless of this flag — `/enrol-2fa` never renders the
+ * "turn it off" form in the first place (`enabled={false}` always), so there is no path that needs
+ * the bypass for it. Widening this set to include it would only be a privilege change with no
+ * matching need.
+ */
+const ENROLMENT_ACTION_IDS: ReadonlySet<PanelActionId> = new Set(["self:begin-2fa", "self:confirm-2fa"]);
+
+/**
  * Resolves the session and checks the registry's permission.
  *
  * Must be called outside any `try` that catches broadly: `requireSession` redirects by throwing.
@@ -52,7 +70,7 @@ type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: P
  */
 async function gate(id: PanelActionId): Promise<GateResult> {
 	const entry = panelActionEntry(id);
-	const user = await requireSession();
+	const user = await requireSession({ skipEnrolmentGate: ENROLMENT_ACTION_IDS.has(id) });
 
 	if (entry.kind !== "command" && entry.kind !== "query") {
 		// `custom`, `self` and `unauthenticated` carry no permission by construction, and the
@@ -74,6 +92,16 @@ async function gate(id: PanelActionId): Promise<GateResult> {
 /**
  * Writes one row for an attempt.
  *
+ * The session id in the row's provenance is read fresh via {@link currentSessionId} rather than
+ * taken from `user.sessionId` as resolved before the body ran. Most actions never rotate their own
+ * session, so this reads back exactly what `user.sessionId` already held — but three of them do:
+ * `changePassword`'s `revokeOtherSessions: true`, and `verifyTOTP`/`disableTwoFactor` behind
+ * `self:confirm-2fa` and `self:end-2fa`. For those, `user.sessionId` names a row the body's own work
+ * has since deleted, and a record naming it would send an investigator looking for a session that no
+ * longer exists. This is a `record()`-level fix rather than three per-action ones because the defect
+ * is a property of *anything* that rotates its own session inside a gated action, not of these three
+ * in particular — the next action to do that would otherwise reintroduce it.
+ *
  * @param id the action's registry id
  * @param user who was acting
  * @param outcome how it went
@@ -93,7 +121,7 @@ async function record(
 		actor: userActor(user),
 		target: options.target,
 		detail: { ...options.detail, ...detail },
-		provenance: await requestProvenance(),
+		provenance: await requestProvenance(await currentSessionId(user.sessionId)),
 	});
 }
 

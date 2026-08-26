@@ -588,9 +588,33 @@ export const PANEL_ACTIONS = [
 		exportName: "signOut",
 		description: "Signed out of the panel",
 	},
+	{
+		id: "self:begin-2fa",
+		kind: "self",
+		permission: null,
+		module: "(panel)/settings/actions.ts",
+		exportName: "startTwoFactor",
+		description: "Started two-factor enrolment",
+	},
+	{
+		id: "self:confirm-2fa",
+		kind: "self",
+		permission: null,
+		module: "(panel)/settings/actions.ts",
+		exportName: "confirmTwoFactor",
+		description: "Confirmed two-factor enrolment",
+	},
+	{
+		id: "self:end-2fa",
+		kind: "self",
+		permission: null,
+		module: "(panel)/settings/actions.ts",
+		exportName: "stopTwoFactor",
+		description: "Turned off their own two-factor",
+	},
 
 	// --- No session to check a permission against. The setup pair is governed by the seal in
-	// `lib/auth/setup.ts` instead. All four already write their own audit rows, so the gate does not
+	// `lib/auth/setup.ts` instead. All five already write their own audit rows, so the gate does not
 	// touch them — they are here to be accounted for, not to be wrapped.
 	{
 		id: "auth:sign-in",
@@ -599,6 +623,14 @@ export const PANEL_ACTIONS = [
 		module: "(auth)/login/actions.ts",
 		exportName: "signIn",
 		description: "Presented credentials at sign-in",
+	},
+	{
+		id: "auth:two-factor",
+		kind: "unauthenticated",
+		permission: null,
+		module: "(auth)/login/actions.ts",
+		exportName: "verifyTwoFactor",
+		description: "Presented a second factor at sign-in",
 	},
 	{
 		id: "auth:set-password",

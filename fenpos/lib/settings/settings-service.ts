@@ -51,6 +51,18 @@ export const DEFAULT_LIMITS: CompileLimits = {
 const TIME_ZONES = ["system", ...Intl.supportedValuesOf("timeZone")] as const;
 
 /**
+ * The longest `auth.sessionHours` may be set to — thirty days.
+ *
+ * Exported because `lib/auth/auth.ts` needs the same number: Better Auth derives the session
+ * cookie's `Max-Age` from `session.expiresIn`, a value read once at module load, and the browser
+ * honours whichever of the cookie and the row expires first. Sizing `expiresIn` to this ceiling is
+ * what keeps the cookie from ever being the shorter of the two, so the row this setting writes is
+ * always the one that decides. A ceiling raised here and not there would silently cap the setting
+ * again, which is exactly the bug the two references exist to prevent.
+ */
+export const MAXIMUM_SESSION_HOURS = 720;
+
+/**
  * Which part of the system a setting affects.
  *
  * Declared per setting rather than derived from the key prefix, because the categories deliberately
@@ -264,6 +276,9 @@ export const SETTING_KEYS = [
 	"auth.lockoutAfterFailures",
 	"auth.lockoutMinutes",
 	"auth.ipAllowlist",
+	"auth.require2fa",
+	"auth.idleTimeoutMinutes",
+	"auth.maxConcurrentSessions",
 	"audit.retentionDays",
 	"audit.maxRecords",
 	"audit.sweepEvery",
@@ -652,13 +667,13 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.sessionHours",
 		label: "Session lifetime",
 		description:
-			"Not applied in this release — Better Auth reads its session lifetime once, at startup, so " +
-			"this value is stored but ignored; changing it does nothing until Phase 6 (auth hardening) " +
-			"wires it back in. A shared back-office terminal wants hours; a private office wants days.",
+			"How long a session lasts before it must be signed in again. Read when a session is created, so a " +
+			"change takes effect at the next sign-in rather than the next restart. The clock starts at sign-in " +
+			"and is not extended by use. A shared back-office terminal wants hours; a private office wants days.",
 		category: "security",
 		type: "integer",
 		min: 1,
-		max: 720,
+		max: MAXIMUM_SESSION_HOURS,
 		fallback: 12,
 		unit: "hours",
 	},
@@ -690,9 +705,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.lastSeenRefreshMinutes",
 		label: "Session activity refresh",
 		description:
-			"Not applied in this release — Better Auth's own session `updateAge` (fixed in `auth.ts`) " +
-			"controls this write-rate concern now, so this value is stored but ignored; changing it does " +
-			"nothing until Phase 6 (auth hardening) wires it back in.",
+			"How stale a session's last-seen time may get before it is written again. The inactivity timeout " +
+			"measures against it and the per-account session limit orders by it, so this exists only to bound " +
+			"how often a busy panel writes to the session row — it is a write-rate control, not a security " +
+			"setting. Setting it at or above the inactivity timeout would have sessions judged idle on a time " +
+			"that had not been refreshed yet, so it is capped at half the timeout when one is set.",
 		category: "security",
 		type: "integer",
 		min: 1,
@@ -754,7 +771,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.lockoutAfterFailures",
 		label: "Lock out after",
 		description:
-			"Consecutive failed sign-ins before an account is locked. Zero never locks. This is a per-account limit, separate from the per-address throttle above, which stays on regardless: one defends a password, the other defends the server.",
+			"Consecutive failed sign-ins before an account is locked. Zero never locks this way. It is a " +
+			"per-account limit on the password step, separate from the per-address throttle above, which stays " +
+			"on regardless: one defends a password, the other defends the server. An account with an " +
+			"authenticator also carries a second, built-in lock that this setting does not govern — ten " +
+			"consecutive wrong codes lock it for fifteen minutes, whatever this is set to.",
 		category: "security",
 		type: "integer",
 		min: 0,
@@ -782,6 +803,46 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		type: "string",
 		maxLength: 2_000,
 		fallback: "",
+	},
+	{
+		key: "auth.require2fa",
+		label: "Require two-factor",
+		description:
+			"Whether every account must carry an authenticator app before it can reach the panel. Turning this on " +
+			"does not lock anyone out: an account with no enrolment still signs in and is sent to set one up, " +
+			"because a switch that stranded the only administrator would have no remedy until the recovery CLI " +
+			"exists.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "auth.idleTimeoutMinutes",
+		label: "Inactivity timeout",
+		description:
+			"How long a session may sit untouched before it is ended. Zero never ends one for inactivity, which is " +
+			"the default — a panel on a wall display is meant to sit still. A shop floor terminal in a public room " +
+			"is the case for setting it.",
+		category: "security",
+		type: "integer",
+		min: 0,
+		max: 1440,
+		fallback: 0,
+		unit: "minutes",
+	},
+	{
+		key: "auth.maxConcurrentSessions",
+		label: "Sessions per account",
+		description:
+			"How many places one account may be signed in at once. Reaching the limit ends the least recently used " +
+			"session rather than refusing the new one: an operator whose browser crashed must be able to get back " +
+			"in, and refusing them would turn a stale row into an outage. Zero is unlimited.",
+		category: "security",
+		type: "integer",
+		min: 0,
+		max: 50,
+		fallback: 0,
+		unit: "sessions",
 	},
 	{
 		key: "audit.retentionDays",
@@ -1384,7 +1445,10 @@ export async function globalPasswordPolicy(): Promise<PasswordPolicy> {
 
 /** What governs whether a sign-in attempt may proceed at all, before any credential is examined. */
 export interface GlobalSignInPolicy {
-	/** `auth.lockoutAfterFailures`: consecutive failures before an account locks. Zero never locks. */
+	/**
+	 * `auth.lockoutAfterFailures`: consecutive password failures before an account locks. Zero never
+	 * locks *this* way; the two-factor plugin's own account lockout is separate and always on.
+	 */
 	lockoutAfterFailures: number;
 	/** `auth.lockoutMinutes`: how long a lock lasts. */
 	lockoutMinutes: number;
@@ -1424,6 +1488,46 @@ export async function globalPasswordLifetime(): Promise<{ reuseCount: number; ex
 	return {
 		reuseCount: narrow(settings, "auth.passwordReuseCount", "integer") as number,
 		expiryDays: narrow(settings, "auth.passwordExpiryDays", "integer") as number,
+	};
+}
+
+/** The session shape an install has configured, in the units the code that enforces it uses. */
+export interface GlobalSessionPolicy {
+	/** `auth.sessionHours` as seconds. How long a session created now will last. */
+	sessionSeconds: number;
+	/** `auth.idleTimeoutMinutes` as milliseconds. Zero never ends a session for inactivity. */
+	idleTimeoutMs: number;
+	/**
+	 * `auth.lastSeenRefreshMinutes` as milliseconds. How stale `Session.lastSeenAt` may get before it
+	 * is rewritten, before `session-policy.ts` clamps it against the inactivity timeout.
+	 */
+	lastSeenRefreshMs: number;
+	/** `auth.maxConcurrentSessions`. Zero is unlimited. */
+	maxConcurrentSessions: number;
+}
+
+/**
+ * How long a session lasts, how quiet it may go, and how many an account may hold.
+ *
+ * One call because the session gate reads all of them on the same request, and because the three
+ * are only meaningful together — an inactivity timeout longer than the session lifetime never
+ * fires, and a refresh interval longer than the inactivity timeout would judge a session idle on a
+ * timestamp it had not got round to rewriting.
+ *
+ * Converted here rather than at each call site. Every one of these is stored in the unit an
+ * operator thinks in and used in the unit a clock comparison needs, and a missed multiplication is
+ * the kind of defect that shows up as "sessions last four seconds" in production and nowhere else.
+ *
+ * @returns the session settings in force
+ */
+export async function globalSessionPolicy(): Promise<GlobalSessionPolicy> {
+	const settings = await listSettings();
+	const minutes = (key: SettingKey): number => (narrow(settings, key, "integer") as number) * 60 * 1000;
+	return {
+		sessionSeconds: (narrow(settings, "auth.sessionHours", "integer") as number) * 60 * 60,
+		idleTimeoutMs: minutes("auth.idleTimeoutMinutes"),
+		lastSeenRefreshMs: minutes("auth.lastSeenRefreshMinutes"),
+		maxConcurrentSessions: narrow(settings, "auth.maxConcurrentSessions", "integer") as number,
 	};
 }
 

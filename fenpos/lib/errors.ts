@@ -93,6 +93,14 @@ export const API_ERROR_STATUS = {
 	/** Reissuing a pairing code for a agent that already holds a credential. */
 	agent_already_paired: 409,
 	/**
+	 * Starting two-factor enrolment for an account that already holds a verified authenticator.
+	 *
+	 * The plugin replaces an existing verified enrolment in place, live, with no confirmation step —
+	 * so this is refused before a new secret is ever minted, the same way a pairing code is refused
+	 * for an agent that already holds a credential.
+	 */
+	already_enrolled: 409,
+	/**
 	 * An `Idempotency-Key` reused with a different body.
 	 *
 	 * A conflict rather than a validation failure, because both requests are individually valid and

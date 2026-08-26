@@ -28,7 +28,15 @@ describe("permittedNavHrefs", () => {
 
 	async function account(id: string, isSuperuser = false) {
 		await prisma.user.create({ data: { id, name: id, email: `${id}@example.com`, isSuperuser } });
-		return { id, name: id, email: `${id}@example.com`, isSuperuser, mustChangePassword: false };
+		return {
+			id,
+			name: id,
+			email: `${id}@example.com`,
+			isSuperuser,
+			mustChangePassword: false,
+			sessionId: `session-${id}`,
+			twoFactorEnabled: false,
+		};
 	}
 
 	it("returns something a Server Component may hand a Client Component", async () => {

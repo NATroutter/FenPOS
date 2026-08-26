@@ -1,16 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VariableDefinition } from "@/lib/variables/definition";
+import { panelUser } from "@/test/helpers/panel-user";
 
-const SESSION_USER = {
-	id: "test-user",
-	name: "Test User",
-	email: "test@example.com",
-	isSuperuser: true,
-	mustChangePassword: false,
-};
+const SESSION_USER = panelUser();
 vi.mock("@/lib/auth/require-session", () => ({
 	requireSession: vi.fn(async () => SESSION_USER),
 	currentUser: vi.fn(async () => SESSION_USER),
+	// No session ever rotates in this file's actions, so the audit row's session id is whatever
+	// `panel-action.ts`'s `record()` was already carrying — see `currentSessionId`'s own doc.
+	currentSessionId: async (fallback: string) => fallback,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 

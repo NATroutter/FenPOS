@@ -1,4 +1,4 @@
-import { currentUser } from "@/lib/auth/require-session";
+import { currentUser, sessionVerdict } from "@/lib/auth/require-session";
 import { type PanelEvent, subscribe } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
 import { integerSetting } from "@/lib/settings/settings-service";
@@ -11,16 +11,36 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * every other request — where a second WebSocket would have to be routed past Next's own upgrade
  * handling, which this process already does once and would rather not do twice.
  *
- * **Signed-in session only, and not one that still owes a password change.** The stream carries
- * job identifiers, device names and log lines from every site in the install, which is more than
- * any API key is ever granted.
+ * **Every gate the panel applies, and not one of them by hand.** The stream carries job identifiers,
+ * device names and log lines from every site in the install, which is more than any API key is ever
+ * granted — so a session that may not open a panel page may not open this either.
  *
- * Gated with {@link currentUser} rather than `requireSession`: the latter redirects an
- * unauthenticated caller, and a redirect is wrong here — the browser's `EventSource` would follow
- * it and receive an HTML redirect target on a connection it opened expecting `text/event-stream`.
- * That means the `mustChangePassword` gate `requireSession` applies for every other panel route
- * has to be repeated here by hand — a session owing a change must reach nothing but `/set-password`,
- * and this route is the one place that check does not come for free.
+ * Gated with {@link currentUser} plus {@link sessionVerdict} rather than with `requireSession`: the
+ * latter redirects an unauthenticated caller, and a redirect is wrong here — the browser's
+ * `EventSource` would follow it and receive an HTML redirect target on a connection it opened
+ * expecting `text/event-stream`. `sessionVerdict` is the same set of gates without the redirecting,
+ * which is what stops this route drifting behind them: it used to repeat only the
+ * `mustChangePassword` check, and by the time the inactivity timeout and the two-factor enrolment
+ * gate had been added, an account with no authenticator — refused everywhere else on an install with
+ * `auth.require2fa` on — could still open the stream with nothing but a password.
+ *
+ * A refusal here ends the connection rather than the session, unlike `requireSession`, which signs
+ * an idled-out or newly-disallowed caller out on its way to `/login`. Writing a cookie onto a stream
+ * the browser will immediately reconnect to buys nothing; the operator's next navigation goes
+ * through `requireSession` and is ended there.
+ *
+ * **Checked once, at connection.** A stream opened by a session that later idles out or is revoked
+ * stays open until the client reconnects, which `EventSource` does on its own whenever the
+ * connection drops. That is a known bound on how quickly a gate reaches an already-open stream.
+ *
+ * **And a connection here is not evidence anybody is at the keyboard**, which is why the gate runs
+ * with `countsAsActivity: false`. Those same reconnects are the browser's doing — nothing on this
+ * side asks for them, and the keepalive below exists precisely because proxies drop this connection.
+ * Left counting as activity, they would refresh `lastSeenAt` on their own: an unattended terminal on
+ * a lossy network would never reach its inactivity timeout, and an abandoned tab would look like the
+ * account's most recently used session and survive the concurrency cap at the expense of the one its
+ * operator is actually working in. The gate still *reads* the stamp — a session already past the
+ * timeout is refused here exactly as it is anywhere else — it just does not move it.
  */
 
 /** Never cached and never prerendered: the whole point is that it does not end. */
@@ -28,7 +48,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
 	const user = await currentUser();
-	if (!user || user.mustChangePassword) {
+	// One message for every refusal, the way the sign-in form has one: which gate stopped a caller is
+	// not something a connection this route is about to close needs to be told.
+	if (!user || (await sessionVerdict(user, { countsAsActivity: false })) !== "allowed") {
 		return Response.json({ error: "missing_key", message: "Not signed in." }, { status: 401 });
 	}
 

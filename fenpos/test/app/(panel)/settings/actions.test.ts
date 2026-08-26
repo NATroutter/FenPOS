@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { panelUser } from "@/test/helpers/panel-user";
+import { headersMock, signedInUser } from "@/test/helpers/session";
 
 /**
- * Tests for the profile and password actions behind the Settings tab.
+ * Tests for the profile, password and two-factor actions behind the Settings tab.
  *
  * The session guard redirects, and a redirect is not what this file is about, so `requireSession`
  * is stubbed to hand back a fixed user rather than exercised for real — the same convention the
@@ -14,22 +16,50 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *
  * `updateProfile` writes through Prisma directly, so its tests exercise the real database rather
  * than a stub.
+ *
+ * The two-factor actions go through Better Auth's own `enableTwoFactor`/`verifyTOTP` for real —
+ * `changePassword` is the only method still stubbed, so the mock factory merges the real `auth.api`
+ * in rather than replacing it. `startTwoFactor`, `confirmTwoFactor` and `stopTwoFactor` call
+ * `lib/auth/two-factor.ts`, which resolves its caller from the session cookie via `headers()`, not
+ * from the stubbed `requireSession` — so those tests use `signedInUser` to sign a real account in
+ * and point the shared `headersMock` at its session, the same helper `set-password/actions.test.ts`
+ * uses for the same reason.
  */
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ headers: () => headersMock() }));
 
 const changePasswordApi = vi.fn();
-vi.mock("@/lib/auth/auth", () => ({
-	auth: { api: { changePassword: (args: unknown) => changePasswordApi(args) } },
-}));
+vi.mock("@/lib/auth/auth", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/auth/auth")>();
+	return {
+		auth: { ...actual.auth, api: { ...actual.auth.api, changePassword: (args: unknown) => changePasswordApi(args) } },
+	};
+});
 
-const SESSION_USER = {
-	id: "u1",
-	name: "NATroutter",
-	email: "me@natroutter.fi",
-	isSuperuser: true,
-	mustChangePassword: false,
-};
-vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => SESSION_USER }));
+// Real by default — every test but one wants the genuine bwip-js drawing. Flipped to throw for the
+// single test below that exercises `beginEnrolment`'s own try/catch around `totpQr`, which is the
+// one branch that would otherwise let an unsanitised error message reach the audit row.
+let totpQrShouldFail = false;
+vi.mock("@/lib/auth/totp-qr", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/auth/totp-qr")>();
+	return {
+		totpQr: (uri: string) => {
+			if (totpQrShouldFail) {
+				throw new Error("bwip-js blew up: otpauth://totp/should-never-reach-an-audit-row");
+			}
+			return actual.totpQr(uri);
+		},
+	};
+});
+
+const SESSION_USER = panelUser({ id: "u1", name: "NATroutter", email: "me@natroutter.fi" });
+vi.mock("@/lib/auth/require-session", () => ({
+	requireSession: async () => SESSION_USER,
+	// No session ever rotates on the path these tests exercise `record()` through — `changePassword`
+	// and the two-factor actions each go through `two-factor.ts`/Better Auth for real when they do
+	// rotate, resolved from `headersMock`, not from this stub — so the audit row's session id is
+	// whatever `record()` was already carrying. See `currentSessionId`'s own doc.
+	currentSessionId: async (fallback: string) => fallback,
+}));
 
 // Revalidation is Next's, not this project's, and calling it outside a request context throws.
 // Kept as a `vi.fn()` (not a no-op) so the default-argument tests below can assert what path
@@ -37,13 +67,19 @@ vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => SESSI
 const revalidatePath = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath: (...args: unknown[]) => revalidatePath(...args) }));
 
-const { changePassword, updateProfile } = await import("@/app/(panel)/settings/actions");
+const { changePassword, updateProfile, startTwoFactor, confirmTwoFactor } = await import(
+	"@/app/(panel)/settings/actions"
+);
 const { prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 
 beforeEach(async () => {
 	changePasswordApi.mockReset().mockResolvedValue({ token: null, user: SESSION_USER });
 	revalidatePath.mockClear();
+	// Reset to the file's default of "no session cookie" between tests — a two-factor test that ran
+	// before this one may have pointed it at a real account's cookie via `signedInUser`.
+	headersMock.mockReset().mockResolvedValue(new Headers());
+	totpQrShouldFail = false;
 
 	await prisma.session.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -200,5 +236,80 @@ describe("updateProfile", () => {
 		await updateProfile("New Name", "new@example.com");
 
 		expect(changePasswordApi).not.toHaveBeenCalled();
+	});
+});
+
+describe("two-factor actions", () => {
+	it("refuses to start enrolment without the current password", async () => {
+		await signedInUser("tfa-start@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("wrong password");
+		expect(result.error).not.toBeNull();
+		expect(result.enrolment).toBeNull();
+	});
+
+	it("hands back an enrolment and writes a row for it", async () => {
+		await signedInUser("tfa-ok@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("correct horse battery staple");
+		expect(result.enrolment?.qrSvg.startsWith("<svg")).toBe(true);
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(row?.outcome).toBe("SUCCESS");
+	});
+
+	it("never puts the secret or the recovery codes in the audit row", async () => {
+		await signedInUser("tfa-quiet@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("correct horse battery staple");
+		const secret = new URL(result.enrolment?.totpUri ?? "otpauth://x").searchParams.get("secret") ?? "";
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		// Asserted before the containment checks below: without this, a run that wrote no row at all
+		// (or the wrong one) would fall through to `JSON.stringify(undefined)` / an empty
+		// `recoveryCodes ?? []` loop and pass having checked nothing.
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(result.enrolment?.recoveryCodes.length).toBeGreaterThan(0);
+
+		const serialised = JSON.stringify(row);
+		expect(serialised).not.toContain(secret);
+		for (const code of result.enrolment?.recoveryCodes ?? []) {
+			expect(serialised).not.toContain(code);
+		}
+	});
+
+	/**
+	 * The success path above only ever writes an empty `{}` detail, so it cannot catch a leak on the
+	 * one branch that writes free-form text: `beginEnrolment`'s own try/catch around `totpQr`, added
+	 * because a QR-drawing failure used to escape unwrapped, carrying whatever bwip-js said about the
+	 * URI it failed on — a URI that holds the secret this call just minted — straight into
+	 * `panelQuery`'s `{ error: error.message }` failure detail. `totpQrShouldFail` forces that
+	 * failure *after* `enableTwoFactor` has already minted a real URI, so this actually exercises the
+	 * branch rather than the password-refusal path the other failure test already covers.
+	 */
+	it("keeps a QR-drawing failure after the secret is minted out of the audit row too", async () => {
+		await signedInUser("tfa-qrfail@example.test", "correct horse battery staple");
+		totpQrShouldFail = true;
+
+		const result = await startTwoFactor("correct horse battery staple");
+		expect(result.error).not.toBeNull();
+		expect(result.enrolment).toBeNull();
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(row?.outcome).toBe("FAILURE");
+
+		const serialised = JSON.stringify(row);
+		expect(serialised).not.toContain("bwip-js blew up");
+		expect(serialised).not.toContain("otpauth://");
+	});
+
+	it("records a refused confirmation as DENIED, not as a success", async () => {
+		await signedInUser("tfa-bad@example.test", "correct horse battery staple");
+		await startTwoFactor("correct horse battery staple");
+		const result = await confirmTwoFactor("000000");
+		expect(result.error).not.toBeNull();
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:confirm-2fa");
+		expect(row?.outcome).toBe("FAILURE");
 	});
 });

@@ -16,7 +16,12 @@ vi.mock("@/lib/request-context", () => ({
 }));
 
 const currentSessionUser = vi.fn();
-vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => currentSessionUser() }));
+// No session ever rotates in this file's actions, so the audit row's session id is whatever
+// `panel-action.ts`'s `record()` was already carrying — see `currentSessionId`'s own doc.
+vi.mock("@/lib/auth/require-session", () => ({
+	requireSession: async () => currentSessionUser(),
+	currentSessionId: async (fallback: string) => fallback,
+}));
 
 const { exportAuditCsv, verifyChain } = await import("@/app/(panel)/audit/actions");
 const { appendEvent, SYSTEM_ACTOR } = await import("@/lib/audit/audit-log");

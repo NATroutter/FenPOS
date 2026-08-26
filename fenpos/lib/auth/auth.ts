@@ -6,6 +6,7 @@ import { admin, twoFactor } from "better-auth/plugins";
 import { hashPassword, MAXIMUM_PASSWORD_LENGTH, verifyPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { globalSessionPolicy, MAXIMUM_SESSION_HOURS } from "@/lib/settings/settings-service";
 
 /**
  * The panel's authentication instance.
@@ -21,17 +22,6 @@ import { env } from "@/lib/env";
  * at once — the property the retired hand-written session layer was built around and the one
  * worth keeping.
  */
-
-/**
- * How long a session lasts, and how often its expiry is extended.
- *
- * Fixed here rather than read from `auth.sessionHours`, which is where it lived before. Better
- * Auth reads this once when the instance is constructed, at module load, and a setting read at
- * that moment would either need a synchronous database call or would silently pin whatever value
- * happened to be stored at the last restart. Phase 6 moves session lifetime to a setting properly,
- * by re-reading it on the paths that can await; until then this is the honest value.
- */
-const SESSION_SECONDS = 12 * 60 * 60;
 
 export const auth = betterAuth({
 	database: prismaAdapter(prisma, { provider: "sqlite" }),
@@ -95,16 +85,98 @@ export const auth = betterAuth({
 	},
 
 	session: {
-		expiresIn: SESSION_SECONDS,
-		// Extend a session's expiry at most once per hour rather than on every request. The same
-		// write-rate concern `auth.lastSeenRefreshMinutes` existed to control, expressed in the
-		// library's own terms.
-		updateAge: 60 * 60,
+		/**
+		 * The **cookie's** lifetime, deliberately set to the ceiling rather than to the policy.
+		 *
+		 * Better Auth reads this once, when the instance is constructed at module load, so it cannot
+		 * be the setting — `databaseHooks.session.create.before` below is where `auth.sessionHours`
+		 * is actually applied. What is easy to miss is that this is not merely a fallback expiry:
+		 * `getCookies` in `better-auth/dist/cookies/index.mjs` uses it as the session cookie's
+		 * `Max-Age`, and `setSessionCookie` re-applies it on every write, so the browser discards the
+		 * token after this long whatever the row says. A short value here does not shorten the row —
+		 * it shortens the *session*, at whichever of the two comes first, and silently.
+		 *
+		 * So it is pinned to `MAXIMUM_SESSION_HOURS`, the largest `auth.sessionHours` may be. The
+		 * cookie is then never the shorter of the two and the row is always what ends a session,
+		 * which is the right authority: the row can be revoked from the Users page and a cookie
+		 * already in a browser cannot. A cookie outliving its row costs nothing — the next request
+		 * presents a token whose row has expired, and `getSession` deletes both.
+		 */
+		expiresIn: MAXIMUM_SESSION_HOURS * 60 * 60,
+		/**
+		 * Better Auth's own sliding renewal, off.
+		 *
+		 * `api/routes/session.mjs` renews by overwriting `expiresAt` with `getDate(expiresIn)` — the
+		 * module-load ceiling above — which would throw away what the creation hook computed and give
+		 * every session thirty days no matter what the setting says. `auth.sessionHours` is an
+		 * absolute lifetime measured from sign-in, so there is nothing here to slide; inactivity is
+		 * FenPOS's own concept and lives in `session-policy.ts`.
+		 *
+		 * `updateAge` is deliberately absent: with refresh disabled it governs nothing, and naming it
+		 * would imply a renewal cadence that does not exist.
+		 */
+		disableSessionRefresh: true,
+		additionalFields: {
+			lastSeenAt: { type: "date", required: false, input: false, returned: false },
+		},
+	},
+
+	databaseHooks: {
+		session: {
+			create: {
+				/**
+				 * Where `auth.sessionHours` is actually applied.
+				 *
+				 * The `session.expiresIn` option above is evaluated once at module load, which is why
+				 * the setting could not live there: it would either need a synchronous database read
+				 * or would pin whatever value happened to be stored at the last restart. This hook
+				 * runs per session creation and can await, so a change to the setting takes effect at
+				 * the next sign-in rather than the next deploy.
+				 *
+				 * `lastSeenAt` is stamped here too, so every session created from now on has one and
+				 * the null fallback in `session-policy.ts` covers only rows that predate the column.
+				 *
+				 * A read, never a write. The concurrency cap is a delete and is called from the
+				 * sign-in path instead — see `enforceSessionCap` — because this hook may run inside
+				 * Better Auth's own transaction and a delete there is how a SQLite deadlock is bought.
+				 *
+				 * **Not wrapped in a try/catch.** If `globalSessionPolicy()` throws — a database read
+				 * that failed, or a stored setting `narrow` refuses to parse — the throw propagates and
+				 * the sign-in fails closed rather than creating a session with no real expiry. That is
+				 * the right failure mode, not merely the unhandled one: `globalSessionPolicy` reads from
+				 * the same database this hook is already writing a session row to, so whatever broke the
+				 * read was already going to make the row it produces untrustworthy. There is no fallback
+				 * lifetime worth inventing for a failure this deep in the same failure domain.
+				 */
+				async before(session) {
+					const { sessionSeconds } = await globalSessionPolicy();
+					const now = new Date();
+					return {
+						data: {
+							...session,
+							expiresAt: new Date(now.getTime() + sessionSeconds * 1000),
+							lastSeenAt: now,
+						},
+					};
+				},
+			},
+		},
 	},
 
 	plugins: [
 		admin(),
-		twoFactor(),
+		twoFactor({
+			// What an authenticator app shows beside the code. Without it the entry is labelled with
+			// the base URL, which on a LAN install is an IP address — three of those on one phone are
+			// indistinguishable.
+			issuer: "FenPOS",
+			backupCodeOptions: {
+				// The plugin's own default, named here rather than left implicit. Ten codes are a full
+				// second-factor bypass each, so this line is the one place an upgrade that ever changed
+				// that default would be caught by a reviewer instead of by an attacker.
+				storeBackupCodes: "encrypted",
+			},
+		}),
 		// Must be last. It wraps the handlers that follow it to write `Set-Cookie` through
 		// Next's cookie store, so anything registered after it would not get that treatment.
 		nextCookies(),

@@ -15,8 +15,15 @@ vi.mock("@/lib/request-context", () => ({
 }));
 
 const currentSessionUser = vi.fn();
+// Identity by default — record() asks for the live session id and gets back exactly the fallback it
+// was given, matching a request whose session was never rotated. The one test below that overrides
+// this proves record() actually uses what it is handed rather than always falling back to
+// `user.sessionId`, which is `currentSessionId`'s own behaviour and is proved for real in
+// `require-session.test.ts` — this file only has to prove `record()` calls it and uses the answer.
+const liveSessionId = vi.fn(async (fallback: string) => fallback);
 vi.mock("@/lib/auth/require-session", () => ({
-	requireSession: async () => currentSessionUser(),
+	requireSession: async (options?: { skipEnrolmentGate?: boolean }) => currentSessionUser(options),
+	currentSessionId: async (fallback: string) => liveSessionId(fallback),
 }));
 
 const { panelAction, panelQuery, panelSelf } = await import("@/lib/auth/panel-action");
@@ -27,7 +34,15 @@ const { ApiError } = await import("@/lib/errors");
 /** An account row, so `effectivePermissions` has something real to read. */
 async function account(id: string, isSuperuser = false) {
 	await prisma.user.create({ data: { id, name: `User ${id}`, email: `${id}@example.com`, isSuperuser } });
-	return { id, name: `User ${id}`, email: `${id}@example.com`, isSuperuser, mustChangePassword: false };
+	return {
+		id,
+		name: `User ${id}`,
+		email: `${id}@example.com`,
+		isSuperuser,
+		mustChangePassword: false,
+		sessionId: `session-${id}`,
+		twoFactorEnabled: false,
+	};
 }
 
 /** The shape `previewMoment` reports, named so the generic is not inferred from one literal. */
@@ -57,6 +72,7 @@ async function reset() {
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});
 	currentSessionUser.mockReset();
+	liveSessionId.mockReset().mockImplementation(async (fallback: string) => fallback);
 }
 
 describe("panelAction", () => {
@@ -76,6 +92,36 @@ describe("panelAction", () => {
 		expect(row.outcome).toBe("SUCCESS");
 		expect(row.actorUserId).toBe("u1");
 		expect(row.ipAddress).toBe("203.0.113.50");
+	});
+
+	it("records the session the action was taken under", async () => {
+		const user = await account("s-provenance", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("agents:delete", async () => undefined);
+
+		const row = await lastEvent();
+		expect(row.sessionId).toBe(user.sessionId);
+	});
+
+	/**
+	 * `changePassword`, `self:confirm-2fa` and `self:end-2fa` all rotate the caller's own session as
+	 * part of their work, so `user.sessionId` — resolved by `gate()` before the body ran — names a row
+	 * that no longer exists by the time this writes. `record()` asks `currentSessionId` for the
+	 * session the request holds *now* instead of trusting that stale value; this proves it uses the
+	 * answer rather than always falling back to `user.sessionId`, which every other test in this file
+	 * would still pass even if `record()` ignored it entirely.
+	 */
+	it("names the session the action rotated onto, not the one the gate resolved", async () => {
+		const user = await account("s-rotated", true);
+		currentSessionUser.mockResolvedValue(user);
+		liveSessionId.mockResolvedValue("rotated-away-from-s-rotated");
+
+		await panelAction("agents:delete", async () => undefined);
+
+		const row = await lastEvent();
+		expect(row.sessionId).toBe("rotated-away-from-s-rotated");
+		expect(row.sessionId).not.toBe(user.sessionId);
 	});
 
 	it("refuses a caller who holds nothing, without running the body", async () => {
@@ -264,5 +310,58 @@ describe("panelSelf", () => {
 		// Calling this on a gated action would skip the permission check entirely, so it is a
 		// mistake worth failing loudly rather than one worth tolerating.
 		await expect(panelSelf("agents:delete")).rejects.toThrow(/gated/);
+	});
+});
+
+/**
+ * `gate` passes `requireSession` a `skipEnrolmentGate` flag that is true for exactly the two
+ * actions enrolling a second factor happens through, and false for everything else — including
+ * `self:end-2fa`, a `self`-kind action of its own, so the flag is tied to specific ids and not to
+ * the registry's `kind`. Nothing else in the suite observes this: `currentSessionUser` used to be a
+ * zero-argument mock, so a caller could widen or delete the bypass entirely and every other test
+ * here would stay green.
+ */
+describe("the enrolment gate bypass", () => {
+	beforeEach(reset);
+
+	it("skips the enrolment gate for the action that starts enrolment", async () => {
+		const user = await account("bypass1");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelQuery("self:begin-2fa", async () => "ok", {
+			refused: () => "refused",
+			failed: () => "failed",
+		});
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: true });
+	});
+
+	it("skips the enrolment gate for the action that confirms it", async () => {
+		const user = await account("bypass2");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("self:confirm-2fa", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: true });
+	});
+
+	it("does not skip it for turning a second factor off", async () => {
+		const user = await account("bypass3");
+		currentSessionUser.mockResolvedValue(user);
+
+		// `self:end-2fa` is `self`-kind too, the same as the two above — proving the flag follows the
+		// id, not the kind, is the whole point of this case.
+		await panelAction("self:end-2fa", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: false });
+	});
+
+	it("does not skip it for an unrelated gated action", async () => {
+		const user = await account("bypass4");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("agents:delete", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: false });
 	});
 });

@@ -33,6 +33,7 @@ export function NavUser({
 	initial,
 	signOutAction,
 	minimumPasswordLength,
+	twoFactorEnabled,
 }: {
 	displayName: string;
 	/** The signed-in user's email. Better Auth requires every account to carry one. */
@@ -42,6 +43,11 @@ export function NavUser({
 	initial: string;
 	signOutAction: () => Promise<void>;
 	minimumPasswordLength: number;
+	/**
+	 * Whether the account already has a confirmed authenticator. Read on the server so the dialog
+	 * opens showing the right of its two states.
+	 */
+	twoFactorEnabled: boolean;
 }) {
 	const [profileOpen, setProfileOpen] = useState(false);
 	const { isMobile } = useSidebar();
@@ -112,6 +118,7 @@ export function NavUser({
 				email={email}
 				avatarUrl={avatarUrl}
 				initial={initial}
+				twoFactorEnabled={twoFactorEnabled}
 			/>
 		</>
 	);

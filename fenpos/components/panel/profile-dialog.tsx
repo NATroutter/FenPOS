@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { type ReactNode, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { changePassword, updateProfile } from "@/app/(panel)/settings/actions";
+import { TwoFactorPanel } from "@/components/panel/two-factor-panel";
 import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar } from "@/components/ui/avatar";
@@ -22,7 +23,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { MAXIMUM_DISPLAY_NAME_LENGTH, minimumLengthPhrase } from "@/lib/auth/password-policy";
 import { cn } from "@/lib/utils";
 
-type Category = "account" | "security";
+type Category = "account" | "security" | "two-factor";
 
 /**
  * The signed-in user's own account, reached from the sidebar footer.
@@ -50,6 +51,7 @@ export function ProfileDialog({
 	email,
 	avatarUrl,
 	initial,
+	twoFactorEnabled,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -61,6 +63,11 @@ export function ProfileDialog({
 	/** Resolved on the server, so no address and no hashing reach the browser. */
 	avatarUrl: string | null;
 	initial: string;
+	/**
+	 * Whether the account already has a confirmed authenticator. Read on the server so the dialog
+	 * opens showing the right of its two states.
+	 */
+	twoFactorEnabled: boolean;
 }) {
 	const [category, setCategory] = useState<Category>("account");
 
@@ -116,6 +123,153 @@ export function ProfileDialog({
 		});
 	};
 
+	// A `switch` rather than a second ternary nested in the first: three categories read cleanly
+	// this way, where a nested ternary would not.
+	let categoryBody: ReactNode;
+	switch (category) {
+		case "account":
+			categoryBody = (
+				<div className="flex min-w-0 flex-1 flex-col gap-4">
+					<Field>
+						<FieldLabel htmlFor="profile-name">Display name</FieldLabel>
+						<Input
+							id="profile-name"
+							maxLength={MAXIMUM_DISPLAY_NAME_LENGTH}
+							value={name}
+							disabled={accountPending}
+							onChange={(event) => setName(event.target.value)}
+						/>
+					</Field>
+
+					<Field>
+						<FieldLabel htmlFor="profile-email">Email</FieldLabel>
+						<Input
+							id="profile-email"
+							type="email"
+							autoComplete="email"
+							value={address}
+							disabled={accountPending}
+							onChange={(event) => setAddress(event.target.value)}
+						/>
+						<FieldDescription>
+							Used to fetch a picture from Gravatar — the address is hashed on the server before it is sent, never in
+							the browser. No picture registered there yet? The initial is shown instead.
+						</FieldDescription>
+					</Field>
+
+					<Field>
+						{/*
+						 * A plain span, not `FieldLabel`: the avatar it names is decoration (`alt=""`,
+						 * `aria-hidden` on the initial) with nothing else in the field for a `<label>`
+						 * to point at, and a `for`-less label reaches assistive tech as pointing at
+						 * nothing.
+						 */}
+						<span className="flex items-center gap-2 text-sm leading-none font-medium select-none">Avatar</span>
+						<div className="flex items-center gap-3">
+							<Avatar src={avatarUrl} initial={initial} className="size-12" />
+							<FieldDescription className="mt-0">
+								The saved avatar. Save in the footer below updates it.
+							</FieldDescription>
+						</div>
+					</Field>
+
+					{accountError ? (
+						<Alert variant="destructive">
+							<AlertDescription>{accountError}</AlertDescription>
+						</Alert>
+					) : null}
+				</div>
+			);
+			break;
+
+		case "security":
+			categoryBody = (
+				<div className="flex min-w-0 flex-1 flex-col gap-4">
+					<Field>
+						<FieldLabel htmlFor="profile-current">Current password</FieldLabel>
+						<PasswordInput
+							id="profile-current"
+							autoComplete="current-password"
+							value={current}
+							disabled={pending}
+							onChange={(event) => setCurrent(event.target.value)}
+						/>
+						<FieldDescription>
+							Asked for even though you are signed in — a session left open on an unattended machine is the case this
+							defends against.
+						</FieldDescription>
+					</Field>
+
+					<Field>
+						<FieldLabel htmlFor="profile-new">New password</FieldLabel>
+						<PasswordInput
+							id="profile-new"
+							autoComplete="new-password"
+							value={next}
+							disabled={pending}
+							onChange={(event) => setNext(event.target.value)}
+						/>
+						<FieldDescription>
+							At least {minimumLengthPhrase(minimumLength)}. Spaces are fine; a passphrase is ideal.
+						</FieldDescription>
+					</Field>
+
+					<Field>
+						<FieldLabel htmlFor="profile-confirm">Confirm new password</FieldLabel>
+						<PasswordInput
+							id="profile-confirm"
+							autoComplete="new-password"
+							value={confirm}
+							disabled={pending}
+							onChange={(event) => setConfirm(event.target.value)}
+						/>
+					</Field>
+
+					{error ? (
+						<Alert variant="destructive">
+							<AlertDescription>{error}</AlertDescription>
+						</Alert>
+					) : null}
+				</div>
+			);
+			break;
+
+		case "two-factor":
+			categoryBody = <TwoFactorPanel enabled={twoFactorEnabled} />;
+			break;
+	}
+
+	// `null` for two-factor: `TwoFactorPanel` carries its own buttons, and a footer with nothing in
+	// it would still draw the band `DialogFooter` always renders around its children.
+	let footer: ReactNode = null;
+	switch (category) {
+		case "account":
+			footer = (
+				<Button
+					type="button"
+					disabled={accountPending || name.trim() === "" || address.trim() === ""}
+					onClick={saveAccount}
+				>
+					{accountPending ? <Spinner className="size-3.5" /> : null}
+					Save profile
+				</Button>
+			);
+			break;
+
+		case "security":
+			footer = (
+				<Button type="button" disabled={pending || current === "" || next === "" || confirm === ""} onClick={submit}>
+					{pending ? <Spinner className="size-3.5" /> : null}
+					Change password
+				</Button>
+			);
+			break;
+
+		case "two-factor":
+			footer = null;
+			break;
+	}
+
 	return (
 		<Dialog
 			open={open}
@@ -161,130 +315,23 @@ export function ProfileDialog({
 						>
 							Security
 						</button>
+						<button
+							type="button"
+							onClick={() => setCategory("two-factor")}
+							className={cn(
+								"rounded-md px-2.5 py-1.5 text-left text-sm font-medium transition-colors",
+								category === "two-factor"
+									? "bg-sidebar-accent text-sidebar-accent-foreground"
+									: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
+							)}
+						>
+							Two-factor
+						</button>
 					</nav>
 
-					{category === "account" ? (
-						<div className="flex min-w-0 flex-1 flex-col gap-4">
-							<Field>
-								<FieldLabel htmlFor="profile-name">Display name</FieldLabel>
-								<Input
-									id="profile-name"
-									maxLength={MAXIMUM_DISPLAY_NAME_LENGTH}
-									value={name}
-									disabled={accountPending}
-									onChange={(event) => setName(event.target.value)}
-								/>
-							</Field>
-
-							<Field>
-								<FieldLabel htmlFor="profile-email">Email</FieldLabel>
-								<Input
-									id="profile-email"
-									type="email"
-									autoComplete="email"
-									value={address}
-									disabled={accountPending}
-									onChange={(event) => setAddress(event.target.value)}
-								/>
-								<FieldDescription>
-									Used to fetch a picture from Gravatar — the address is hashed on the server before it is sent, never
-									in the browser. No picture registered there yet? The initial is shown instead.
-								</FieldDescription>
-							</Field>
-
-							<Field>
-								{/*
-								 * A plain span, not `FieldLabel`: the avatar it names is decoration (`alt=""`,
-								 * `aria-hidden` on the initial) with nothing else in the field for a `<label>`
-								 * to point at, and a `for`-less label reaches assistive tech as pointing at
-								 * nothing.
-								 */}
-								<span className="flex items-center gap-2 text-sm leading-none font-medium select-none">Avatar</span>
-								<div className="flex items-center gap-3">
-									<Avatar src={avatarUrl} initial={initial} className="size-12" />
-									<FieldDescription className="mt-0">
-										The saved avatar. Save in the footer below updates it.
-									</FieldDescription>
-								</div>
-							</Field>
-
-							{accountError ? (
-								<Alert variant="destructive">
-									<AlertDescription>{accountError}</AlertDescription>
-								</Alert>
-							) : null}
-						</div>
-					) : (
-						<div className="flex min-w-0 flex-1 flex-col gap-4">
-							<Field>
-								<FieldLabel htmlFor="profile-current">Current password</FieldLabel>
-								<PasswordInput
-									id="profile-current"
-									autoComplete="current-password"
-									value={current}
-									disabled={pending}
-									onChange={(event) => setCurrent(event.target.value)}
-								/>
-								<FieldDescription>
-									Asked for even though you are signed in — a session left open on an unattended machine is the case
-									this defends against.
-								</FieldDescription>
-							</Field>
-
-							<Field>
-								<FieldLabel htmlFor="profile-new">New password</FieldLabel>
-								<PasswordInput
-									id="profile-new"
-									autoComplete="new-password"
-									value={next}
-									disabled={pending}
-									onChange={(event) => setNext(event.target.value)}
-								/>
-								<FieldDescription>
-									At least {minimumLengthPhrase(minimumLength)}. Spaces are fine; a passphrase is ideal.
-								</FieldDescription>
-							</Field>
-
-							<Field>
-								<FieldLabel htmlFor="profile-confirm">Confirm new password</FieldLabel>
-								<PasswordInput
-									id="profile-confirm"
-									autoComplete="new-password"
-									value={confirm}
-									disabled={pending}
-									onChange={(event) => setConfirm(event.target.value)}
-								/>
-							</Field>
-
-							{error ? (
-								<Alert variant="destructive">
-									<AlertDescription>{error}</AlertDescription>
-								</Alert>
-							) : null}
-						</div>
-					)}
+					{categoryBody}
 				</DialogBody>
-				<DialogFooter>
-					{category === "account" ? (
-						<Button
-							type="button"
-							disabled={accountPending || name.trim() === "" || address.trim() === ""}
-							onClick={saveAccount}
-						>
-							{accountPending ? <Spinner className="size-3.5" /> : null}
-							Save profile
-						</Button>
-					) : (
-						<Button
-							type="button"
-							disabled={pending || current === "" || next === "" || confirm === ""}
-							onClick={submit}
-						>
-							{pending ? <Spinner className="size-3.5" /> : null}
-							Change password
-						</Button>
-					)}
-				</DialogFooter>
+				{footer ? <DialogFooter>{footer}</DialogFooter> : null}
 			</DialogContent>
 		</Dialog>
 	);

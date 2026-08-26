@@ -62,7 +62,7 @@ describe("auth audit events", () => {
 	it("records a refused sign-in with the address that was tried", async () => {
 		signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
 
-		await signIn({ error: null }, form({ email: "Stranger@Example.com", password: "wrong" }));
+		await signIn({ error: null, twoFactorRequired: false }, form({ email: "Stranger@Example.com", password: "wrong" }));
 
 		const row = await lastEvent();
 		expect(row.action).toBe(AUTH_AUDIT_ACTIONS.SIGN_IN);
@@ -75,10 +75,13 @@ describe("auth audit events", () => {
 	});
 
 	it("records a successful sign-in against the account that signed in", async () => {
-		signInEmail.mockResolvedValue({ user: { id: "u1", name: "Owner", email: "owner@example.com" } });
+		signInEmail.mockResolvedValue({ user: { id: "u1", name: "Owner", email: "owner@example.com" }, token: "tok-u1" });
 
 		await expect(
-			signIn({ error: null }, form({ email: "owner@example.com", password: "a-long-password" })),
+			signIn(
+				{ error: null, twoFactorRequired: false },
+				form({ email: "owner@example.com", password: "a-long-password" }),
+			),
 		).rejects.toThrow("REDIRECT:/dashboard");
 
 		const row = await lastEvent();
@@ -91,7 +94,7 @@ describe("auth audit events", () => {
 		signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
 
 		for (let attempt = 0; attempt < 6; attempt++) {
-			await signIn({ error: null }, form({ email: "a@example.com", password: "x" }));
+			await signIn({ error: null, twoFactorRequired: false }, form({ email: "a@example.com", password: "x" }));
 		}
 
 		const row = await lastEvent();
@@ -143,7 +146,7 @@ describe("auth audit events", () => {
 		await rotateSetupKey();
 		signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
 
-		await signIn({ error: null }, form({ email: "a@example.com", password: "x" }));
+		await signIn({ error: null, twoFactorRequired: false }, form({ email: "a@example.com", password: "x" }));
 		await checkSetupKey({ error: null }, form({ setupKey: "XXXX-XXXX-XXXX-XXXX-XXXX" }));
 		await checkSetupKey({ error: null }, form({ setupKey: "YYYY-YYYY-YYYY-YYYY-YYYY" }));
 

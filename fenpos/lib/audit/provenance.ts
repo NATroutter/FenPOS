@@ -15,7 +15,15 @@ import { getClientAddress, getUserAgent } from "@/lib/request-context";
 export interface RequestProvenance {
 	ipAddress: string | null;
 	userAgent: string | null;
-	/** The session the action was taken under, when the caller knows it. */
+	/**
+	 * The session the row names as having taken the action, when the caller knows one.
+	 *
+	 * Not a guarantee that this is the session that *authenticated* the request — a caller whose own
+	 * work rotates its session, such as `panel-action.ts`'s `record()` via `currentSessionId`, reads
+	 * it fresh at write time instead, so the row names the session the request ended up on rather
+	 * than the one it started with. A caller that never rotates its own session, which is every other
+	 * one in this codebase, passes the id it resolved at the top of the request, and the two coincide.
+	 */
 	sessionId: string | null;
 }
 
