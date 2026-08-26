@@ -1,7 +1,7 @@
 import "server-only";
 import { credentialAccountRow } from "@/lib/auth/credential-account";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
-import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { DEFAULT_PASSWORD_POLICY, MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { hashSecret, secretsMatch } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
@@ -91,7 +91,7 @@ const SETUP_KEY_ROW_ID = 1;
  * @throws ApiError when the submitted details are not acceptable
  */
 export async function completeSetup(input: SetupInput): Promise<{ userId: string }> {
-	const parsedPassword = passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(input.password);
+	const parsedPassword = passwordSchema(DEFAULT_PASSWORD_POLICY).safeParse(input.password);
 	if (!parsedPassword.success) {
 		throw new ApiError("invalid_type", parsedPassword.error.issues[0]?.message ?? "That password is not acceptable.");
 	}

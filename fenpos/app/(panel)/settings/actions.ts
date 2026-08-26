@@ -10,7 +10,7 @@ import { auth } from "@/lib/auth/auth";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { panelAction, panelSelf } from "@/lib/auth/panel-action";
 import { passwordSchema } from "@/lib/auth/password";
-import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
+import { DEFAULT_PASSWORD_POLICY, MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { PermissionDeniedError } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
@@ -166,7 +166,9 @@ export async function changePassword(current: string, next: string): Promise<Act
 			// built-in bounds — it knows nothing about the install's configured
 			// `auth.minimumPasswordLength`.
 			const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-			const parsed = passwordSchema(minimumPasswordLength).safeParse(next);
+			const parsed = passwordSchema({ ...DEFAULT_PASSWORD_POLICY, minimumLength: minimumPasswordLength }).safeParse(
+				next,
+			);
 			if (!parsed.success) {
 				throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 			}

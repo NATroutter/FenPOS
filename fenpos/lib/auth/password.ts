@@ -1,6 +1,12 @@
 import { hash, verify } from "@node-rs/argon2";
 import { z } from "zod";
-import { minimumLengthPhrase } from "@/lib/auth/password-policy";
+import {
+	hasDigit,
+	hasMixedCase,
+	hasSymbol,
+	minimumLengthPhrase,
+	type PasswordPolicy,
+} from "@/lib/auth/password-policy";
 
 /**
  * Account password hashing.
@@ -78,9 +84,12 @@ export function normalizePassword(plaintext: string): string {
  * see `password-policy.ts`) and builds its own schema from it; nothing here reads a stale minimum
  * while the setting appears to work, because nothing here reads the minimum at all.
  *
- * Length aside, there are no composition rules — requiring a digit, a symbol or mixed case
- * measurably pushes people toward predictable patterns without adding real entropy, and length is
- * the property that matters.
+ * Composition rules are **off unless the install turns them on**, and that default is the position
+ * this project takes: requiring a digit, a symbol or mixed case measurably pushes people toward
+ * predictable patterns without adding real entropy, and length is the property that matters. They
+ * exist because some installs answer to a policy that demands them. The whole shape arrives as one
+ * {@link PasswordPolicy} rather than as loose flags, so the three writers that accept a password
+ * cannot enforce different rules from one another.
  *
  * **Interior spaces are allowed on purpose.** They are what makes a passphrase possible, and
  * `correct horse battery staple` is both far stronger and far more memorable than anything a
@@ -89,21 +98,33 @@ export function normalizePassword(plaintext: string): string {
  * recommended it now says the opposite. What is worth removing is whitespace nobody can see,
  * which normalizePassword handles.
  *
- * @param minimumLength shortest password to accept, in characters
- * @returns a schema validating length, and control characters
+ * @param policy the shape a password must have on this install
+ * @returns a schema validating length, control characters, and whatever the policy requires
  */
-export function passwordSchema(minimumLength: number) {
+export function passwordSchema(policy: PasswordPolicy) {
 	return z
 		.string()
 		.transform(normalizePassword)
 		.pipe(
 			z
 				.string()
-				.min(minimumLength, `Password must be at least ${minimumLengthPhrase(minimumLength)}.`)
+				.min(policy.minimumLength, `Password must be at least ${minimumLengthPhrase(policy.minimumLength)}.`)
 				.max(MAXIMUM_PASSWORD_LENGTH, `Password must be at most ${MAXIMUM_PASSWORD_LENGTH} characters.`)
 				.refine(
 					(value) => !CONTROL_CHARACTERS.test(value),
 					"Password must not contain tabs, newlines or control characters.",
+				)
+				// Each requirement is its own refine so the message names the one thing that is missing.
+				// A single check reporting the whole policy back would make an operator re-read four
+				// rules to work out which of them they broke.
+				.refine(
+					(value) => !policy.requireMixedCase || hasMixedCase(value),
+					"Password must contain both upper and lower case letters.",
+				)
+				.refine((value) => !policy.requireDigit || hasDigit(value), "Password must contain a digit.")
+				.refine(
+					(value) => !policy.requireSymbol || hasSymbol(value),
+					"Password must contain a symbol, which a space does not count as.",
 				),
 		);
 }

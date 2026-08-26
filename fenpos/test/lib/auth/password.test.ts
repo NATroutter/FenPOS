@@ -1,34 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { hashPassword, passwordSchema, verifyPassword } from "@/lib/auth/password";
-import { MINIMUM_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { DEFAULT_PASSWORD_POLICY, MINIMUM_PASSWORD_LENGTH, type PasswordPolicy } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { integerSetting, setSetting } from "@/lib/settings/settings-service";
 
 /**
- * `passwordSchema` takes the minimum as a parameter rather than baking one in — see its doc
+ * A policy that requires nothing but a length.
+ *
+ * Which is what this project's default is, and what every case below except the complexity block
+ * wants: those cases are about length, encoding and whitespace, and none of them should start
+ * failing because somebody changed a composition default.
+ *
+ * @param minimumLength the length to require
+ * @returns the policy
+ */
+function lengthOnly(minimumLength: number): PasswordPolicy {
+	return { ...DEFAULT_PASSWORD_POLICY, minimumLength };
+}
+
+/**
+ * `passwordSchema` takes the policy as a parameter rather than baking one in — see its doc
  * comment in `password.ts` for why. These tests build it with `MINIMUM_PASSWORD_LENGTH`, the
  * built-in floor, throughout; the block below confirms a caller that reads the configured
  * `auth.minimumPasswordLength` instead gets a schema that actually enforces it.
  */
 describe("passwordSchema", () => {
 	it("accepts a password at the minimum length", () => {
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH)).success).toBe(true);
+		expect(
+			passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH)).success,
+		).toBe(true);
 	});
 
 	it("rejects a password one character short", () => {
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH - 1)).success).toBe(
-			false,
-		);
+		expect(
+			passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("a".repeat(MINIMUM_PASSWORD_LENGTH - 1)).success,
+		).toBe(false);
 	});
 
 	it("rejects an absurdly long password rather than hashing it", () => {
 		// Argon2 cost scales with input, so an unbounded password is a cheap way to make the
 		// server do expensive work on every sign-in attempt.
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("a".repeat(1025)).success).toBe(false);
+		expect(passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("a".repeat(1025)).success).toBe(false);
 	});
 
 	it("does not impose composition rules", () => {
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("correct horse battery staple").success).toBe(true);
+		expect(passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("correct horse battery staple").success).toBe(
+			true,
+		);
 	});
 
 	it("accepts any printable character, including other scripts, emoji and symbols", () => {
@@ -38,19 +56,27 @@ describe("passwordSchema", () => {
 			"'; DROP TABLE admin_auth;--",
 			"«»½¬{}[]|~`\\!@#$%^&*()",
 		]) {
-			expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(password).success, JSON.stringify(password)).toBe(true);
+			expect(
+				passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse(password).success,
+				JSON.stringify(password),
+			).toBe(true);
 		}
 	});
 
 	it("allows interior spaces, because passphrases are the point", () => {
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("correct horse battery staple").success).toBe(true);
+		expect(passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("correct horse battery staple").success).toBe(
+			true,
+		);
 	});
 
 	it("rejects control characters", () => {
 		// A tab or newline arrives from a copied line and cannot be retyped at a login form,
 		// so accepting one sets a password its owner cannot enter again.
 		for (const password of ["twelve chars\there", "twelve chars\nhere", "twelve chars\0here"]) {
-			expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(password).success, JSON.stringify(password)).toBe(false);
+			expect(
+				passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse(password).success,
+				JSON.stringify(password),
+			).toBe(false);
 		}
 	});
 
@@ -58,8 +84,8 @@ describe("passwordSchema", () => {
 		// Worth pinning because it is surprising: six emoji satisfy a twelve-character minimum
 		// while five do not, and a twelve-letter Japanese phrase carries far more entropy than
 		// a twelve-letter English one. The limit is a floor on effort, not on entropy.
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("🔑".repeat(6)).success).toBe(true);
-		expect(passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse("🔑".repeat(5)).success).toBe(false);
+		expect(passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("🔑".repeat(6)).success).toBe(true);
+		expect(passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse("🔑".repeat(5)).success).toBe(false);
 	});
 });
 
@@ -77,8 +103,67 @@ describe("passwordSchema with a configured minimum", () => {
 
 		const configuredMinimum = await integerSetting("auth.minimumPasswordLength");
 
-		expect(passwordSchema(configuredMinimum).safeParse("a".repeat(16)).success).toBe(false);
-		expect(passwordSchema(configuredMinimum).safeParse("a".repeat(20)).success).toBe(true);
+		expect(passwordSchema(lengthOnly(configuredMinimum)).safeParse("a".repeat(16)).success).toBe(false);
+		expect(passwordSchema(lengthOnly(configuredMinimum)).safeParse("a".repeat(20)).success).toBe(true);
+	});
+});
+
+/**
+ * The composition rules, each off by default and each enforced only when the policy asks.
+ *
+ * The message matters as much as the refusal: an operator who is told "that is not acceptable"
+ * without being told which of four rules they broke will try the same thing again.
+ */
+describe("passwordSchema complexity", () => {
+	/** The default policy with one requirement turned on, so each case varies exactly one thing. */
+	function policy(overrides: Partial<PasswordPolicy> = {}): PasswordPolicy {
+		return { ...DEFAULT_PASSWORD_POLICY, minimumLength: 12, ...overrides };
+	}
+
+	it("accepts anything long enough when nothing else is required", () => {
+		expect(passwordSchema(policy()).safeParse("all lower case here").success).toBe(true);
+	});
+
+	it("requires both cases when asked", () => {
+		const schema = passwordSchema(policy({ requireMixedCase: true }));
+
+		expect(schema.safeParse("all lower case here").success).toBe(false);
+		expect(schema.safeParse("ALL UPPER CASE HERE").success).toBe(false);
+		expect(schema.safeParse("Mixed Case Here Ok").success).toBe(true);
+	});
+
+	it("requires a digit when asked", () => {
+		const schema = passwordSchema(policy({ requireDigit: true }));
+
+		expect(schema.safeParse("no digits in here").success).toBe(false);
+		expect(schema.safeParse("one digit in here 7").success).toBe(true);
+	});
+
+	it("requires a symbol when asked", () => {
+		const schema = passwordSchema(policy({ requireSymbol: true }));
+
+		expect(schema.safeParse("no symbols in here").success).toBe(false);
+		expect(schema.safeParse("one symbol in here!").success).toBe(true);
+	});
+
+	it("does not count the passphrase's own spaces as a symbol", () => {
+		// A space is what makes a passphrase readable, and treating it as satisfying "a symbol" would
+		// make the setting do nothing for exactly the passwords it was turned on for.
+		expect(passwordSchema(policy({ requireSymbol: true })).safeParse("correct horse battery").success).toBe(false);
+	});
+
+	it("names the one thing that is missing rather than restating the whole policy", () => {
+		const result = passwordSchema(policy({ requireDigit: true })).safeParse("no digits in here");
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.message).toContain("digit");
+	});
+
+	it("still enforces length and control characters alongside the new rules", () => {
+		const schema = passwordSchema(policy({ requireDigit: true }));
+
+		expect(schema.safeParse("shrt1").success).toBe(false);
+		expect(schema.safeParse("with a tab\there and a 1").success).toBe(false);
 	});
 });
 
@@ -124,7 +209,8 @@ describe("what counts as the same password", () => {
 
 	it("counts length after trimming, so padding cannot pad out the minimum", async () => {
 		expect(
-			passwordSchema(MINIMUM_PASSWORD_LENGTH).safeParse(`   ${"a".repeat(MINIMUM_PASSWORD_LENGTH - 1)}   `).success,
+			passwordSchema(lengthOnly(MINIMUM_PASSWORD_LENGTH)).safeParse(`   ${"a".repeat(MINIMUM_PASSWORD_LENGTH - 1)}   `)
+				.success,
 		).toBe(false);
 	});
 

@@ -3,6 +3,7 @@ import { assertNotLastSuperuser, assertNotSelf } from "@/lib/auth/account-guards
 import { CREDENTIAL_ISSUER } from "@/lib/auth/credential-account";
 import type { Granter } from "@/lib/auth/grant-guard";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
+import { DEFAULT_PASSWORD_POLICY } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
@@ -72,7 +73,9 @@ export async function listAccountSessions(userId: string): Promise<SessionSummar
  */
 export async function setAccountPassword(userId: string, password: string): Promise<void> {
 	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-	const parsed = passwordSchema(minimumPasswordLength).safeParse(password);
+	const parsed = passwordSchema({ ...DEFAULT_PASSWORD_POLICY, minimumLength: minimumPasswordLength }).safeParse(
+		password,
+	);
 	if (!parsed.success) {
 		throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 	}

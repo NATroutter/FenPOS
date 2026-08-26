@@ -4,7 +4,7 @@ import { assertNotLastSuperuser, assertNotSelf } from "@/lib/auth/account-guards
 import { credentialAccountRow } from "@/lib/auth/credential-account";
 import { assertMayAssignRoles, assertMayGrant, type Granter, parseGrantedPermissions } from "@/lib/auth/grant-guard";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
-import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
+import { DEFAULT_PASSWORD_POLICY, MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { prisma } from "@/lib/db";
 import { isUniqueViolationOn } from "@/lib/db-errors";
 import { type PanelPermission, parseStoredPanelPermissions } from "@/lib/domain/panel-permissions";
@@ -121,7 +121,9 @@ export async function createAccount(actor: Granter, input: NewAccountInput): Pro
 	const roleIds = [...new Set(input.roleIds)];
 
 	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-	const parsedPassword = passwordSchema(minimumPasswordLength).safeParse(input.password);
+	const parsedPassword = passwordSchema({ ...DEFAULT_PASSWORD_POLICY, minimumLength: minimumPasswordLength }).safeParse(
+		input.password,
+	);
 	if (!parsedPassword.success) {
 		throw new ApiError("invalid_type", parsedPassword.error.issues[0]?.message ?? "That password is not acceptable.");
 	}
