@@ -6,11 +6,13 @@ import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
-import { passwordSchema } from "@/lib/auth/password";
+import { hashPassword, passwordSchema } from "@/lib/auth/password";
+import { assertNotReused, recordPasswordChange } from "@/lib/auth/password-history";
 import { currentUser } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
+import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { globalPasswordPolicy } from "@/lib/settings/settings-service";
 
 /**
  * Replacing a password the account is required to change.
@@ -64,14 +66,22 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 	const password = formData.get("password");
 	const confirm = formData.get("confirm");
 
-	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-	const parsed = passwordSchema(minimumPasswordLength).safeParse(password);
+	const policy = await globalPasswordPolicy();
+	const parsed = passwordSchema(policy).safeParse(password);
 	if (!parsed.success) {
 		return { error: parsed.error.issues[0]?.message ?? "That password is not acceptable." };
 	}
 
 	if (parsed.data !== confirm) {
 		return { error: "The two passwords do not match." };
+	}
+
+	// The path that matters most for reuse: an account sent here *because its password expired* must
+	// not be able to set the same one straight back.
+	try {
+		await assertNotReused(user.id, parsed.data);
+	} catch (error) {
+		return { error: error instanceof ApiError ? error.message : "That password is not acceptable." };
 	}
 
 	// `auth.api.setPassword` is the wrong endpoint for this: it throws `PASSWORD_ALREADY_SET`
@@ -91,6 +101,11 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 		body: { userId: user.id, newPassword: parsed.data },
 		headers: await headers(),
 	});
+
+	// Recorded after the store, for the same reason the flag is cleared after it. The hash here is a
+	// second hash of the same password — argon2 salts each one, so it differs from the stored one by
+	// design and `verifyPassword` matches either.
+	await recordPasswordChange(user.id, await hashPassword(parsed.data));
 
 	// Cleared after the password is actually stored, not before. The other order would leave an
 	// account free of the requirement but still holding the password it was told to replace, if

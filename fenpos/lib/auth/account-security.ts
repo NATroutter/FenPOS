@@ -3,10 +3,11 @@ import { assertNotLastSuperuser, assertNotSelf } from "@/lib/auth/account-guards
 import { CREDENTIAL_ISSUER } from "@/lib/auth/credential-account";
 import type { Granter } from "@/lib/auth/grant-guard";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
+import { recordPasswordChange } from "@/lib/auth/password-history";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { integerSetting } from "@/lib/settings/settings-service";
+import { globalPasswordPolicy } from "@/lib/settings/settings-service";
 
 /**
  * Everything that ends or restrains an account's access.
@@ -71,8 +72,8 @@ export async function listAccountSessions(userId: string): Promise<SessionSummar
  * @throws ApiError when the password is unacceptable, or the account has no credential
  */
 export async function setAccountPassword(userId: string, password: string): Promise<void> {
-	const minimumPasswordLength = await integerSetting("auth.minimumPasswordLength");
-	const parsed = passwordSchema(minimumPasswordLength).safeParse(password);
+	const policy = await globalPasswordPolicy();
+	const parsed = passwordSchema(policy).safeParse(password);
 	if (!parsed.success) {
 		throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 	}
@@ -89,6 +90,13 @@ export async function setAccountPassword(userId: string, password: string): Prom
 		}
 		await tx.session.deleteMany({ where: { userId } });
 	});
+
+	// Recorded, but **not** checked against the history first. The reuse rule constrains an account's
+	// own choices; an administrator resetting a compromised account to a known temporary value is not
+	// the case it exists to stop, and refusing them there would leave them guessing at a list they
+	// cannot see. The change is still recorded, so the account's expiry clock restarts and its next
+	// self-service change has this password to compare against.
+	await recordPasswordChange(userId, passwordHash);
 
 	// Nothing about the password reaches the log or the record: not its length, not its strength.
 	logger.info("Account password set by an administrator", { userId });

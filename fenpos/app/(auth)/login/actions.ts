@@ -6,9 +6,12 @@ import { recordAudit, unknownUserActor, userActor } from "@/lib/audit/audit-log"
 import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
+import { addressAllowed } from "@/lib/auth/ip-allowlist";
+import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth/lockout";
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
+import { globalSignInPolicy } from "@/lib/settings/settings-service";
 
 /**
  * Sign-in.
@@ -62,6 +65,23 @@ function readEmail(formData: FormData): string {
  */
 export async function signIn(_previous: SignInState, formData: FormData): Promise<SignInState> {
 	const address = await getClientAddress();
+	const policy = await globalSignInPolicy();
+
+	// First, and ahead of the throttle: an address that may not reach this install at all should not
+	// consume a throttle budget that legitimate operators elsewhere share.
+	if (!addressAllowed(address, policy.ipAllowlist)) {
+		logger.warn("Sign-in refused by the address allowlist", { address });
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "DENIED",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { reason: "address-not-allowed" },
+			provenance: await requestProvenance(),
+		});
+		// The same message a wrong password gets. An allowlist that announced itself would tell an
+		// attacker they had found a real install and needed only a different address to come from.
+		return { error: REJECTION_MESSAGE };
+	}
 
 	// Consumed before the credentials are examined, so attempts are counted whether or not the
 	// submission is well-formed.
@@ -93,6 +113,23 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		return { error: REJECTION_MESSAGE };
 	}
 
+	// After the throttle, because this is a database read and that one is in memory; and after the
+	// malformed check, because there is no address to look up before it.
+	const lockedFor = await lockedOutFor(email);
+	if (lockedFor > 0) {
+		logger.warn("Sign-in refused: account locked", { address, email: email.trim().toLowerCase() });
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "DENIED",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { reason: "locked", retryAfterSeconds: Math.ceil(lockedFor / 1000) },
+			provenance: await requestProvenance(),
+		});
+		// Deliberately not "this account is locked". That would confirm the address holds an account,
+		// and hand an attacker a way to enumerate them by locking each one in turn.
+		return { error: REJECTION_MESSAGE };
+	}
+
 	let signedIn: { user: { id: string; name: string; email: string } };
 	try {
 		signedIn = await auth.api.signInEmail({
@@ -100,6 +137,9 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			headers: await headers(),
 		});
 	} catch (error) {
+		// Counted against the account rather than the address. A ban, a wrong password and an unknown
+		// address all land here, and `recordFailedSignIn` is silent about the last of those.
+		await recordFailedSignIn(email);
 		logger.warn("Failed sign-in attempt", {
 			address,
 			email: email.trim().toLowerCase(),
@@ -117,8 +157,9 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	}
 
 	// A legitimate operator who mistyped twice should not stay throttled for the rest of the
-	// window once they get it right.
+	// window once they get it right — nor stay one failure away from a lock.
 	signInLimiter.reset(address);
+	await clearFailedSignIns(signedIn.user.id);
 
 	logger.info("Signed in", { address, email: email.trim().toLowerCase() });
 

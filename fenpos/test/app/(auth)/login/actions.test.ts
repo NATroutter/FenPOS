@@ -30,6 +30,8 @@ vi.mock("@/lib/auth/auth", () => ({ auth: { api: { signInEmail: (args: unknown) 
 
 const { signIn } = await import("@/app/(auth)/login/actions");
 const { signInLimiter } = await import("@/lib/auth/rate-limit");
+const { prisma } = await import("@/lib/db");
+const { setSetting } = await import("@/lib/settings/settings-service");
 
 function form(fields: Record<string, string>): FormData {
 	const data = new FormData();
@@ -40,9 +42,12 @@ function form(fields: Record<string, string>): FormData {
 }
 
 describe("signIn", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		signInLimiter.reset("203.0.113.30");
 		signInEmail.mockReset();
+		await prisma.setting.deleteMany({});
+		await prisma.auditEvent.deleteMany({});
+		await prisma.auditAnchor.deleteMany({});
 	});
 
 	it("gives one message for a wrong password and for an unknown address", async () => {
@@ -79,5 +84,148 @@ describe("signIn", () => {
 		}
 
 		expect(attempts.at(-1)?.error).toMatch(/too many/i);
+	});
+});
+
+/**
+ * The two gates that run before any credential is examined.
+ *
+ * Both refuse with the *same* message a wrong password gets. That is the property worth pinning: an
+ * allowlist or a lockout that announced itself would tell an attacker they had found a real install,
+ * or a real account, and hand them a way to enumerate either.
+ */
+describe("the gates before the credential", () => {
+	/** A fresh account, returning the address to sign in with. Ids are per-case. */
+	async function account(id: string): Promise<string> {
+		await prisma.user.create({ data: { id, name: id, email: `${id}@example.com` } });
+		return `${id}@example.com`;
+	}
+
+	beforeEach(async () => {
+		signInLimiter.reset("203.0.113.30");
+		signInEmail.mockReset();
+		await prisma.user.deleteMany({});
+		await prisma.setting.deleteMany({});
+		await prisma.auditEvent.deleteMany({});
+		await prisma.auditAnchor.deleteMany({});
+	});
+
+	describe("address allowlist", () => {
+		it("refuses an address that is not on it, without examining the credential", async () => {
+			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+			await setSetting("auth.ipAllowlist", "10.0.0.0/8");
+
+			const result = await signIn({ error: null }, form({ email: "known@example.com", password: "correct" }));
+
+			expect(result.error).not.toBeNull();
+			// Refused before the password is even looked at, so a barred address cannot be used to test
+			// passwords either.
+			expect(signInEmail).not.toHaveBeenCalled();
+		});
+
+		it("gives a barred address the same message a wrong password gets", async () => {
+			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+			const wrongPassword = await signIn({ error: null }, form({ email: "known@example.com", password: "nope" }));
+
+			signInLimiter.reset("203.0.113.30");
+			await setSetting("auth.ipAllowlist", "10.0.0.0/8");
+			const barred = await signIn({ error: null }, form({ email: "known@example.com", password: "correct" }));
+
+			expect(barred.error).toBe(wrongPassword.error);
+		});
+
+		it("records the refusal so the record says what happened", async () => {
+			await setSetting("auth.ipAllowlist", "10.0.0.0/8");
+
+			await signIn({ error: null }, form({ email: "known@example.com", password: "correct" }));
+
+			const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+			expect(row.outcome).toBe("DENIED");
+			expect(row.detail).toContain("address-not-allowed");
+		});
+
+		it("allows an address on it", async () => {
+			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+			// 203.0.113.30 is what the request-context mock above returns.
+			await setSetting("auth.ipAllowlist", "203.0.113.0/24");
+
+			await expect(signIn({ error: null }, form({ email: "known@example.com", password: "correct" }))).rejects.toThrow(
+				"REDIRECT:/dashboard",
+			);
+		});
+
+		it("allows every address while it is empty", async () => {
+			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+
+			await expect(signIn({ error: null }, form({ email: "known@example.com", password: "correct" }))).rejects.toThrow(
+				"REDIRECT:/dashboard",
+			);
+		});
+	});
+
+	describe("account lockout", () => {
+		it("counts a wrong password toward the lock", async () => {
+			await setSetting("auth.lockoutAfterFailures", 2);
+			const email = await account("li1");
+			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+
+			await signIn({ error: null }, form({ email, password: "wrong" }));
+			signInLimiter.reset("203.0.113.30");
+			await signIn({ error: null }, form({ email, password: "wrong" }));
+
+			const user = await prisma.user.findUniqueOrThrow({ where: { id: "li1" } });
+			expect(user.lockedUntil).not.toBeNull();
+		});
+
+		it("refuses a locked account without examining the credential", async () => {
+			await setSetting("auth.lockoutAfterFailures", 2);
+			const email = await account("li2");
+			await prisma.user.update({ where: { id: "li2" }, data: { lockedUntil: new Date(Date.now() + 60_000) } });
+			signInEmail.mockResolvedValue({ user: { id: "li2" } });
+
+			const result = await signIn({ error: null }, form({ email, password: "correct" }));
+
+			expect(result.error).not.toBeNull();
+			expect(signInEmail).not.toHaveBeenCalled();
+		});
+
+		it("records a locked refusal as such", async () => {
+			await setSetting("auth.lockoutAfterFailures", 2);
+			const email = await account("li3");
+			await prisma.user.update({ where: { id: "li3" }, data: { lockedUntil: new Date(Date.now() + 60_000) } });
+
+			await signIn({ error: null }, form({ email, password: "correct" }));
+
+			const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+			expect(row.detail).toContain("locked");
+		});
+
+		it("forgets the failures once a sign-in succeeds", async () => {
+			await setSetting("auth.lockoutAfterFailures", 5);
+			const email = await account("li4");
+			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+			await signIn({ error: null }, form({ email, password: "wrong" }));
+			signInLimiter.reset("203.0.113.30");
+
+			signInEmail.mockReset();
+			signInEmail.mockResolvedValue({ user: { id: "li4" } });
+			await expect(signIn({ error: null }, form({ email, password: "correct" }))).rejects.toThrow(
+				"REDIRECT:/dashboard",
+			);
+
+			const user = await prisma.user.findUniqueOrThrow({ where: { id: "li4" } });
+			expect(user.failedSignInCount).toBe(0);
+		});
+
+		it("counts nothing while the setting is zero", async () => {
+			const email = await account("li5");
+			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+
+			await signIn({ error: null }, form({ email, password: "wrong" }));
+
+			const user = await prisma.user.findUniqueOrThrow({ where: { id: "li5" } });
+			expect(user.failedSignInCount).toBe(0);
+			expect(user.lockedUntil).toBeNull();
+		});
 	});
 });
