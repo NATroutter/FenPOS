@@ -102,6 +102,31 @@ export async function passwordExpired(
 }
 
 /**
+ * Whether the account behind a session owes a password change.
+ *
+ * The setting is read **before** the account is, and that ordering is the whole point: this runs in
+ * `requireSession`, which every panel page and every server action goes through, and
+ * `auth.passwordExpiryDays` is zero by default. Reading the account first would put a query on every
+ * request of every install to answer a question that is almost always "no".
+ *
+ * @param userId the signed-in account
+ * @param now current time; injectable so tests need no sleeps
+ * @returns whether the account's password has outlived the configured lifetime
+ */
+export async function accountPasswordExpired(userId: string, now: Date = new Date()): Promise<boolean> {
+	const { expiryDays } = await globalPasswordLifetime();
+	if (expiryDays === 0) {
+		return false;
+	}
+
+	const user = await prisma.user.findUnique({ where: { id: userId }, select: { passwordChangedAt: true } });
+	if (!user) {
+		return false;
+	}
+	return passwordExpired(user, now);
+}
+
+/**
  * Hashes a password and records the change in one step.
  *
  * The convenience the three writers share, so none of them can store one hash and record a different

@@ -110,6 +110,36 @@ describe("password history", () => {
 	});
 });
 
+describe("setAccountPassword", () => {
+	beforeEach(async () => {
+		await prisma.passwordHistory.deleteMany({});
+		await prisma.user.deleteMany({});
+		await prisma.setting.deleteMany({});
+	});
+
+	it("records the change without checking the history first", async () => {
+		const { setAccountPassword } = await import("@/lib/auth/account-security");
+		const { credentialAccountRow } = await import("@/lib/auth/credential-account");
+		await setSetting("auth.passwordReuseCount", 3);
+		await prisma.user.create({ data: { id: "sap1", name: "sap1", email: "sap1@example.com" } });
+		await prisma.account.create({
+			data: credentialAccountRow("sap1", await hashPassword("original-password-here"), new Date()),
+		});
+		await recordPasswordChange("sap1", await hashPassword("original-password-here"));
+
+		// An administrator resetting a compromised account to a known temporary value is not the case
+		// the reuse rule exists to stop, and refusing them would leave them guessing at a list they
+		// cannot see.
+		await expect(setAccountPassword("sap1", "original-password-here")).resolves.toBeUndefined();
+
+		// Still recorded, so the account's expiry clock restarts and its next self-service change has
+		// this password to compare against.
+		expect(await prisma.passwordHistory.count({ where: { userId: "sap1" } })).toBe(2);
+		const user = await prisma.user.findUniqueOrThrow({ where: { id: "sap1" } });
+		expect(user.passwordChangedAt).not.toBeNull();
+	});
+});
+
 describe("passwordExpired", () => {
 	beforeEach(async () => {
 		await prisma.setting.deleteMany({});

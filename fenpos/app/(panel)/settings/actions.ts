@@ -9,7 +9,8 @@ import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { panelAction, panelSelf } from "@/lib/auth/panel-action";
-import { passwordSchema } from "@/lib/auth/password";
+import { hashPassword, passwordSchema } from "@/lib/auth/password";
+import { assertNotReused, recordPasswordChange } from "@/lib/auth/password-history";
 import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { PermissionDeniedError } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
@@ -159,7 +160,7 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
 export async function changePassword(current: string, next: string): Promise<ActionState> {
 	return panelAction(
 		"self:change-password",
-		async () => {
+		async (user) => {
 			// Checked here rather than trusted from the form, and before Better Auth ever sees the
 			// candidate: the form disables its button on an empty field, which stops a slip but not a
 			// direct call to this action, and Better Auth's own `changePassword` enforces only its own
@@ -170,6 +171,8 @@ export async function changePassword(current: string, next: string): Promise<Act
 			if (!parsed.success) {
 				throw new ApiError("invalid_type", parsed.error.issues[0]?.message ?? "That password is not acceptable.");
 			}
+
+			await assertNotReused(user.id, parsed.data);
 
 			try {
 				await auth.api.changePassword({
@@ -182,6 +185,11 @@ export async function changePassword(current: string, next: string): Promise<Act
 				// the one on the account.
 				throw new ApiError("invalid_key", "That is not the current password.");
 			}
+
+			// Recorded after Better Auth has stored it, because only then is it the account's password.
+			// Better Auth hashes its own copy, so this is a second hash of the same string — argon2
+			// salts each one, so the two differ by design and `verifyPassword` matches either.
+			await recordPasswordChange(user.id, await hashPassword(parsed.data));
 
 			logger.info("Password changed");
 			// Nothing about the password reaches the record: not its length, not its strength. The row

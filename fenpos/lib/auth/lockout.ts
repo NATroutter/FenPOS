@@ -78,8 +78,13 @@ export async function recordFailedSignIn(email: string, now: Date = new Date()):
 /**
  * Forgets an account's failures. Called on every successful sign-in.
  *
+ * `updateMany` rather than `update`, so an id that matches nothing is a no-op instead of a throw.
+ * This runs *after* the credentials have been accepted and the session created — an account deleted
+ * in the moment between those two steps is a race nobody can do anything useful about, and turning it
+ * into an error page would report a sign-in that actually succeeded as a failure.
+ *
  * @param userId the account that just signed in
  */
 export async function clearFailedSignIns(userId: string): Promise<void> {
-	await prisma.user.update({ where: { id: userId }, data: { failedSignInCount: 0, lockedUntil: null } });
+	await prisma.user.updateMany({ where: { id: userId }, data: { failedSignInCount: 0, lockedUntil: null } });
 }

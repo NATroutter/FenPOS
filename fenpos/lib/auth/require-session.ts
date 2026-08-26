@@ -2,7 +2,12 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/auth";
+import { addressAllowed } from "@/lib/auth/ip-allowlist";
+import { accountPasswordExpired } from "@/lib/auth/password-history";
 import { isInstallClaimed } from "@/lib/auth/setup-key";
+import { prisma } from "@/lib/db";
+import { getClientAddress } from "@/lib/request-context";
+import { globalSignInPolicy } from "@/lib/settings/settings-service";
 
 /**
  * The panel's session gate.
@@ -86,6 +91,31 @@ export async function requireSession(): Promise<PanelUser> {
 	}
 
 	if (user.mustChangePassword) {
+		redirect("/set-password");
+	}
+
+	// Re-checked on every request, not only at sign-in. Checking only at sign-in would leave an
+	// operator who signed in from home before the allowlist was tightened working until their session
+	// lapsed, which is the opposite of what tightening one is for.
+	const { ipAllowlist } = await globalSignInPolicy();
+	if (!addressAllowed(await getClientAddress(), ipAllowlist)) {
+		// The session is destroyed, not merely redirected. `/login` bounces an authenticated visitor to
+		// `/dashboard`, so sending a still-valid session there would loop between the two forever — and
+		// a session from an address that may no longer reach this install is the honest thing to end.
+		await auth.api.signOut({ headers: await headers() });
+		redirect("/login");
+	}
+
+	// An expired password **sets the forced-reset flag** rather than merely redirecting, and that is
+	// load-bearing: `/set-password` bounces anyone whose `mustChangePassword` is false to `/dashboard`,
+	// so a bare redirect here would put the two pages in an infinite loop. Setting the flag makes
+	// expiry converge with the mechanism that already exists — the page renders, the action clears the
+	// flag once the new password is stored, and the audit trail says what it always said.
+	//
+	// Written on a read path, once: the `mustChangePassword` branch above short-circuits every request
+	// after this one, so this costs a single write at the moment the password expires.
+	if (await accountPasswordExpired(user.id)) {
+		await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: true } });
 		redirect("/set-password");
 	}
 
