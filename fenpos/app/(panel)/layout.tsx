@@ -100,6 +100,7 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 					email={user.email}
 					avatarUrl={gravatarUrl(user.email)}
 					initial={avatarInitial(user.name)}
+					twoFactorEnabled={user.twoFactorEnabled}
 				/>
 				<SidebarInset className="flex h-screen min-w-0 flex-col overflow-hidden">
 					{/* Wraps the header as well as the pages, because the chip that governs the stream

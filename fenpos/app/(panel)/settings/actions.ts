@@ -8,11 +8,12 @@ import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { userHolds } from "@/lib/auth/effective-permissions";
-import { panelAction, panelSelf } from "@/lib/auth/panel-action";
+import { panelAction, panelQuery, panelSelf } from "@/lib/auth/panel-action";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
 import { assertNotReused, recordPasswordChange } from "@/lib/auth/password-history";
 import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { PermissionDeniedError } from "@/lib/auth/require-permission";
+import { beginEnrolment, confirmEnrolment, type Enrolment, endEnrolment } from "@/lib/auth/two-factor";
 import { prisma } from "@/lib/db";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
@@ -270,4 +271,67 @@ export async function updateProfile(displayName: string, email: string | null): 
  */
 function isPrismaCode(error: unknown, code: string): boolean {
 	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code;
+}
+
+/** What the enrolment screen gets back: the material, or the reason there is none. */
+export interface StartTwoFactorState {
+	error: string | null;
+	enrolment: Enrolment | null;
+}
+
+/**
+ * Stores a secret for the caller's account and hands back the QR and recovery codes.
+ *
+ * `panelQuery` rather than `panelAction`, because the return value *is* the point — an
+ * `ActionState` would leave nowhere to put the QR. `self:begin-2fa` is a `command` in everything but
+ * the wrapper it uses, which is exactly the case `PanelActionKind`'s own note describes: the kind
+ * decides what is recorded, the shape of the result decides which wrapper carries it.
+ *
+ * **Nothing about the enrolment reaches the audit row.** The registry description says the caller
+ * started enrolment and stops there. A secret written into an append-only table is a secret with no
+ * way back out.
+ *
+ * @param password the caller's current password
+ * @returns the enrolment, or the reason there is none
+ */
+export async function startTwoFactor(password: string): Promise<StartTwoFactorState> {
+	return panelQuery<StartTwoFactorState>(
+		"self:begin-2fa",
+		async () => ({ error: null, enrolment: await beginEnrolment(password) }),
+		{
+			refused: () => ({ error: "You cannot do that.", enrolment: null }),
+			failed: (error) => ({
+				error: error instanceof ApiError ? error.message : "Two-factor could not be set up.",
+				enrolment: null,
+			}),
+		},
+	);
+}
+
+/**
+ * Accepts a code from the authenticator and turns the second factor on.
+ *
+ * A refused code is a `FAILURE` row rather than a silent retry: a run of them is either an operator
+ * whose clock has drifted or somebody working through codes on an account they have a session for,
+ * and both are worth being able to see.
+ *
+ * @param code the six digits the app is showing
+ * @returns the state to render
+ */
+export async function confirmTwoFactor(code: string): Promise<ActionState> {
+	return panelAction("self:confirm-2fa", () => confirmEnrolment(code), {
+		revalidate: () => revalidatePath("/settings"),
+	});
+}
+
+/**
+ * Removes the caller's own second factor.
+ *
+ * @param password the caller's current password
+ * @returns the state to render
+ */
+export async function stopTwoFactor(password: string): Promise<ActionState> {
+	return panelAction("self:end-2fa", () => endEnrolment(password), {
+		revalidate: () => revalidatePath("/settings"),
+	});
 }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { headersMock, signedInUser } from "@/test/helpers/session";
 
 /**
  * Replacing a password the account is required to change.
@@ -13,8 +14,6 @@ vi.mock("next/navigation", () => ({
 		throw new Error(`REDIRECT:${destination}`);
 	},
 }));
-
-const headersMock = vi.fn(async () => new Headers());
 vi.mock("next/headers", () => ({ headers: () => headersMock() }));
 
 const user = vi.fn();
@@ -115,35 +114,23 @@ describe("setPassword", () => {
 		const oldPassword = "the-original-long-password";
 		const newPassword = "a-brand-new-long-password";
 
-		const created = await actualAuth.auth.api.createUser({
-			body: { email, password: oldPassword, name: "Reset Me", role: "admin" },
-		});
-		await prisma.user.update({ where: { id: created.user.id }, data: { mustChangePassword: true } });
-
-		const signedIn = await actualAuth.auth.api.signInEmail({
-			body: { email, password: oldPassword },
-			returnHeaders: true,
-		});
-		const cookie = signedIn.headers
-			.getSetCookie()
-			.map((entry) => entry.split(";")[0])
-			.join("; ");
+		const { user: created } = await signedInUser(email, oldPassword);
+		await prisma.user.update({ where: { id: created.id }, data: { mustChangePassword: true } });
 
 		user.mockResolvedValue({
-			id: created.user.id,
-			name: "Reset Me",
+			id: created.id,
+			name: created.name,
 			email,
 			isSuperuser: false,
 			mustChangePassword: true,
 		});
-		headersMock.mockResolvedValue(new Headers({ cookie }));
 		setUserPasswordApi.mockImplementation((args: Parameters<typeof actualAuth.auth.api.setUserPassword>[0]) =>
 			actualAuth.auth.api.setUserPassword(args),
 		);
 
 		await expect(setPassword({ error: null }, form(newPassword, newPassword))).rejects.toThrow("REDIRECT:/dashboard");
 
-		expect((await prisma.user.findUnique({ where: { id: created.user.id } }))?.mustChangePassword).toBe(false);
+		expect((await prisma.user.findUnique({ where: { id: created.id } }))?.mustChangePassword).toBe(false);
 
 		// The old password no longer works and the new one does — the only proof that actually
 		// matters, since a stored-hash comparison would pass even against a hash Better Auth wrote

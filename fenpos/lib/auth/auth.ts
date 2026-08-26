@@ -140,7 +140,12 @@ export const auth = betterAuth({
 
 	plugins: [
 		admin(),
-		twoFactor(),
+		twoFactor({
+			// What an authenticator app shows beside the code. Without it the entry is labelled with
+			// the base URL, which on a LAN install is an IP address — three of those on one phone are
+			// indistinguishable.
+			issuer: "FenPOS",
+		}),
 		// Must be last. It wraps the handlers that follow it to write `Set-Cookie` through
 		// Next's cookie store, so anything registered after it would not get that treatment.
 		nextCookies(),

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { headersMock, signedInUser } from "@/test/helpers/session";
 
 /**
- * Tests for the profile and password actions behind the Settings tab.
+ * Tests for the profile, password and two-factor actions behind the Settings tab.
  *
  * The session guard redirects, and a redirect is not what this file is about, so `requireSession`
  * is stubbed to hand back a fixed user rather than exercised for real — the same convention the
@@ -14,13 +15,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *
  * `updateProfile` writes through Prisma directly, so its tests exercise the real database rather
  * than a stub.
+ *
+ * The two-factor actions go through Better Auth's own `enableTwoFactor`/`verifyTOTP` for real —
+ * `changePassword` is the only method still stubbed, so the mock factory merges the real `auth.api`
+ * in rather than replacing it. `startTwoFactor`, `confirmTwoFactor` and `stopTwoFactor` call
+ * `lib/auth/two-factor.ts`, which resolves its caller from the session cookie via `headers()`, not
+ * from the stubbed `requireSession` — so those tests use `signedInUser` to sign a real account in
+ * and point the shared `headersMock` at its session, the same helper `set-password/actions.test.ts`
+ * uses for the same reason.
  */
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ headers: () => headersMock() }));
 
 const changePasswordApi = vi.fn();
-vi.mock("@/lib/auth/auth", () => ({
-	auth: { api: { changePassword: (args: unknown) => changePasswordApi(args) } },
-}));
+vi.mock("@/lib/auth/auth", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/auth/auth")>();
+	return {
+		auth: { ...actual.auth, api: { ...actual.auth.api, changePassword: (args: unknown) => changePasswordApi(args) } },
+	};
+});
 
 const SESSION_USER = {
 	id: "u1",
@@ -37,13 +49,18 @@ vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => SESSI
 const revalidatePath = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath: (...args: unknown[]) => revalidatePath(...args) }));
 
-const { changePassword, updateProfile } = await import("@/app/(panel)/settings/actions");
+const { changePassword, updateProfile, startTwoFactor, confirmTwoFactor } = await import(
+	"@/app/(panel)/settings/actions"
+);
 const { prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 
 beforeEach(async () => {
 	changePasswordApi.mockReset().mockResolvedValue({ token: null, user: SESSION_USER });
 	revalidatePath.mockClear();
+	// Reset to the file's default of "no session cookie" between tests — a two-factor test that ran
+	// before this one may have pointed it at a real account's cookie via `signedInUser`.
+	headersMock.mockReset().mockResolvedValue(new Headers());
 
 	await prisma.session.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -200,5 +217,48 @@ describe("updateProfile", () => {
 		await updateProfile("New Name", "new@example.com");
 
 		expect(changePasswordApi).not.toHaveBeenCalled();
+	});
+});
+
+describe("two-factor actions", () => {
+	it("refuses to start enrolment without the current password", async () => {
+		await signedInUser("tfa-start@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("wrong password");
+		expect(result.error).not.toBeNull();
+		expect(result.enrolment).toBeNull();
+	});
+
+	it("hands back an enrolment and writes a row for it", async () => {
+		await signedInUser("tfa-ok@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("correct horse battery staple");
+		expect(result.enrolment?.qrSvg.startsWith("<svg")).toBe(true);
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:begin-2fa");
+		expect(row?.outcome).toBe("SUCCESS");
+	});
+
+	it("never puts the secret or the recovery codes in the audit row", async () => {
+		await signedInUser("tfa-quiet@example.test", "correct horse battery staple");
+		const result = await startTwoFactor("correct horse battery staple");
+		const secret = new URL(result.enrolment?.totpUri ?? "otpauth://x").searchParams.get("secret") ?? "";
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		const serialised = JSON.stringify(row);
+		expect(serialised).not.toContain(secret);
+		for (const code of result.enrolment?.recoveryCodes ?? []) {
+			expect(serialised).not.toContain(code);
+		}
+	});
+
+	it("records a refused confirmation as DENIED, not as a success", async () => {
+		await signedInUser("tfa-bad@example.test", "correct horse battery staple");
+		await startTwoFactor("correct horse battery staple");
+		const result = await confirmTwoFactor("000000");
+		expect(result.error).not.toBeNull();
+
+		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		expect(row?.action).toBe("self:confirm-2fa");
+		expect(row?.outcome).toBe("FAILURE");
 	});
 });

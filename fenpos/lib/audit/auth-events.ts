@@ -27,4 +27,12 @@ export const AUTH_AUDIT_ACTIONS = {
 	SETUP_KEY: "setup:key-check",
 	/** An install claimed, or setup refused. */
 	SETUP_COMPLETE: "setup:complete",
+	/**
+	 * A second factor presented at `/login`, however that turned out.
+	 *
+	 * Separate from `SIGN_IN` rather than folded into it. The two answer different questions — a run
+	 * of failed sign-ins is somebody guessing a password, a run of failed challenges is somebody who
+	 * already has one — and an investigation that could not tell them apart would miss the second.
+	 */
+	TWO_FACTOR: "auth:two-factor",
 } as const;

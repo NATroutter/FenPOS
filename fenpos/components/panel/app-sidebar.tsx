@@ -112,6 +112,7 @@ export function AppSidebar({
 	email,
 	avatarUrl,
 	initial,
+	twoFactorEnabled,
 }: {
 	/**
 	 * The paths this account may open, decided on the server by `permittedNavHrefs`.
@@ -136,6 +137,11 @@ export function AppSidebar({
 	/** Resolved on the server, so no address and no hashing reach the browser. */
 	avatarUrl: string | null;
 	initial: string;
+	/**
+	 * Whether the account already has a confirmed authenticator. Read on the server so the dialog
+	 * opens showing the right of its two states.
+	 */
+	twoFactorEnabled: boolean;
 }) {
 	const pathname = usePathname();
 	const navGroups = permittedGroups(permittedHrefs);
@@ -197,6 +203,7 @@ export function AppSidebar({
 					initial={initial}
 					signOutAction={signOutAction}
 					minimumPasswordLength={minimumPasswordLength}
+					twoFactorEnabled={twoFactorEnabled}
 				/>
 			</SidebarFooter>
 
