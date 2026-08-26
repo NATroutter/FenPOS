@@ -13,9 +13,10 @@ import { Spinner } from "@/components/ui/spinner";
 /**
  * Enrolling an authenticator, in the three states the flow actually has.
  *
- * Rendered by the profile dialog's Two-factor category, as a standalone component rather than
- * markup inline in the dialog — the three states are enough logic that keeping them here is what
- * lets the dialog's own switch stay a one-line case per category.
+ * Shared by the profile dialog's Two-factor category and by `/enrol-2fa`, as a standalone component
+ * rather than markup inline in either caller — the three states are enough logic that keeping them
+ * here is what lets the dialog's own switch stay a one-line case per category, and lets the gate
+ * page render the same flow with nothing of its own to keep in sync.
  *
  * The QR arrives as markup from the server and is inlined. It is drawn by bwip-js from a URI the
  * server has just minted — not fetched, not from a third party, and never sent anywhere. That is

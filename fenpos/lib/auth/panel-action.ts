@@ -43,6 +43,21 @@ export interface PanelActionOptions {
 type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: PanelUser; permission: string };
 
 /**
+ * The three actions that are how enrolling a second factor happens.
+ *
+ * `/enrol-2fa` renders `TwoFactorPanel` for an account that has none, on an install that requires
+ * one — precisely the condition `requireSession`'s own enrolment gate redirects on. Gating these
+ * three the ordinary way would make that redirect fire on their very first call, so `startTwoFactor`
+ * would hand the page a redirect instead of a QR. `requireSession`'s `skipEnrolmentGate` exists for
+ * exactly this set, and only for it — every other gate it runs still applies.
+ */
+const ENROLMENT_ACTION_IDS: ReadonlySet<PanelActionId> = new Set([
+	"self:begin-2fa",
+	"self:confirm-2fa",
+	"self:end-2fa",
+]);
+
+/**
  * Resolves the session and checks the registry's permission.
  *
  * Must be called outside any `try` that catches broadly: `requireSession` redirects by throwing.
@@ -52,7 +67,7 @@ type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: P
  */
 async function gate(id: PanelActionId): Promise<GateResult> {
 	const entry = panelActionEntry(id);
-	const user = await requireSession();
+	const user = await requireSession({ skipEnrolmentGate: ENROLMENT_ACTION_IDS.has(id) });
 
 	if (entry.kind !== "command" && entry.kind !== "query") {
 		// `custom`, `self` and `unauthenticated` carry no permission by construction, and the

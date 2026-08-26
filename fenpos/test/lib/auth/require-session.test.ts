@@ -206,3 +206,88 @@ describe("password expiry", () => {
 		await expect(requireSession()).resolves.toMatchObject({ id: "rs6" });
 	});
 });
+
+/**
+ * The last gate: an install that requires a second factor sends an account with none to enrol one.
+ */
+describe("the enrolment gate", () => {
+	beforeEach(async () => {
+		redirected.mockClear();
+		getSession.mockReset();
+		signOut.mockReset();
+		claimed.mockReset().mockResolvedValue(true);
+		clientAddress.mockReset().mockResolvedValue("203.0.113.30");
+		await prisma.setting.deleteMany({});
+		await prisma.user.deleteMany({});
+	});
+
+	it("lets an un-enrolled user through while the setting is off", async () => {
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs7" },
+			user: {
+				id: "rs7",
+				name: "rs7",
+				email: "rs7@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession()).resolves.toMatchObject({ twoFactorEnabled: false });
+	});
+
+	it("sends an un-enrolled user to enrolment while the setting is on", async () => {
+		await setSetting("auth.require2fa", true);
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs8" },
+			user: {
+				id: "rs8",
+				name: "rs8",
+				email: "rs8@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession()).rejects.toThrow("REDIRECT:/enrol-2fa");
+	});
+
+	it("lets an enrolled user through while the setting is on", async () => {
+		await setSetting("auth.require2fa", true);
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs9" },
+			user: {
+				id: "rs9",
+				name: "rs9",
+				email: "rs9@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: true,
+			},
+		});
+
+		await expect(requireSession()).resolves.toMatchObject({ twoFactorEnabled: true });
+	});
+
+	it("takes a forced password change first, so the two gates cannot loop", async () => {
+		await setSetting("auth.require2fa", true);
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs10" },
+			user: {
+				id: "rs10",
+				name: "rs10",
+				email: "rs10@example.com",
+				isSuperuser: false,
+				mustChangePassword: true,
+				twoFactorEnabled: false,
+			},
+		});
+
+		// Both gates would redirect; the assertion that matters is that exactly one does, and it is the
+		// password one — `/set-password` is reachable without a second factor, and `/enrol-2fa` is not
+		// reachable while a password change is owed.
+		await expect(requireSession()).rejects.toThrow("REDIRECT:/set-password");
+	});
+});

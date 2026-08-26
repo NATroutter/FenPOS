@@ -8,7 +8,7 @@ import { keepSessionAlive } from "@/lib/auth/session-policy";
 import { isInstallClaimed } from "@/lib/auth/setup-key";
 import { prisma } from "@/lib/db";
 import { getClientAddress } from "@/lib/request-context";
-import { globalSignInPolicy } from "@/lib/settings/settings-service";
+import { booleanSetting, globalSignInPolicy } from "@/lib/settings/settings-service";
 
 /**
  * The panel's session gate.
@@ -100,9 +100,16 @@ export async function currentUser(): Promise<PanelUser | null> {
  * end. That is a routing convenience only — the seal in `setup.ts` is what actually decides
  * whether setup may proceed.
  *
+ * @param options `skipEnrolmentGate` exists for exactly one caller: `panel-action.ts`'s `gate`,
+ *   for the three actions that are how enrolment happens (`self:begin-2fa`, `self:confirm-2fa`,
+ *   `self:end-2fa`). Those run from `/enrol-2fa` itself — an account with none, on an install that
+ *   requires one — so the ordinary call here would redirect to the very page already asking for
+ *   the click, and `startTwoFactor` would hand back a redirect instead of a QR. Every other gate
+ *   still applies with the flag set; only the last one, the one these actions exist to satisfy, is
+ *   skipped.
  * @returns the signed-in user; never null
  */
-export async function requireSession(): Promise<PanelUser> {
+export async function requireSession(options: { skipEnrolmentGate?: boolean } = {}): Promise<PanelUser> {
 	const user = await currentUser();
 
 	if (!user) {
@@ -148,6 +155,21 @@ export async function requireSession(): Promise<PanelUser> {
 	if (await accountPasswordExpired(user.id)) {
 		await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: true } });
 		redirect("/set-password");
+	}
+
+	// Last of the gates, and deliberately: a forced password change outranks it, because
+	// `/set-password` is reachable without a second factor and enrolling one while owing a password
+	// change would leave the account holding a factor for a password it is about to replace.
+	//
+	// The flag is consulted before the setting is read, so `&&` short-circuits: an account that
+	// already has one is not asked again, and an install that does not require two factors — the
+	// default — pays one settings read and no more.
+	//
+	// Skippable, and only by this one condition — see `skipEnrolmentGate` above. Everything before
+	// this point still ran: an account on a disallowed address or past its inactivity timeout is
+	// still turned away before it ever reaches the actions this flag exists for.
+	if (!options.skipEnrolmentGate && !user.twoFactorEnabled && (await booleanSetting("auth.require2fa"))) {
+		redirect("/enrol-2fa");
 	}
 
 	return user;
