@@ -119,14 +119,25 @@ export interface SignedInAccount {
  * own response — one path for "point `headers()` at the current session" is one path to keep
  * correct, instead of two that must agree.
  *
+ * `role` defaults to `"admin"` to match every existing caller, all written before
+ * `account-service.ts` made `"user"` the default for a panel-made account. A caller exercising
+ * behaviour that must hold for a non-admin account — the common case now — passes `"user"`
+ * explicitly, rather than this default silently making every fixture the one role better-auth's
+ * admin plugin treats specially.
+ *
  * @param email the new account's address
  * @param password the new account's password
+ * @param role the account's better-auth role
  * @returns the created user
  */
-export async function signedInUser(email: string, password: string): Promise<{ user: SignedInAccount }> {
+export async function signedInUser(
+	email: string,
+	password: string,
+	role: "admin" | "user" = "admin",
+): Promise<{ user: SignedInAccount }> {
 	const { auth } = await vi.importActual<typeof import("@/lib/auth/auth")>("@/lib/auth/auth");
 
-	const created = await auth.api.createUser({ body: { email, password, name: email, role: "admin" } });
+	const created = await auth.api.createUser({ body: { email, password, name: email, role } });
 	await auth.api.signInEmail({ body: { email, password } });
 	await refreshSession(created.user.id);
 
