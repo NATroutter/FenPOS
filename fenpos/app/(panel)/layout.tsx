@@ -68,8 +68,8 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// job is authorisation, not handing back every field Better Auth happens to expose, and most
 	// callers have no use for a session's expiry. Confirmed against `better-auth`'s
 	// `getSession` route (`dist/api/routes/session.mjs`) that the session object carries a real
-	// `expiresAt: Date` — not a guess or a value computed from `SESSION_SECONDS`, which could
-	// drift from what the server actually extended the session to.
+	// `expiresAt: Date` — not a guess or a value the app recomputes itself, which could drift from
+	// what the server actually extended the session to.
 	const currentSession = await auth.api.getSession({ headers: await headers() });
 
 	// Read here rather than in the sidebar: the footer is part of this layout, and a client

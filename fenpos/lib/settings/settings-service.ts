@@ -655,7 +655,9 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.sessionHours",
 		label: "Session lifetime",
 		description:
-			"How long a session lasts before it must be signed in again. Read when a session is created, so a change takes effect at the next sign-in rather than the next restart. A shared back-office terminal wants hours; a private office wants days.",
+			"How long a session lasts before it must be signed in again. Read when a session is created, so a " +
+			"change takes effect at the next sign-in rather than the next restart. A shared back-office terminal " +
+			"wants hours; a private office wants days.",
 		category: "security",
 		type: "integer",
 		min: 1,
@@ -788,7 +790,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.require2fa",
 		label: "Require two-factor",
 		description:
-			"Whether every account must carry an authenticator app before it can reach the panel. Turning this on does not lock anyone out: an account with no enrolment still signs in and is sent to set one up, because a switch that stranded the only administrator would have no remedy until the recovery CLI exists.",
+			"Whether every account must carry an authenticator app before it can reach the panel. Turning this on " +
+			"does not lock anyone out: an account with no enrolment still signs in and is sent to set one up, " +
+			"because a switch that stranded the only administrator would have no remedy until the recovery CLI " +
+			"exists.",
 		category: "security",
 		type: "boolean",
 		fallback: false,
@@ -797,7 +802,9 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.idleTimeoutMinutes",
 		label: "Inactivity timeout",
 		description:
-			"How long a session may sit untouched before it is ended. Zero never ends one for inactivity, which is the default — a panel on a wall display is meant to sit still. A shop floor terminal in a public room is the case for setting it.",
+			"How long a session may sit untouched before it is ended. Zero never ends one for inactivity, which is " +
+			"the default — a panel on a wall display is meant to sit still. A shop floor terminal in a public room " +
+			"is the case for setting it.",
 		category: "security",
 		type: "integer",
 		min: 0,
@@ -809,7 +816,9 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.maxConcurrentSessions",
 		label: "Sessions per account",
 		description:
-			"How many places one account may be signed in at once. Reaching the limit ends the least recently used session rather than refusing the new one: an operator whose browser crashed must be able to get back in, and refusing them would turn a stale row into an outage. Zero is unlimited.",
+			"How many places one account may be signed in at once. Reaching the limit ends the least recently used " +
+			"session rather than refusing the new one: an operator whose browser crashed must be able to get back " +
+			"in, and refusing them would turn a stale row into an outage. Zero is unlimited.",
 		category: "security",
 		type: "integer",
 		min: 0,
