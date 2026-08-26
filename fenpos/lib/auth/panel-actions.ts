@@ -625,6 +625,14 @@ export const PANEL_ACTIONS = [
 		description: "Presented credentials at sign-in",
 	},
 	{
+		id: "auth:two-factor",
+		kind: "unauthenticated",
+		permission: null,
+		module: "(auth)/login/actions.ts",
+		exportName: "verifyTwoFactor",
+		description: "Presented a second factor at sign-in",
+	},
+	{
 		id: "auth:set-password",
 		kind: "unauthenticated",
 		permission: null,

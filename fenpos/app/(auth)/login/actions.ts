@@ -27,6 +27,14 @@ import { globalSignInPolicy } from "@/lib/settings/settings-service";
 export interface SignInState {
 	/** Message to display, or null before the first attempt. */
 	error: string | null;
+	/**
+	 * True once the password has been accepted and a second factor is owed.
+	 *
+	 * The form swaps its fields on this rather than navigating. The plugin's own challenge cookie is
+	 * what actually carries the state between the two submissions, so a refresh loses the *screen*
+	 * and not the *challenge* — signing in again lands on the same step.
+	 */
+	twoFactorRequired: boolean;
 }
 
 /** Shown for every failure, whatever its cause. */
@@ -82,7 +90,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		});
 		// The same message a wrong password gets. An allowlist that announced itself would tell an
 		// attacker they had found a real install and needed only a different address to come from.
-		return { error: REJECTION_MESSAGE };
+		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
 
 	// Consumed before the credentials are examined, so attempts are counted whether or not the
@@ -98,7 +106,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			detail: { reason: "rate-limited", retryAfterSeconds: seconds },
 			provenance: await requestProvenance(),
 		});
-		return { error: `Too many attempts. Try again in ${seconds} seconds.` };
+		return { error: `Too many attempts. Try again in ${seconds} seconds.`, twoFactorRequired: false };
 	}
 
 	const email = formData.get("email");
@@ -112,7 +120,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			detail: { reason: "malformed" },
 			provenance: await requestProvenance(),
 		});
-		return { error: REJECTION_MESSAGE };
+		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
 
 	// After the throttle, because this is a database read and that one is in memory; and after the
@@ -129,10 +137,10 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		});
 		// Deliberately not "this account is locked". That would confirm the address holds an account,
 		// and hand an attacker a way to enumerate them by locking each one in turn.
-		return { error: REJECTION_MESSAGE };
+		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
 
-	let signedIn: { user: { id: string; name: string; email: string }; token: string };
+	let signedIn: Awaited<ReturnType<typeof auth.api.signInEmail>>;
 	try {
 		signedIn = await auth.api.signInEmail({
 			body: { email: email.trim().toLowerCase(), password },
@@ -155,12 +163,35 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			detail: { reason: "rejected", remainingAttempts: limit.remaining },
 			provenance: await requestProvenance(),
 		});
-		return { error: REJECTION_MESSAGE };
+		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
 
-	// A legitimate operator who mistyped twice should not stay throttled for the rest of the
-	// window once they get it right — nor stay one failure away from a lock.
+	// The password was right either way, so the throttle and the failure count are cleared before the
+	// branch: an operator who then fumbles a TOTP code has not mistyped their password, and counting
+	// it against them would lock accounts for having a slow phone.
 	signInLimiter.reset(address);
+
+	// Better Auth defers instead of returning a session when the account carries a second factor. It
+	// has already set its own challenge cookie by this point; nothing here has to carry state.
+	if ("twoFactorRedirect" in signedIn && signedIn.twoFactorRedirect) {
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+			outcome: "SUCCESS",
+			actor: unknownUserActor(readEmail(formData)),
+			detail: { stage: "password", twoFactorRequired: true },
+			provenance: await requestProvenance(),
+		});
+		// Deliberately not "wrong password" and deliberately not silent: the operator needs to know
+		// what to type next, and by this point they have already proved they hold the password.
+		return { error: null, twoFactorRequired: true };
+	}
+
+	if (!("user" in signedIn)) {
+		// Unreachable: the union has exactly two arms and the deferral is handled above. Checked so
+		// that a plugin adding a third arm is a refusal rather than a crash on `signedIn.user`.
+		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
+	}
+
 	await clearFailedSignIns(signedIn.user.id);
 
 	// After the session exists, so the new one is counted and protected. `signInEmail` returns the
@@ -183,5 +214,80 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	});
 
 	// Outside the try/catch that would otherwise swallow it: redirect() signals by throwing.
+	redirect("/dashboard");
+}
+
+/**
+ * Verifies the second factor and finishes the sign-in.
+ *
+ * Takes a TOTP code or a recovery code in the same field. Asking an operator which kind they are
+ * about to type is a question they should not have to answer under pressure — the two are different
+ * lengths and the plugin can tell them apart, so this tries the authenticator first and falls back.
+ *
+ * Deliberately **not** rate-limited by address the way the password step is: the throttle was
+ * already cleared when the password was accepted, and an attacker who has reached this step holds a
+ * valid password, so the thing worth counting is codes against this challenge rather than requests
+ * from this address. The challenge cookie the plugin issued is short-lived, which is what bounds it.
+ * If a run of `auth:two-factor` DENIED rows ever shows this being ground at, a per-challenge counter
+ * is the fix, not a per-address one.
+ *
+ * @param _previous the prior form state, required by useActionState and unused
+ * @param formData the submitted form
+ * @returns the state to render, or never when the code is accepted and redirects
+ */
+export async function verifyTwoFactor(_previous: SignInState, formData: FormData): Promise<SignInState> {
+	const submitted = formData.get("code");
+	const code = typeof submitted === "string" ? submitted.trim() : "";
+
+	if (code === "") {
+		return { error: "Enter the code from your authenticator.", twoFactorRequired: true };
+	}
+
+	let verified: Awaited<ReturnType<typeof auth.api.verifyTOTP>> | Awaited<ReturnType<typeof auth.api.verifyBackupCode>>;
+	try {
+		verified = await auth.api.verifyTOTP({ body: { code }, headers: await headers() });
+	} catch {
+		try {
+			verified = await auth.api.verifyBackupCode({ body: { code }, headers: await headers() });
+		} catch (error) {
+			logger.warn("Failed two-factor attempt", {
+				address: await getClientAddress(),
+				reason: error instanceof Error ? error.message : String(error),
+			});
+			await recordAudit({
+				action: AUTH_AUDIT_ACTIONS.TWO_FACTOR,
+				outcome: "DENIED",
+				actor: unknownUserActor(""),
+				detail: { reason: "rejected" },
+				provenance: await requestProvenance(),
+			});
+			// No actor on the row. The challenge cookie is the only thing identifying the account at
+			// this point and it is the plugin's; reading it here to name a user would couple this
+			// action to an internal the plugin is free to change.
+			return { error: "That code is not right.", twoFactorRequired: true };
+		}
+	}
+
+	await clearFailedSignIns(verified.user.id);
+
+	// `verifyTOTP` and `verifyBackupCode` both rotate the session on success and both hand back the
+	// new token, the same way `signInEmail` does on the password path — so the just-issued session is
+	// pinned here for the same reason it is pinned there: without it, a cap of one could sort the
+	// session just created behind an existing one on a coarse clock and sign the caller straight back
+	// out of the session they just proved they own.
+	const newSession = verified.token
+		? await prisma.session.findUnique({ where: { token: verified.token }, select: { id: true } })
+		: null;
+	await enforceSessionCap(verified.user.id, newSession?.id ?? null);
+
+	logger.info("Signed in with a second factor", { address: await getClientAddress() });
+	await recordAudit({
+		action: AUTH_AUDIT_ACTIONS.TWO_FACTOR,
+		outcome: "SUCCESS",
+		actor: userActor(verified.user),
+		provenance: await requestProvenance(),
+	});
+
+	// Outside any try/catch: redirect() signals by throwing.
 	redirect("/dashboard");
 }
