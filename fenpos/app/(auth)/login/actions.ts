@@ -232,7 +232,20 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
  *
  * Takes a TOTP code or a recovery code in the same field. Asking an operator which kind they are
  * about to type is a question they should not have to answer under pressure — the two are different
- * lengths and the plugin can tell them apart, so this tries the authenticator first and falls back.
+ * shapes and this picks the endpoint from the shape.
+ *
+ * **One submission costs one attempt, and picking by shape is what buys that.** Trying the
+ * authenticator and falling back to the recovery code on failure sent every wrong code to both
+ * endpoints, and each of them spends from the same two budgets — so five per-challenge attempts died
+ * on the third submission and ten per-account failures on the fifth. That landed hardest on the case
+ * this flow expects, a phone whose clock has drifted, and because the account lockout covers the
+ * recovery codes too it locked the operator out of the very thing they would reach for next.
+ *
+ * A six-digit string is a TOTP code and nothing else: the plugin's own recovery codes are two groups
+ * of five alphanumerics joined by a hyphen (`generateBackupCodesFn`, `two-factor/backup-codes`), so
+ * the two sets do not overlap and neither endpoint is ever asked about a code meant for the other.
+ * Both refusals return the same message, deliberately — one that said which kind of code was
+ * expected would tell a password-holder whether the account still had recovery codes left.
  *
  * Deliberately **not** rate-limited by address the way the password step is: the throttle was
  * already cleared when the password was accepted, and an attacker who has reached this step holds a
@@ -242,7 +255,8 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
  * `two-factor/{totp,backup-codes}/index.mjs`), destroying the challenge cookie once they are spent,
  * and separately caps them *per account, across challenges* at ten consecutive failures
  * (`accountLockout`, `two-factor/verify-two-factor.mjs`) — a budget `lib/auth/auth.ts` leaves at the
- * plugin's default rather than overriding, so this reasoning depends on it staying that way. The
+ * plugin's default rather than overriding, so this reasoning depends on it staying that way. Those
+ * are the numbers an operator actually gets only because one submission reaches one endpoint. The
  * challenge cookie's own short life is not what bounds this: `signInLimiter.reset(address)` above
  * fires on every accepted password, so a password-holder can mint a fresh ten-minute challenge
  * indefinitely without ever tripping the address throttle. The account lockout is the real ceiling.
@@ -269,29 +283,34 @@ export async function verifyTwoFactor(_previous: SignInState, formData: FormData
 		return { error: "Enter the code from your authenticator.", twoFactorRequired: true };
 	}
 
+	// Six digits and nothing else is a TOTP code; a recovery code carries a hyphen and letters. See
+	// the note above for why the shape decides rather than a first attempt deciding.
+	const looksLikeTotp = /^\d{6}$/.test(code);
+
 	let verified: Awaited<ReturnType<typeof auth.api.verifyTOTP>> | Awaited<ReturnType<typeof auth.api.verifyBackupCode>>;
 	try {
-		verified = await auth.api.verifyTOTP({ body: { code }, headers: await headers() });
-	} catch {
-		try {
-			verified = await auth.api.verifyBackupCode({ body: { code }, headers: await headers() });
-		} catch (error) {
-			logger.warn("Failed two-factor attempt", {
-				address: await getClientAddress(),
-				reason: error instanceof Error ? error.message : String(error),
-			});
-			await recordAudit({
-				action: AUTH_AUDIT_ACTIONS.TWO_FACTOR,
-				outcome: "DENIED",
-				actor: unknownUserActor(""),
-				detail: { reason: "rejected" },
-				provenance: await requestProvenance(),
-			});
-			// No actor on the row. The challenge cookie is the only thing identifying the account at
-			// this point and it is the plugin's; reading it here to name a user would couple this
-			// action to an internal the plugin is free to change.
-			return { error: "That code is not right.", twoFactorRequired: true };
-		}
+		verified = looksLikeTotp
+			? await auth.api.verifyTOTP({ body: { code }, headers: await headers() })
+			: await auth.api.verifyBackupCode({ body: { code }, headers: await headers() });
+	} catch (error) {
+		logger.warn("Failed two-factor attempt", {
+			address: await getClientAddress(),
+			// Which endpoint was tried, so the server log can tell a mistyped authenticator code from a
+			// spent recovery code. The operator is told neither.
+			factor: looksLikeTotp ? "totp" : "recovery-code",
+			reason: error instanceof Error ? error.message : String(error),
+		});
+		await recordAudit({
+			action: AUTH_AUDIT_ACTIONS.TWO_FACTOR,
+			outcome: "DENIED",
+			actor: unknownUserActor(""),
+			detail: { reason: "rejected" },
+			provenance: await requestProvenance(),
+		});
+		// No actor on the row. The challenge cookie is the only thing identifying the account at
+		// this point and it is the plugin's; reading it here to name a user would couple this
+		// action to an internal the plugin is free to change.
+		return { error: "That code is not right.", twoFactorRequired: true };
 	}
 
 	await clearFailedSignIns(verified.user.id);

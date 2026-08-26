@@ -513,6 +513,32 @@ describe("two-factor at sign-in", () => {
 		).rejects.toThrow("REDIRECT:/dashboard");
 	});
 
+	/**
+	 * One submission, one attempt.
+	 *
+	 * The plugin allows five tries against a single challenge. Trying the authenticator and then
+	 * falling back to the recovery code spent two of them for every wrong code an operator typed, so
+	 * the challenge died on the third submission rather than the fifth — and the account-wide lockout,
+	 * which covers the recovery codes too, fired at five wrong codes rather than ten. Four wrong codes
+	 * followed by a right one is the cheapest thing that tells the two behaviours apart.
+	 */
+	it("spends one attempt per submission, so a fifth submission is still examined", async () => {
+		const secret = await enrolledUser("budget@example.test", "correct horse battery staple");
+		await signIn(
+			{ error: null, twoFactorRequired: false },
+			form({ email: "budget@example.test", password: "correct horse battery staple" }),
+		);
+
+		for (let submission = 0; submission < 4; submission += 1) {
+			const state = await verifyTwoFactor({ error: null, twoFactorRequired: true }, form({ code: "000000" }));
+			expect(state.error).not.toBeNull();
+		}
+
+		await expect(
+			verifyTwoFactor({ error: null, twoFactorRequired: true }, form({ code: totp(secret) })),
+		).rejects.toThrow("REDIRECT:/dashboard");
+	});
+
 	it("keeps the session the second factor just issued, even under a cap the eviction order would miss", async () => {
 		const secret = await enrolledUser("capped@example.test", "correct horse battery staple");
 		const user = await prisma.user.findFirstOrThrow({ where: { email: "capped@example.test" } });
