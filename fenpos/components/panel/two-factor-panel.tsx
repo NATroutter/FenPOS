@@ -100,8 +100,8 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 					<RecoveryCodeList codes={recoveryCodes} />
 					<FieldDescription>
 						Last chance: these are not shown again. Each one signs you in once if you lose the app — the panel stores
-						them encrypted, not in the clear, so nobody here can read them back to you. Without them, an administrator
-						has to clear the enrolment for you.
+						them encrypted, and nothing here decrypts them, so there is no screen that can show them to you a second
+						time. Without them, an administrator has to clear the enrolment for you.
 					</FieldDescription>
 				</Field>
 				<div>

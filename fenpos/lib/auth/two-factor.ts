@@ -64,7 +64,11 @@ export interface Enrolment {
  */
 export async function beginEnrolment(password: string): Promise<Enrolment> {
 	const session = await auth.api.getSession({ headers: await headers() });
-	if (session?.user.twoFactorEnabled) {
+	// Read through `Boolean` rather than trusted as typed, matching `currentUser`: the column is a
+	// SQLite integer, and a null from a row written before it existed must read as "no", never as
+	// "unknown" and certainly never as "yes".
+	const alreadyEnrolled = Boolean(session?.user.twoFactorEnabled);
+	if (alreadyEnrolled) {
 		throw new ApiError("already_enrolled", "Two-factor is already on. Turn it off before setting up a new one.");
 	}
 

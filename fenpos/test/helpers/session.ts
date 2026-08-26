@@ -23,21 +23,37 @@ import { env } from "@/lib/env";
  */
 export const headersMock = vi.fn(async () => new Headers());
 
+/** One entry of a cookie jar, in the shape both of Next's cookie-store types hand back. */
+export interface CookiePair {
+	name: string;
+	value: string;
+}
+
 /** The one method `authHeaders` calls on Next's cookie store. */
 export interface CookieStoreStub {
-	toString(): string;
+	getAll(): CookiePair[];
 }
 
 /**
  * Stands in for `cookies()`.
  *
- * `lib/auth/auth-headers.ts` reads the store through `toString()` and nothing else, so that is all
+ * `lib/auth/auth-headers.ts` reads the store through `getAll()` and nothing else, so that is all
  * this provides — a fuller stand-in would be inventing a contract no caller relies on. It is
  * separate from {@link headersMock} because production has to tell the two apart: after a server
  * action writes a cookie, Next keeps the store current and deliberately leaves the request's own
  * `Cookie` header alone, and that difference is the whole of the bug `authHeaders` exists to close.
  */
-export const cookiesMock = vi.fn(async (): Promise<CookieStoreStub> => ({ toString: () => "" }));
+export const cookiesMock = vi.fn(async (): Promise<CookieStoreStub> => ({ getAll: () => [] }));
+
+/**
+ * A cookie store holding exactly the pairs given.
+ *
+ * @param pairs what `getAll()` should return
+ * @returns the stand-in to hand {@link cookiesMock}
+ */
+export function cookieStoreOf(...pairs: CookiePair[]): CookieStoreStub {
+	return { getAll: () => pairs };
+}
 
 /**
  * Better Auth's cookie name for its own session token, under this install's default cookie prefix
@@ -46,22 +62,21 @@ export const cookiesMock = vi.fn(async (): Promise<CookieStoreStub> => ({ toStri
 const SESSION_COOKIE_NAME = "better-auth.session_token";
 
 /**
- * The `Cookie` header value carrying an account's most recent session, signed the way Better Auth's
- * own cookie is.
+ * The cookie carrying an account's most recent session, signed the way Better Auth's own is.
  *
  * Exposed on its own so a test can point `headers()` and `cookies()` at *different* sessions, which
  * is what a request whose session was rotated mid-flight actually looks like.
  *
  * @param userId the account whose most recent session should be named
- * @returns the cookie header value
+ * @returns the cookie's name and signed value
  */
-export async function sessionCookieFor(userId: string): Promise<string> {
+export async function sessionCookieFor(userId: string): Promise<CookiePair> {
 	const session = await prisma.session.findFirstOrThrow({
 		where: { userId },
 		orderBy: { createdAt: "desc" },
 	});
 	const signature = await makeSignature(session.token, env.BETTER_AUTH_SECRET);
-	return `${SESSION_COOKIE_NAME}=${session.token}.${signature}`;
+	return { name: SESSION_COOKIE_NAME, value: `${session.token}.${signature}` };
 }
 
 /**
@@ -81,9 +96,9 @@ export async function sessionCookieFor(userId: string): Promise<string> {
  * @param userId the account whose most recent session should now back both `headers()` and `cookies()`
  */
 export async function refreshSession(userId: string): Promise<void> {
-	const cookie = await sessionCookieFor(userId);
-	headersMock.mockResolvedValue(new Headers({ cookie }));
-	cookiesMock.mockResolvedValue({ toString: () => cookie });
+	const pair = await sessionCookieFor(userId);
+	headersMock.mockResolvedValue(new Headers({ cookie: `${pair.name}=${pair.value}` }));
+	cookiesMock.mockResolvedValue(cookieStoreOf(pair));
 }
 
 /** The fields a test typically wants back after signing an account in. */

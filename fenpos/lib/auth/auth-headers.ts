@@ -29,9 +29,25 @@ import { cookies, headers } from "next/headers";
  */
 export async function authHeaders(): Promise<Headers> {
 	const requestHeaders = new Headers(await headers());
-	// `toString()` renders the jar the way a `Cookie` header carries it, percent-encoding values;
-	// Better Auth's own cookie parser decodes them again, so the round trip is lossless.
-	const jar = (await cookies()).toString();
+
+	// Built from `getAll()` rather than from the store's own `toString()`, and that is not a
+	// stylistic choice. `cookies()` returns a different underlying type depending on the request's
+	// phase: during a server action it is Next's `userspaceMutableCookies`, which proxies a
+	// `ResponseCookies`, and *that* `toString()` runs every entry through `stringifyCookie` — it
+	// emits `name=value; Path=/; HttpOnly; SameSite=Lax; Max-Age=…`, which is `Set-Cookie` syntax
+	// and not what a `Cookie` request header may carry. It happens to come out clean while every
+	// entry was seeded from the incoming request, because those carry no attributes — so the one
+	// moment it would go wrong is a reader placed after a rotation, which is the whole reason this
+	// function exists. `getAll()` is on both types and returns plain `{ name, value }`, so the pairs
+	// below are exact in either phase.
+	//
+	// Values are percent-encoded here because Better Auth's own cookie parser runs every value
+	// through `tryDecode`, so the round trip is lossless.
+	const jar = (await cookies())
+		.getAll()
+		.map((cookie) => `${cookie.name}=${encodeURIComponent(cookie.value)}`)
+		.join("; ");
+
 	if (jar === "") {
 		requestHeaders.delete("cookie");
 	} else {

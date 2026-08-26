@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({ redirect: redirected }));
 // request carrying no cookies at all — the session itself comes from the `getSession` stub below.
 vi.mock("next/headers", () => ({
 	headers: async () => new Headers(),
-	cookies: async () => ({ toString: () => "" }),
+	cookies: async () => ({ getAll: () => [] }),
 }));
 
 const clientAddress = vi.fn(async () => "203.0.113.30");

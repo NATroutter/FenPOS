@@ -1,6 +1,13 @@
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cookiesMock, headersMock, refreshSession, sessionCookieFor, signedInUser } from "@/test/helpers/session";
+import {
+	cookieStoreOf,
+	cookiesMock,
+	headersMock,
+	refreshSession,
+	sessionCookieFor,
+	signedInUser,
+} from "@/test/helpers/session";
 
 /**
  * The session gate, on a request that replaced its own session cookie part-way through.
@@ -66,8 +73,7 @@ function totp(secret: string, at: number = Date.now()): string {
  * @param userId the account whose newly issued session the store should name
  */
 async function cookieStoreCatchesUp(userId: string): Promise<void> {
-	const cookie = await sessionCookieFor(userId);
-	cookiesMock.mockResolvedValue({ toString: () => cookie });
+	cookiesMock.mockResolvedValue(cookieStoreOf(await sessionCookieFor(userId)));
 }
 
 describe("the session gate after a mid-request session rotation", () => {
