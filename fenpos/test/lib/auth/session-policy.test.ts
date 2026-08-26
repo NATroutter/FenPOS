@@ -135,6 +135,38 @@ describe("enforceSessionCap", () => {
 		expect(left.map((row) => row.id).sort()).toEqual([ids[3], ids[4]].sort());
 	});
 
+	it("evicts by last-seen time, not by creation order", async () => {
+		// The `sessions()` fixture above stamps createdAt, updatedAt and lastSeenAt identically, so it
+		// cannot tell a last-seen ordering from a creation-time one. This test makes the two disagree:
+		// the session created earliest is the one still in use, and the session created most recently
+		// is the one nobody has touched in over an hour.
+		await setSetting("auth.maxConcurrentSessions", 2);
+		await prisma.user.create({
+			data: { id: "cap-diverge", name: "cap-diverge", email: "cap-diverge@example.test", emailVerified: false },
+		});
+		const minutesAgo = (minutes: number): Date => new Date(Date.now() - minutes * 60 * 1000);
+		const row = (id: string, createdMinutesAgo: number, seenMinutesAgo: number) => ({
+			id,
+			token: `t-${id}`,
+			userId: "cap-diverge",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			createdAt: minutesAgo(createdMinutesAgo),
+			updatedAt: minutesAgo(seenMinutesAgo),
+			lastSeenAt: minutesAgo(seenMinutesAgo),
+		});
+		// Created first (180 minutes ago) but seen a minute ago: must survive.
+		await prisma.session.create({ data: row("cap-diverge-a", 180, 1) });
+		// Created after A but idle for 90 minutes: outlasts C, loses to A.
+		await prisma.session.create({ data: row("cap-diverge-b", 120, 90) });
+		// Created most recently of the three (60 minutes ago) but idle the longest, at 100 minutes:
+		// last out, first evicted. Ordering by createdAt instead of lastSeenAt would evict A instead.
+		await prisma.session.create({ data: row("cap-diverge-c", 60, 100) });
+
+		expect(await enforceSessionCap("cap-diverge", null)).toBe(1);
+		const left = await prisma.session.findMany({ where: { userId: "cap-diverge" }, select: { id: true } });
+		expect(left.map((entry) => entry.id).sort()).toEqual(["cap-diverge-a", "cap-diverge-b"].sort());
+	});
+
 	it("never evicts the session that was just created, however old its stamp looks", async () => {
 		await setSetting("auth.maxConcurrentSessions", 1);
 		const ids = await sessions("cap-keep", 3);

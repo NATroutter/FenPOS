@@ -10,6 +10,7 @@ import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth/lockout";
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { enforceSessionCap } from "@/lib/auth/session-policy";
+import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
 import { globalSignInPolicy } from "@/lib/settings/settings-service";
@@ -131,7 +132,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		return { error: REJECTION_MESSAGE };
 	}
 
-	let signedIn: { user: { id: string; name: string; email: string } };
+	let signedIn: { user: { id: string; name: string; email: string }; token: string };
 	try {
 		signedIn = await auth.api.signInEmail({
 			body: { email: email.trim().toLowerCase(), password },
@@ -162,11 +163,12 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	signInLimiter.reset(address);
 	await clearFailedSignIns(signedIn.user.id);
 
-	// After the session exists, so the new one is counted and protected. The session id is not
-	// available here — `signInEmail` returns a token rather than a row — so nothing is pinned, and
-	// the newest session survives on its stamp alone. It was written milliseconds ago; every other
-	// session the account holds was written on a different request.
-	await enforceSessionCap(signedIn.user.id, null);
+	// After the session exists, so the new one is counted and protected. `signInEmail` returns the
+	// session's token rather than its row, so the row is found by that unique column and its id is
+	// pinned — without that, a cap of one could sort the just-created session behind an existing one
+	// on a coarse clock and sign the caller straight back out.
+	const newSession = await prisma.session.findUnique({ where: { token: signedIn.token }, select: { id: true } });
+	await enforceSessionCap(signedIn.user.id, newSession?.id ?? null);
 
 	logger.info("Signed in", { address, email: email.trim().toLowerCase() });
 

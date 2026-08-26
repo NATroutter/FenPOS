@@ -75,7 +75,7 @@ describe("auth audit events", () => {
 	});
 
 	it("records a successful sign-in against the account that signed in", async () => {
-		signInEmail.mockResolvedValue({ user: { id: "u1", name: "Owner", email: "owner@example.com" } });
+		signInEmail.mockResolvedValue({ user: { id: "u1", name: "Owner", email: "owner@example.com" }, token: "tok-u1" });
 
 		await expect(
 			signIn({ error: null }, form({ email: "owner@example.com", password: "a-long-password" })),

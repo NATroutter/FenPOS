@@ -62,7 +62,7 @@ export async function keepSessionAlive(sessionId: string): Promise<boolean> {
 }
 
 /**
- * Retires an account's oldest sessions until it holds no more than the install allows.
+ * Retires an account's quietest sessions until it holds no more than the install allows.
  *
  * **Evicts rather than refuses.** Better Auth's own session limits, where they exist, turn the new
  * sign-in away; this does the opposite, because the person being turned away is the one at the

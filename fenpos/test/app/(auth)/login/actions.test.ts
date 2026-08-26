@@ -68,7 +68,7 @@ describe("signIn", () => {
 	});
 
 	it("redirects to the dashboard on success", async () => {
-		signInEmail.mockResolvedValue({ user: { id: "u1" } });
+		signInEmail.mockResolvedValue({ user: { id: "u1" }, token: "tok-u1" });
 
 		await expect(
 			signIn({ error: null }, form({ email: "owner@example.com", password: "a-long-password" })),
@@ -112,7 +112,7 @@ describe("the gates before the credential", () => {
 
 	describe("address allowlist", () => {
 		it("refuses an address that is not on it, without examining the credential", async () => {
-			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+			signInEmail.mockResolvedValue({ user: { id: "u1" }, token: "tok-u1" });
 			await setSetting("auth.ipAllowlist", "10.0.0.0/8");
 
 			const result = await signIn({ error: null }, form({ email: "known@example.com", password: "correct" }));
@@ -145,7 +145,7 @@ describe("the gates before the credential", () => {
 		});
 
 		it("allows an address on it", async () => {
-			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+			signInEmail.mockResolvedValue({ user: { id: "u1" }, token: "tok-u1" });
 			// 203.0.113.30 is what the request-context mock above returns.
 			await setSetting("auth.ipAllowlist", "203.0.113.0/24");
 
@@ -155,7 +155,7 @@ describe("the gates before the credential", () => {
 		});
 
 		it("allows every address while it is empty", async () => {
-			signInEmail.mockResolvedValue({ user: { id: "u1" } });
+			signInEmail.mockResolvedValue({ user: { id: "u1" }, token: "tok-u1" });
 
 			await expect(signIn({ error: null }, form({ email: "known@example.com", password: "correct" }))).rejects.toThrow(
 				"REDIRECT:/dashboard",
@@ -181,7 +181,7 @@ describe("the gates before the credential", () => {
 			await setSetting("auth.lockoutAfterFailures", 2);
 			const email = await account("li2");
 			await prisma.user.update({ where: { id: "li2" }, data: { lockedUntil: new Date(Date.now() + 60_000) } });
-			signInEmail.mockResolvedValue({ user: { id: "li2" } });
+			signInEmail.mockResolvedValue({ user: { id: "li2" }, token: "tok-li2" });
 
 			const result = await signIn({ error: null }, form({ email, password: "correct" }));
 
@@ -208,7 +208,7 @@ describe("the gates before the credential", () => {
 			signInLimiter.reset("203.0.113.30");
 
 			signInEmail.mockReset();
-			signInEmail.mockResolvedValue({ user: { id: "li4" } });
+			signInEmail.mockResolvedValue({ user: { id: "li4" }, token: "tok-li4" });
 			await expect(signIn({ error: null }, form({ email, password: "correct" }))).rejects.toThrow(
 				"REDIRECT:/dashboard",
 			);
