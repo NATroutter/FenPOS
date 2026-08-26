@@ -655,9 +655,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.sessionHours",
 		label: "Session lifetime",
 		description:
-			"Not applied in this release — Better Auth reads its session lifetime once, at startup, so " +
-			"this value is stored but ignored; changing it does nothing until Phase 6 (auth hardening) " +
-			"wires it back in. A shared back-office terminal wants hours; a private office wants days.",
+			"How long a session lasts before it must be signed in again. Read when a session is created, so a change takes effect at the next sign-in rather than the next restart. A shared back-office terminal wants hours; a private office wants days.",
 		category: "security",
 		type: "integer",
 		min: 1,

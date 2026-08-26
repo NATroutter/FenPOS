@@ -6,6 +6,7 @@ import { admin, twoFactor } from "better-auth/plugins";
 import { hashPassword, MAXIMUM_PASSWORD_LENGTH, verifyPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { globalSessionPolicy } from "@/lib/settings/settings-service";
 
 /**
  * The panel's authentication instance.
@@ -21,17 +22,6 @@ import { env } from "@/lib/env";
  * at once — the property the retired hand-written session layer was built around and the one
  * worth keeping.
  */
-
-/**
- * How long a session lasts, and how often its expiry is extended.
- *
- * Fixed here rather than read from `auth.sessionHours`, which is where it lived before. Better
- * Auth reads this once when the instance is constructed, at module load, and a setting read at
- * that moment would either need a synchronous database call or would silently pin whatever value
- * happened to be stored at the last restart. Phase 6 moves session lifetime to a setting properly,
- * by re-reading it on the paths that can await; until then this is the honest value.
- */
-const SESSION_SECONDS = 12 * 60 * 60;
 
 export const auth = betterAuth({
 	database: prismaAdapter(prisma, { provider: "sqlite" }),
@@ -95,11 +85,57 @@ export const auth = betterAuth({
 	},
 
 	session: {
-		expiresIn: SESSION_SECONDS,
-		// Extend a session's expiry at most once per hour rather than on every request. The same
-		// write-rate concern `auth.lastSeenRefreshMinutes` existed to control, expressed in the
-		// library's own terms.
+		/**
+		 * A floor, not the policy.
+		 *
+		 * Better Auth reads this once, when the instance is constructed at module load, so it cannot
+		 * be the setting — `databaseHooks.session.create.before` below is where `auth.sessionHours`
+		 * is actually applied. This value is what a session would get if that hook were ever
+		 * bypassed, and it is deliberately the shortest sensible lifetime rather than the longest:
+		 * the failure mode of a too-short session is signing in again, and of a too-long one is a
+		 * session nobody intended.
+		 */
+		expiresIn: 60 * 60,
+		// How often Better Auth extends an expiry. Left fixed: this governs the library's own
+		// bookkeeping, while `auth.lastSeenRefreshMinutes` governs ours. See `session-policy.ts`.
 		updateAge: 60 * 60,
+		additionalFields: {
+			lastSeenAt: { type: "date", required: false, input: false, returned: false },
+		},
+	},
+
+	databaseHooks: {
+		session: {
+			create: {
+				/**
+				 * Where `auth.sessionHours` is actually applied.
+				 *
+				 * The `session.expiresIn` option above is evaluated once at module load, which is why
+				 * the setting could not live there: it would either need a synchronous database read
+				 * or would pin whatever value happened to be stored at the last restart. This hook
+				 * runs per session creation and can await, so a change to the setting takes effect at
+				 * the next sign-in rather than the next deploy.
+				 *
+				 * `lastSeenAt` is stamped here too, so every session created from now on has one and
+				 * the null fallback in `session-policy.ts` covers only rows that predate the column.
+				 *
+				 * A read, never a write. The concurrency cap is a delete and is called from the
+				 * sign-in path instead — see `enforceSessionCap` — because this hook may run inside
+				 * Better Auth's own transaction and a delete there is how a SQLite deadlock is bought.
+				 */
+				async before(session) {
+					const { sessionSeconds } = await globalSessionPolicy();
+					const now = new Date();
+					return {
+						data: {
+							...session,
+							expiresAt: new Date(now.getTime() + sessionSeconds * 1000),
+							lastSeenAt: now,
+						},
+					};
+				},
+			},
+		},
 	},
 
 	plugins: [
