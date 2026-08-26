@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
@@ -231,6 +232,16 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 				process.stdout.write("Address allowlist cleared.\n");
 				return;
 			}
+			default: {
+				// Exhaustiveness guard, not a reachable branch: every kind `runCommand` is typed to accept
+				// returns above. A sixth `RecoveryCommand` kind added later without a case here would
+				// otherwise fall off the end of this `try` silently — exiting 0 having done nothing, the
+				// same failure class `parseRecoveryArgs`' own comment calls out for `--clear-allowlst`.
+				// Assigning to `never` turns that into a compile error at the moment the case is missing,
+				// instead of a silent no-op discovered during an emergency.
+				const exhaustive: never = command;
+				throw new Error(`unhandled recovery command: ${JSON.stringify(exhaustive)}`);
+			}
 		}
 	} catch (error) {
 		if (error instanceof RecoveryRefusal) {
@@ -272,8 +283,15 @@ async function main(): Promise<void> {
 
 // True when this file is the one `tsx` (or `node`) was invoked on directly, and false when it is
 // only imported — the traditional Node "is this the entry module" check, chosen over the newer
-// `import.meta.main` because that field is not available in this project's Node 22 runtime.
-const isEntryModule = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
+// `import.meta.main` because that field is not available in this project's Node 22 runtime. Both
+// sides go through `resolve()` before comparing: an exact string compare between
+// `fileURLToPath(import.meta.url)` and `process.argv[1]` agrees only when both happen to be
+// spelled identically — an 8.3 short path (`NATROU~1`) or a drive-letter case difference is enough
+// to make them disagree even though they name the same file. When that happens the guard used to
+// fail *silently*: `main()` never ran, nothing printed, exit code 0 — the same failure class this
+// script's own argument parser exists to rule out for a mistyped flag.
+const isEntryModule =
+	process.argv[1] !== undefined && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isEntryModule) {
 	void main();
