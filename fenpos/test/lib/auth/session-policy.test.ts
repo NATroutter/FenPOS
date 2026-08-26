@@ -97,6 +97,27 @@ describe("keepSessionAlive", () => {
 		expect(Date.now() - (row.lastSeenAt?.getTime() ?? 0)).toBeLessThan(5000);
 	});
 
+	/**
+	 * The mode `/api/events` gates with. A request the browser made on its own is not evidence anybody
+	 * used the session, so it is measured against the stamp without moving it — otherwise a stream that
+	 * reconnects more often than the timeout would keep an unattended terminal signed in for good.
+	 */
+	it("leaves last-seen alone for a request that does not count as activity", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		const at = await sessionLastSeen("uncounted", 20);
+
+		expect(await keepSessionAlive("uncounted", { countsAsActivity: false })).toBe(true);
+
+		const row = await prisma.session.findUniqueOrThrow({ where: { id: "uncounted" } });
+		expect(row.lastSeenAt?.getTime()).toBe(at.getTime());
+	});
+
+	it("still ends an idle session for a request that does not count as activity", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		await sessionLastSeen("uncounted-stale", 31);
+		expect(await keepSessionAlive("uncounted-stale", { countsAsActivity: false })).toBe(false);
+	});
+
 	it("says no to a session that is not there", async () => {
 		await setSetting("auth.idleTimeoutMinutes", 30);
 		expect(await keepSessionAlive("missing")).toBe(false);

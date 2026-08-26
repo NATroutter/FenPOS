@@ -112,21 +112,32 @@ export type SessionVerdict =
  * Takes the user rather than resolving one, so a caller that has already paid for `currentUser` does
  * not pay twice — and so this stays about the gates rather than about authentication.
  *
- * **Not free of side effects, deliberately.** It marks the session as seen, and it sets the
- * forced-reset flag on an account whose password has just expired. Both are things that must happen
- * on every request that reaches the panel, which is exactly the set of requests this runs on.
+ * **Not free of side effects, deliberately.** It sets the forced-reset flag on an account whose
+ * password has just expired — unconditionally, because that is a fact about the password rather than
+ * about the caller — and by default it marks the session as seen.
+ *
+ * **The second write is the caller's to decline, with `countsAsActivity: false`.** Marking a session
+ * as seen is a claim that somebody used it, and both readers of `lastSeenAt` believe that claim: the
+ * inactivity timeout and the concurrency cap. It holds for a panel page and for a server action, and
+ * that is why it is the default. It does not hold for `/api/events`, which the browser's `EventSource`
+ * reopens by itself after every dropped connection — a stream reconnecting on a lossy network would
+ * otherwise keep an unattended terminal signed in forever and make an abandoned tab look like the
+ * account's most recently used session. Declining the write changes no verdict: an idle session is
+ * still `"idle-too-long"`, measured against the stamp the last real request left.
  *
  * It does *not* destroy sessions. Ending one writes a cookie, and what that should mean differs by
  * caller: a page redirects to `/login` and must not leave a live session behind to bounce back, while
  * a streaming route simply refuses and lets the next navigation deal with it.
  *
  * @param user the signed-in user, from {@link currentUser}
- * @param options `skipEnrolmentGate` skips the last gate only — see {@link requireSession}
+ * @param options `skipEnrolmentGate` skips the last gate only — see {@link requireSession};
+ *   `countsAsActivity` defaults to true and is set false only by a caller whose requests the user did
+ *   not make — see {@link keepSessionAlive}
  * @returns `"allowed"`, or the gate that turned the session away
  */
 export async function sessionVerdict(
 	user: PanelUser,
-	options: { skipEnrolmentGate?: boolean } = {},
+	options: { skipEnrolmentGate?: boolean; countsAsActivity?: boolean } = {},
 ): Promise<SessionVerdict> {
 	if (user.mustChangePassword) {
 		return "password-change-owed";
@@ -146,7 +157,9 @@ export async function sessionVerdict(
 	// that reaches here — including the ones that go on to redirect because the password has just
 	// expired, two branches below. (The `mustChangePassword` branch above short-circuits before this
 	// and always has: a session held by an account that already owes a change is not being used.)
-	if (!(await keepSessionAlive(user.sessionId))) {
+	// Passed straight through rather than defaulted here: the default lives with the function that
+	// acts on it, so there is one place saying that an unspecified caller counts as activity.
+	if (!(await keepSessionAlive(user.sessionId, { countsAsActivity: options.countsAsActivity }))) {
 		return "idle-too-long";
 	}
 

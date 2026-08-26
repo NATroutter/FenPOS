@@ -13,12 +13,20 @@ import { globalSessionPolicy } from "@/lib/settings/settings-service";
  */
 
 /**
- * Decides whether a session may continue, and marks it as seen if so.
+ * Decides whether a session may continue, and marks it as seen unless the caller says not to.
  *
  * Called from the session gate on every request, which is why it is one read and at most one write
  * rather than a check followed by a touch. The write is skipped while the stored time is fresher
  * than `auth.lastSeenRefreshMinutes` — without that, a panel that polls would write to the session
  * row several times a second for as long as it was open.
+ *
+ * **`countsAsActivity` decides whether the request is evidence a person is there.** `lastSeenAt`
+ * means "when this session was last *used*", and both readers of it below depend on that: the
+ * timeout ends a session nobody is sitting in front of, and the cap evicts the one least recently
+ * used. A request the browser makes on its own satisfies neither — `/api/events` is reopened by
+ * `EventSource` after every dropped connection, with no user involved and no code of ours called —
+ * so a caller like that passes false and is judged against the stamp without moving it. Refusal is
+ * unaffected: an idle session is refused either way, and only the write is suppressed.
  *
  * **Two settings read `lastSeenAt`, not one.** The inactivity timeout is the obvious one; the
  * concurrency cap below is the other, and it orders by that same column. So the early return is
@@ -35,9 +43,16 @@ import { globalSessionPolicy } from "@/lib/settings/settings-service";
  * stamped by the `databaseHooks.session.create.before` hook in `auth.ts`.
  *
  * @param sessionId the session this request arrived on
+ * @param options `countsAsActivity` — whether this request should refresh `lastSeenAt`. Defaults to
+ *   true, which is what a request a person made means; pass false only for one the browser makes by
+ *   itself.
  * @returns true when the session may continue; false when it is gone or has been idle too long
  */
-export async function keepSessionAlive(sessionId: string): Promise<boolean> {
+export async function keepSessionAlive(
+	sessionId: string,
+	options: { countsAsActivity?: boolean } = {},
+): Promise<boolean> {
+	const { countsAsActivity = true } = options;
 	const { idleTimeoutMs, lastSeenRefreshMs, maxConcurrentSessions } = await globalSessionPolicy();
 
 	// Both off is the default, and the default should cost nothing: with no timeout to measure
@@ -62,7 +77,7 @@ export async function keepSessionAlive(sessionId: string): Promise<boolean> {
 		return false;
 	}
 
-	if (idleFor >= refreshIntervalMs(idleTimeoutMs, lastSeenRefreshMs)) {
+	if (countsAsActivity && idleFor >= refreshIntervalMs(idleTimeoutMs, lastSeenRefreshMs)) {
 		await prisma.session.update({ where: { id: sessionId }, data: { lastSeenAt: new Date() } });
 	}
 
@@ -100,7 +115,9 @@ function refreshIntervalMs(idleTimeoutMs: number, lastSeenRefreshMs: number): nu
  * Ordered by last seen rather than by creation, so "the one nobody is using" is what goes — a
  * session opened this morning and used a minute ago outranks one opened an hour ago and abandoned.
  * That ordering is only as good as the stamp, which is why {@link keepSessionAlive} refreshes
- * `lastSeenAt` whenever this cap is set, whether or not an inactivity timeout is.
+ * `lastSeenAt` whenever this cap is set, whether or not an inactivity timeout is — and why it
+ * refreshes it only for requests a person made, so an abandoned tab whose stream keeps reconnecting
+ * does not outrank the session somebody is working in.
  *
  * `keepSessionId` is never evicted. Without it a cap of one would race with itself: the session
  * just created has the newest stamp, but only by milliseconds, and a clock with coarse resolution

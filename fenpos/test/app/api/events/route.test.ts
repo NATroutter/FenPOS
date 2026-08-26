@@ -143,6 +143,43 @@ describe("GET /api/events session gate", () => {
 	});
 
 	/**
+	 * The other half of sharing the panel's gates: the stream runs them, but it must not *count* as
+	 * the panel being used.
+	 *
+	 * `EventSource` reopens this connection by itself after every drop, and the route's own keepalive
+	 * exists because proxies drop it. So a stamp refreshed here is a stamp refreshed by nobody: an
+	 * unattended terminal on a lossy network would never reach `auth.idleTimeoutMinutes`, and an
+	 * abandoned tab would outrank a working session in `enforceSessionCap`'s least-recently-used
+	 * ordering. Twenty minutes stale against a thirty-minute timeout is well past the refresh interval,
+	 * so a gate that touched the row would rewrite it here.
+	 */
+	it("does not count as activity: an opened stream leaves last-seen where it was", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		await setSetting("auth.lastSeenRefreshMinutes", 5);
+		const seenAt = new Date(Date.now() - 20 * 60 * 1000);
+		await prisma.user.create({ data: { id: "test-user", name: "Test User", email: "test@example.com" } });
+		await prisma.session.create({
+			data: {
+				id: "session-test-user",
+				token: "t-session-test-user",
+				userId: "test-user",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				createdAt: seenAt,
+				updatedAt: seenAt,
+				lastSeenAt: seenAt,
+			},
+		});
+
+		const abort = new AbortController();
+		const response = await GET(new Request("https://fenpos.test/api/events", { signal: abort.signal }));
+		expect(response.status).toBe(200);
+		abort.abort();
+
+		const row = await prisma.session.findUniqueOrThrow({ where: { id: "session-test-user" } });
+		expect(row.lastSeenAt?.getTime()).toBe(seenAt.getTime());
+	});
+
+	/**
 	 * Pre-existing before this route shared the panel's gates, and closed by sharing them: tightening
 	 * the allowlist ends panel sessions on their next request, and left alone this stream would have
 	 * gone on feeding an address the install no longer accepts.

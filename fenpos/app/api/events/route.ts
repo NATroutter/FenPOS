@@ -32,6 +32,15 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * **Checked once, at connection.** A stream opened by a session that later idles out or is revoked
  * stays open until the client reconnects, which `EventSource` does on its own whenever the
  * connection drops. That is a known bound on how quickly a gate reaches an already-open stream.
+ *
+ * **And a connection here is not evidence anybody is at the keyboard**, which is why the gate runs
+ * with `countsAsActivity: false`. Those same reconnects are the browser's doing — nothing on this
+ * side asks for them, and the keepalive below exists precisely because proxies drop this connection.
+ * Left counting as activity, they would refresh `lastSeenAt` on their own: an unattended terminal on
+ * a lossy network would never reach its inactivity timeout, and an abandoned tab would look like the
+ * account's most recently used session and survive the concurrency cap at the expense of the one its
+ * operator is actually working in. The gate still *reads* the stamp — a session already past the
+ * timeout is refused here exactly as it is anywhere else — it just does not move it.
  */
 
 /** Never cached and never prerendered: the whole point is that it does not end. */
@@ -41,7 +50,7 @@ export async function GET(request: Request): Promise<Response> {
 	const user = await currentUser();
 	// One message for every refusal, the way the sign-in form has one: which gate stopped a caller is
 	// not something a connection this route is about to close needs to be told.
-	if (!user || (await sessionVerdict(user)) !== "allowed") {
+	if (!user || (await sessionVerdict(user, { countsAsActivity: false })) !== "allowed") {
 		return Response.json({ error: "missing_key", message: "Not signed in." }, { status: 401 });
 	}
 
