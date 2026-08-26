@@ -45,7 +45,7 @@ const PREVIEW_DOTS = dotWidth(32);
  */
 export default async function AssetsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("assets:read");
+	await requirePagePermission("assets:read", "/assets");
 
 	const assets = await listAssets();
 	const uploadCap = await maxAssetBytes();

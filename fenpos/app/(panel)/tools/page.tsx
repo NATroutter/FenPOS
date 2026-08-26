@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function ToolsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("tools:read");
+	await requirePagePermission("tools:read", "/tools");
 
 	const rows = await prisma.device.findMany({
 		orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],

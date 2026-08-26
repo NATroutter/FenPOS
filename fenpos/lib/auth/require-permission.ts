@@ -1,10 +1,14 @@
 import "server-only";
 import { redirect } from "next/navigation";
+import { recordAudit, userActor } from "@/lib/audit/audit-log";
+import { requestProvenance } from "@/lib/audit/provenance";
+import { PAGE_VIEW_ACTION } from "@/lib/audit/system-actions";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelUser, requireSession } from "@/lib/auth/require-session";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
 import { NAV_GROUPS } from "@/lib/navigation";
+import { globalAuditSettings } from "@/lib/settings/settings-service";
 
 /**
  * The page-side half of authorisation.
@@ -50,7 +54,7 @@ export class PermissionDeniedError extends ApiError {
 }
 
 /**
- * Resolves the session and refuses a caller who may not open this page.
+ * Resolves the session, refuses a caller who may not open this page, and records the view.
  *
  * Called at the top of every panel page's server component, **outside** any `try` — both
  * `requireSession` and the redirect below signal by throwing, and a broad catch would turn being
@@ -60,14 +64,37 @@ export class PermissionDeniedError extends ApiError {
  * flag this install does not set, and rather than to `/dashboard`, which an account without
  * `dashboard:read` could not open either.
  *
+ * **The route is an argument because a server component cannot ask what its own path is.** Next
+ * exposes no stable API for it, and deriving it from the permission would be ambiguous — `docs:read`
+ * gates three routes. Making it required rather than optional means a page added without naming its
+ * route is a compile error rather than a page that quietly records nothing.
+ *
+ * The view is recorded only when `audit.recordPageViews` is on, and it is **off by default**: a live
+ * tab re-renders its server component on every job or log event through `router.refresh()`, so this
+ * runs at event rate rather than at navigation rate. Recording is awaited rather than left floating,
+ * because a promise a server component does not await can be cut off when the response finishes —
+ * and `recordAudit` never throws, so awaiting cannot fail the page.
+ *
  * @param permission the permission this page requires
+ * @param route the path being opened, as it appears in `lib/navigation.ts`
  * @returns the signed-in user; never null, and never one who lacks the permission
  */
-export async function requirePagePermission(permission: PanelPermission): Promise<PanelUser> {
+export async function requirePagePermission(permission: PanelPermission, route: string): Promise<PanelUser> {
 	const user = await requireSession();
 
 	if (!(await userHolds(user, permission))) {
 		redirect("/no-access");
+	}
+
+	const { recordPageViews } = await globalAuditSettings();
+	if (recordPageViews) {
+		await recordAudit({
+			action: PAGE_VIEW_ACTION,
+			outcome: "SUCCESS",
+			actor: userActor(user),
+			target: { kind: "page", id: route },
+			provenance: await requestProvenance(),
+		});
 	}
 
 	return user;

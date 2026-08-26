@@ -529,6 +529,28 @@ export const PANEL_ACTIONS = [
 		description: "Deleted a role",
 	},
 
+	// --- Audit ---
+	// Both are reads, and both are `command`. `kind` decides what is written, not what the action
+	// does: a `query` stays quiet about succeeding because `preview` runs on every keystroke, and
+	// neither of these does. Verification is a button press, and an export is somebody taking a copy
+	// of the record away with them — the single most worth-recording read in the system.
+	{
+		id: "audit:verify",
+		kind: "command",
+		permission: "audit:verify",
+		module: "(panel)/audit/actions.ts",
+		exportName: "verifyChain",
+		description: "Walked the audit chain and reported whether it is whole",
+	},
+	{
+		id: "audit:export",
+		kind: "command",
+		permission: "audit:export",
+		module: "(panel)/audit/actions.ts",
+		exportName: "exportAuditCsv",
+		description: "Exported a filtered range of the audit record",
+	},
+
 	// --- Settings ---
 	{
 		id: "settings:save",

@@ -33,7 +33,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function DashboardPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("dashboard:read");
+	await requirePagePermission("dashboard:read", "/dashboard");
 
 	const [windowHours, tailLines] = await Promise.all([
 		integerSetting("panel.dashboardWindowHours"),

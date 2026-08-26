@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function DevicesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("devices:read");
+	await requirePagePermission("devices:read", "/devices");
 
 	const [agents, variables] = await Promise.all([
 		prisma.agent.findMany({

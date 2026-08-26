@@ -18,10 +18,12 @@ import {
  */
 describe("panel permissions", () => {
 	it("declares the complete set the spec names", () => {
-		// Seventy-five, derived by walking every `"use server"` export that exists plus every action
-		// phases 4 through 8 add. A count rather than a list, so adding one deliberately is a
-		// one-line change and adding one accidentally is a failure.
-		expect(PANEL_PERMISSION_IDS).toHaveLength(75);
+		// Seventy-six: seventy-five derived by walking every `"use server"` export that exists plus
+		// every action phases 4 through 8 add, and `settings:write:audit`, which that derivation could
+		// not have counted because the `audit` settings category did not exist yet. A count rather than
+		// a list, so adding one deliberately is a one-line change and adding one accidentally is a
+		// failure.
+		expect(PANEL_PERMISSION_IDS).toHaveLength(76);
 	});
 
 	it("names each identifier once", () => {

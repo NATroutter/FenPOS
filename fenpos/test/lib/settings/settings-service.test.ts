@@ -192,9 +192,18 @@ describe("setting definitions", () => {
 			"media",
 			"variables",
 			"security",
+			"audit",
 			"connections",
 			"panel",
 		]);
+	});
+
+	it("defaults page-view recording to off", async () => {
+		// Not the reading the spec's phrasing implies, and deliberately so. `router.refresh()` re-runs a
+		// route's server component, so a live tab produces page views at event rate rather than at
+		// navigation rate — and every audit append serialises on `prev_hash`'s unique constraint with
+		// five retries. On by default would make real actions lose that race to page views.
+		expect(await booleanSetting("audit.recordPageViews")).toBe(false);
 	});
 
 	it("declares the type every setting is documented to have", () => {
@@ -239,6 +248,10 @@ describe("setting definitions", () => {
 			"auth.signInAttemptsPerMinute": "integer",
 			"auth.minimumPasswordLength": "integer",
 			"auth.lastSeenRefreshMinutes": "integer",
+			"audit.retentionDays": "integer",
+			"audit.maxRecords": "integer",
+			"audit.sweepEvery": "integer",
+			"audit.recordPageViews": "boolean",
 			"api.readsPerMinute": "integer",
 			"api.defaultPageSize": "integer",
 			"api.maxPageSize": "integer",

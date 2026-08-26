@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function RolesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	const user = await requirePagePermission("roles:read");
+	const user = await requirePagePermission("roles:read", "/roles");
 
 	const [roles, accounts] = await Promise.all([listRoles(), listAccounts()]);
 

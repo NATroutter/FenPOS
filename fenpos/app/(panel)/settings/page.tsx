@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function SettingsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("settings:read");
+	await requirePagePermission("settings:read", "/settings");
 
 	const settings = await listSettings();
 

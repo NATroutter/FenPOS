@@ -142,7 +142,7 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
  */
 export default async function MarkupDocsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("docs:read");
+	await requirePagePermission("docs:read", "/docs/markup");
 
 	const assetCap = await maxAssetBytes();
 	const remoteTimeoutMs = await remoteFetchTimeoutMs();
