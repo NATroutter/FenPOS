@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { panelUser } from "@/test/helpers/panel-user";
 import { headersMock, signedInUser } from "@/test/helpers/session";
 
 /**
@@ -50,14 +51,15 @@ vi.mock("@/lib/auth/totp-qr", async (importOriginal) => {
 	};
 });
 
-const SESSION_USER = {
-	id: "u1",
-	name: "NATroutter",
-	email: "me@natroutter.fi",
-	isSuperuser: true,
-	mustChangePassword: false,
-};
-vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => SESSION_USER }));
+const SESSION_USER = panelUser({ id: "u1", name: "NATroutter", email: "me@natroutter.fi" });
+vi.mock("@/lib/auth/require-session", () => ({
+	requireSession: async () => SESSION_USER,
+	// No session ever rotates on the path these tests exercise `record()` through — `changePassword`
+	// and the two-factor actions each go through `two-factor.ts`/Better Auth for real when they do
+	// rotate, resolved from `headersMock`, not from this stub — so the audit row's session id is
+	// whatever `record()` was already carrying. See `currentSessionId`'s own doc.
+	currentSessionId: async (fallback: string) => fallback,
+}));
 
 // Revalidation is Next's, not this project's, and calling it outside a request context throws.
 // Kept as a `vi.fn()` (not a no-op) so the default-argument tests below can assert what path
