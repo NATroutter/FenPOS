@@ -72,6 +72,15 @@ model User {
   /// Blocks every panel route except the one that replaces the password. Set by the "Require
   /// password reset" checkbox at creation, or by the force-reset action later.
   mustChangePassword Boolean @default(false)
+  /// When the password was last replaced, for `auth.passwordExpiryDays`. Null on an account whose
+  /// password predates this column, and that reads as "never expires" rather than as "expired
+  /// immediately" — the alternative would force a password change across the whole install the
+  /// moment somebody turned the setting on.
+  passwordChangedAt  DateTime? @map("password_changed_at")
+  /// Consecutive failed sign-ins, for `auth.lockoutAfterFailures`. Reset to zero on any success.
+  failedSignInCount  Int       @default(0) @map("failed_sign_in_count")
+  /// When an account lock lifts on its own. Null means not locked; nobody has to clear it.
+  lockedUntil        DateTime? @map("locked_until")
 
   sessions   Session[]
   accounts   Account[]
@@ -81,9 +90,30 @@ model User {
   /// the deliberate opposite — see `AuditEvent`.
   roles       UserRole[]
   permissions UserPermission[]
+  /// Hashes of passwords this account may not return to. Cascades, unlike the audit trail: a
+  /// deleted account's old hashes protect nobody and are only a liability to keep.
+  passwordHistory PasswordHistory[]
 
   @@unique([email])
   @@map("user")
+}
+
+/// Previous passwords an account may not return to, for `auth.passwordReuseCount`.
+///
+/// Hashes, never plaintext and never a reversible digest: this table is exactly as sensitive as
+/// `account.password` and is treated the same. Written on every password change including the
+/// first, so that turning the setting on later has something to compare against rather than
+/// starting blind.
+model PasswordHistory {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// A PHC-format argon2id string, written by `hashPassword` like every other password here.
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("password_history")
 }
 
 /// An authenticated browser session.
