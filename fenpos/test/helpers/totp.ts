@@ -4,10 +4,11 @@ import { createHmac } from "node:crypto";
  * Computing real TOTP codes against a real secret, the way an authenticator app would.
  *
  * Shared by every test that needs to prove a code was accepted rather than merely that some
- * six-digit string was — `test/lib/auth/two-factor.test.ts` for enrolment and
- * `test/app/(auth)/login/actions.test.ts` for the sign-in challenge both drive the same plugin
- * against the same kind of secret, and a second, drifted copy of this math in either file would be
- * the one place a bug could hide from both.
+ * six-digit string was — `test/lib/auth/two-factor.test.ts` for enrolment,
+ * `test/app/(auth)/login/actions.test.ts` for the sign-in challenge, and
+ * `test/lib/auth/session-rotation.test.ts` for what confirming one does to the session all drive the
+ * same plugin against the same kind of secret, and a second, drifted copy of this math in any of
+ * them would be the one place a bug could hide from all three.
  */
 
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -15,11 +16,14 @@ const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 /**
  * Decodes the plugin's stored base32 secret.
  *
+ * Not exported: {@link totp} is the whole of what callers want, and an exported decoder with no
+ * importer was only ever an invitation to hand-roll the rest of the algorithm beside it.
+ *
  * @param secret the base32 text the plugin handed back in the enrolment URI
  * @returns the raw key bytes
  * @throws Error when a character is not in the base32 alphabet
  */
-export function fromBase32(secret: string): Buffer {
+function fromBase32(secret: string): Buffer {
 	let bits = "";
 	for (const character of secret.replace(/=+$/, "").toUpperCase()) {
 		const index = BASE32.indexOf(character);
