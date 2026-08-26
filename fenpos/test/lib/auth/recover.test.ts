@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAuditChain } from "@/lib/audit/verify";
 import { credentialAccountRow } from "@/lib/auth/credential-account";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
@@ -154,6 +154,35 @@ describe("recovery", () => {
 		// Neither the plaintext (unknowable here, since resetPassword never returned it) nor the
 		// argon2id marker every hash this module writes begins with may appear in the stored row.
 		expect(serialized).not.toContain("$argon2id$");
+	});
+
+	it("records an unexpected failure's fixed reason, never the exception's own message", async () => {
+		// `unlockAccount`'s `perform` calls exactly one Prisma method, `user.update`. Stubbing it to
+		// reject is the least invasive way to get a *raw*, un-authored exception out of a `perform` —
+		// distinct from `resetPassword`'s "no credential" case, which is a `RecoveryRefusal` this
+		// module wrote itself and was always going to be recorded safely.
+		const user = await lockedOutUser("stub@example.test");
+		const sentinel = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaGhhc2g";
+		const updateSpy = vi.spyOn(prisma.user, "update").mockRejectedValueOnce(new Error(sentinel));
+
+		try {
+			await expect(unlockAccount(prisma, "stub@example.test")).rejects.toThrow(sentinel);
+		} finally {
+			updateSpy.mockRestore();
+		}
+
+		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		expect(row.outcome).toBe("FAILURE");
+		expect(row.action).toBe(RECOVERY_AUDIT_ACTIONS.UNLOCK);
+		// The fixed reason recordFailure falls back to for anything that is not a RecoveryRefusal —
+		// asserted as a literal rather than imported, since UNEXPECTED_FAILURE_REASON is intentionally
+		// not exported: nothing outside this module needs to construct or compare against it.
+		expect(row.detail).toBe(JSON.stringify({ reason: "an unexpected error; see the command's own output" }));
+		expect(JSON.stringify(row)).not.toContain(sentinel);
+
+		// The account itself is untouched: the stub prevented the real update from ever running.
+		const after = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+		expect(after.lockedUntil).not.toBeNull();
 	});
 
 	it("leaves the chain verifiable after every operation", async () => {

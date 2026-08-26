@@ -31,6 +31,12 @@ import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
  * if narrow, window between a change committing and its row existing; nothing below closes it, and
  * `resetPassword`'s own doc comment says so again where it matters most.
  *
+ * **A caller can tell an actionable refusal from an unexpected failure.** Every exported operation
+ * throws {@link RecoveryRefusal} for the one kind of failure it expects — an address matching nothing,
+ * or matching an account this operation cannot act on — and anything else unchanged. `RecoveryRefusal`
+ * is exported for exactly this: a caller (the CLI, most immediately) can `instanceof` it to decide
+ * whether to print "that address is not right" or "something went wrong, check the logs".
+ *
  * **This re-expresses, rather than reuses, `lib/auth/account-security.ts`.** That module already
  * implements almost every operation here, but it opens with `import "server-only"` and calls through
  * the bound `prisma` singleton rather than accepting one — both fatal to a script running outside
@@ -122,8 +128,13 @@ function normalizeEmail(email: string): string {
  * {@link recordFailure} for why everything else does not. Every message given to this class is
  * therefore text this module wrote deliberately for the row, never a value read back from elsewhere,
  * exactly the discipline `appendAuditEvent`'s callers are expected to hold everywhere else.
+ *
+ * **Exported for callers, not only for this file.** `pnpm auth:recover`'s CLI is exactly the kind of
+ * caller that needs to tell the two apart: `error instanceof RecoveryRefusal` means the operator gave
+ * an address that could not be acted on — something to print and let them try again — while anything
+ * else is unexpected and worth surfacing as "check the logs" rather than as a normal refusal.
  */
-class RecoveryRefusal extends Error {}
+export class RecoveryRefusal extends Error {}
 
 /**
  * What a `FAILURE` row's `detail.reason` says when `perform` threw something other than a
@@ -196,7 +207,10 @@ async function recordFailure(
  * committed (and, for `resetPassword`, a minted password the caller would then never receive even
  * though it now works). Second, `perform`'s own thrown message reaches the row only when it is a
  * {@link RecoveryRefusal} — see {@link recordFailure} and {@link UNEXPECTED_FAILURE_REASON} for why an
- * arbitrary exception's message does not.
+ * arbitrary exception's message does not. `RecoveryRefusal` is exported, and this function always
+ * rethrows `perform`'s original error unchanged (see the `@throws` below) — so a caller of
+ * `resetPassword`/`clearTwoFactor`/`unlockAccount` can `instanceof` it themselves to tell an
+ * actionable refusal apart from an unexpected failure, exactly as this function does internally.
  *
  * @param prisma the client to read and write through
  * @param action which {@link RECOVERY_AUDIT_ACTIONS} this is
