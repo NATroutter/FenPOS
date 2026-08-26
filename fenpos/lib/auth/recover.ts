@@ -281,9 +281,13 @@ export async function unlockAccount(prisma: PrismaClient, email: string): Promis
 	});
 }
 
-/** The one setting {@link clearAllowlist} writes. A literal, not `SettingKey`: importing that type
- * costs nothing at compile time, but the value it types is declared in a `server-only` module this
- * one may not depend on even for a type. */
+/**
+ * The one setting {@link clearAllowlist} writes.
+ *
+ * A literal, not `SettingKey`: that type is declared in `settings-service.ts`, which opens with
+ * `import "server-only"` — the same problem `CLI_ACTOR` and `CREDENTIAL_ISSUER` have, above, this
+ * time for a type rather than a value.
+ */
 const IP_ALLOWLIST_SETTING_KEY = "auth.ipAllowlist";
 
 /**
