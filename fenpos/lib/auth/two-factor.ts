@@ -15,6 +15,19 @@ import { ApiError } from "@/lib/errors";
  * can also enrol by emailed OTP — and this install has no mail, so the branch that would hand back
  * a code nobody receives is turned into a refusal here rather than left for a caller to forget.
  * It also puts the QR beside the URI, because every caller wants both and neither wants bwip-js.
+ *
+ * **Raw `headers()` is safe in this file only because of where the rotations sit, and that is not an
+ * accident to lean on.** `lib/auth/auth-headers.ts` exists because a request that has replaced its
+ * own session cookie still carries the old one in `headers()` — and the two calls that do the
+ * replacing, `verifyTOTP` and `disableTwoFactor`, are in this very module. Every `auth.api.*` call
+ * below still reads `headers()` directly, and each is correct today for one reason: none of them
+ * runs *after* a cookie write in the same request. `beginEnrolment` writes nothing, and the two that
+ * do rotate are each the last thing their function does.
+ *
+ * So the boundary is: **anything added to this module that reads a session after one of those two
+ * calls must use `authHeaders()`, not `headers()`.** A second `auth.api.*` call appended below either
+ * of them, or a new function that verifies a code and then looks the caller up, would be reading a
+ * session row the rotation has already deleted and would conclude nobody is signed in.
  */
 
 /** What an authenticator app labels the entry with. Matches the `issuer` given to the plugin. */

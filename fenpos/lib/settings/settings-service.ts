@@ -771,7 +771,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "auth.lockoutAfterFailures",
 		label: "Lock out after",
 		description:
-			"Consecutive failed sign-ins before an account is locked. Zero never locks. This is a per-account limit, separate from the per-address throttle above, which stays on regardless: one defends a password, the other defends the server.",
+			"Consecutive failed sign-ins before an account is locked. Zero never locks this way. It is a " +
+			"per-account limit on the password step, separate from the per-address throttle above, which stays " +
+			"on regardless: one defends a password, the other defends the server. An account with an " +
+			"authenticator also carries a second, built-in lock that this setting does not govern — ten " +
+			"consecutive wrong codes lock it for fifteen minutes, whatever this is set to.",
 		category: "security",
 		type: "integer",
 		min: 0,
@@ -1441,7 +1445,10 @@ export async function globalPasswordPolicy(): Promise<PasswordPolicy> {
 
 /** What governs whether a sign-in attempt may proceed at all, before any credential is examined. */
 export interface GlobalSignInPolicy {
-	/** `auth.lockoutAfterFailures`: consecutive failures before an account locks. Zero never locks. */
+	/**
+	 * `auth.lockoutAfterFailures`: consecutive password failures before an account locks. Zero never
+	 * locks *this* way; the two-factor plugin's own account lockout is separate and always on.
+	 */
 	lockoutAfterFailures: number;
 	/** `auth.lockoutMinutes`: how long a lock lasts. */
 	lockoutMinutes: number;

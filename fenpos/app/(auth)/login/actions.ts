@@ -177,7 +177,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	// no longer needs its own lookup, either.
 	const passwordAccount = await prisma.user.findFirst({
 		where: { email: email.trim().toLowerCase() },
-		select: { id: true },
+		select: { id: true, name: true, email: true },
 	});
 	if (passwordAccount) {
 		await clearFailedSignIns(passwordAccount.id);
@@ -189,7 +189,11 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		await recordAudit({
 			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
 			outcome: "SUCCESS",
-			actor: unknownUserActor(readEmail(formData)),
+			// Named, not anonymous. The password was accepted, so the account is no longer in doubt and
+			// the enumeration argument `unknownUserActor` exists for does not apply — that argument is
+			// about *refusals*. It was resolved four lines above; leaving the row anonymous only meant
+			// somebody reading the record had to correlate it with the two-factor row by time.
+			actor: passwordAccount ? userActor(passwordAccount) : unknownUserActor(readEmail(formData)),
 			detail: { stage: "password", twoFactorRequired: true },
 			provenance: await requestProvenance(),
 		});

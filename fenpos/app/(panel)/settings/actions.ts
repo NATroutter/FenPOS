@@ -140,7 +140,7 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
 			refused,
 			failed: Object.keys(errors).filter((key) => !refused.includes(key)),
 		},
-		provenance: await requestProvenance(),
+		provenance: await requestProvenance(user.sessionId),
 	});
 
 	revalidatePath("/settings");

@@ -93,7 +93,7 @@ export async function requirePagePermission(permission: PanelPermission, route: 
 			outcome: "SUCCESS",
 			actor: userActor(user),
 			target: { kind: "page", id: route },
-			provenance: await requestProvenance(),
+			provenance: await requestProvenance(user.sessionId),
 		});
 	}
 
