@@ -101,12 +101,11 @@ export async function currentUser(): Promise<PanelUser | null> {
  * whether setup may proceed.
  *
  * @param options `skipEnrolmentGate` exists for exactly one caller: `panel-action.ts`'s `gate`,
- *   for the three actions that are how enrolment happens (`self:begin-2fa`, `self:confirm-2fa`,
- *   `self:end-2fa`). Those run from `/enrol-2fa` itself — an account with none, on an install that
- *   requires one — so the ordinary call here would redirect to the very page already asking for
- *   the click, and `startTwoFactor` would hand back a redirect instead of a QR. Every other gate
- *   still applies with the flag set; only the last one, the one these actions exist to satisfy, is
- *   skipped.
+ *   for the two actions that are how enrolment happens (`self:begin-2fa`, `self:confirm-2fa`). Those
+ *   run from `/enrol-2fa` itself — an account with none, on an install that requires one — so the
+ *   ordinary call here would redirect to the very page already asking for the click, and
+ *   `startTwoFactor` would hand back a redirect instead of a QR. Every other gate still applies with
+ *   the flag set; only the last one, the one these actions exist to satisfy, is skipped.
  * @returns the signed-in user; never null
  */
 export async function requireSession(options: { skipEnrolmentGate?: boolean } = {}): Promise<PanelUser> {

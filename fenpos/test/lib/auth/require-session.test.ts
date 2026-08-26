@@ -291,3 +291,88 @@ describe("the enrolment gate", () => {
 		await expect(requireSession()).rejects.toThrow("REDIRECT:/set-password");
 	});
 });
+
+/**
+ * `skipEnrolmentGate` exists for exactly one caller — `panel-action.ts`'s `gate`, for the two
+ * actions that are how enrolment happens — and it must skip only the gate it names. These prove the
+ * other three still fire with the flag set, the same way `panel-action.test.ts` proves `gate` only
+ * ever passes the flag for those two actions. Between the two files, "only the last gate is
+ * skipped" is a fact the suite would catch a regression in, not a sentence in a comment.
+ */
+describe("skipEnrolmentGate skips only the last gate", () => {
+	beforeEach(async () => {
+		redirected.mockClear();
+		getSession.mockReset();
+		signOut.mockReset();
+		claimed.mockReset().mockResolvedValue(true);
+		clientAddress.mockReset().mockResolvedValue("203.0.113.30");
+		await prisma.session.deleteMany({});
+		await prisma.setting.deleteMany({});
+		await prisma.user.deleteMany({});
+	});
+
+	it("still redirects a forced password change", async () => {
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs13" },
+			user: {
+				id: "rs13",
+				name: "rs13",
+				email: "rs13@example.com",
+				isSuperuser: false,
+				mustChangePassword: true,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession({ skipEnrolmentGate: true })).rejects.toThrow("REDIRECT:/set-password");
+	});
+
+	it("still ends a session from a disallowed address", async () => {
+		await setSetting("auth.ipAllowlist", "10.0.0.0/8");
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs14" },
+			user: {
+				id: "rs14",
+				name: "rs14",
+				email: "rs14@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession({ skipEnrolmentGate: true })).rejects.toThrow("REDIRECT:/login");
+		expect(signOut).toHaveBeenCalled();
+	});
+
+	it("still ends a session that has been idle too long", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		await prisma.user.create({ data: { id: "rs15", name: "rs15", email: "rs15@example.com" } });
+		const staleAt = new Date(Date.now() - 40 * 60 * 1000);
+		await prisma.session.create({
+			data: {
+				id: "sess-rs15",
+				token: "t-rs15",
+				userId: "rs15",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				createdAt: staleAt,
+				updatedAt: staleAt,
+				lastSeenAt: staleAt,
+			},
+		});
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs15" },
+			user: {
+				id: "rs15",
+				name: "rs15",
+				email: "rs15@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession({ skipEnrolmentGate: true })).rejects.toThrow("REDIRECT:/login");
+		expect(signOut).toHaveBeenCalled();
+	});
+});

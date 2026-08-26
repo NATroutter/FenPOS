@@ -16,7 +16,7 @@ vi.mock("@/lib/request-context", () => ({
 
 const currentSessionUser = vi.fn();
 vi.mock("@/lib/auth/require-session", () => ({
-	requireSession: async () => currentSessionUser(),
+	requireSession: async (options?: { skipEnrolmentGate?: boolean }) => currentSessionUser(options),
 }));
 
 const { panelAction, panelQuery, panelSelf } = await import("@/lib/auth/panel-action");
@@ -282,5 +282,58 @@ describe("panelSelf", () => {
 		// Calling this on a gated action would skip the permission check entirely, so it is a
 		// mistake worth failing loudly rather than one worth tolerating.
 		await expect(panelSelf("agents:delete")).rejects.toThrow(/gated/);
+	});
+});
+
+/**
+ * `gate` passes `requireSession` a `skipEnrolmentGate` flag that is true for exactly the two
+ * actions enrolling a second factor happens through, and false for everything else — including
+ * `self:end-2fa`, a `self`-kind action of its own, so the flag is tied to specific ids and not to
+ * the registry's `kind`. Nothing else in the suite observes this: `currentSessionUser` used to be a
+ * zero-argument mock, so a caller could widen or delete the bypass entirely and every other test
+ * here would stay green.
+ */
+describe("the enrolment gate bypass", () => {
+	beforeEach(reset);
+
+	it("skips the enrolment gate for the action that starts enrolment", async () => {
+		const user = await account("bypass1");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelQuery("self:begin-2fa", async () => "ok", {
+			refused: () => "refused",
+			failed: () => "failed",
+		});
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: true });
+	});
+
+	it("skips the enrolment gate for the action that confirms it", async () => {
+		const user = await account("bypass2");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("self:confirm-2fa", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: true });
+	});
+
+	it("does not skip it for turning a second factor off", async () => {
+		const user = await account("bypass3");
+		currentSessionUser.mockResolvedValue(user);
+
+		// `self:end-2fa` is `self`-kind too, the same as the two above — proving the flag follows the
+		// id, not the kind, is the whole point of this case.
+		await panelAction("self:end-2fa", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: false });
+	});
+
+	it("does not skip it for an unrelated gated action", async () => {
+		const user = await account("bypass4");
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("agents:delete", async () => undefined);
+
+		expect(currentSessionUser).toHaveBeenCalledWith({ skipEnrolmentGate: false });
 	});
 });

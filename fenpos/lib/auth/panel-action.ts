@@ -43,19 +43,22 @@ export interface PanelActionOptions {
 type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: PanelUser; permission: string };
 
 /**
- * The three actions that are how enrolling a second factor happens.
+ * The two actions that are how enrolling a second factor happens.
  *
  * `/enrol-2fa` renders `TwoFactorPanel` for an account that has none, on an install that requires
  * one — precisely the condition `requireSession`'s own enrolment gate redirects on. Gating these
- * three the ordinary way would make that redirect fire on their very first call, so `startTwoFactor`
+ * two the ordinary way would make that redirect fire on their very first call, so `startTwoFactor`
  * would hand the page a redirect instead of a QR. `requireSession`'s `skipEnrolmentGate` exists for
  * exactly this set, and only for it — every other gate it runs still applies.
+ *
+ * `self:end-2fa` (turning a second factor *off*) is deliberately not here. Reaching it means
+ * `user.twoFactorEnabled` is already true, at which point `!user.twoFactorEnabled` is false and the
+ * enrolment gate was never going to fire regardless of this flag — `/enrol-2fa` never renders the
+ * "turn it off" form in the first place (`enabled={false}` always), so there is no path that needs
+ * the bypass for it. Widening this set to include it would only be a privilege change with no
+ * matching need.
  */
-const ENROLMENT_ACTION_IDS: ReadonlySet<PanelActionId> = new Set([
-	"self:begin-2fa",
-	"self:confirm-2fa",
-	"self:end-2fa",
-]);
+const ENROLMENT_ACTION_IDS: ReadonlySet<PanelActionId> = new Set(["self:begin-2fa", "self:confirm-2fa"]);
 
 /**
  * Resolves the session and checks the registry's permission.

@@ -22,13 +22,22 @@ export const dynamic = "force-dynamic";
  * is what sends an un-enrolled operator here — a gate page inside the thing it gates would redirect
  * to itself forever. `/set-password` sits here for exactly the same reason.
  *
- * `currentUser` rather than `requireSession`, for that same reason. This page does its own three
- * checks instead: signed in at all, still needs to enrol, and the install still requires it.
+ * `currentUser` rather than `requireSession`, for that same reason. This page does its own checks
+ * instead: signed in at all, owes no password change, still needs to enrol, and the install still
+ * requires it.
  */
 export default async function EnrolTwoFactorPage() {
 	const user = await currentUser();
 	if (!user) {
 		redirect("/login");
+	}
+
+	// Same rank as in `requireSession`: a forced password change outranks enrolment there, so this
+	// page must not offer the enrolment form to an account that owes one either — `self:begin-2fa`
+	// would refuse it and bounce to `/set-password` anyway, which is correct at the action layer but
+	// not a reason to let the form render here first.
+	if (user.mustChangePassword) {
+		redirect("/set-password");
 	}
 
 	// Both directions matter. Somebody who has just enrolled must not be held here, and somebody who
