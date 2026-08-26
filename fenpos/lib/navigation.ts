@@ -3,6 +3,7 @@ import {
 	BookOpen,
 	Braces,
 	CodeXml,
+	History,
 	// `Image` is also a DOM global, and one that a React file legitimately reaches for. Aliased so
 	// the name in this file can only mean the icon.
 	Image as ImageIcon,
@@ -155,6 +156,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 					"Bundles of permissions several people share. Editing a role changes what every member can do, immediately.",
 				icon: Shield,
 				permission: "roles:read",
+			},
+			{
+				href: "/audit",
+				label: "Audit",
+				title: "Audit record",
+				description:
+					"Who did what, and what came of it. Append-only and hash-chained: there is no edit control here because there is no edit path.",
+				icon: History,
+				permission: "audit:read",
 			},
 			{
 				href: "/keys",
