@@ -74,10 +74,10 @@ export async function appendAuditEvent(prisma: PrismaClient, input: AuditEventIn
 /**
  * How many times a losing writer re-reads the tail and tries again.
  *
- * Bounded rather than unbounded because this runs on the way out of a real request: a writer that
- * kept retrying under sustained contention would hold the request open indefinitely, which is the
- * failure this module's whole "never throws" posture exists to avoid. Five is generous — losing
- * five in a row means five other events committed while this one was being written.
+ * Bounded rather than unbounded because the panel's caller is usually a request on its way out: a
+ * writer that kept retrying under sustained contention would hold that request open indefinitely.
+ * Five is generous — losing five in a row means five other events committed while this one was
+ * being written.
  */
 const MAX_CHAIN_ATTEMPTS = 5;
 
