@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/panel/app-sidebar";
 import { EventStreamProvider } from "@/components/panel/event-stream";
@@ -10,6 +9,7 @@ import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
+import { authHeaders } from "@/lib/auth/auth-headers";
 import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
 import { permittedNavHrefs } from "@/lib/auth/require-permission";
 import { requireSession } from "@/lib/auth/require-session";
@@ -30,7 +30,7 @@ export const dynamic = "force-dynamic";
 async function signOut(): Promise<void> {
 	"use server";
 
-	const requestHeaders = await headers();
+	const requestHeaders = await authHeaders();
 	// Read before the session is destroyed: afterwards there is no id to record and no user to
 	// attribute the row to.
 	const session = await auth.api.getSession({ headers: requestHeaders });
@@ -70,7 +70,11 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// `getSession` route (`dist/api/routes/session.mjs`) that the session object carries a real
 	// `expiresAt: Date` — not a guess or a value the app recomputes itself, which could drift from
 	// what the server actually extended the session to.
-	const currentSession = await auth.api.getSession({ headers: await headers() });
+	//
+	// `authHeaders` rather than `headers()`, for the reason `currentUser` gives: when this render is
+	// the one Next performs after a server action that replaced the session cookie, the request's own
+	// headers still name the session that action deleted, and this would come back null.
+	const currentSession = await auth.api.getSession({ headers: await authHeaders() });
 
 	// Read here rather than in the sidebar: the footer is part of this layout, and a client
 	// component cannot reach the database anyway. One settings read rather than two — see

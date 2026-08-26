@@ -1,7 +1,7 @@
 import "server-only";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth/auth";
+import { authHeaders } from "@/lib/auth/auth-headers";
 import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { accountPasswordExpired } from "@/lib/auth/password-history";
 import { keepSessionAlive } from "@/lib/auth/session-policy";
@@ -58,10 +58,15 @@ export interface PanelUser {
  * the difference — the sign-in page deciding whether to bounce an already-authenticated visitor,
  * and the setup route deciding what to render. Everything else wants {@link requireSession}.
  *
+ * Resolved through {@link authHeaders} rather than through `headers()` directly. A request that has
+ * already replaced its own session cookie — which is what confirming or removing a second factor
+ * does — still carries the *old* one in `headers()`, and reading that would make this report
+ * nobody as signed in while the caller is holding a session that was issued moments earlier.
+ *
  * @returns the signed-in user, or null
  */
 export async function currentUser(): Promise<PanelUser | null> {
-	const session = await auth.api.getSession({ headers: await headers() });
+	const session = await auth.api.getSession({ headers: await authHeaders() });
 	if (!session?.user) {
 		return null;
 	}
@@ -116,7 +121,7 @@ export async function requireSession(): Promise<PanelUser> {
 		// The session is destroyed, not merely redirected. `/login` bounces an authenticated visitor to
 		// `/dashboard`, so sending a still-valid session there would loop between the two forever — and
 		// a session from an address that may no longer reach this install is the honest thing to end.
-		await auth.api.signOut({ headers: await headers() });
+		await auth.api.signOut({ headers: await authHeaders() });
 		redirect("/login");
 	}
 
@@ -128,7 +133,7 @@ export async function requireSession(): Promise<PanelUser> {
 		// Destroyed rather than redirected, for the reason the allowlist branch above gives: `/login`
 		// bounces an authenticated visitor to `/dashboard`, and a session left alive would loop
 		// between the two.
-		await auth.api.signOut({ headers: await headers() });
+		await auth.api.signOut({ headers: await authHeaders() });
 		redirect("/login");
 	}
 

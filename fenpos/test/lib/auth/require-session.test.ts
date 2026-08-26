@@ -13,7 +13,13 @@ const redirected = vi.fn((destination: string) => {
 });
 
 vi.mock("next/navigation", () => ({ redirect: redirected }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+// `cookies` as well as `headers`: `authHeaders` reads the session cookie from the store, because
+// that is the only view of the jar Next keeps current across a server action. Both stand for a
+// request carrying no cookies at all — the session itself comes from the `getSession` stub below.
+vi.mock("next/headers", () => ({
+	headers: async () => new Headers(),
+	cookies: async () => ({ toString: () => "" }),
+}));
 
 const clientAddress = vi.fn(async () => "203.0.113.30");
 vi.mock("@/lib/request-context", () => ({

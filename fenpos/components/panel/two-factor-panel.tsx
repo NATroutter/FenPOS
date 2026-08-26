@@ -21,6 +21,13 @@ import { Spinner } from "@/components/ui/spinner";
  * server has just minted — not fetched, not from a third party, and never sent anywhere. That is
  * the whole reason it is not an `<img src="https://...">` to a QR service, which is how a shared
  * secret ends up in somebody else's access log.
+ *
+ * **Confirming does not take the recovery codes off the screen.** The codes are handed over once —
+ * the panel stores them encrypted and has no path that shows them again — so an operator who had not
+ * yet copied them when they pressed the button would have lost them for good, and losing a phone
+ * after that means an administrator has to clear the enrolment. The third state below is what
+ * replaces that: two-factor is on, the codes are still there, and the operator says when they are
+ * done with them.
  */
 export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 	const [password, setPassword] = useState("");
@@ -29,6 +36,7 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 	const [qrSvg, setQrSvg] = useState<string | null>(null);
 	const [totpUri, setTotpUri] = useState<string | null>(null);
 	const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+	const [justEnrolled, setJustEnrolled] = useState(false);
 	const [pending, startTransition] = useTransition();
 
 	const begin = (): void => {
@@ -54,10 +62,13 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 				setError(result.error);
 				return;
 			}
+			// The QR and the typed code are spent; the recovery codes deliberately are not. They are
+			// shown once in the account's lifetime, and clearing them here is how an operator who had
+			// not copied them yet loses them permanently.
 			setQrSvg(null);
 			setTotpUri(null);
-			setRecoveryCodes(null);
 			setCode("");
+			setJustEnrolled(true);
 			toast.success("Two-factor is on.");
 		});
 	};
@@ -74,6 +85,40 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 			toast.success("Two-factor is off.");
 		});
 	};
+
+	// Ahead of the `enabled` branch, and that ordering is the point: the server has just been told the
+	// account is enrolled, so `enabled` is true by the time this renders. Checking it first would swap
+	// the codes for the "turn it off" form in the same breath as issuing them.
+	if (justEnrolled && recoveryCodes) {
+		return (
+			<div className="flex min-w-0 flex-1 flex-col gap-4">
+				<p className="text-sm text-muted-foreground">
+					Two-factor is on. This account now asks for a code from your authenticator every time you sign in.
+				</p>
+				<Field>
+					<span className="text-sm leading-none font-medium select-none">Recovery codes</span>
+					<RecoveryCodeList codes={recoveryCodes} />
+					<FieldDescription>
+						Last chance: these are not shown again. Each one signs you in once if you lose the app — the panel stores
+						them encrypted, not in the clear, so nobody here can read them back to you. Without them, an administrator
+						has to clear the enrolment for you.
+					</FieldDescription>
+				</Field>
+				<div>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => {
+							setRecoveryCodes(null);
+							setJustEnrolled(false);
+						}}
+					>
+						I have written these down
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	if (enabled) {
 		return (
@@ -129,11 +174,7 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 
 				<Field>
 					<span className="text-sm leading-none font-medium select-none">Recovery codes</span>
-					<ul className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-sm">
-						{recoveryCodes.map((recoveryCode) => (
-							<li key={recoveryCode}>{recoveryCode}</li>
-						))}
-					</ul>
+					<RecoveryCodeList codes={recoveryCodes} />
 					<FieldDescription>
 						Write these down now. Each one signs you in once if you lose the app, and they are not shown again — the
 						panel stores them encrypted, not in the clear. Without them, an administrator has to clear the enrolment for
@@ -203,6 +244,22 @@ export function TwoFactorPanel({ enabled }: { enabled: boolean }) {
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+/**
+ * The ten codes, laid out to be copied off the screen.
+ *
+ * Its own component because the same list is shown twice — once beside the QR and once after the
+ * enrolment is confirmed — and the two must not drift apart.
+ */
+function RecoveryCodeList({ codes }: { codes: string[] }) {
+	return (
+		<ul className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-sm">
+			{codes.map((recoveryCode) => (
+				<li key={recoveryCode}>{recoveryCode}</li>
+			))}
+		</ul>
 	);
 }
 
