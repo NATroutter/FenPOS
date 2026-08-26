@@ -143,7 +143,22 @@ export type SessionVerdict =
  *
  * **Not free of side effects, deliberately.** It sets the forced-reset flag on an account whose
  * password has just expired — unconditionally, because that is a fact about the password rather than
- * about the caller — and by default it marks the session as seen.
+ * about the caller — and by default it marks the session as seen, including on the `mustChangePassword`
+ * branch below, before it returns.
+ *
+ * **`mustChangePassword` still marks the session as seen, even though it returns before the idle
+ * check that reads the same stamp — and it writes the stamp directly rather than through
+ * `keepSessionAlive`.** That helper refuses to write once a session already reads as idle past the
+ * configured timeout (see its own early return), which is the right call for every other reader: an
+ * idle session should not get to refresh its own reprieve. It is the wrong call here. This branch is
+ * unconditionally reachable while the flag is set, whether or not a timeout is already past due, and
+ * a forced password change outranks the idle check the same way it outranks every gate below — an
+ * operator who takes longer than the configured timeout to pick a new password must still land on
+ * `/set-password`, not `/login`, and *that* request is exactly the one `keepSessionAlive` would have
+ * refused to stamp. Without the direct write, `lastSeenAt` would sit frozen at whatever it was when
+ * the reset began for as long as the operator takes, and the moment the flag clears, the very next
+ * request would reach the idle check for the first time and judge the session against that stale
+ * stamp — timing it out immediately despite the operator having been on the page throughout.
  *
  * **The second write is the caller's to decline, with `countsAsActivity: false`.** Marking a session
  * as seen is a claim that somebody used it, and both readers of `lastSeenAt` believe that claim: the
@@ -169,6 +184,16 @@ export async function sessionVerdict(
 	options: { skipEnrolmentGate?: boolean; countsAsActivity?: boolean } = {},
 ): Promise<SessionVerdict> {
 	if (user.mustChangePassword) {
+		// Unconditional, unlike `keepSessionAlive`'s own write — see this function's own doc for why
+		// a session already past the idle timeout must still be stamped here. Swallowed rather than
+		// awaited into a throw: the session may have been revoked between `currentUser` resolving it
+		// and this write running (an administrator's concurrent action, another tab signing out), and
+		// nothing below depends on this write succeeding — the redirect happens regardless.
+		if (options.countsAsActivity ?? true) {
+			await prisma.session
+				.update({ where: { id: user.sessionId }, data: { lastSeenAt: new Date() } })
+				.catch(() => undefined);
+		}
 		return "password-change-owed";
 	}
 

@@ -410,3 +410,106 @@ describe("skipEnrolmentGate skips only the last gate", () => {
 		expect(signOut).toHaveBeenCalled();
 	});
 });
+
+/**
+ * `sessionVerdict`'s `mustChangePassword` branch stamps the session directly rather than through
+ * `keepSessionAlive`, because that helper refuses to write once a session already reads as idle past
+ * the timeout — right for every other caller, wrong for a branch that must be reachable regardless of
+ * how long the operator has been on `/set-password`. These prove the two symptoms that gate would
+ * otherwise cause here: a session already past the timeout still gets its clock moved, and the
+ * request right after the flag clears is not judged against a stamp frozen since the reset began.
+ */
+describe("the forced password-change branch keeps lastSeenAt moving", () => {
+	beforeEach(async () => {
+		redirected.mockClear();
+		getSession.mockReset();
+		signOut.mockReset();
+		claimed.mockReset().mockResolvedValue(true);
+		clientAddress.mockReset().mockResolvedValue("203.0.113.30");
+		await prisma.session.deleteMany({});
+		await prisma.setting.deleteMany({});
+		await prisma.user.deleteMany({});
+	});
+
+	it("stamps the session even though it already reads as idle past the timeout", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		await prisma.user.create({ data: { id: "rs20", name: "rs20", email: "rs20@example.com" } });
+		const staleAt = new Date(Date.now() - 40 * 60 * 1000);
+		await prisma.session.create({
+			data: {
+				id: "sess-rs20",
+				token: "t-rs20",
+				userId: "rs20",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				createdAt: staleAt,
+				updatedAt: staleAt,
+				lastSeenAt: staleAt,
+			},
+		});
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs20" },
+			user: {
+				id: "rs20",
+				name: "rs20",
+				email: "rs20@example.com",
+				isSuperuser: false,
+				mustChangePassword: true,
+				twoFactorEnabled: false,
+			},
+		});
+
+		await expect(requireSession()).rejects.toThrow("REDIRECT:/set-password");
+
+		const session = await prisma.session.findUniqueOrThrow({ where: { id: "sess-rs20" } });
+		expect(session.lastSeenAt?.getTime()).toBeGreaterThan(staleAt.getTime());
+	});
+
+	it("does not sign the operator out on the request right after the flag clears", async () => {
+		await setSetting("auth.idleTimeoutMinutes", 30);
+		await prisma.user.create({ data: { id: "rs21", name: "rs21", email: "rs21@example.com" } });
+		const staleAt = new Date(Date.now() - 40 * 60 * 1000);
+		await prisma.session.create({
+			data: {
+				id: "sess-rs21",
+				token: "t-rs21",
+				userId: "rs21",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+				createdAt: staleAt,
+				updatedAt: staleAt,
+				lastSeenAt: staleAt,
+			},
+		});
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs21" },
+			user: {
+				id: "rs21",
+				name: "rs21",
+				email: "rs21@example.com",
+				isSuperuser: false,
+				mustChangePassword: true,
+				twoFactorEnabled: false,
+			},
+		});
+
+		// The request that finally submits a new password still sees the flag set — it clears only
+		// once the action's own body runs — so this is the request that has to do the stamping.
+		await expect(requireSession()).rejects.toThrow("REDIRECT:/set-password");
+
+		// The flag clears, the way `changePassword`'s own action leaves it.
+		getSession.mockResolvedValue({
+			session: { id: "sess-rs21" },
+			user: {
+				id: "rs21",
+				name: "rs21",
+				email: "rs21@example.com",
+				isSuperuser: false,
+				mustChangePassword: false,
+				twoFactorEnabled: false,
+			},
+		});
+
+		// Without the stamp above, this would still be measured against the original 40-minute-old
+		// `lastSeenAt` and end the session instead of letting it through.
+		await expect(requireSession()).resolves.toMatchObject({ id: "rs21" });
+	});
+});

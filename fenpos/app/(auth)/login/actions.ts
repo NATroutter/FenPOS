@@ -171,21 +171,20 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 	// it against them would lock accounts for having a slow phone.
 	signInLimiter.reset(address);
 
-	// `signedIn` carries no user id on the deferral arm — the plugin's response there is exactly
-	// `{ twoFactorRedirect: true, twoFactorMethods }` — so the account is looked up by the address
-	// already validated above. Done ahead of the branch, so both arms benefit: the full-success arm
-	// no longer needs its own lookup, either.
-	const passwordAccount = await prisma.user.findFirst({
-		where: { email: email.trim().toLowerCase() },
-		select: { id: true, name: true, email: true },
-	});
-	if (passwordAccount) {
-		await clearFailedSignIns(passwordAccount.id);
-	}
-
 	// Better Auth defers instead of returning a session when the account carries a second factor. It
 	// has already set its own challenge cookie by this point; nothing here has to carry state.
 	if ("twoFactorRedirect" in signedIn && signedIn.twoFactorRedirect) {
+		// `signedIn` carries no user id on this arm — the plugin's response here is exactly
+		// `{ twoFactorRedirect: true, twoFactorMethods }` — so the account is looked up by the
+		// address already validated above. Scoped to this branch: the full-success arm below already
+		// has `signedIn.user.id` and would only be paying for a lookup it does not need.
+		const passwordAccount = await prisma.user.findFirst({
+			where: { email: email.trim().toLowerCase() },
+			select: { id: true, name: true, email: true },
+		});
+		if (passwordAccount) {
+			await clearFailedSignIns(passwordAccount.id);
+		}
 		await recordAudit({
 			action: AUTH_AUDIT_ACTIONS.SIGN_IN,
 			outcome: "SUCCESS",
@@ -207,6 +206,8 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		// that a plugin adding a third arm is a refusal rather than a crash on `signedIn.user`.
 		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
+
+	await clearFailedSignIns(signedIn.user.id);
 
 	// After the session exists, so the new one is counted and protected. `signInEmail` returns the
 	// session's token rather than its row, so the row is found by that unique column and its id is

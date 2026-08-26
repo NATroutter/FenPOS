@@ -139,6 +139,14 @@ export const auth = betterAuth({
 				 * A read, never a write. The concurrency cap is a delete and is called from the
 				 * sign-in path instead — see `enforceSessionCap` — because this hook may run inside
 				 * Better Auth's own transaction and a delete there is how a SQLite deadlock is bought.
+				 *
+				 * **Not wrapped in a try/catch.** If `globalSessionPolicy()` throws — a database read
+				 * that failed, or a stored setting `narrow` refuses to parse — the throw propagates and
+				 * the sign-in fails closed rather than creating a session with no real expiry. That is
+				 * the right failure mode, not merely the unhandled one: `globalSessionPolicy` reads from
+				 * the same database this hook is already writing a session row to, so whatever broke the
+				 * read was already going to make the row it produces untrustworthy. There is no fallback
+				 * lifetime worth inventing for a failure this deep in the same failure domain.
 				 */
 				async before(session) {
 					const { sessionSeconds } = await globalSessionPolicy();

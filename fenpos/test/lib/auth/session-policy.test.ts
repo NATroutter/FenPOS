@@ -166,6 +166,7 @@ describe("enforceSessionCap", () => {
 		await setSetting("auth.maxConcurrentSessions", 3);
 		const ids = await sessions("cap-under", 3);
 		expect(await enforceSessionCap("cap-under", ids[2])).toBe(0);
+		expect(await prisma.session.count({ where: { userId: "cap-under" } })).toBe(3);
 	});
 
 	it("evicts the least recently seen sessions once the cap is exceeded", async () => {
