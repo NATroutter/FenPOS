@@ -213,12 +213,15 @@ export async function requireSession(options: { skipEnrolmentGate?: boolean } = 
 		redirect((await isInstallClaimed()) ? "/login" : "/setup");
 	}
 
+	// `return redirect(...)` rather than a bare call: `redirect` is typed `never` and signals by
+	// throwing, so the `return` changes nothing at runtime — it is there so the lint rule that
+	// forbids a `case` falling into the next one can see that none of these do.
 	switch (await sessionVerdict(user, options)) {
 		case "allowed":
 			return user;
 		case "password-change-owed":
 		case "password-expired":
-			redirect("/set-password");
+			return redirect("/set-password");
 		// The session is destroyed, not merely redirected. `/login` bounces an authenticated visitor to
 		// `/dashboard`, so sending a still-valid session there would loop between the two forever — and
 		// a session from an address that may no longer reach this install, or one that has sat past its
@@ -226,8 +229,8 @@ export async function requireSession(options: { skipEnrolmentGate?: boolean } = 
 		case "address-not-allowed":
 		case "idle-too-long":
 			await auth.api.signOut({ headers: await authHeaders() });
-			redirect("/login");
+			return redirect("/login");
 		case "enrolment-owed":
-			redirect("/enrol-2fa");
+			return redirect("/enrol-2fa");
 	}
 }
