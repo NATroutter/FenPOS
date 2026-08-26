@@ -3,6 +3,7 @@ import { AUDIT_DEFAULT_SORT, type AuditSortColumn } from "@/lib/audit/audit-sort
 import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { SYSTEM_AUDIT_ACTIONS } from "@/lib/audit/system-actions";
 import { PANEL_ACTIONS } from "@/lib/auth/panel-actions";
+import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
 import { prisma } from "@/lib/db";
 import { type AuditOutcome, AuditOutcome as AuditOutcomeSet } from "@/lib/domain/audit";
 import type { SortDirection } from "@/lib/table/sort";
@@ -54,6 +55,7 @@ export const KNOWN_AUDIT_ACTIONS: readonly string[] = [
 		...PANEL_ACTIONS.map((entry) => entry.id),
 		...Object.values(AUTH_AUDIT_ACTIONS),
 		...SYSTEM_AUDIT_ACTIONS,
+		...Object.values(RECOVERY_AUDIT_ACTIONS),
 	]),
 ].sort();
 
