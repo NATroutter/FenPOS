@@ -6,7 +6,7 @@ import { admin, twoFactor } from "better-auth/plugins";
 import { hashPassword, MAXIMUM_PASSWORD_LENGTH, verifyPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
-import { globalSessionPolicy } from "@/lib/settings/settings-service";
+import { globalSessionPolicy, MAXIMUM_SESSION_HOURS } from "@/lib/settings/settings-service";
 
 /**
  * The panel's authentication instance.
@@ -86,19 +86,36 @@ export const auth = betterAuth({
 
 	session: {
 		/**
-		 * A floor, not the policy.
+		 * The **cookie's** lifetime, deliberately set to the ceiling rather than to the policy.
 		 *
 		 * Better Auth reads this once, when the instance is constructed at module load, so it cannot
 		 * be the setting — `databaseHooks.session.create.before` below is where `auth.sessionHours`
-		 * is actually applied. This value is what a session would get if that hook were ever
-		 * bypassed, and it is deliberately the shortest sensible lifetime rather than the longest:
-		 * the failure mode of a too-short session is signing in again, and of a too-long one is a
-		 * session nobody intended.
+		 * is actually applied. What is easy to miss is that this is not merely a fallback expiry:
+		 * `getCookies` in `better-auth/dist/cookies/index.mjs` uses it as the session cookie's
+		 * `Max-Age`, and `setSessionCookie` re-applies it on every write, so the browser discards the
+		 * token after this long whatever the row says. A short value here does not shorten the row —
+		 * it shortens the *session*, at whichever of the two comes first, and silently.
+		 *
+		 * So it is pinned to `MAXIMUM_SESSION_HOURS`, the largest `auth.sessionHours` may be. The
+		 * cookie is then never the shorter of the two and the row is always what ends a session,
+		 * which is the right authority: the row can be revoked from the Users page and a cookie
+		 * already in a browser cannot. A cookie outliving its row costs nothing — the next request
+		 * presents a token whose row has expired, and `getSession` deletes both.
 		 */
-		expiresIn: 60 * 60,
-		// How often Better Auth extends an expiry. Left fixed: this governs the library's own
-		// bookkeeping, while `auth.lastSeenRefreshMinutes` governs ours. See `session-policy.ts`.
-		updateAge: 60 * 60,
+		expiresIn: MAXIMUM_SESSION_HOURS * 60 * 60,
+		/**
+		 * Better Auth's own sliding renewal, off.
+		 *
+		 * `api/routes/session.mjs` renews by overwriting `expiresAt` with `getDate(expiresIn)` — the
+		 * module-load ceiling above — which would throw away what the creation hook computed and give
+		 * every session thirty days no matter what the setting says. `auth.sessionHours` is an
+		 * absolute lifetime measured from sign-in, so there is nothing here to slide; inactivity is
+		 * FenPOS's own concept and lives in `session-policy.ts`.
+		 *
+		 * `updateAge` is deliberately absent: with refresh disabled it governs nothing, and naming it
+		 * would imply a renewal cadence that does not exist.
+		 */
+		disableSessionRefresh: true,
 		additionalFields: {
 			lastSeenAt: { type: "date", required: false, input: false, returned: false },
 		},

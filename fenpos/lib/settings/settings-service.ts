@@ -51,6 +51,18 @@ export const DEFAULT_LIMITS: CompileLimits = {
 const TIME_ZONES = ["system", ...Intl.supportedValuesOf("timeZone")] as const;
 
 /**
+ * The longest `auth.sessionHours` may be set to — thirty days.
+ *
+ * Exported because `lib/auth/auth.ts` needs the same number: Better Auth derives the session
+ * cookie's `Max-Age` from `session.expiresIn`, a value read once at module load, and the browser
+ * honours whichever of the cookie and the row expires first. Sizing `expiresIn` to this ceiling is
+ * what keeps the cookie from ever being the shorter of the two, so the row this setting writes is
+ * always the one that decides. A ceiling raised here and not there would silently cap the setting
+ * again, which is exactly the bug the two references exist to prevent.
+ */
+export const MAXIMUM_SESSION_HOURS = 720;
+
+/**
  * Which part of the system a setting affects.
  *
  * Declared per setting rather than derived from the key prefix, because the categories deliberately
@@ -656,12 +668,12 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		label: "Session lifetime",
 		description:
 			"How long a session lasts before it must be signed in again. Read when a session is created, so a " +
-			"change takes effect at the next sign-in rather than the next restart. A shared back-office terminal " +
-			"wants hours; a private office wants days.",
+			"change takes effect at the next sign-in rather than the next restart. The clock starts at sign-in " +
+			"and is not extended by use. A shared back-office terminal wants hours; a private office wants days.",
 		category: "security",
 		type: "integer",
 		min: 1,
-		max: 720,
+		max: MAXIMUM_SESSION_HOURS,
 		fallback: 12,
 		unit: "hours",
 	},
