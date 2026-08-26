@@ -23,6 +23,8 @@ const currentUser = vi.fn<() => Promise<PanelUser | null>>(async () => ({
 	email: "test@example.com",
 	isSuperuser: true,
 	mustChangePassword: false,
+	sessionId: "session-test-user",
+	twoFactorEnabled: false,
 }));
 vi.mock("@/lib/auth/require-session", () => ({ currentUser: () => currentUser() }));
 
@@ -36,6 +38,8 @@ beforeEach(async () => {
 		email: "test@example.com",
 		isSuperuser: true,
 		mustChangePassword: false,
+		sessionId: "session-test-user",
+		twoFactorEnabled: false,
 	});
 });
 
@@ -60,6 +64,8 @@ describe("GET /api/events session gate", () => {
 			email: "test@example.com",
 			isSuperuser: false,
 			mustChangePassword: true,
+			sessionId: "session-test-user",
+			twoFactorEnabled: false,
 		});
 
 		const response = await GET(new Request("https://fenpos.test/api/events"));

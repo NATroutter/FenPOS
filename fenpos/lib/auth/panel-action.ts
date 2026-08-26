@@ -93,7 +93,7 @@ async function record(
 		actor: userActor(user),
 		target: options.target,
 		detail: { ...options.detail, ...detail },
-		provenance: await requestProvenance(),
+		provenance: await requestProvenance(user.sessionId),
 	});
 }
 

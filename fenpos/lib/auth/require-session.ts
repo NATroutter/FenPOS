@@ -37,6 +37,17 @@ export interface PanelUser {
 	isSuperuser: boolean;
 	/** True while the account owes a password change and can reach nothing but the page that takes it. */
 	mustChangePassword: boolean;
+	/**
+	 * The session this request arrived on.
+	 *
+	 * Carried on the user rather than fetched again, because every caller that wants it already has
+	 * this object and a second `getSession` would be a second read of the same cookie. It is what
+	 * lets an audit row say which session did something — `RequestProvenance.sessionId` has had a
+	 * field for it since phase 2 and, until now, no caller able to supply one.
+	 */
+	sessionId: string;
+	/** Whether the account has a confirmed authenticator. Read by the enrolment gate. */
+	twoFactorEnabled: boolean;
 }
 
 /**
@@ -64,6 +75,8 @@ export async function currentUser(): Promise<PanelUser | null> {
 		// existed must read as "no", never as "unknown" and certainly never as "yes".
 		isSuperuser: Boolean(user.isSuperuser),
 		mustChangePassword: Boolean(user.mustChangePassword),
+		sessionId: session.session.id,
+		twoFactorEnabled: Boolean(user.twoFactorEnabled),
 	};
 }
 

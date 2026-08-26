@@ -43,6 +43,7 @@ describe("requireSession", () => {
 
 	it("returns the signed-in user", async () => {
 		getSession.mockResolvedValue({
+			session: { id: "sess-1" },
 			user: { id: "u1", name: "Owner", email: "owner@example.com", isSuperuser: true, mustChangePassword: false },
 		});
 
@@ -52,6 +53,8 @@ describe("requireSession", () => {
 			email: "owner@example.com",
 			isSuperuser: true,
 			mustChangePassword: false,
+			sessionId: "sess-1",
+			twoFactorEnabled: false,
 		});
 	});
 
@@ -70,6 +73,7 @@ describe("requireSession", () => {
 
 	it("sends a user owing a password change to the page that takes it", async () => {
 		getSession.mockResolvedValue({
+			session: { id: "sess-2" },
 			user: { id: "u2", name: "Staff", email: "staff@example.com", isSuperuser: false, mustChangePassword: true },
 		});
 
@@ -99,6 +103,7 @@ describe("the allowlist, re-checked on every request", () => {
 		await prisma.user.deleteMany({});
 		await prisma.user.create({ data: { id: "rs1", name: "Ada", email: "ada@example.com" } });
 		getSession.mockResolvedValue({
+			session: { id: "sess-rs1" },
 			user: { id: "rs1", name: "Ada", email: "ada@example.com", isSuperuser: false, mustChangePassword: false },
 		});
 	});
@@ -145,6 +150,7 @@ describe("password expiry", () => {
 			},
 		});
 		getSession.mockResolvedValue({
+			session: { id: `sess-${id}` },
 			user: { id, name: id, email: `${id}@example.com`, isSuperuser: false, mustChangePassword: false },
 		});
 	}
@@ -185,6 +191,7 @@ describe("password expiry", () => {
 		await setSetting("auth.passwordExpiryDays", 30);
 		await prisma.user.create({ data: { id: "rs6", name: "rs6", email: "rs6@example.com" } });
 		getSession.mockResolvedValue({
+			session: { id: "sess-rs6" },
 			user: { id: "rs6", name: "rs6", email: "rs6@example.com", isSuperuser: false, mustChangePassword: false },
 		});
 

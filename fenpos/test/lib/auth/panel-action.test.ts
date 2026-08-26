@@ -27,7 +27,15 @@ const { ApiError } = await import("@/lib/errors");
 /** An account row, so `effectivePermissions` has something real to read. */
 async function account(id: string, isSuperuser = false) {
 	await prisma.user.create({ data: { id, name: `User ${id}`, email: `${id}@example.com`, isSuperuser } });
-	return { id, name: `User ${id}`, email: `${id}@example.com`, isSuperuser, mustChangePassword: false };
+	return {
+		id,
+		name: `User ${id}`,
+		email: `${id}@example.com`,
+		isSuperuser,
+		mustChangePassword: false,
+		sessionId: `session-${id}`,
+		twoFactorEnabled: false,
+	};
 }
 
 /** The shape `previewMoment` reports, named so the generic is not inferred from one literal. */
@@ -76,6 +84,16 @@ describe("panelAction", () => {
 		expect(row.outcome).toBe("SUCCESS");
 		expect(row.actorUserId).toBe("u1");
 		expect(row.ipAddress).toBe("203.0.113.50");
+	});
+
+	it("records the session the action was taken under", async () => {
+		const user = await account("s-provenance", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		await panelAction("agents:delete", async () => undefined);
+
+		const row = await lastEvent();
+		expect(row.sessionId).toBe(user.sessionId);
 	});
 
 	it("refuses a caller who holds nothing, without running the body", async () => {

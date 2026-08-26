@@ -136,6 +136,12 @@ model Session {
   /// session is not what it appears to be, which is exactly what the audit log needs to say.
   impersonatedBy String?
 
+  // --- FenPOS, via session.additionalFields in lib/auth/auth.ts ---
+  // Nullable because Better Auth wrote every row that existed before this column did, and a session
+  // in flight when the migration ran must not be judged idle on a timestamp it never had. Readers
+  // fall back to updatedAt.
+  lastSeenAt DateTime?
+
   @@unique([token])
   @@index([userId])
   @@map("session")
