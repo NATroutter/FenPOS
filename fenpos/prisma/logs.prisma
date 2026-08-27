@@ -42,8 +42,7 @@ model LogEntry {
   /// looks like severity and is not, and a page of rows cannot be reordered after the fact.
   severity Int      @default(1)
   message  String
-  /// Plain columns, not relations: this database cannot join to the application's tables, and a
-  /// deleted agent's lines must keep their source name rather than going null.
+  /// Plain columns, not relations: this database cannot join to the application's tables.
   agentId    String?  @map("agent_id")
   deviceId   String?  @map("device_id")
   /// Denormalised, for the reason `AuditEvent` denormalises its actor: a deleted agent's lines

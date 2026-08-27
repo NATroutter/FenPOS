@@ -83,10 +83,16 @@ export async function POST(
 		// only records the writes that returned cleanly is not an audit trail.
 		//
 		// `target.name` rather than the path segment: this line is written after the grant check, so
-		// the stored name is available and is the one an operator recognises.
+		// the stored name is available and is the one an operator recognises. `agent` is the path
+		// segment too, but the grant check having succeeded means it is not merely untrusted input
+		// here: `requireGrantedDevice` matched it against the device's actual agent by exact name, so
+		// it is the verified name, not the caller's claim of it — the same reasoning `target.name`
+		// already relies on for the device.
 		await recordServerLog("INFO", `Raw write of ${bytes.length} bytes to '${target.name}' by key '${key.name}'.`, {
 			agentId: target.agentId,
+			agentName: agent,
 			deviceId: target.id,
+			deviceName: target.name,
 		});
 
 		handedOff = bytes.length;
@@ -110,13 +116,22 @@ export async function POST(
 		if (key) {
 			const code = error instanceof ApiError ? error.code : "internal_error";
 
+			// Named even on the refusals that never got as far as resolving a device, so every line
+			// this route writes reaches the Logs tab's agent filter and its live stream — which is
+			// what `recordServerLog` means by "the raw-write caller always names an agent". The
+			// lookup is skipped once the grant check has already produced the id.
+			const agentId = target?.agentId ?? (await agentIdNamed(agent));
+
 			await recordServerLog("WARN", auditFailure(device, key.name, code, handedOff, error), {
-				// Named even on the refusals that never got as far as resolving a device, so every line
-				// this route writes reaches the Logs tab's agent filter and its live stream — which is
-				// what `recordServerLog` means by "the raw-write caller always names an agent". The
-				// lookup is skipped once the grant check has already produced the id.
-				agentId: target?.agentId ?? (await agentIdNamed(agent)),
+				agentId,
+				// Only once an id is known: `agentId` above is only ever set by an exact match against a
+				// real agent's name (the grant check, or `agentIdNamed`'s own lookup), so `agent` is the
+				// verified name in that case. When nothing matched, there is no agent to name — storing
+				// the caller's unverified path segment as if it were one would misattribute the line to
+				// an agent that may not exist, which is worse than leaving it unattributed.
+				agentName: agentId ? agent : undefined,
 				deviceId: target?.id,
+				deviceName: target?.name,
 			});
 		}
 

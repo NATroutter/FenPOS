@@ -180,6 +180,36 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(rows[0].message).toContain("Raw write of 7 bytes");
 	});
 
+	it("attributes the audit row to the agent and device by name, not only by id", async () => {
+		// The names are what let the row outlive the agent or device being deleted later —
+		// `LogEntry.agentName`/`deviceName` exist for exactly that, and this route is their
+		// motivating case: the audit row is the only record a raw write ever happened.
+		await POST(...call({ bytes: BYTES }));
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].agentName).toBe(agentName);
+		expect(rows[0].deviceName).toBe("kitchen");
+	});
+
+	it("does not invent an agent's name when nothing on the request identifies one", async () => {
+		// The path segment is the caller's claim, not a fact. Before this line is attributed by name,
+		// something must have actually matched it against a real agent — otherwise a request naming
+		// an agent that does not exist would store that invented name as if it were real.
+		await POST(
+			new Request(`https://fenpos.test/api/v1/devices/no-such-agent/kitchen/raw`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body: JSON.stringify({ bytes: BYTES }),
+			}),
+			{ params: Promise.resolve({ agent: "no-such-agent", device: "kitchen" }) },
+		);
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].agentName).toBeNull();
+	});
+
 	it("does not call a timed-out write a refusal, because nobody here knows what the printer did", async () => {
 		// The wording is the test. `sendRawWrite` times out with "the bytes may or may not have been
 		// written" — the honest answer — and an audit trail that recorded that as "refused" would tell

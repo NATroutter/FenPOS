@@ -49,6 +49,18 @@ describe("log ingestion", () => {
 		expect(lines[0].agentName).toBe("site-a");
 	});
 
+	it("keeps an agent's name on its line after the agent is deleted", async () => {
+		await ingestLog(agentId, line());
+
+		await prisma.agent.delete({ where: { id: agentId } });
+
+		// Goes red if `agentName` is not written onto the row at ingest time — the dominant path an
+		// agent-attributed line is written through, and the one the spec's survival claim is actually
+		// about. Once the agent is gone there is no relation left to read a name from, so a line
+		// holding only `agentId` would have no way to report where it came from.
+		expect((await listLogs()).lines[0].agentName).toBe("site-a");
+	});
+
 	it("attributes a line to the device it names", async () => {
 		await ingestLog(agentId, line({ device: "kitchen" }));
 

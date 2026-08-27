@@ -125,6 +125,12 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } }),
 	]);
 
+	// Only when the name actually resolved to a device of this agent's: a name that matches
+	// nothing, or names another agent's device, attributes the line to no device at all (see the
+	// lookup above). Shared between the stored row and the published event below, so a live
+	// subscriber and a page reload cannot disagree about what the line was attributed to.
+	const deviceName = device ? (frame.device ?? null) : null;
+
 	const entry = await logsDb.logEntry.create({
 		data: {
 			level: frame.level,
@@ -135,11 +141,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 			agentId,
 			agentName: agent?.name ?? null,
 			deviceId: device?.id ?? null,
-			// Only when the name actually resolved to a device of this agent's: a name that matches
-			// nothing, or names another agent's device, attributes the line to no device at all (see
-			// the lookup above), and the stored name must agree with that or the Logs tab would show a
-			// device the line was never actually attributed to.
-			deviceName: device ? frame.device : null,
+			deviceName,
 			// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
 			// the row's own sequence, since agent clocks are not synchronised with each other.
 			ts: new Date(frame.at),
@@ -154,7 +156,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		level: entry.level as LogLevel,
 		message: entry.message,
 		agentId,
-		deviceName: frame.device ?? null,
+		deviceName,
 	});
 
 	void sweepOccasionally(settings.maxRows, settings.sweepEvery);
