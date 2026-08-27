@@ -28,11 +28,12 @@ export interface SweepOutcome {
 }
 
 /**
- * Removes the oldest events until the table is inside both bounds, and re-anchors the chain.
+ * Removes events older than the retention window, and re-anchors the chain.
  *
- * The two bounds are both oldest-first, so they do not add: whichever reaches further into the table
- * subsumes the other, and the boundary is the higher of the two `seq` values. Adding them would
- * remove rows twice over.
+ * By age alone, not by row count: audit is negligible in size — ~500-650 B a row, so even a busy
+ * install adds tens of megabytes a year — so there is no volume an operator needs protecting from,
+ * only a window of history they want kept. A count cap would evict by volume instead, and a burst of
+ * two hundred actions in one hour could silently destroy the year before it.
  *
  * The delete and the anchor write go in one transaction, and can: both tables live in `audit.db`,
  * so this is one file's transaction rather than a promise spanning two. Separately, a crash between
@@ -40,14 +41,11 @@ export interface SweepOutcome {
  * it, or an anchor naming an event that is still present — and the first of those reads, to
  * `verifyAuditChain`, as tampering.
  *
- * @param bounds `audit.retentionDays` and `audit.maxRecords`, as configured
- * @returns what the sweep did, or null when the table was already inside both bounds
+ * @param bounds `audit.retentionDays`, as configured
+ * @returns what the sweep did, or null when nothing has aged out
  */
-export async function sweepAuditNow(bounds: {
-	retentionDays: number;
-	maxRecords: number;
-}): Promise<SweepOutcome | null> {
-	const boundary = Math.max(await ageBoundary(bounds.retentionDays), await countBoundary(bounds.maxRecords));
+export async function sweepAuditNow(bounds: { retentionDays: number }): Promise<SweepOutcome | null> {
+	const boundary = await ageBoundary(bounds.retentionDays);
 	if (boundary === 0) {
 		return null;
 	}
@@ -84,28 +82,4 @@ async function ageBoundary(retentionDays: number): Promise<number> {
 		select: { seq: true },
 	});
 	return oldest?.seq ?? 0;
-}
-
-/**
- * The newest `seq` that has to go for the table to fit under the record cap.
- *
- * @param maxRecords rows kept before the oldest are swept
- * @returns that `seq`, or 0 when the table already fits
- */
-async function countBoundary(maxRecords: number): Promise<number> {
-	const total = await auditDb.auditEvent.count();
-	if (total <= maxRecords) {
-		return 0;
-	}
-
-	// The last row of the excess, found by skipping to it rather than by loading the excess: on an
-	// install that has been running a year the excess is the larger half of the table.
-	const excess = total - maxRecords;
-	const last = await auditDb.auditEvent.findMany({
-		orderBy: { seq: "asc" },
-		skip: excess - 1,
-		take: 1,
-		select: { seq: true },
-	});
-	return last[0]?.seq ?? 0;
 }

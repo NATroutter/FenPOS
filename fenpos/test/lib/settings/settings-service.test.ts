@@ -313,7 +313,6 @@ describe("setting definitions", () => {
 			"auth.idleTimeoutMinutes": "integer",
 			"auth.maxConcurrentSessions": "integer",
 			"audit.retentionDays": "integer",
-			"audit.maxRecords": "integer",
 			"audit.sweepEvery": "integer",
 			"audit.recordPageViews": "boolean",
 			"api.readsPerMinute": "integer",

@@ -280,7 +280,6 @@ export const SETTING_KEYS = [
 	"auth.idleTimeoutMinutes",
 	"auth.maxConcurrentSessions",
 	"audit.retentionDays",
-	"audit.maxRecords",
 	"audit.sweepEvery",
 	"audit.recordPageViews",
 	"api.readsPerMinute",
@@ -857,18 +856,6 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 3_650,
 		fallback: 365,
 		unit: "days",
-	},
-	{
-		key: "audit.maxRecords",
-		label: "Audit records kept",
-		description:
-			"Hard cap, applied on top of the retention window and sweeping the oldest events first. Bounds the table on an install busy enough to fill the window early.",
-		category: "audit",
-		type: "integer",
-		min: 1_000,
-		max: 5_000_000,
-		fallback: 200_000,
-		unit: "records",
 	},
 	{
 		key: "audit.sweepEvery",
@@ -1538,8 +1525,6 @@ export async function globalSessionPolicy(): Promise<GlobalSessionPolicy> {
 export interface GlobalAuditSettings {
 	/** `audit.retentionDays`: how long an event is kept before it is swept. */
 	retentionDays: number;
-	/** `audit.maxRecords`: rows kept before the oldest are swept, applied on top of the window. */
-	maxRecords: number;
 	/** `audit.sweepEvery`: how many recorded events pass between sweeps. */
 	sweepEvery: number;
 	/** `audit.recordPageViews`: whether opening a panel page writes a row. */
@@ -1563,7 +1548,6 @@ export async function globalAuditSettings(): Promise<GlobalAuditSettings> {
 
 	return {
 		retentionDays: integer("audit.retentionDays"),
-		maxRecords: integer("audit.maxRecords"),
 		sweepEvery: integer("audit.sweepEvery"),
 		recordPageViews: narrow(settings, "audit.recordPageViews", "boolean") as boolean,
 	};

@@ -47,18 +47,23 @@ describe("sweepAuditNow", () => {
 		});
 	}
 
-	it("does nothing when the table is inside both bounds", async () => {
+	it("does nothing when the table is inside the retention window", async () => {
 		await chain(3);
 
-		expect(await sweepAuditNow({ retentionDays: 365, maxRecords: 100 })).toBeNull();
+		expect(await sweepAuditNow({ retentionDays: 365 })).toBeNull();
 		expect(await auditDb.auditEvent.count()).toBe(3);
 		expect(await auditDb.auditAnchor.findUnique({ where: { id: 1 } })).toBeNull();
 	});
 
-	it("removes the oldest down to the record cap", async () => {
+	it("removes exactly the events older than the window", async () => {
 		await chain(10);
+		const old = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" }, take: 6 });
+		await backdate(
+			old.map((row) => row.seq),
+			40,
+		);
 
-		const outcome = await sweepAuditNow({ retentionDays: 365, maxRecords: 4 });
+		const outcome = await sweepAuditNow({ retentionDays: 30 });
 
 		expect(outcome?.removed).toBe(6);
 		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
@@ -68,8 +73,13 @@ describe("sweepAuditNow", () => {
 
 	it("leaves what survives verifiable", async () => {
 		await chain(10);
+		const old = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" }, take: 6 });
+		await backdate(
+			old.map((row) => row.seq),
+			40,
+		);
 
-		await sweepAuditNow({ retentionDays: 365, maxRecords: 4 });
+		await sweepAuditNow({ retentionDays: 30 });
 
 		// The assertion the anchor exists for. Without the re-anchor this reports `anchor-mismatch` at
 		// the oldest surviving row, because its `prevHash` names an event that is gone.
@@ -81,15 +91,19 @@ describe("sweepAuditNow", () => {
 		await chain(10);
 		const removed = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" }, take: 6 });
 		const last = removed[5];
+		await backdate(
+			removed.map((row) => row.seq),
+			40,
+		);
 
-		await sweepAuditNow({ retentionDays: 365, maxRecords: 4 });
+		await sweepAuditNow({ retentionDays: 30 });
 
 		const anchor = await auditDb.auditAnchor.findUniqueOrThrow({ where: { id: 1 } });
 		expect(anchor.seq).toBe(last.seq);
 		expect(anchor.hash).toBe(last.hash);
 	});
 
-	it("removes events past the retention window even when the cap is not reached", async () => {
+	it("removes events past the retention window", async () => {
 		await chain(5);
 		const old = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" }, take: 2 });
 		await backdate(
@@ -97,31 +111,21 @@ describe("sweepAuditNow", () => {
 			40,
 		);
 
-		const outcome = await sweepAuditNow({ retentionDays: 30, maxRecords: 100 });
+		const outcome = await sweepAuditNow({ retentionDays: 30 });
 
 		expect(outcome?.removed).toBe(2);
 		expect(await auditDb.auditEvent.count()).toBe(3);
 	});
 
-	it("takes the larger of the two bounds when both apply", async () => {
-		await chain(10);
-		const old = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" }, take: 2 });
-		await backdate(
-			old.map((row) => row.seq),
-			40,
-		);
-
-		// Age would remove 2, the cap would remove 6. Both are oldest-first, so the cap subsumes the
-		// window and the answer is 6 — not 8, which is what adding them would give.
-		const outcome = await sweepAuditNow({ retentionDays: 30, maxRecords: 4 });
-
-		expect(outcome?.removed).toBe(6);
-	});
-
 	it("survives sweeping the table empty", async () => {
 		await chain(3);
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await backdate(
+			rows.map((row) => row.seq),
+			400,
+		);
 
-		const outcome = await sweepAuditNow({ retentionDays: 365, maxRecords: 0 });
+		const outcome = await sweepAuditNow({ retentionDays: 365 });
 
 		expect(outcome?.removed).toBe(3);
 		expect(await auditDb.auditEvent.count()).toBe(0);
@@ -131,15 +135,58 @@ describe("sweepAuditNow", () => {
 
 	it("re-anchors forward across a second sweep", async () => {
 		await chain(10);
-		await sweepAuditNow({ retentionDays: 365, maxRecords: 6 });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await backdate(
+			rows.slice(0, 6).map((row) => row.seq),
+			40,
+		);
+
+		await sweepAuditNow({ retentionDays: 30 });
 		const firstAnchor = await auditDb.auditAnchor.findUniqueOrThrow({ where: { id: 1 } });
 
-		await sweepAuditNow({ retentionDays: 365, maxRecords: 2 });
+		await backdate(
+			rows.slice(6, 8).map((row) => row.seq),
+			40,
+		);
+		await sweepAuditNow({ retentionDays: 30 });
 
 		const secondAnchor = await auditDb.auditAnchor.findUniqueOrThrow({ where: { id: 1 } });
 		// The anchor moves forward rather than a second row being written: `AuditAnchor` is one row by
 		// construction, and a chain with two boundaries is one no verifier could walk.
 		expect(secondAnchor.seq).toBeGreaterThan(firstAnchor.seq);
 		expect((await verifyAuditChain(auditDb)).ok).toBe(true);
+	});
+
+	it("keeps the chain verifiable after an age-based sweep, whatever the volume", async () => {
+		for (let index = 0; index < 40; index += 1) {
+			await appendEvent({ action: "audit:sweep", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		}
+		// `seq` is a real SQLite AUTOINCREMENT column (backed by sqlite_sequence), so it climbs across
+		// every test in this file rather than resetting to 1 when `beforeEach` empties the table. The
+		// oldest five rows of *this* run are found by ordering rather than assumed to be seq 1-5.
+		const oldest = await auditDb.auditEvent.findMany({
+			orderBy: { seq: "asc" },
+			take: 5,
+			select: { seq: true },
+		});
+		// A raw update rather than the `backdate` helper above — safe for the same reason `backdate`
+		// is: every row touched here is removed by the sweep below before anything hash-verifies it,
+		// and `verifyAuditChain` checks the surviving chain against the anchor's *stored* hash for the
+		// removed boundary row, never a recomputed one. So mutating `at` — one of `CANONICAL_FIELDS`
+		// the hash covers — never surfaces as a hash mismatch. This is safe only because these rows are
+		// deleted before verification; it would not be safe to do this to a row a sweep is asked to
+		// keep.
+		await auditDb.auditEvent.updateMany({
+			where: { seq: { in: oldest.map((row) => row.seq) } },
+			data: { at: new Date(Date.now() - 400 * 24 * 60 * 60 * 1000) },
+		});
+
+		const outcome = await sweepAuditNow({ retentionDays: 365 });
+
+		expect(outcome?.removed).toBe(5);
+		const verified = await verifyAuditChain(auditDb);
+		expect(verified.ok).toBe(true);
+		// Volume alone must never sweep: 35 rows remain inside the window.
+		expect(verified.checked).toBe(35);
 	});
 });

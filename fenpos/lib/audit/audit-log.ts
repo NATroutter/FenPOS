@@ -193,10 +193,10 @@ async function maybeSweep(): Promise<void> {
 			return;
 		}
 
-		const { retentionDays, maxRecords, sweepEvery } = await globalAuditSettings();
+		const { retentionDays, sweepEvery } = await globalAuditSettings();
 		globalForAudit.fenposAuditSweepEvery = sweepEvery;
 
-		const outcome = await sweepAuditNow({ retentionDays, maxRecords });
+		const outcome = await sweepAuditNow({ retentionDays });
 		if (outcome === null) {
 			return;
 		}
@@ -207,7 +207,7 @@ async function maybeSweep(): Promise<void> {
 			action: AUDIT_SWEEP_ACTION,
 			outcome: "SUCCESS",
 			actor: SYSTEM_ACTOR,
-			detail: { removed: outcome.removed, anchoredAt: outcome.anchoredAt, retentionDays, maxRecords },
+			detail: { removed: outcome.removed, anchoredAt: outcome.anchoredAt, retentionDays },
 		});
 	} catch (error) {
 		logger.error("Could not sweep the audit record", error);
