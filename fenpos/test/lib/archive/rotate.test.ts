@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -128,6 +128,24 @@ describe("archivePeriod", () => {
 		expect(live[0].message).toBe("current");
 	});
 
+	it("leaves a line written at the boundary instant in the live database", async () => {
+		const boundary = new Date("2026-02-01T00:00:00.000Z");
+		await logsDb.logEntry.create({
+			data: { level: "INFO", severity: 1, message: "last of january", ts: new Date("2026-01-31T23:59:59.999Z") },
+		});
+		await logsDb.logEntry.create({ data: { level: "INFO", severity: 1, message: "first of february", ts: boundary } });
+
+		const outcome = await archivePeriod({ source: "logs", before: boundary, directory });
+
+		// The boundary is exclusive, and this is the assertion that says so: the line at exactly the
+		// boundary belongs to February. Goes red on an inclusive `lte`, which would archive it into a file
+		// named `logs-2026-01` and delete it from live.
+		expect(outcome.rows).toBe(1);
+		const live = await logsDb.logEntry.findMany();
+		expect(live).toHaveLength(1);
+		expect(live[0].message).toBe("first of february");
+	});
+
 	it("round-trips every log column, timestamps included", async () => {
 		await logsDb.logEntry.create({
 			data: {
@@ -199,6 +217,77 @@ describe("archivePeriod", () => {
 		).rejects.toThrow(/already exists/i);
 		// The second line is still live rather than gone into a file that overwrote the first.
 		expect(await logsDb.logEntry.count({ where: { message: "second" } })).toBe(1);
+	});
+
+	it("refuses when only the uncompressed archive is on disk, and names the remedy", async () => {
+		await logsDb.logEntry.create({
+			data: { level: "INFO", severity: 1, message: "still live", ts: new Date("2026-01-15T00:00:00Z") },
+		});
+		// The other branch of the guard: what a rotation whose compression failed leaves behind is a
+		// bare `.db` with no `.gz` beside it. The test above only reaches the `.gz` branch.
+		writeFileSync(join(directory, "logs-2026-01.db"), "");
+
+		// This is the one refusal a retry cannot clear on its own, so it has to say what to do about it.
+		await expect(
+			archivePeriod({ source: "logs", before: new Date("2026-02-01T00:00:00Z"), directory }),
+		).rejects.toThrow(/Move or remove that file/);
+
+		expect(await logsDb.logEntry.count()).toBe(1);
+	});
+
+	it("lets the period be rotated again after a rotation dies before the delete", async () => {
+		await logsDb.logEntry.create({
+			data: { level: "INFO", severity: 1, message: "old", ts: new Date("2026-01-15T00:00:00Z") },
+		});
+		const before = new Date("2026-02-01T00:00:00Z");
+
+		// Exactly what a Prisma transaction timeout does: the archive is written and verified, and then
+		// the delete does not happen. Injected rather than provoked, because provoking it for real needs a
+		// month of a busy install's log volume.
+		let namesMidRotation: string[] = [];
+		const failing = vi.spyOn(logsDb, "$transaction").mockImplementationOnce((async () => {
+			// Read at the exact moment a hard kill would be unrecoverable: the archive is written and
+			// verified, and the rows are still live. Nothing may carry the period's real name yet.
+			namesMidRotation = readdirSync(directory);
+			throw new Error("Transaction API error: Transaction already closed");
+		}) as typeof logsDb.$transaction);
+
+		await expect(archivePeriod({ source: "logs", before, directory })).rejects.toThrow(/Transaction/);
+		failing.mockRestore();
+
+		// Goes red on an archive written straight to its real name — which is what a crash between the
+		// write and the delete would then leave behind, refusing every retry from that point on.
+		expect(namesMidRotation).toHaveLength(1);
+		expect(namesMidRotation[0]).toMatch(/^logs-2026-01\.db\..+\.partial$/);
+
+		// Nothing was lost, and this rotation cleaned up after itself rather than leaving its own attempt.
+		expect(await logsDb.logEntry.count()).toBe(1);
+		expect(readdirSync(directory)).toEqual([]);
+
+		const outcome = await archivePeriod({ source: "logs", before, directory });
+
+		expect(outcome.rows).toBe(1);
+		expect(await logsDb.logEntry.count()).toBe(0);
+		expect(existsSync(outcome.path)).toBe(true);
+	});
+
+	it("is not blocked by an attempt a crash left behind, and does not remove it", async () => {
+		await logsDb.logEntry.create({
+			data: { level: "INFO", severity: 1, message: "old", ts: new Date("2026-01-15T00:00:00Z") },
+		});
+		// What a hard kill mid-rotation leaves: an attempt file under a name no finished archive can
+		// have. No `catch` ran, so nothing cleaned it up — the case the provisional name exists for and
+		// the one an in-process cleanup cannot reach.
+		const wreckage = "logs-2026-01.db.11111111-2222-3333-4444-555555555555.partial";
+		writeFileSync(join(directory, wreckage), "not a database");
+
+		const outcome = await archivePeriod({ source: "logs", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		expect(outcome.rows).toBe(1);
+		expect(existsSync(outcome.path)).toBe(true);
+		// And it is left alone rather than tidied away: only the rotation that wrote an attempt file may
+		// remove it, because after a failed promotion one of these is the only copy of its rows.
+		expect(readdirSync(directory)).toContain(wreckage);
 	});
 
 	it("gives the audit archive the same columns the live table has", async () => {
@@ -289,6 +378,31 @@ describe("archivePeriod", () => {
 		// Verification gates the delete: every row is still where it was, and nothing was anchored.
 		expect(await auditDb.auditEvent.count()).toBe(4);
 		expect(await auditDb.auditAnchor.findUnique({ where: { id: 1 } })).toBeNull();
+	});
+
+	it("leaves an audit event written at the boundary instant out of the archive", async () => {
+		const boundary = new Date("2026-02-01T00:00:00.000Z");
+		await chainAt(1, new Date("2026-01-15T00:00:00Z"));
+		await chainAt(1, boundary);
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+
+		const outcome = await archivePeriod({ source: "audit", before: boundary, directory });
+
+		// All three assertions go red on an inclusive `lte`, which would put a February event into
+		// January's file, delete it from live, and — worst of the three — anchor on it, so Task 8's walk
+		// across the boundary would look for it in the wrong segment of the chain.
+		expect(outcome.rows).toBe(1);
+		const live = await auditDb.auditEvent.findMany();
+		expect(live.map((row) => row.seq)).toEqual([rows[1].seq]);
+		const anchor = await auditDb.auditAnchor.findUniqueOrThrow({ where: { id: 1 } });
+		expect(anchor.seq).toBe(rows[0].seq);
+
+		const archive = openArchive(outcome.path);
+		try {
+			expect(archive.prepare("SELECT seq FROM audit_events WHERE seq = ?").get(rows[1].seq)).toBeUndefined();
+		} finally {
+			archive.close();
+		}
 	});
 
 	it("leaves audit events newer than the boundary alone", async () => {

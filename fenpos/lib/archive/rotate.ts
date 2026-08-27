@@ -1,5 +1,6 @@
 import "server-only";
-import { createReadStream, createWriteStream, existsSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { createReadStream, createWriteStream, existsSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
@@ -20,20 +21,29 @@ import { logger } from "@/lib/logger";
  *
  * **The order is the safety property, and it is the whole of it: write, verify, delete, compress.**
  *
- * 1. Read the rows at or before the boundary from the live database.
- * 2. Create the period file and its table, with the same DDL the live table has.
+ * 1. Read the rows before the boundary from the live database.
+ * 2. Create the period file and its table, under a provisional name, with the live table's own DDL.
  * 3. Insert every row, preserving its primary key, its timestamp, and for audit its `seq`, `prevHash`
  *    and `hash` exactly — an archived audit row that differs in any hashed byte reads as tampered.
  * 4. Verify: the archive's row count against what was read, and for audit the hash chain itself,
  *    walked by `verifyAuditChain` over the file.
  * 5. Only then delete those rows from live, by primary key, in one transaction.
- * 6. Compress to `.db.gz` and remove the uncompressed file.
+ * 6. Rename the file to the period's real name, then compress it to `.db.gz`.
  *
  * A crash or a throw between any two of those leaves rows **duplicated**, never lost. Anything that
  * fails before step 5 leaves the live rows untouched, which is why the directory is not created here:
- * a misconfigured path fails at step 2, where failing is free. If step 6 fails the archive is already
- * complete and the rows are already gone, so the uncompressed file beside it *is* the archive — that
- * is logged and the file is kept rather than deleted.
+ * a misconfigured path fails at step 2, where failing is free.
+ *
+ * **A rotation that dies must not stop the next one.** That is what the provisional name in step 2
+ * buys: until the live rows are actually gone, nothing exists at the period's real name, so an attempt
+ * that fails anywhere up to and including the delete leaves no wreckage for the retry to trip over.
+ * A `*.partial` file on disk is an abandoned attempt, and holds rows the live database still has —
+ * with one exception, reported through `logger.error` the moment it happens: if the rename in step 6
+ * fails, the rows are already gone and that file is the only copy of them.
+ *
+ * If step 6's *compression* fails the archive is already complete and named, so the uncompressed file
+ * beside it *is* the archive — that is logged and the file kept. The half-written `.gz` is removed,
+ * because archives are found by name and a truncated one is indistinguishable from a good one.
  *
  * **Nothing schedules this.** There is no timer, no write counter, and no settings key behind it; it
  * runs when something calls it, and at this phase nothing does. Reading an archive back is not here
@@ -52,7 +62,14 @@ export type ArchiveSource = "logs" | "audit";
 export interface ArchiveOptions {
 	/** Which live database to drain. */
 	source: ArchiveSource;
-	/** Rows at or before this moment are archived. */
+	/**
+	 * Rows strictly before this moment are archived.
+	 *
+	 * Exclusive, so a caller passes the first instant of the period *after* the one being archived and
+	 * gets exactly that period. An inclusive boundary would pull one instant — the first millisecond of
+	 * the next period — into a file named for the previous one, which for logs makes the filename lie
+	 * and for audit puts the row in the wrong segment of the chain.
+	 */
 	before: Date;
 	/**
 	 * Directory archives are written to.
@@ -71,10 +88,12 @@ export interface ArchiveOutcome {
 	/** How many rows moved. Zero is a real answer, and still leaves a file for the period. */
 	rows: number;
 	/**
-	 * The archive on disk — the `.db.gz`, or the uncompressed `.db` when compression failed.
+	 * The archive on disk: the `.db.gz` normally, the uncompressed `.db` when compression failed, or
+	 * the `*.partial` when the file could not be renamed to its real name.
 	 *
-	 * Either way the rows are in the file this names; a caller that cares which it got can look at the
-	 * extension, and the compression failure is logged when it happens.
+	 * In every case the rows are in the file this names, and in the two abnormal ones the failure was
+	 * reported through `logger.error` as it happened. A caller that cares which it got can look at the
+	 * extension.
 	 */
 	path: string;
 }
@@ -88,6 +107,18 @@ export interface ArchiveOutcome {
  * well inside SQLite's cap on bound parameters in one statement.
  */
 const PAGE_SIZE = 500;
+
+/**
+ * How long the live delete may take before Prisma abandons it.
+ *
+ * Explicit because the default is five seconds, and this is the one transaction in the codebase that
+ * cannot fit in five seconds: a period of a busy install is hundreds of batched `deleteMany` round
+ * trips, which is exactly what {@link PAGE_SIZE} exists to say. Timing out is safe on its own — the
+ * transaction rolls back and the rows stay live — but it costs the whole archive that was just written
+ * and verified, so it should happen because the database is genuinely stuck, not because a month of
+ * logs took six seconds to remove.
+ */
+const DELETE_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * The `log_entries` DDL, copied from `prisma/migrations-logs`.
@@ -161,55 +192,134 @@ CREATE INDEX "audit_events_outcome_at_idx" ON "audit_events"("outcome", "at");
  *
  * @param options which database, which boundary, and where the file goes
  * @returns the period archived, how many rows moved, and the file they moved into
- * @throws if the archive cannot be written or does not verify — in which case nothing was deleted
+ * @throws if the period is already archived, or the archive cannot be written, or it does not verify,
+ *   or the live delete fails — in every one of which nothing was deleted and nothing was left behind
+ *   under the period's real name
  */
 export async function archivePeriod(options: ArchiveOptions): Promise<ArchiveOutcome> {
-	// The last instant the boundary covers, so a boundary of "the first moment of February" names
-	// January rather than the month it is the start of.
+	// The boundary is exclusive, so the last instant it covers is one millisecond before it: a boundary
+	// of "the first moment of February" names January rather than the month it is the start of.
 	const periodKey = periodKeyFor(new Date(options.before.getTime() - 1));
 	const path = join(options.directory, `${options.source}-${periodKey}.db`);
+	refuseIfArchived(path, periodKey);
 
-	const rows =
-		options.source === "logs" ? await drainLogs(options.before, path) : await drainAudit(options.before, path);
+	// No finished archive can ever carry this name, which is what makes a failed rotation retryable:
+	// the period's real name stays free until the live rows are actually gone.
+	const provisional = `${path}.${randomUUID()}.partial`;
 
-	return { periodKey, rows, path: await compress(path) };
+	let rows: number;
+	try {
+		rows =
+			options.source === "logs"
+				? await drainLogs(options.before, provisional)
+				: await drainAudit(options.before, provisional);
+	} catch (error) {
+		// Reached only while the rows are still live: every step that can throw here runs before the
+		// delete, and the delete is the last thing either drain does. So this discards a copy of rows the
+		// database still holds, never the only copy of anything.
+		discard(provisional);
+		throw error;
+	}
+
+	const promoted = promote(provisional, path);
+	// Compression is skipped when promotion failed. That file is the only copy of these rows and the
+	// failure has already been reported, so the useful thing is to hand it back as it is rather than
+	// put a second confusing name on it.
+	return { periodKey, rows, path: promoted === null ? provisional : await compress(promoted) };
 }
 
 /**
- * Creates the period file, fills it, and cleans up after a failure.
+ * Refuses to rotate a period that has already been archived.
  *
- * The refusal to write over an existing archive is the one guard that runs before the file is opened,
- * and it guards the archive rather than the arguments: rotating the same period twice would otherwise
- * append a second copy of the rows into the first archive, or compress over a `.gz` that already held
- * a month.
+ * Guards the archive rather than the arguments, and only ever sees a *finished* one: a rotation in
+ * progress writes under a provisional name, so nothing an interrupted attempt leaves behind can reach
+ * this. Rotating the same period twice would otherwise append a second copy of the rows into the first
+ * archive, or compress over a `.gz` that already held a month.
  *
- * @param path where the uncompressed archive goes
+ * The message names the remedy because this is the one refusal here that a retry cannot clear on its
+ * own — someone has to decide what the existing file is worth.
+ *
+ * @param path the period's uncompressed name
+ * @param periodKey the period, for the message
+ * @throws if a finished archive for the period is already on disk
+ */
+function refuseIfArchived(path: string, periodKey: string): void {
+	let existing: string | null = null;
+	if (existsSync(`${path}.gz`)) {
+		existing = `${path}.gz`;
+	} else if (existsSync(path)) {
+		existing = path;
+	}
+
+	if (existing !== null) {
+		throw new Error(
+			`An archive for ${periodKey} already exists at ${existing}; refusing to write over it. ` +
+				`Move or remove that file if this period genuinely needs archiving again.`,
+		);
+	}
+}
+
+/**
+ * Creates the period file and fills it.
+ *
+ * @param path where the provisional archive goes
  * @param ddl the table and indexes to create in it
  * @param fill inserts the rows and verifies them; whatever it returns is returned
  * @returns what `fill` returned
  */
 async function intoArchive<T>(path: string, ddl: string, fill: (archive: Database.Database) => Promise<T>): Promise<T> {
-	if (existsSync(path) || existsSync(`${path}.gz`)) {
-		throw new Error(`An archive for this period already exists at ${path}; refusing to write over it.`);
-	}
-
 	const archive = new Database(path);
-	let filled = false;
 	try {
 		archive.exec(ddl);
-		const result = await fill(archive);
-		filled = true;
-		return result;
+		return await fill(archive);
 	} finally {
-		// Windows will not remove a file with an open handle, so this closes before it removes — and it
-		// closes on every path, because a leaked handle keeps the archive locked for the whole process.
+		// On every path, and before the caller can try to remove the file: Windows will not remove one
+		// with an open handle, and a leaked handle keeps the archive locked for the whole process.
 		archive.close();
-		if (!filled) {
-			// Nothing has been deleted from live yet, so this half-written copy holds nothing that is not
-			// still in the database. Removing it keeps a retry possible instead of leaving a file that
-			// claims to be the period and is not.
-			rmSync(path, { force: true });
-		}
+	}
+}
+
+/**
+ * Removes an abandoned attempt.
+ *
+ * Only ever called on a file this same call wrote and whose rows are still in the live database. A
+ * removal that itself fails is reported rather than thrown, because it would otherwise replace the
+ * real failure with a tidying-up failure — and the file it leaves is harmless: its name can never be
+ * mistaken for a finished archive.
+ *
+ * @param provisional the file to remove
+ */
+function discard(provisional: string): void {
+	try {
+		rmSync(provisional, { force: true });
+	} catch (error) {
+		logger.error("Could not remove an abandoned archive attempt", error, { path: provisional });
+	}
+}
+
+/**
+ * Gives a finished archive its real name.
+ *
+ * The step that publishes the archive, and it runs *after* the live delete on purpose: until it does,
+ * the period's real name is free and a failed rotation can simply be run again. A rename within one
+ * directory is a single atomic operation, so the window in which neither name is the right one is as
+ * small as the filesystem allows.
+ *
+ * @param provisional the verified archive, under its attempt name
+ * @param path the period's real name
+ * @returns the real name, or null when the rename failed and the rows are only in `provisional`
+ */
+function promote(provisional: string, path: string): string | null {
+	try {
+		renameSync(provisional, path);
+		return path;
+	} catch (error) {
+		logger.error(
+			"An archive could not be given its final name; its rows have already been removed from the live database, so this file is the only copy of them",
+			error,
+			{ path: provisional, expected: path },
+		);
+		return null;
 	}
 }
 
@@ -229,14 +339,14 @@ function storedAt(at: Date): string {
 }
 
 /**
- * Moves log lines at or before the boundary into the archive.
+ * Moves log lines from before the boundary into the archive.
  *
  * Live rows are deleted by the ids collected while writing, not by repeating the timestamp predicate:
  * a line written between the read and the delete would match that predicate without being in the
  * archive, and would then be the one row this whole module exists to not lose.
  *
- * @param before rows at or before this moment
- * @param path where the uncompressed archive goes
+ * @param before rows strictly before this moment
+ * @param path where the provisional archive goes
  * @returns how many lines were archived
  */
 async function drainLogs(before: Date, path: string): Promise<number> {
@@ -250,7 +360,7 @@ async function drainLogs(before: Date, path: string): Promise<number> {
 		let cursor = "";
 		for (;;) {
 			const page = await logsDb.logEntry.findMany({
-				where: { ts: { lte: before }, id: { gt: cursor } },
+				where: { ts: { lt: before }, id: { gt: cursor } },
 				orderBy: { id: "asc" },
 				take: PAGE_SIZE,
 			});
@@ -287,14 +397,17 @@ async function drainLogs(before: Date, path: string): Promise<number> {
 		return ids;
 	});
 
-	await logsDb.$transaction(async (tx) => {
-		// Batched because SQLite caps the number of bound parameters in one statement, and a period can
-		// hold far more rows than that cap. One transaction around the batches is what keeps the delete
-		// all-or-nothing anyway.
-		for (let start = 0; start < archived.length; start += PAGE_SIZE) {
-			await tx.logEntry.deleteMany({ where: { id: { in: archived.slice(start, start + PAGE_SIZE) } } });
-		}
-	});
+	await logsDb.$transaction(
+		async (tx) => {
+			// Batched because SQLite caps the number of bound parameters in one statement, and a period can
+			// hold far more rows than that cap. One transaction around the batches is what keeps the delete
+			// all-or-nothing anyway.
+			for (let start = 0; start < archived.length; start += PAGE_SIZE) {
+				await tx.logEntry.deleteMany({ where: { id: { in: archived.slice(start, start + PAGE_SIZE) } } });
+			}
+		},
+		{ timeout: DELETE_TIMEOUT_MS },
+	);
 
 	return archived.length;
 }
@@ -308,13 +421,13 @@ async function drainLogs(before: Date, path: string): Promise<number> {
  * only shape the chain permits: an anchor vouches for exactly one boundary, so what leaves has to be a
  * prefix, and a gap anywhere else could never be told from a removed row.
  *
- * @param before rows at or before this moment
- * @param path where the uncompressed archive goes
+ * @param before rows strictly before this moment
+ * @param path where the provisional archive goes
  * @returns how many events were archived
  */
 async function drainAudit(before: Date, path: string): Promise<number> {
 	const newest = await auditDb.auditEvent.findFirst({
-		where: { at: { lte: before } },
+		where: { at: { lt: before } },
 		orderBy: { seq: "desc" },
 		select: { seq: true },
 	});
@@ -417,6 +530,17 @@ async function compress(path: string): Promise<string> {
 		await pipeline(createReadStream(path), createGzip(), createWriteStream(compressed));
 	} catch (error) {
 		logger.error("Could not compress an archive; the uncompressed file beside it is the archive", error, { path });
+		// A pipeline that stopped partway leaves a truncated `.gz` under the name a finished archive
+		// would have, and archives are found by name — a later reader would take it for the period and
+		// find most of the period missing. Removing it removes a corrupt copy, not the archive: every row
+		// is still in the complete `.db` beside it, which is what this returns.
+		try {
+			rmSync(compressed, { force: true });
+		} catch (removalError) {
+			logger.error("Could not remove a truncated archive; it must not be read as this period", removalError, {
+				path: compressed,
+			});
+		}
 		return path;
 	}
 
