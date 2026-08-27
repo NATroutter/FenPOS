@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { logsDb, prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
@@ -116,7 +116,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 			})
 		: null;
 
-	const entry = await prisma.logEntry.create({
+	const entry = await logsDb.logEntry.create({
 		data: {
 			level: frame.level,
 			// Derived here rather than at read time: the filter and the Level ordering both run in the
@@ -217,12 +217,12 @@ export async function sweepOccasionally(maxRows: number, sweepEvery: number): Pr
  */
 export async function sweepLogsNow(maxRows: number): Promise<void> {
 	try {
-		const total = await prisma.logEntry.count();
+		const total = await logsDb.logEntry.count();
 		if (total <= maxRows) {
 			return;
 		}
 
-		const cutoff = await prisma.logEntry.findMany({
+		const cutoff = await logsDb.logEntry.findMany({
 			orderBy: { ts: "desc" },
 			skip: maxRows - 1,
 			take: 1,
@@ -230,7 +230,7 @@ export async function sweepLogsNow(maxRows: number): Promise<void> {
 		});
 
 		if (cutoff.length > 0) {
-			const removed = await prisma.logEntry.deleteMany({ where: { ts: { lt: cutoff[0].ts } } });
+			const removed = await logsDb.logEntry.deleteMany({ where: { ts: { lt: cutoff[0].ts } } });
 			logger.info("Swept old log entries", { removed: removed.count });
 		}
 	} catch (error) {

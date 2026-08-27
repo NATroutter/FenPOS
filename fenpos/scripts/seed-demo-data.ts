@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
+import { PrismaClient as LogsPrismaClient } from "../generated/prisma-logs/client";
 import { generateToken, hashSecret } from "../lib/auth/secrets";
+import { siblingDatabaseUrl } from "../lib/database-url";
 import { HINT_LENGTH, KEY_PREFIX } from "../lib/keys/key-format";
 import { LOG_SEVERITY } from "../lib/logs/log-sort";
 
@@ -78,14 +80,32 @@ async function main(): Promise<void> {
 	}
 
 	const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: databaseUrl }) });
+	// Two clients because there are two databases. The logs URL is derived from DATABASE_URL the
+	// same way lib/env.ts derives it, so this script addresses the file the running server does.
+	const logsDb = new LogsPrismaClient({
+		adapter: new PrismaBetterSqlite3({
+			url: process.env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(databaseUrl, "logs.db"),
+		}),
+	});
 	const out = (line: string) => process.stdout.write(`${line}\n`);
 
 	try {
-		// Agents cascade to their devices, jobs, pairing codes and log lines, so removing them
-		// takes almost everything with it. Keys are the exception: they belong to no agent.
+		// Log lines are removed explicitly rather than by cascade: they live in their own database,
+		// which has no foreign key to the agents table to cascade through. Their agent ids have to be
+		// read before the agents go, because afterwards there is nothing left to match them by.
+		const demoAgents = await prisma.agent.findMany({
+			where: { name: { startsWith: PREFIX } },
+			select: { id: true },
+		});
+		const { count: removedLines } = await logsDb.logEntry.deleteMany({
+			where: { agentId: { in: demoAgents.map((agent) => agent.id) } },
+		});
+
+		// Agents cascade to their devices, jobs and pairing codes, so removing them takes almost
+		// everything else with it. Keys are the exception: they belong to no agent.
 		const { count: removedAgents } = await prisma.agent.deleteMany({ where: { name: { startsWith: PREFIX } } });
 		const { count: removedKeys } = await prisma.apiKey.deleteMany({ where: { name: { startsWith: PREFIX } } });
-		out(`Removed ${removedAgents} demo agents and ${removedKeys} demo keys.`);
+		out(`Removed ${removedAgents} demo agents, ${removedKeys} demo keys and ${removedLines} demo log lines.`);
 
 		if (cleanOnly) {
 			out("Nothing seeded (--clean).");
@@ -317,8 +337,9 @@ async function main(): Promise<void> {
 
 		// --- Log lines ----------------------------------------------------------------------
 
-		// Attached to a seeded agent so that removing the agent removes them too. A demo log line
-		// with no owner would survive every cleanup this script can perform.
+		// Attached to a seeded agent so that the cleanup above can find them again. A demo log line
+		// with no agent id would survive every cleanup this script can perform, since its database
+		// holds no name to match on.
 		const LINES = [
 			["INFO", "Agent connected"],
 			["INFO", "Port opened"],
@@ -344,7 +365,7 @@ async function main(): Promise<void> {
 			};
 		});
 
-		await prisma.logEntry.createMany({ data: logs });
+		await logsDb.logEntry.createMany({ data: logs });
 		out(`Created ${logs.length} log lines.`);
 
 		// --- The secrets ---------------------------------------------------------------------
@@ -360,6 +381,7 @@ async function main(): Promise<void> {
 		out("Run `pnpm db:seed --clean` to remove all of it.");
 	} finally {
 		await prisma.$disconnect();
+		await logsDb.$disconnect();
 	}
 }
 

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { prisma } from "@/lib/db";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logsDb, prisma } from "@/lib/db";
 import { listLogs, recordServerLog } from "@/lib/logs/log-service";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -11,13 +11,13 @@ import { setSetting } from "@/lib/settings/settings-service";
  */
 describe("listLogs paging", () => {
 	beforeEach(async () => {
-		await prisma.logEntry.deleteMany();
+		await logsDb.logEntry.deleteMany();
 		await prisma.setting.deleteMany();
 	});
 
 	/** Seeds `count` lines, newest last, so paging has something to actually page through. */
 	async function seedLines(count: number): Promise<void> {
-		await prisma.logEntry.createMany({
+		await logsDb.logEntry.createMany({
 			data: Array.from({ length: count }, (_, index) => ({
 				level: "INFO",
 				severity: 1,
@@ -63,14 +63,14 @@ describe("recordServerLog", () => {
 	// block) bleed into the length and findFirst() assertions below — confirmed by running this
 	// suite without it, which fails all three non-throwing tests on stale rows.
 	beforeEach(async () => {
-		await prisma.logEntry.deleteMany();
+		await logsDb.logEntry.deleteMany();
 		await prisma.setting.deleteMany();
 	});
 
 	it("writes a row the Logs tab will show", async () => {
 		await recordServerLog("INFO", "Something an operator should see");
 
-		const rows = await prisma.logEntry.findMany();
+		const rows = await logsDb.logEntry.findMany();
 		expect(rows).toHaveLength(1);
 		expect(rows[0].message).toBe("Something an operator should see");
 		expect(rows[0].agentId).toBeNull();
@@ -79,7 +79,7 @@ describe("recordServerLog", () => {
 	it("derives severity so the level filter and column ordering work", async () => {
 		await recordServerLog("WARN", "careful");
 
-		expect((await prisma.logEntry.findFirst())?.severity).toBe(2);
+		expect((await logsDb.logEntry.findFirst())?.severity).toBe(2);
 	});
 
 	it("attributes a line to a device when one is named", async () => {
@@ -90,7 +90,7 @@ describe("recordServerLog", () => {
 
 		await recordServerLog("INFO", "about a printer", { agentId: agent.id, deviceId: device.id });
 
-		const row = await prisma.logEntry.findFirst();
+		const row = await logsDb.logEntry.findFirst();
 		expect(row?.agentId).toBe(agent.id);
 		expect(row?.deviceId).toBe(device.id);
 	});
@@ -103,13 +103,26 @@ describe("recordServerLog", () => {
 
 		await recordServerLog("INFO", "x".repeat(500));
 
-		expect((await prisma.logEntry.findFirst())?.message).toHaveLength(200);
+		expect((await logsDb.logEntry.findFirst())?.message).toHaveLength(200);
 	});
 
 	it("does not throw when the row cannot be written", async () => {
 		// Audit logging must never be the reason a request fails. A line lost is bad; a raw write
 		// refused because its audit line could not be stored is worse, and a raw write that *happened*
 		// and then threw on the way out is worst of all.
-		await expect(recordServerLog("INFO", "orphan", { agentId: "no-such-agent" })).resolves.toBeUndefined();
+		//
+		// The failure is injected rather than provoked with an agent id matching nothing, which is how
+		// this test used to reach the catch. Log lines live in their own database now, and it holds no
+		// foreign key to `agents` — an unknown id stores perfectly well, so asserting on one would be
+		// asserting that a write *succeeds*. Injecting a rejection keeps the assertion about the
+		// failure path this test is named for.
+		const create = vi.spyOn(logsDb.logEntry, "create").mockRejectedValueOnce(new Error("no space left on device"));
+
+		try {
+			await expect(recordServerLog("INFO", "orphan")).resolves.toBeUndefined();
+			expect(create).toHaveBeenCalledTimes(1);
+		} finally {
+			create.mockRestore();
+		}
 	});
 });

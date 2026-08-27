@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { siblingDatabaseUrl } from "@/lib/database-url";
 
 /**
  * Validated process environment.
@@ -93,3 +94,25 @@ export const env: Env = parseEnv(process.env);
 
 /** Whether this process is running a production build. */
 export const isProduction = env.NODE_ENV === "production";
+
+/**
+ * Where the logs database lives, derived rather than configured.
+ *
+ * An install sets one path. Three separately configured URLs would let a deployment point its logs
+ * at one volume and its audit record at another, which is a way to lose half the record to a
+ * missing mount and not find out until someone goes looking.
+ *
+ * `LOGS_DATABASE_URL` overrides the derivation, and exists for one caller: the test suite runs each
+ * file in its own worker process against its own database file, and every worker shares one `data/`
+ * directory, so derivation alone would hand them all the same logs file. `prisma-logs.config.ts`
+ * gives the variable the same precedence, so the CLI and the running server always agree.
+ */
+export const LOGS_DATABASE_URL: string =
+	process.env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "logs.db");
+
+/**
+ * Re-exported here so callers needing a sibling database reach it beside the URL it is derived
+ * from. It lives in its own module because `prisma-logs.config.ts` must import it too, and a
+ * Prisma config file cannot load anything carrying `server-only`.
+ */
+export { siblingDatabaseUrl };

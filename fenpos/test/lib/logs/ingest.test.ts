@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma } from "@/lib/db";
+import { logsDb, prisma } from "@/lib/db";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -17,7 +17,7 @@ describe("log ingestion", () => {
 	let otherAgentId: string;
 
 	beforeEach(async () => {
-		await prisma.logEntry.deleteMany();
+		await logsDb.logEntry.deleteMany();
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
 		await prisma.setting.deleteMany();
@@ -85,7 +85,7 @@ describe("log ingestion", () => {
 		}
 
 		expect(accepted).toBe(120);
-		expect((await prisma.logEntry.count()).valueOf()).toBe(120);
+		expect((await logsDb.logEntry.count()).valueOf()).toBe(120);
 	});
 
 	it("limits each agent separately", async () => {
@@ -214,7 +214,7 @@ describe("log ingestion", () => {
 			// Only the writes that need to be real — enough to cross logs.sweepEvery's built-in 500
 			// and trigger sweepOccasionally for real, through ingestLog itself rather than by calling
 			// the sweep entry point directly — go through the throttled, awaited ingestLog path below.
-			await prisma.logEntry.createMany({
+			await logsDb.logEntry.createMany({
 				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
 					severity: 1,
@@ -239,7 +239,7 @@ describe("log ingestion", () => {
 			// for it rather than asserting immediately.
 			await vi.waitFor(
 				async () => {
-					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+					expect(await logsDb.logEntry.count()).toBeLessThanOrEqual(1000);
 				},
 				{ timeout: 5000 },
 			);
@@ -261,7 +261,7 @@ describe("log ingestion", () => {
 			// fires after 50 real writes rather than needing ten times as many.
 			await setSetting("logs.sweepEvery", 50);
 
-			await prisma.logEntry.createMany({
+			await logsDb.logEntry.createMany({
 				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
 					severity: 1,
@@ -283,7 +283,7 @@ describe("log ingestion", () => {
 			// which the built-in 500 would not have reached with only 50 writes.
 			await vi.waitFor(
 				async () => {
-					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+					expect(await logsDb.logEntry.count()).toBeLessThanOrEqual(1000);
 				},
 				{ timeout: 5000 },
 			);

@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { logsDb, prisma } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
@@ -46,15 +46,19 @@ export interface LogFilter {
  * Keyed by {@link LogSortColumn}, so a column offered there without a mapping here is a type error
  * rather than a header that quietly does nothing.
  *
- * `source` orders by agent then device, which is how the column reads on screen. Lines an agent
- * recorded against no device sort first within that agent, since a null device name orders ahead of
- * any name.
+ * `source` groups by agent then device, which is the order the column reads in — though by id
+ * rather than by name, for the reason below. Lines an agent recorded against no device sort first
+ * within that agent, since a null id orders ahead of any id.
  */
 const LOG_ORDER = {
 	time: (dir: SortDirection) => ({ ts: dir }),
 	// The stored number, not the level string: descending has to mean errors first.
 	level: (dir: SortDirection) => ({ severity: dir }),
-	source: (dir: SortDirection) => [{ agent: { name: dir } }, { device: { name: dir } }],
+	// By the stored ids, not the names. The lines are in their own database now, so there is no
+	// `agents` table for SQLite to join to and no name for it to order by; the ids still bring every
+	// line from one source together, which is most of what the column is read for. Ordering the
+	// column alphabetically again means storing the names on the row itself.
+	source: (dir: SortDirection) => [{ agentId: dir }, { deviceId: dir }],
 	message: (dir: SortDirection) => ({ message: dir }),
 } as const satisfies Record<LogSortColumn, (dir: SortDirection) => unknown>;
 
@@ -100,7 +104,7 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 	// swap places between one page view and the next, which would show one twice and hide another.
 	const orderBy = [...(Array.isArray(chosen) ? chosen : [chosen]), { ts: "desc" as const }];
 
-	const rows = await prisma.logEntry.findMany({
+	const rows = await logsDb.logEntry.findMany({
 		where: {
 			...(filter.agentId ? { agentId: filter.agentId } : {}),
 			...(filter.level ? { severity: { gte: LOG_SEVERITY[filter.level] } } : {}),
@@ -108,13 +112,10 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 		orderBy,
 		skip: filter.skip ?? 0,
 		take: take + 1,
-		include: {
-			agent: { select: { name: true } },
-			device: { select: { name: true } },
-		},
 	});
 
 	const page = rows.slice(0, take);
+	const names = await resolveSourceNames(page);
 
 	return {
 		more: rows.length > take,
@@ -123,9 +124,44 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			at: row.ts.toISOString(),
 			level: (LogLevelSet.is(row.level) ? row.level : "INFO") as LogLevel,
 			message: row.message,
-			agentName: row.agent?.name ?? null,
-			deviceName: row.device?.name ?? null,
+			agentName: row.agentId === null ? null : (names.agents.get(row.agentId) ?? null),
+			deviceName: row.deviceId === null ? null : (names.devices.get(row.deviceId) ?? null),
 		})),
+	};
+}
+
+/**
+ * Names the agents and devices a page of lines came from.
+ *
+ * A second query rather than a join, because there is no join to make: the lines live in their own
+ * database and hold ids the application's tables know nothing about. It is bounded by the page
+ * size, not by the log, so it stays two queries however many rows are stored.
+ *
+ * An id that resolves to nothing reads as no name. That is now reachable — without a foreign key
+ * to cascade them away, a deleted agent's lines outlive it — and it is the behaviour wanted: the
+ * line still says what happened and when, which is why it was kept.
+ *
+ * @param rows the page whose sources need naming
+ * @returns names by id, for the ids that still resolve
+ */
+async function resolveSourceNames(
+	rows: readonly { agentId: string | null; deviceId: string | null }[],
+): Promise<{ agents: Map<string, string>; devices: Map<string, string> }> {
+	const agentIds = [...new Set(rows.map((row) => row.agentId).filter((id): id is string => id !== null))];
+	const deviceIds = [...new Set(rows.map((row) => row.deviceId).filter((id): id is string => id !== null))];
+
+	const [agents, devices] = await Promise.all([
+		agentIds.length > 0
+			? prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } })
+			: [],
+		deviceIds.length > 0
+			? prisma.device.findMany({ where: { id: { in: deviceIds } }, select: { id: true, name: true } })
+			: [],
+	]);
+
+	return {
+		agents: new Map(agents.map((agent) => [agent.id, agent.name])),
+		devices: new Map(devices.map((device) => [device.id, device.name])),
 	};
 }
 
@@ -171,7 +207,7 @@ export async function recordServerLog(
 		// three values this same read produces.
 		const { maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
-		const entry = await prisma.logEntry.create({
+		const entry = await logsDb.logEntry.create({
 			data: {
 				level,
 				// Derived here rather than at read time, exactly as `ingestLog` does: the severity

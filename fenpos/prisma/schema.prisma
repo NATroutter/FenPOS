@@ -335,7 +335,6 @@ model Agent {
   devices      Device[]
   jobs         Job[]
   pairingCodes PairingCode[]
-  logEntries   LogEntry[]
 
   @@index([status])
   @@map("agents")
@@ -417,7 +416,6 @@ model Device {
   agent          Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
   jobs           Job[]
   keyGrants      ApiKeyDevice[]
-  logEntries     LogEntry[]
   variableValues DeviceVariable[]
 
   @@unique([agentId, name])
@@ -544,33 +542,10 @@ model Job {
   @@map("jobs")
 }
 
-/// An operational log line, either raised by the server or forwarded from an agent.
-///
-/// Ingestion from agents is rate-limited and length-capped at the protocol boundary. This
-/// table must never become a channel through which an agent can exhaust the disk.
-model LogEntry {
-  id       String   @id @default(cuid())
-  ts       DateTime @default(now())
-  /// DEBUG | INFO | WARN | ERROR
-  level    String
-  /// DEBUG 0, INFO 1, WARN 2, ERROR 3. Derived from level when the row is written.
-  ///
-  /// Stored rather than computed because both the severity filter and the Level column ordering
-  /// need it in the database: ordering the level string gives DEBUG, ERROR, INFO, WARN, which
-  /// looks like severity and is not, and a page of rows cannot be reordered after the fact.
-  severity Int      @default(1)
-  message  String
-  agentId  String?  @map("agent_id")
-  deviceId String?  @map("device_id")
-
-  agent  Agent?  @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
-
-  @@index([ts])
-  @@index([severity, ts])
-  @@index([agentId, ts])
-  @@map("log_entries")
-}
+// LogEntry lived here until log volume proved able to evict the rows kept beside it. It now has
+// its own database and its own migration history — see prisma/logs.prisma — so its retention is
+// bounded on its own budget. Nothing in this file may relate to it: the two files cannot be
+// joined, and a log line's agent and device are plain id columns over there.
 
 /// Global configuration, replacing the removed config.yaml.
 ///

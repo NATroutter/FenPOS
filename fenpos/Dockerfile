@@ -82,6 +82,10 @@ COPY --from=build --chown=fenpos:fenpos /build/generated ./generated
 COPY --from=build --chown=fenpos:fenpos /build/prisma ./prisma
 COPY --from=build --chown=fenpos:fenpos /build/package.json ./package.json
 COPY --from=build --chown=fenpos:fenpos /build/prisma.config.ts ./prisma.config.ts
+# The logs database has its own CLI config, and the start command below migrates through it.
+# Without this file that migration fails and the container comes up with nowhere to put a log
+# line. It reads lib/database-url.ts, which the lib/ copy further down brings along.
+COPY --from=build --chown=fenpos:fenpos /build/prisma-logs.config.ts ./prisma-logs.config.ts
 COPY --from=build --chown=fenpos:fenpos /build/server.ts ./server.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation.ts ./instrumentation.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation-runtime.ts ./instrumentation-runtime.ts
@@ -117,4 +121,9 @@ VOLUME ["/app/data"]
 # Migrations run at start rather than in the build, because the database is a
 # volume the image has never seen. Deploy rather than dev: it applies what is
 # committed and refuses to invent a migration against a production database.
-CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec ./node_modules/.bin/tsx server.ts"]
+#
+# Both databases, in one command, because they are one install. The second is the logs
+# database; its URL is derived from DATABASE_URL above, so it lands in the same volume and
+# no second path has to be configured. Migrating one and forgetting the other would start a
+# server that serves every page and then fails on the first log line it tries to record.
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && exec ./node_modules/.bin/tsx server.ts"]
