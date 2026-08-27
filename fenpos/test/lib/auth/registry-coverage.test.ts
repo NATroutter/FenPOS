@@ -123,7 +123,9 @@ describe("panel action coverage", () => {
 	 * `action: params.action` filter is not mistaken for a write.
 	 */
 	it("writes no audit action from app/ that the registry does not name", () => {
-		const registered = new Set(PANEL_ACTIONS.map((entry) => entry.id));
+		// Widened to `string` deliberately: `PANEL_ACTIONS`'s ids narrow to a literal union, and a
+		// `Set` of that union refuses `has(someString)` — which is the exact question being asked.
+		const registered = new Set<string>(PANEL_ACTIONS.map((entry) => entry.id));
 		const written: string[] = [];
 
 		for (const file of sourceFiles(APP_ROOT)) {
