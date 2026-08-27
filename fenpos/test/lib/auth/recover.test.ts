@@ -196,7 +196,9 @@ describe("recovery", () => {
 		// The fixed reason recordFailure falls back to for anything that is not a RecoveryRefusal —
 		// asserted as a literal rather than imported, since UNEXPECTED_FAILURE_REASON is intentionally
 		// not exported: nothing outside this module needs to construct or compare against it.
-		expect(row.detail).toBe(JSON.stringify({ reason: "an unexpected error; see the command's own output" }));
+		expect(row.detail).toBe(
+			JSON.stringify({ reason: "an unexpected error; the exception is rethrown to the caller, never stored here" }),
+		);
 		expect(JSON.stringify(row)).not.toContain(sentinel);
 
 		// The account itself is untouched: the stub prevented the real update from ever running.

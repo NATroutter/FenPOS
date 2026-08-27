@@ -146,8 +146,15 @@ export class RecoveryRefusal extends Error {}
  * hash sitting inside a stringified error message would pass straight through it into a table with no
  * edit path. The original error is not lost — {@link recoverAccount} still rethrows it to the caller
  * unchanged — it is only kept out of the one place that cannot be corrected afterwards.
+ *
+ * The text says exactly that, and nothing more. It named "the command's own output" until the CLI was
+ * made to print the exception there, which it was not doing: a row pointing at a terminal, a terminal
+ * pointing at logs this process cannot write, and the exception discarded in between. What the row can
+ * promise on its own is what `recoverAccount` guarantees by construction for *every* caller — the
+ * exception is rethrown, not swallowed — so that is what it says. `scripts/auth-recover.ts`'s
+ * `formatFailure` is the caller that turns that guarantee into text an operator can read.
  */
-const UNEXPECTED_FAILURE_REASON = "an unexpected error; see the command's own output";
+const UNEXPECTED_FAILURE_REASON = "an unexpected error; the exception is rethrown to the caller, never stored here";
 
 /**
  * Writes the `FAILURE` row for a `perform` that threw, after the account was already resolved.

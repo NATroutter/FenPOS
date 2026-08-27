@@ -38,6 +38,12 @@ import {
  * only argument parsing (tested here, in `parseRecoveryArgs`, because a misread command acts on the
  * wrong account) and the printing and process shape (`try`/`finally`, `process.exitCode`) that turns
  * that module's exports into a runnable command, modelled on `scripts/audit-verify.ts`.
+ *
+ * **This process has no logs.** `lib/logger.ts` opens with `import "server-only"`, so nothing here can
+ * reach it, and this runs in its own process rather than inside the server whose stdout the operator
+ * might otherwise tail. Its stderr is therefore the only place a failure is ever described, which is
+ * why {@link formatFailure} writes the exception itself there rather than a sentence pointing
+ * somewhere else.
  */
 
 /** The commands `parseRecoveryArgs` can produce, plus the two outcomes that are not a command. */
@@ -82,6 +88,13 @@ const EMAIL_FLAGS = {
  * `--clear-allowlst` for `--clear-allowlist`) is exactly how an emergency command becomes a no-op at
  * the moment it is needed most.
  *
+ * Membership is tested with `Object.hasOwn`, never `in`. `in` walks the prototype chain, so
+ * `"constructor" in NO_ARGUMENT_FLAGS` is true and `pnpm auth:recover constructor` would be accepted
+ * as a known flag — pushing a command whose `kind` is a function, opening a database connection, and
+ * falling off `runCommand`'s exhaustiveness guard instead of printing the documented
+ * `unrecognized argument:`. `Object.hasOwn` asks the question these two objects are actually answering:
+ * is this one of the keys written here.
+ *
  * @param argv the arguments after the script name, i.e. `process.argv.slice(2)`
  * @returns the single command `argv` names, `{ kind: "help" }` for no arguments, or
  *   `{ kind: "error" }` with a message explaining what was wrong
@@ -101,13 +114,13 @@ export function parseRecoveryArgs(argv: string[]): RecoveryCommand {
 			return { kind: "help" };
 		}
 
-		if (arg in NO_ARGUMENT_FLAGS) {
+		if (Object.hasOwn(NO_ARGUMENT_FLAGS, arg)) {
 			commands.push({ kind: NO_ARGUMENT_FLAGS[arg as keyof typeof NO_ARGUMENT_FLAGS] });
 			index += 1;
 			continue;
 		}
 
-		if (arg in EMAIL_FLAGS) {
+		if (Object.hasOwn(EMAIL_FLAGS, arg)) {
 			const email = argv[index + 1];
 			// Not just "missing": an email-looking flag's argument slot swallowed by the next flag
 			// (`--reset-password --list`) must refuse too, rather than treat "--list" as an address.
@@ -164,6 +177,44 @@ function formatAccountTable(accounts: RecoverableAccount[]): string {
 }
 
 /**
+ * Turns whatever a command threw into the text an operator reads on stderr.
+ *
+ * A {@link RecoveryRefusal} is the one failure `lib/auth/recover.ts` authored a message for on
+ * purpose — an address matching nothing, an account with no password credential — so its message is
+ * printed as-is and nothing else is. Anything else gets a fixed sentence **and the exception itself**.
+ *
+ * Printing the exception is the point of this function existing. This process has no logs to defer to
+ * (see the module comment), so a bare "check the logs" would leave whoever is recovering an install
+ * nobody can sign in to — with the panel unreachable — holding one opaque line. If `resetPassword`'s
+ * transaction fails after minting and hashing, what actually went wrong is here or it is nowhere.
+ *
+ * **The asymmetry with `UNEXPECTED_FAILURE_REASON` in `lib/auth/recover.ts` is deliberate, not an
+ * oversight.** That module keeps a raw exception out of the *audit row* because `AuditEvent` is
+ * append-only with no edit path and a `PrismaClientValidationError` can embed the freshly minted argon2
+ * hash among the arguments it choked on. Neither half of that reasoning reaches stderr: nothing here is
+ * stored, and whoever is running this already holds the filesystem access to read the database
+ * directly — which is this script's entire authorization model. Raw exception to the terminal, fixed
+ * reason in the row.
+ *
+ * Exported so `test/scripts/auth-recover.test.ts` can assert the unexpected branch really does carry
+ * the exception. `runCommand` opens a database connection, so a test driving that instead would need a
+ * real database to observe one line of formatting.
+ *
+ * @param error whatever the command threw
+ * @returns the text to write to stderr, newline-terminated
+ */
+export function formatFailure(error: unknown): string {
+	if (error instanceof RecoveryRefusal) {
+		return `${error.message}\n`;
+	}
+
+	// `.stack` in preference to `.message`: a stack already opens with the name and message, and the
+	// frames below it are the only thing that says *which* call failed to a reader with no logs.
+	const described = error instanceof Error ? (error.stack ?? error.message) : String(error);
+	return `Unexpected failure:\n${described}\n`;
+}
+
+/**
  * Builds the client this script's operations run through.
  *
  * Modelled on `scripts/audit-verify.ts`, which explains why: `lib/db.ts` begins with
@@ -187,14 +238,9 @@ function buildPrismaClient(): PrismaClient {
  * which is a second lockout instead of a recovery. Printing it as the very next statement after the
  * `await` is what rules that out.
  *
- * **A refusal prints differently from an unexpected failure.** `error instanceof RecoveryRefusal`
- * covers the one kind of failure `lib/auth/recover.ts` authored a message for on purpose — for
- * instance, an address whose account has no password credential to reset — and that message is
- * printed as-is. Anything else is unchanged from whatever the client or the runtime threw, which
- * `lib/auth/recover.ts`'s own comments note can embed argument values (a `PrismaClientValidationError`
- * on the credential update, for one, can embed the freshly minted hash); this prints only "check the
- * logs" for that case, never the exception's own message, for the same reason
- * `UNEXPECTED_FAILURE_REASON` keeps it out of the audit row.
+ * **A refusal prints differently from an unexpected failure**, and both print everything they know —
+ * {@link formatFailure} does that part, and carries the reasoning for why the unexpected branch prints
+ * the exception here even though `lib/auth/recover.ts` keeps it out of the audit row.
  *
  * @param command the command `parseRecoveryArgs` produced; only the five action kinds reach here
  */
@@ -244,11 +290,7 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 			}
 		}
 	} catch (error) {
-		if (error instanceof RecoveryRefusal) {
-			process.stderr.write(`${error.message}\n`);
-		} else {
-			process.stderr.write("Unexpected failure; check the logs.\n");
-		}
+		process.stderr.write(formatFailure(error));
 		process.exitCode = 1;
 	} finally {
 		await prisma.$disconnect();
