@@ -107,7 +107,7 @@ export async function readArchive<T>(
 	descriptor: ArchiveDescriptor,
 	query: (archive: Database.Database) => T | Promise<T>,
 ): Promise<T> {
-	const plain = join(tmpdir(), `fenpos-archive-${randomUUID()}.db`);
+	const plain = join(tmpdir(), `${descriptor.source}-${descriptor.periodKey}-${randomUUID()}.db`);
 
 	try {
 		await pipeline(createReadStream(descriptor.path), createGunzip(), createWriteStream(plain));
