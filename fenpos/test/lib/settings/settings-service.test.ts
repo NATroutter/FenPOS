@@ -152,6 +152,8 @@ describe("settings", () => {
 		expect(await globalLogIngestSettings()).toEqual({
 			linesPerMinutePerAgent: 120,
 			retentionDays: 5,
+			archiveEnabled: true,
+			archiveRetentionDays: 365,
 			maxMessageChars: 1000,
 			sweepEvery: 500,
 		});
@@ -293,6 +295,8 @@ describe("setting definitions", () => {
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
 			"logs.retentionDays": "integer",
+			"logs.archiveEnabled": "boolean",
+			"logs.archiveRetentionDays": "integer",
 			"logs.maxMessageChars": "integer",
 			"logs.sweepEvery": "integer",
 			"pairing.enabled": "boolean",

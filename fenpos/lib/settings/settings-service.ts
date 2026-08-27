@@ -260,6 +260,8 @@ export const SETTING_KEYS = [
 	"logs.minimumLevel",
 	"logs.linesPerMinutePerAgent",
 	"logs.retentionDays",
+	"logs.archiveEnabled",
+	"logs.archiveRetentionDays",
 	"logs.maxMessageChars",
 	"logs.sweepEvery",
 	"pairing.enabled",
@@ -613,12 +615,37 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		label: "Log retention",
 		description:
 			"How long a log line is kept before it is removed. Bounded by time rather than by a record count, so a " +
-			"noisy afternoon cannot evict the week before it.",
+			"noisy afternoon cannot evict the week before it. When archiving is on, whole calendar months are " +
+			"kept, so up to a month more than this is retained.",
 		category: "logs",
 		type: "integer",
 		min: 1,
 		max: 3_650,
 		fallback: 30,
+		unit: "days",
+	},
+	{
+		key: "logs.archiveEnabled",
+		label: "Archive log lines",
+		description:
+			"Whether log lines leaving the retention window are written to a compressed archive first. With " +
+			"this off they are deleted outright. With it on, retention works a whole calendar month at a " +
+			"time, so up to a month more than the window is kept — an archive's name has to be true.",
+		category: "logs",
+		type: "boolean",
+		fallback: true,
+	},
+	{
+		key: "logs.archiveRetentionDays",
+		label: "Log archive retention",
+		description:
+			"How long a log archive is kept before it is deleted. Bounds what archiving can cost in disk; " +
+			"the audit record's archives are not deleted on a timer and have no equivalent setting.",
+		category: "logs",
+		type: "integer",
+		min: 1,
+		max: 3_650,
+		fallback: 365,
 		unit: "days",
 	},
 	{
@@ -1379,6 +1406,10 @@ export interface GlobalLogIngestSettings {
 	linesPerMinutePerAgent: number;
 	/** `logs.retentionDays`: how long a line is kept before it is swept. */
 	retentionDays: number;
+	/** `logs.archiveEnabled`: whether a swept line is archived first, rather than only deleted. */
+	archiveEnabled: boolean;
+	/** `logs.archiveRetentionDays`: how long a log archive is kept before it is deleted. */
+	archiveRetentionDays: number;
 	maxMessageChars: number;
 	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
 	sweepEvery: number;
@@ -1400,10 +1431,14 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 	// SETTINGS. A mismatch here is a definition that changed type without its readers being
 	// updated, which is a programming error rather than a stored value.
 	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
+	// `logs.archiveEnabled` is the one `boolean` among these, asserted the same way.
+	const flag = (key: SettingKey): boolean => narrow(settings, key, "boolean") as boolean;
 
 	return {
 		linesPerMinutePerAgent: value("logs.linesPerMinutePerAgent"),
 		retentionDays: value("logs.retentionDays"),
+		archiveEnabled: flag("logs.archiveEnabled"),
+		archiveRetentionDays: value("logs.archiveRetentionDays"),
 		maxMessageChars: value("logs.maxMessageChars"),
 		sweepEvery: value("logs.sweepEvery"),
 	};

@@ -227,6 +227,11 @@ async function allow(agentId: string): Promise<boolean> {
  * same reason `ingestLog` does. Both share the one counter above, which is what makes the
  * retention window a property of the table rather than of whoever happened to write the row.
  *
+ * **Always sweeps with archiving off**, regardless of `logs.archiveEnabled`. This write-counted
+ * trigger is withdrawn once `lib/maintenance/pass.ts`'s hourly pass exists to call `sweepLogsNow`
+ * with the operator's real archiving choice and a provisioned directory; wiring that setting through
+ * a call site about to be removed would only be more code to delete.
+ *
  * @param retentionDays how long a line is kept before it is swept (`logs.retentionDays`)
  * @param sweepEvery how many recorded lines pass between sweeps (`logs.sweepEvery`)
  */
@@ -239,7 +244,7 @@ export async function sweepOccasionally(retentionDays: number, sweepEvery: numbe
 	}
 
 	try {
-		const { removed } = await sweepLogsNow(retentionDays);
+		const { removed } = await sweepLogsNow(retentionDays, { archiveEnabled: false, archiveDirectory: "" });
 		if (removed > 0) {
 			logger.info("Swept old log entries", { removed });
 		}
