@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,9 +94,16 @@ describe("log retention", () => {
 			const { removed } = await sweepLogsNow(30, { archiveEnabled: true, archiveDirectory: directory });
 
 			expect(removed).toBe(1);
-			expect(existsSync(join(directory, "logs-2026-01.db.gz"))).toBe(true);
-			// Goes red if the sweep deletes by cutoff rather than by period: March is inside the cutoff's
-			// own period and must survive whatever its individual timestamps say.
+			// Pins the retention window itself, not merely that *a* January archive exists. A cutoff
+			// that ignored `retentionDays` (e.g. `new Date()` instead of the real 2026-02-18) would make
+			// `periodsFullyBefore(2026-01-15, now)` return both 2026-01 and 2026-02, and the archiving
+			// branch would then write a stray zero-row `logs-2026-02.db.gz` alongside the real one —
+			// `removed` would still read `1` and January's archive would still exist, so only the exact
+			// directory listing catches it. March surviving does not carry this property on its own:
+			// the real cutoff already falls in February, so a plain cutoff-based `deleteMany` would
+			// leave March alone too — the assertion below is what actually distinguishes period-based
+			// archiving from a cutoff-based delete for these dates.
+			expect(readdirSync(directory)).toEqual(["logs-2026-01.db.gz"]);
 			expect(await logsDb.logEntry.findFirst({ where: { message: "march" } })).not.toBeNull();
 		} finally {
 			vi.useRealTimers();
@@ -107,10 +114,15 @@ describe("log retention", () => {
 	it("deletes by the strict window when archiving is off", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "fenpos-logs-sweep-"));
 		try {
+			// Pinned rather than left on the live clock: at this instant the 40-day row lands on
+			// 2026-01-24 and the cutoff on 2026-02-03, so 2026-01 has fully aged out and a mutated off
+			// path that reran the archiving branch's own `periodsFullyBefore` logic would write a file
+			// here on every run — not on the one day in three a live clock would happen to catch it.
+			vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-03-05T00:00:00Z") });
 			await logsDb.logEntry.createMany({
 				data: [
-					{ level: "INFO", severity: 1, message: "ancient", ts: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000) },
-					{ level: "INFO", severity: 1, message: "recent", ts: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+					{ level: "INFO", severity: 1, message: "ancient", ts: new Date(Date.now() - 40 * DAY) },
+					{ level: "INFO", severity: 1, message: "recent", ts: new Date(Date.now() - 2 * DAY) },
 				],
 			});
 
@@ -121,6 +133,7 @@ describe("log retention", () => {
 			// Goes red if the off path silently rounds to periods: nothing should be written here at all.
 			expect(readdirSync(directory)).toEqual([]);
 		} finally {
+			vi.useRealTimers();
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
