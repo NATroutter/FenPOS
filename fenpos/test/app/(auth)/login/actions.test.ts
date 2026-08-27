@@ -321,6 +321,17 @@ describe("the gates before the credential", () => {
  * identically whatever the reason and so could never tell either claim from its opposite. This one
  * drives the real endpoint with the account's *correct* password, leaving the ban as the only thing
  * that can turn it away.
+ *
+ * **Which assertion is load-bearing, so nobody simplifies the wrong half away.** It is not
+ * `expect(banned.error).toBe(wrongPassword.error)` — on its own that is close to a tautology, since
+ * both values come from the single `return` in `signIn`'s one `catch` (`login/actions.ts:166`). What
+ * proves the ban is enforced is that the correct-password submission reached that catch at all: had
+ * it not been refused it would have redirected, and the `next/navigation` mock at the top of this
+ * file turns that into a thrown `REDIRECT:/dashboard` that fails the test before any assertion runs.
+ * `expect(await prisma.session.count()).toBe(0)` is the second half of the same statement — a ban
+ * that merely returned a message while minting a session would be no ban. Both depend on
+ * `signInEmail` being the *real* endpoint here: point it back at a mock and this test keeps passing
+ * while proving nothing.
  */
 describe("a banned account", () => {
 	beforeEach(async () => {

@@ -204,12 +204,28 @@ describe("recovery", () => {
 		expect(after.lockedUntil).not.toBeNull();
 	});
 
-	it("leaves the chain verifiable after every operation", async () => {
+	it("leaves the chain verifiable after every operation, having written one row per operation", async () => {
 		await credentialUser("chain@example.test", "old password entirely");
 		await resetPassword(prisma, "chain@example.test");
 		await unlockAccount(prisma, "chain@example.test");
 		await clearAllowlist(prisma);
 
-		expect((await verifyAuditChain(prisma)).ok).toBe(true);
+		const result = await verifyAuditChain(prisma);
+		expect(result.ok).toBe(true);
+
+		// `ok` on its own is not enough, and saying so is the point of the two assertions below.
+		// `verifyAuditChain` answers `{ ok: true, checked: 0 }` for an empty table — an intact chain of
+		// nothing — so a version of this test that stopped at `ok` would stay green if all three
+		// operations quietly stopped writing rows at all, which is the one regression a test named for
+		// the audit trail most needs to catch.
+		//
+		// Three, not four: `credentialUser` writes its `User` and `Account` rows through Prisma
+		// directly, the way a fixture does, and records nothing.
+		expect(result.checked).toBe(3);
+		expect(await prisma.auditEvent.findMany({ orderBy: { seq: "asc" }, select: { action: true } })).toEqual([
+			{ action: RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD },
+			{ action: RECOVERY_AUDIT_ACTIONS.UNLOCK },
+			{ action: RECOVERY_AUDIT_ACTIONS.CLEAR_ALLOWLIST },
+		]);
 	});
 });

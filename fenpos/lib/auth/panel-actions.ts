@@ -9,10 +9,20 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * failure it cannot miss. A per-file helper could not do that — there would be nothing to compare
  * the filesystem against.
  *
- * An entry's `id` is what the audit record stores in `action`. It usually equals the permission,
- * and deliberately does not where two exports share one: `replaceAsset` and `replaceAssetFromUrl`
- * both require `assets:replace`, and a row saying which of them ran is worth more than one that
- * cannot tell them apart.
+ * An entry's `id` is what the audit record stores in `action`, for every entry without exception. It
+ * usually equals the permission, and deliberately does not where two exports share one:
+ * `replaceAsset` and `replaceAssetFromUrl` both require `assets:replace`, and a row saying which of
+ * them ran is worth more than one that cannot tell them apart.
+ *
+ * **Most entries keep that true by construction; a handful keep it true by hand.** `panel-action.ts`'s
+ * `record()` writes `action: id` straight from the entry, so a `command`, a `query` and most of the
+ * `self` actions cannot drift. The `unauthenticated` entries and `auth:sign-out` are written by the
+ * actions themselves, through `AUTH_AUDIT_ACTIONS` (`lib/audit/auth-events.ts`), and `settings:save`
+ * through a literal of its own — so for those the id here and the string written there are two
+ * spellings that have to agree. They did not, once: `signOut` was registered as `self:sign-out` while
+ * recording `auth:sign-out`, which made the sentence above false and offered `/audit` a filter that
+ * could only ever return no rows. If you add an entry whose action writes its own row, make the two
+ * match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second literal.
  */
 
 /**
@@ -581,7 +591,13 @@ export const PANEL_ACTIONS = [
 		description: "Changed their own name or email",
 	},
 	{
-		id: "self:sign-out",
+		// `auth:sign-out`, not `self:sign-out`, though this sits among the `self` entries and its `kind`
+		// stays `self`: the id has to be the string the row actually carries, and `layout.tsx`'s
+		// `signOut` records `AUTH_AUDIT_ACTIONS.SIGN_OUT`. The stored value is the authority here, since
+		// `AuditEvent` has no edit path by design and every row any install has ever written says
+		// `auth:sign-out` — renaming the other way would leave those rows unfindable. It reads correctly
+		// too: signing out is an auth lifecycle event beside `auth:sign-in` and `auth:set-password`.
+		id: "auth:sign-out",
 		kind: "self",
 		permission: null,
 		module: "(panel)/layout.tsx",
