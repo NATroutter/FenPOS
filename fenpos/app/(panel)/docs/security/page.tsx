@@ -281,9 +281,17 @@ export default async function SecurityDocsPage() {
 					<Split>
 						<Col>
 							<P>
-								Every row the panel or the API writes to the audit record stays. There is no edit control and no delete
-								control anywhere in the panel — not on the Audit tab, not for a superuser — and each row's hash chains
-								to the one before it, so an edited or deleted row breaks the chain rather than vanishing invisibly.
+								Every row written to the audit record stays. There is no edit control and no delete control anywhere in
+								the panel — not on the Audit tab, not for a superuser — and each row's hash chains to the one before it,
+								so an edited or deleted row breaks the chain rather than vanishing invisibly.
+							</P>
+
+							<P>
+								What writes rows is the panel itself, and <Mono>pnpm auth:recover</Mono> below.{" "}
+								<strong>The v1 API writes none.</strong> A key that prints a job, cancels one, uploads an asset or
+								pauses a device leaves nothing here, and neither does a key refused for a permission it does not hold.
+								Jobs and assets keep their own records on their own tabs, so the effects of API traffic are still
+								traceable — what the Audit tab cannot answer about it is who did it.
 							</P>
 
 							<P>
@@ -320,8 +328,10 @@ export default async function SecurityDocsPage() {
 							</P>
 
 							<P>
-								<Mono>--list</Mono> prints every account's email, name, superuser status, two-factor status and lockout,
-								so an operator can see who they are about to act on before doing anything.
+								<Mono>--list</Mono> prints every account's email, name, superuser status, two-factor status, ban and
+								lockout, so an operator can see who they are about to act on before doing anything. The ban is on that
+								line because it is the one refusal there that no command below lifts: a banned account with a freshly
+								reset password still cannot sign in, and only the Users tab changes that.
 							</P>
 
 							<P>
@@ -332,9 +342,17 @@ export default async function SecurityDocsPage() {
 
 							<P>
 								<Mono>--clear-2fa &lt;email&gt;</Mono> and <Mono>--unlock &lt;email&gt;</Mono> clear an enrolment or a
-								lockout the same way the Users tab and its own fifteen-minute clock would, respectively — outside the
-								panel, for the install where nobody can reach the panel at all. <Mono>--clear-allowlist</Mono> empties{" "}
-								<Mono>auth.ipAllowlist</Mono>, the third way this install can lock everyone out of itself.
+								lockout the same way the Users tab and the lockout's own <strong>{lockoutMinutes}</strong>-minute clock
+								would, respectively — outside the panel, for the install where nobody can reach the panel at all.{" "}
+								<Mono>--clear-allowlist</Mono> empties <Mono>auth.ipAllowlist</Mono>, the third way this install can
+								lock everyone out of itself.
+							</P>
+
+							<P>
+								<Mono>--unlock</Mono> ends the <strong>password</strong> lockout and only that one. The second, built-in
+								two-factor lock described under Signing in — ten wrong codes, fifteen minutes, governed by no setting on
+								this install — is untouched by it. An administrator locked out that way is reached only by{" "}
+								<Mono>--clear-2fa</Mono>, which ends the lock by destroying the enrolment behind it.
 							</P>
 
 							<Aside>
