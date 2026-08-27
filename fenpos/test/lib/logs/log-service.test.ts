@@ -58,6 +58,36 @@ describe("listLogs paging", () => {
 	});
 });
 
+/**
+ * Tests for ordering the Logs tab's Source column.
+ *
+ * `LOG_ORDER.source` orders by `agentName`/`deviceName`, not by `agentId`/`deviceId` — the two
+ * disagree whenever two agents were not created in alphabetical order, which is the case this
+ * suite has to cover: an id-based sort passed a fully green suite for a release before anyone
+ * wrote a test that could tell the two apart.
+ */
+describe("listLogs sort", () => {
+	beforeEach(async () => {
+		await logsDb.logEntry.deleteMany();
+		await prisma.setting.deleteMany();
+	});
+
+	it("orders the source column alphabetically by name, not by agent creation order", async () => {
+		// Created in reverse alphabetical order: cuids are roughly creation-ordered, so "zebra-source"
+		// (created first) gets the lower id even though "apple-source" sorts first by name. Sorting by
+		// id would therefore return these two lines in the opposite order to sorting by name.
+		const zebra = await prisma.agent.create({ data: { name: "zebra-source" } });
+		const apple = await prisma.agent.create({ data: { name: "apple-source" } });
+
+		await recordServerLog("INFO", "from zebra", { agentId: zebra.id, agentName: zebra.name });
+		await recordServerLog("INFO", "from apple", { agentId: apple.id, agentName: apple.name });
+
+		const page = await listLogs({ sort: "source", desc: false });
+
+		expect(page.lines.map((line) => line.message)).toEqual(["from apple", "from zebra"]);
+	});
+});
+
 describe("recordServerLog", () => {
 	// Without this, rows left behind by "listLogs paging" above (and by earlier tests in this
 	// block) bleed into the length and findFirst() assertions below — confirmed by running this
@@ -104,6 +134,20 @@ describe("recordServerLog", () => {
 		await recordServerLog("INFO", "x".repeat(500));
 
 		expect((await logsDb.logEntry.findFirst())?.message).toHaveLength(200);
+	});
+
+	it("keeps an agent's name on its lines after the agent is deleted", async () => {
+		const agent = await prisma.agent.create({ data: { name: "kitchen" } });
+		await recordServerLog("WARN", "raw write refused", { agentId: agent.id, agentName: agent.name });
+
+		await prisma.agent.delete({ where: { id: agent.id } });
+
+		const page = await listLogs({});
+		const line = page.lines.find((entry) => entry.message === "raw write refused");
+		// Goes red if the name is not written onto the row at insert: once the agent is gone, there is
+		// no relation left to read it from, so a line with only `agentId` has no way to report where
+		// it came from.
+		expect(line?.agentName).toBe("kitchen");
 	});
 
 	it("does not throw when the row cannot be written", async () => {

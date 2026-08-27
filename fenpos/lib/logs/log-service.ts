@@ -1,5 +1,5 @@
 import "server-only";
-import { logsDb, prisma } from "@/lib/db";
+import { logsDb } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
@@ -46,19 +46,15 @@ export interface LogFilter {
  * Keyed by {@link LogSortColumn}, so a column offered there without a mapping here is a type error
  * rather than a header that quietly does nothing.
  *
- * `source` groups by agent then device, which is the order the column reads in — though by id
- * rather than by name, for the reason below. Lines an agent recorded against no device sort first
- * within that agent, since a null id orders ahead of any id.
+ * `source` groups by agent name then device name, which is the order the column reads in and
+ * keeps every line from one source together, alphabetically. Lines an agent recorded against no
+ * device sort first within that agent, since a null name orders ahead of any name.
  */
 const LOG_ORDER = {
 	time: (dir: SortDirection) => ({ ts: dir }),
 	// The stored number, not the level string: descending has to mean errors first.
 	level: (dir: SortDirection) => ({ severity: dir }),
-	// By the stored ids, not the names. The lines are in their own database now, so there is no
-	// `agents` table for SQLite to join to and no name for it to order by; the ids still bring every
-	// line from one source together, which is most of what the column is read for. Ordering the
-	// column alphabetically again means storing the names on the row itself.
-	source: (dir: SortDirection) => [{ agentId: dir }, { deviceId: dir }],
+	source: (dir: SortDirection) => [{ agentName: dir }, { deviceName: dir }],
 	message: (dir: SortDirection) => ({ message: dir }),
 } as const satisfies Record<LogSortColumn, (dir: SortDirection) => unknown>;
 
@@ -115,7 +111,6 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 	});
 
 	const page = rows.slice(0, take);
-	const names = await resolveSourceNames(page);
 
 	return {
 		more: rows.length > take,
@@ -124,44 +119,9 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			at: row.ts.toISOString(),
 			level: (LogLevelSet.is(row.level) ? row.level : "INFO") as LogLevel,
 			message: row.message,
-			agentName: row.agentId === null ? null : (names.agents.get(row.agentId) ?? null),
-			deviceName: row.deviceId === null ? null : (names.devices.get(row.deviceId) ?? null),
+			agentName: row.agentName,
+			deviceName: row.deviceName,
 		})),
-	};
-}
-
-/**
- * Names the agents and devices a page of lines came from.
- *
- * A second query rather than a join, because there is no join to make: the lines live in their own
- * database and hold ids the application's tables know nothing about. It is bounded by the page
- * size, not by the log, so it stays two queries however many rows are stored.
- *
- * An id that resolves to nothing reads as no name. That is now reachable — without a foreign key
- * to cascade them away, a deleted agent's lines outlive it — and it is the behaviour wanted: the
- * line still says what happened and when, which is why it was kept.
- *
- * @param rows the page whose sources need naming
- * @returns names by id, for the ids that still resolve
- */
-async function resolveSourceNames(
-	rows: readonly { agentId: string | null; deviceId: string | null }[],
-): Promise<{ agents: Map<string, string>; devices: Map<string, string> }> {
-	const agentIds = [...new Set(rows.map((row) => row.agentId).filter((id): id is string => id !== null))];
-	const deviceIds = [...new Set(rows.map((row) => row.deviceId).filter((id): id is string => id !== null))];
-
-	const [agents, devices] = await Promise.all([
-		agentIds.length > 0
-			? prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } })
-			: [],
-		deviceIds.length > 0
-			? prisma.device.findMany({ where: { id: { in: deviceIds } }, select: { id: true, name: true } })
-			: [],
-	]);
-
-	return {
-		agents: new Map(agents.map((agent) => [agent.id, agent.name])),
-		devices: new Map(devices.map((device) => [device.id, device.name])),
 	};
 }
 
@@ -192,12 +152,14 @@ async function resolveSourceNames(
  *
  * @param level severity of the line
  * @param message what happened; stored truncated to `logs.maxMessageChars`
- * @param target the agent and device it concerns, when it concerns one
+ * @param target the agent and device it concerns, when it concerns one. `agentName`/`deviceName`
+ * are denormalised onto the row exactly as `ingestLog` denormalises them for an agent's own lines,
+ * so the caller supplies them rather than this function looking them up — see `LogEntry.agentName`.
  */
 export async function recordServerLog(
 	level: LogLevel,
 	message: string,
-	target: { agentId?: string; deviceId?: string } = {},
+	target: { agentId?: string; agentName?: string; deviceId?: string; deviceName?: string } = {},
 ): Promise<void> {
 	try {
 		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
@@ -216,7 +178,9 @@ export async function recordServerLog(
 				severity: LOG_SEVERITY[level],
 				message: message.slice(0, maxMessageChars),
 				agentId: target.agentId ?? null,
+				agentName: target.agentName ?? null,
 				deviceId: target.deviceId ?? null,
+				deviceName: target.deviceName ?? null,
 			},
 			select: { id: true, ts: true, level: true, message: true },
 		});

@@ -44,8 +44,13 @@ model LogEntry {
   message  String
   /// Plain columns, not relations: this database cannot join to the application's tables, and a
   /// deleted agent's lines must keep their source name rather than going null.
-  agentId  String?  @map("agent_id")
-  deviceId String?  @map("device_id")
+  agentId    String?  @map("agent_id")
+  deviceId   String?  @map("device_id")
+  /// Denormalised, for the reason `AuditEvent` denormalises its actor: a deleted agent's lines
+  /// must keep their source rather than going null. The id stays for filtering while the agent
+  /// exists; the name is what survives it.
+  agentName  String?  @map("agent_name")
+  deviceName String?  @map("device_name")
 
   @@index([ts])
   @@index([severity, ts])

@@ -109,12 +109,21 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 
 	// Resolved by name within this agent, so a agent cannot attribute a line to another's device
 	// by naming it. A name that matches nothing records the line against the agent alone.
-	const device = frame.device
-		? await prisma.device.findFirst({
-				where: { agentId, name: frame.device },
-				select: { id: true },
-			})
-		: null;
+	//
+	// Run alongside the agent's own name, rather than after it: `LogEntry.agentName` denormalises
+	// the name onto the row for the same reason `AuditEvent` denormalises its actor (see
+	// `prisma/logs.prisma`), and `LogFrame` carries no name for the server to reuse, so a lookup is
+	// unavoidable — the two run together so it costs no extra round trip over resolving the device
+	// alone.
+	const [device, agent] = await Promise.all([
+		frame.device
+			? prisma.device.findFirst({
+					where: { agentId, name: frame.device },
+					select: { id: true },
+				})
+			: null,
+		prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } }),
+	]);
 
 	const entry = await logsDb.logEntry.create({
 		data: {
@@ -124,7 +133,13 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 			severity: LOG_SEVERITY[frame.level],
 			message: frame.message.slice(0, settings.maxMessageChars),
 			agentId,
+			agentName: agent?.name ?? null,
 			deviceId: device?.id ?? null,
+			// Only when the name actually resolved to a device of this agent's: a name that matches
+			// nothing, or names another agent's device, attributes the line to no device at all (see
+			// the lookup above), and the stored name must agree with that or the Logs tab would show a
+			// device the line was never actually attributed to.
+			deviceName: device ? frame.device : null,
 			// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
 			// the row's own sequence, since agent clocks are not synchronised with each other.
 			ts: new Date(frame.at),
