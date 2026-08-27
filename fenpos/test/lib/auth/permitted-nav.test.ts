@@ -73,7 +73,7 @@ describe("permittedNavHrefs", () => {
 		const user = await account("p3");
 		await prisma.userPermission.create({ data: { userId: user.id, permission: "docs:read" } });
 
-		expect(await permittedNavHrefs(user)).toEqual(["/docs", "/docs/api", "/docs/markup"]);
+		expect(await permittedNavHrefs(user)).toEqual(["/docs", "/docs/api", "/docs/markup", "/docs/security"]);
 	});
 
 	it("counts a permission carried by a role, not only a direct grant", async () => {

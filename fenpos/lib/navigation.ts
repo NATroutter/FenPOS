@@ -16,6 +16,7 @@ import {
 	Server,
 	Settings2,
 	Shield,
+	ShieldCheck,
 	Users,
 	Wrench,
 } from "lucide-react";
@@ -224,6 +225,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 						title: "Markup language",
 						description: "What goes inside a job's data: the tags a receipt is written with, and the blocks they draw.",
 						icon: CodeXml,
+						permission: "docs:read",
+					},
+					{
+						href: "/docs/security",
+						label: "Security",
+						title: "Security",
+						description: "Signing in, two-factor, sessions and how to recover an install nobody can sign in to.",
+						icon: ShieldCheck,
 						permission: "docs:read",
 					},
 				],
