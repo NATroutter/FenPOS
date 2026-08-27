@@ -42,6 +42,7 @@ async function superuser() {
 beforeEach(async () => {
 	await auditDb.auditEvent.deleteMany({});
 	await auditDb.auditAnchor.deleteMany({});
+	await auditDb.auditEpoch.deleteMany({});
 	await prisma.session.deleteMany({});
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});

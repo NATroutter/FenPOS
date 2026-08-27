@@ -14,6 +14,7 @@ describe("listAuditEvents", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 
 		await appendEvent({
 			action: "devices:delete",
@@ -134,6 +135,7 @@ describe("auditFilterOptions", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 		await appendEvent({
 			action: "devices:delete",
 			outcome: "SUCCESS",

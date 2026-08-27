@@ -17,6 +17,7 @@ describe("audit schema", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	/** Builds a row with everything the columns require and nothing they do not. */

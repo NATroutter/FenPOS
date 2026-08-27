@@ -16,6 +16,7 @@ describe("sweepAuditNow", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	/**

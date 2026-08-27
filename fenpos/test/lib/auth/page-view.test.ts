@@ -47,6 +47,7 @@ describe("page view recording", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 		await prisma.setting.deleteMany({});
 		await prisma.userPermission.deleteMany({});
 		await prisma.user.deleteMany({});

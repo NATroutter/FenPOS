@@ -126,3 +126,20 @@ model AuditAnchor {
 
   @@map("audit_anchor")
 }
+
+/// Where archived history begins.
+///
+/// Separate from `AuditAnchor`, which answers a different question — what was last swept.
+/// Conflating them would make one row mean two things, and this one is the claim an attacker must
+/// defeat rather than a fact they can manufacture by deleting evidence: an archive that starts
+/// later than this says is a missing archive, not a history nobody kept.
+model AuditEpoch {
+  id        Int      @id @default(1)
+  /// `seq` of the oldest event archiving is complete from.
+  seq       Int
+  /// That event's `prevHash`, so an archive found on disk can be proved to start where this says.
+  prevHash  String   @map("prev_hash")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("audit_epoch")
+}

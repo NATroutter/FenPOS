@@ -14,6 +14,7 @@ describe("verifyAuditChain", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 
 		for (const action of ["test:one", "test:two", "test:three", "test:four"]) {
 			await recordAudit({ action, outcome: "SUCCESS", actor: SYSTEM_ACTOR });

@@ -29,6 +29,7 @@ describe("verifyAuditChain across an archive boundary", () => {
 		directory = mkdtempSync(join(tmpdir(), "fenpos-verify-archive-"));
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	afterEach(() => {

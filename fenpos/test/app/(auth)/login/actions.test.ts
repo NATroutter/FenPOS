@@ -76,6 +76,7 @@ describe("signIn", () => {
 		await prisma.setting.deleteMany({});
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	it("gives one message for a wrong password and for an unknown address", async () => {
@@ -161,6 +162,7 @@ describe("the gates before the credential", () => {
 		await prisma.setting.deleteMany({});
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	describe("address allowlist", () => {
@@ -349,6 +351,7 @@ describe("a banned account", () => {
 		await prisma.setting.deleteMany({});
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	it("is refused with the message a wrong password gets, and is left with no session", async () => {
@@ -527,6 +530,7 @@ describe("two-factor at sign-in", () => {
 		await prisma.setting.deleteMany({});
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	it("defers instead of signing in when the account is enrolled", async () => {

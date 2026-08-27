@@ -25,6 +25,7 @@ describe("archivePeriod", () => {
 		await logsDb.logEntry.deleteMany({});
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 	});
 
 	afterEach(() => {

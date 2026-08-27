@@ -53,6 +53,7 @@ describe("auth audit events", () => {
 		signInEmail.mockReset();
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 		await prisma.setupKey.deleteMany({});
 		await prisma.session.deleteMany({});
 		await prisma.account.deleteMany({});

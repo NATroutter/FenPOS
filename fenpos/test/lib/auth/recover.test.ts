@@ -31,6 +31,7 @@ describe("recovery", () => {
 	beforeEach(async () => {
 		await auditDb.auditEvent.deleteMany({});
 		await auditDb.auditAnchor.deleteMany({});
+		await auditDb.auditEpoch.deleteMany({});
 		await prisma.twoFactor.deleteMany({});
 		await prisma.session.deleteMany({});
 		await prisma.account.deleteMany({});
