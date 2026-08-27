@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth/account-service";
 import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db";
+import { signedInUser } from "@/test/helpers/session";
 
 /**
  * Creating, changing and removing accounts.
@@ -90,6 +91,29 @@ describe("account-service", () => {
 			const created = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
 			expect(created.isSuperuser).toBe(false);
 			expect(created.role).toBe("user");
+		});
+
+		/**
+		 * The suite's own fixtures have to be the account shape this function produces.
+		 *
+		 * `test/helpers/session.ts`'s `signedInUser` defaulted to `role: "admin"` while this writes
+		 * `"user"`, and that one-word divergence is how the `/set-password` defect stayed hidden:
+		 * `auth.api.setUserPassword` is gated on better-auth's admin-plugin role, every fixture in the
+		 * suite happened to hold it, and a call that refused in production passed everywhere in test.
+		 *
+		 * The assertion is that the two **agree**, not that either one is the literal `"user"`. A
+		 * literal here would be a second opinion about production's default, free to drift from it the
+		 * next time this function changes; agreement is the property that actually has to hold.
+		 */
+		it("gives a new account the role the suite's own fixtures default to", async () => {
+			const actor = await superuser("c-role");
+
+			const { userId } = await createAccount(actor, newAccount);
+			const { user: fixture } = await signedInUser("fixture-default@example.com", "a-long-enough-password");
+
+			const created = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+			const fromFixture = await prisma.user.findUniqueOrThrow({ where: { id: fixture.id } });
+			expect(fromFixture.role).toBe(created.role);
 		});
 
 		it("marks the account for a forced reset when asked", async () => {

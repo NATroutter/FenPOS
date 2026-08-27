@@ -159,16 +159,22 @@ describe("setPassword", () => {
 	});
 
 	/**
-	 * **The regression test for the finding this branch exists to fix.** Every fixture above this
-	 * one, and every fixture `signedInUser` produced before it grew a `role` parameter, creates an
-	 * account with role `"admin"` — which is exactly why a suite full of real, unmocked calls to this
-	 * action could still pass against code that called `auth.api.setUserPassword`: that endpoint is
-	 * gated on the caller's session role against better-auth's admin plugin's `adminRoles` (default
-	 * `["admin"]`), and every account above happened to hold that role. `account-service.ts` makes
-	 * `"user"` the default role for every panel-made account, so this is the account shape the vast
-	 * majority of real "Require password reset" flows actually have. Signed in as a `"user"`-role
-	 * account with `mustChangePassword` forced, this must still be able to complete the change —
-	 * proving the action does not depend on the caller already holding better-auth's admin role.
+	 * **The regression test for the finding this branch exists to fix.** The action used to call
+	 * `auth.api.setUserPassword`, which better-auth's admin plugin gates on the caller's session role
+	 * against `adminRoles` (default `["admin"]`) — and every fixture in this suite held `"admin"`,
+	 * because that is what `signedInUser` defaulted to. That is how a suite full of real, unmocked
+	 * calls to this action stayed green against code that refused in production. `account-service.ts`
+	 * makes `"user"` the default role for every panel-made account, so this is the account shape the
+	 * vast majority of real "Require password reset" flows actually have.
+	 *
+	 * `signedInUser`'s default has since been flipped to `"user"` to match production, which is what
+	 * stops the next admin-plugin-gated call from hiding the same way. `"user"` is still written out
+	 * here rather than left to that default: the case is *about* the role, and a test whose subject is
+	 * inherited from a helper stops saying so the moment the helper changes again.
+	 *
+	 * Signed in as a `"user"`-role account with `mustChangePassword` forced, this must still be able to
+	 * complete the change — proving the action does not depend on the caller already holding
+	 * better-auth's admin role.
 	 */
 	it("lets a non-admin account complete a forced password change", async () => {
 		const email = "non-admin@example.com";

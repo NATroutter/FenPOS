@@ -119,21 +119,27 @@ export interface SignedInAccount {
  * own response — one path for "point `headers()` at the current session" is one path to keep
  * correct, instead of two that must agree.
  *
- * `role` defaults to `"admin"` to match every existing caller, all written before
- * `account-service.ts` made `"user"` the default for a panel-made account. A caller exercising
- * behaviour that must hold for a non-admin account — the common case now — passes `"user"`
- * explicitly, rather than this default silently making every fixture the one role better-auth's
- * admin plugin treats specially.
+ * **`role` defaults to `"user"`, which is what production defaults to** —
+ * `account-service.ts:152` writes `role: "user"` for every panel-made account, and only
+ * `setAccountSuperuser` ever writes `"admin"`. A caller needing an administrator asks for one.
+ *
+ * It defaulted to `"admin"` until this was flipped, and that default is how the `/set-password`
+ * defect this phase found stayed hidden: every fixture account held the one role better-auth's admin
+ * plugin treats specially, so a call gated on that plugin passed in the suite and refused in
+ * production. A fixture whose default differs from production's cannot see that class of bug at all,
+ * and the next admin-plugin-gated call added anywhere in the panel would have been hidden the same
+ * way. The default now matches, so a test that genuinely needs an administrator has to say so — and
+ * saying so is the thing that would have made the defect visible.
  *
  * @param email the new account's address
  * @param password the new account's password
- * @param role the account's better-auth role
+ * @param role the account's better-auth role; `"admin"` only where the behaviour under test needs one
  * @returns the created user
  */
 export async function signedInUser(
 	email: string,
 	password: string,
-	role: "admin" | "user" = "admin",
+	role: "admin" | "user" = "user",
 ): Promise<{ user: SignedInAccount }> {
 	const { auth } = await vi.importActual<typeof import("@/lib/auth/auth")>("@/lib/auth/auth");
 
