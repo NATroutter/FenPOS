@@ -177,8 +177,14 @@ describe("recovery", () => {
 	it("refuses an account with no credential, and never lets the audit row carry a hash", async () => {
 		// A `User` row with no `Account` row at all — never went through `credentialUser`, so there is
 		// no credential for `resetPassword` to update. This is the one path in the whole module that
-		// mints a password, hashes it, and *then* fails: the exact shape a leak would take if a raw
-		// exception's message ever reached the row.
+		// mints a password, hashes it, and *then* fails.
+		//
+		// **The hash assertion below is documentation, not the guard.** What reaches `recordFailure` on
+		// this path is a `RecoveryRefusal` this module authored, and its message names an address and
+		// nothing else — so `not.toContain("$argon2id$")` here holds even with the
+		// `UNEXPECTED_FAILURE_REASON` substitution deleted outright. The case that actually pins that
+		// substitution is the next one, "records an unexpected failure's fixed reason": it forces a
+		// *raw* exception carrying an argon2-shaped sentinel out of a `perform`, and it goes red.
 		await prisma.user.create({
 			data: { id: "no-credential", name: "No Credential", email: "nocred@example.test" },
 		});
@@ -189,8 +195,9 @@ describe("recovery", () => {
 		const row = await prisma.auditEvent.findFirstOrThrow();
 		expect(row.outcome).toBe("FAILURE");
 		const serialized = JSON.stringify(row);
-		// Neither the plaintext (unknowable here, since resetPassword never returned it) nor the
-		// argon2id marker every hash this module writes begins with may appear in the stored row.
+		// The argon2id marker every hash this module writes begins with, on the one path that has a
+		// live hash in scope when it fails. See the note above: this states the shape a leak would take
+		// rather than proving it cannot happen.
 		expect(serialized).not.toContain("$argon2id$");
 	});
 
@@ -229,6 +236,12 @@ describe("recovery", () => {
 		await credentialUser("chain@example.test", "old password entirely");
 		await resetPassword(prisma, "chain@example.test");
 		await unlockAccount(prisma, "chain@example.test");
+		// `clearTwoFactor` is driven here rather than left to its own state-change case above, which
+		// asserts only that the enrolment is gone. It was the one recovery operation nothing observed
+		// writing a row. "Structural, so it cannot avoid the append" was the argument for leaving it —
+		// and that was equally true of this whole test before it started counting rows, when it was
+		// green against a module writing none at all.
+		await clearTwoFactor(prisma, "chain@example.test");
 		await clearAllowlist(prisma);
 
 		const result = await verifyAuditChain(prisma);
@@ -236,16 +249,17 @@ describe("recovery", () => {
 
 		// `ok` on its own is not enough, and saying so is the point of the two assertions below.
 		// `verifyAuditChain` answers `{ ok: true, checked: 0 }` for an empty table — an intact chain of
-		// nothing — so a version of this test that stopped at `ok` would stay green if all three
+		// nothing — so a version of this test that stopped at `ok` would stay green if all four
 		// operations quietly stopped writing rows at all, which is the one regression a test named for
 		// the audit trail most needs to catch.
 		//
-		// Three, not four: `credentialUser` writes its `User` and `Account` rows through Prisma
+		// Four, not five: `credentialUser` writes its `User` and `Account` rows through Prisma
 		// directly, the way a fixture does, and records nothing.
-		expect(result.checked).toBe(3);
+		expect(result.checked).toBe(4);
 		expect(await prisma.auditEvent.findMany({ orderBy: { seq: "asc" }, select: { action: true } })).toEqual([
 			{ action: RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD },
 			{ action: RECOVERY_AUDIT_ACTIONS.UNLOCK },
+			{ action: RECOVERY_AUDIT_ACTIONS.CLEAR_TWO_FACTOR },
 			{ action: RECOVERY_AUDIT_ACTIONS.CLEAR_ALLOWLIST },
 		]);
 	});
