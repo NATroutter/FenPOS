@@ -28,7 +28,7 @@ vi.mock("@/lib/auth/require-session", () => ({
 
 const { panelAction, panelQuery, panelSelf } = await import("@/lib/auth/panel-action");
 const { REFUSAL_MESSAGE } = await import("@/lib/auth/require-permission");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 const { ApiError } = await import("@/lib/errors");
 
 /** An account row, so `effectivePermissions` has something real to read. */
@@ -59,11 +59,11 @@ interface Minted {
 
 /** The most recent audit row. */
 async function lastEvent() {
-	return prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+	return auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 }
 
 async function reset() {
-	await prisma.auditEvent.deleteMany({});
+	await auditDb.auditEvent.deleteMany({});
 	await prisma.userPermission.deleteMany({});
 	await prisma.userRole.deleteMany({});
 	await prisma.rolePermission.deleteMany({});
@@ -242,7 +242,7 @@ describe("panelQuery", () => {
 
 		// `previewMoment` runs as an operator types. A row per keystroke would bury the rows worth
 		// reading; see the registry's `query` kind.
-		expect(await prisma.auditEvent.count()).toBe(0);
+		expect(await auditDb.auditEvent.count()).toBe(0);
 	});
 
 	it("writes a row when a read is refused", async () => {

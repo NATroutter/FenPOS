@@ -4,7 +4,7 @@ import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { SYSTEM_AUDIT_ACTIONS } from "@/lib/audit/system-actions";
 import { PANEL_ACTIONS } from "@/lib/auth/panel-actions";
 import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 import { type AuditOutcome, AuditOutcome as AuditOutcomeSet } from "@/lib/domain/audit";
 import type { SortDirection } from "@/lib/table/sort";
 
@@ -16,9 +16,9 @@ import type { SortDirection } from "@/lib/table/sort";
  * whole shape of the record, so this one reads two things and writes nothing.
  *
  * Paged and filtered in the database rather than in the page, because on an install that has been
- * running a year this table is larger than everything else in the schema put together — and because a
- * filter applied to the fifty rows that happened to be fetched would answer a different question than
- * the one it appears to answer.
+ * running a year this table holds more rows than the whole application database — it is why the
+ * record was given a file of its own — and because a filter applied to the fifty rows that happened
+ * to be fetched would answer a different question than the one it appears to answer.
  */
 
 /** One event as the Audit tab displays it. */
@@ -135,7 +135,7 @@ export async function listAuditEvents(
 
 	// One extra row rather than a count: counting this table on every page view is a scan run to
 	// answer a question worth one boolean.
-	const rows = await prisma.auditEvent.findMany({ where, orderBy, skip: filter.skip ?? 0, take: take + 1 });
+	const rows = await auditDb.auditEvent.findMany({ where, orderBy, skip: filter.skip ?? 0, take: take + 1 });
 
 	return {
 		more: rows.length > take,
@@ -202,14 +202,15 @@ export interface AuditFilterOptions {
  * The filter row's choices.
  *
  * The actor list comes from the record rather than from the `user` table, and that is the point: an
- * account can be deleted and its trail survives it (`actorUserId` is a plain column, not a relation),
+ * account can be deleted and its trail survives it (`actorUserId` is a plain column in another
+ * database file, not a relation — there is no join to make and nothing that could have cascaded),
  * so filtering by "who" has to offer the people who are gone. They are the ones somebody is usually
  * looking for.
  *
  * @returns the actor and action choices
  */
 export async function auditFilterOptions(): Promise<AuditFilterOptions> {
-	const rows = await prisma.auditEvent.findMany({
+	const rows = await auditDb.auditEvent.findMany({
 		where: { actorUserId: { not: null } },
 		distinct: ["actorUserId"],
 		orderBy: { seq: "desc" },

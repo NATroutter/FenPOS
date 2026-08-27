@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { apiKeyActor, appendEvent, SYSTEM_ACTOR, userActor } from "@/lib/audit/audit-log";
 import { auditFilterOptions, KNOWN_AUDIT_ACTIONS, listAuditEvents } from "@/lib/audit/audit-query";
-import { prisma } from "@/lib/db";
+import { auditDb, prisma } from "@/lib/db";
 
 /**
  * The read half of the record.
@@ -12,8 +12,8 @@ import { prisma } from "@/lib/db";
  */
 describe("listAuditEvents", () => {
 	beforeEach(async () => {
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 
 		await appendEvent({
 			action: "devices:delete",
@@ -132,8 +132,8 @@ describe("listAuditEvents", () => {
 
 describe("auditFilterOptions", () => {
 	beforeEach(async () => {
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 		await appendEvent({
 			action: "devices:delete",
 			outcome: "SUCCESS",
@@ -148,8 +148,10 @@ describe("auditFilterOptions", () => {
 	});
 
 	it("offers an actor whose account no longer exists", async () => {
-		// The case the whole thing is for: `actorUserId` is a plain column, not a relation, so a
-		// deleted account keeps its trail — and is usually who somebody is looking for.
+		// The case the whole thing is for: `actorUserId` is a plain column in another database file,
+		// not a relation, so a deleted account keeps its trail — and is usually who somebody is
+		// looking for. The `prisma.user` lookup below is what makes that concrete: the id names no
+		// account and the option is offered anyway.
 		await appendEvent({
 			action: "users:delete",
 			outcome: "SUCCESS",

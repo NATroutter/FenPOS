@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "../generated/prisma/client";
+import { PrismaClient as AuditPrismaClient } from "../generated/prisma-audit/client";
 import {
 	clearAllowlist,
 	clearTwoFactor,
@@ -12,6 +13,7 @@ import {
 	resetPassword,
 	unlockAccount,
 } from "../lib/auth/recover";
+import { siblingDatabaseUrl } from "../lib/database-url";
 
 /**
  * A shell for an install nobody can sign in to.
@@ -221,17 +223,32 @@ export function formatFailure(error: unknown): string {
 }
 
 /**
- * Builds the client this script's operations run through.
+ * Builds the two clients this script's operations run through.
  *
- * Modelled on `scripts/audit-verify.ts`, which explains why: `lib/db.ts` begins with
- * `import "server-only"` and throws outside Next, so a script running out here — the entire point of
- * this command existing — builds its own client instead. `dotenv/config`, imported for its side
- * effect at the top of this module, is what puts `DATABASE_URL` in the environment out here.
+ * Two, because there are two databases: the accounts being recovered live in the application
+ * database and the rows describing the recovery live in `audit.db`. `lib/auth/recover.ts` takes
+ * both rather than reaching for either, and this is where they come from.
  *
- * @returns a client backed by the database at `DATABASE_URL`
+ * Modelled on `scripts/audit-verify.ts`, which explains why they are built here at all: `lib/db.ts`
+ * begins with `import "server-only"` and throws outside Next, so a script running out here — the
+ * entire point of this command existing — builds its own instead. `dotenv/config`, imported for its
+ * side effect at the top of this module, is what puts `DATABASE_URL` in the environment out here,
+ * and the audit path is derived from it through the same `siblingDatabaseUrl` the server derives it
+ * with, so this command cannot write its rows into a file nobody reads.
+ *
+ * @returns the application client and the audit client, both backed by files beside `DATABASE_URL`
  */
-function buildPrismaClient(): PrismaClient {
-	return new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL ?? "" }) });
+function buildClients(): { prisma: PrismaClient; auditDb: AuditPrismaClient } {
+	const databaseUrl = process.env.DATABASE_URL ?? "";
+
+	return {
+		prisma: new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: databaseUrl }) }),
+		auditDb: new AuditPrismaClient({
+			adapter: new PrismaBetterSqlite3({
+				url: process.env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(databaseUrl, "audit.db"),
+			}),
+		}),
+	};
 }
 
 /**
@@ -251,7 +268,7 @@ function buildPrismaClient(): PrismaClient {
  * @param command the command `parseRecoveryArgs` produced; only the five action kinds reach here
  */
 async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | { kind: "error" }>): Promise<void> {
-	const prisma = buildPrismaClient();
+	const { prisma, auditDb } = buildClients();
 
 	try {
 		switch (command.kind) {
@@ -261,7 +278,7 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 				return;
 			}
 			case "reset-password": {
-				const minted = await resetPassword(prisma, command.email);
+				const minted = await resetPassword(prisma, auditDb, command.email);
 				process.stdout.write(`${minted}\n`);
 				process.stdout.write(
 					"This password is shown once and cannot be recovered; the account must set a new one at " +
@@ -270,17 +287,17 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 				return;
 			}
 			case "clear-2fa": {
-				await clearTwoFactor(prisma, command.email);
+				await clearTwoFactor(prisma, auditDb, command.email);
 				process.stdout.write(`Two-factor enrolment cleared for '${command.email}'.\n`);
 				return;
 			}
 			case "unlock": {
-				await unlockAccount(prisma, command.email);
+				await unlockAccount(prisma, auditDb, command.email);
 				process.stdout.write(`Lockout cleared for '${command.email}'.\n`);
 				return;
 			}
 			case "clear-allowlist": {
-				await clearAllowlist(prisma);
+				await clearAllowlist(prisma, auditDb);
 				process.stdout.write("Address allowlist cleared.\n");
 				return;
 			}
@@ -300,6 +317,7 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 		process.exitCode = 1;
 	} finally {
 		await prisma.$disconnect();
+		await auditDb.$disconnect();
 	}
 }
 

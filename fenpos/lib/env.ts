@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { siblingDatabaseUrl } from "@/lib/database-url";
 
 /**
  * Validated process environment.
@@ -30,6 +31,36 @@ export const envSchema = z.object({
 		.refine((value) => value.startsWith("file:"), {
 			message: "must be a SQLite file URL beginning with file:",
 		}),
+
+	/**
+	 * Overrides the derived path to the logs database. See {@link LOGS_DATABASE_URL} for when to
+	 * set this — most installs should leave it unset and let it derive from `DATABASE_URL`.
+	 *
+	 * Optional, but validated the same way `DATABASE_URL` is when present: an unscoped string here
+	 * would reach `PrismaClient` unchecked and fail on the first query. Both `ingestLog` (`lib/logs/
+	 * ingest.ts`) and `recordServerLog` (`lib/logs/log-service.ts`) swallow that failure and log it
+	 * rather than raise it, so a typo here is how an install silently stops recording log lines.
+	 */
+	LOGS_DATABASE_URL: z
+		.string()
+		.refine((value) => value.startsWith("file:"), {
+			message: "must be a SQLite file URL beginning with file:",
+		})
+		.optional(),
+
+	/**
+	 * Overrides the derived path to the audit database. See {@link AUDIT_DATABASE_URL}.
+	 *
+	 * The same validation as `LOGS_DATABASE_URL` above, for the sharper version of the same reason:
+	 * `appendEvent` (`lib/audit/audit-log.ts`) swallows a write failure too, and the audit chain is
+	 * what an investigation reads, so a typo here is how an install silently stops recording it.
+	 */
+	AUDIT_DATABASE_URL: z
+		.string()
+		.refine((value) => value.startsWith("file:"), {
+			message: "must be a SQLite file URL beginning with file:",
+		})
+		.optional(),
 
 	/**
 	 * Signing key for Better Auth's cookies and tokens.
@@ -93,3 +124,40 @@ export const env: Env = parseEnv(process.env);
 
 /** Whether this process is running a production build. */
 export const isProduction = env.NODE_ENV === "production";
+
+/**
+ * Where the logs database lives, derived rather than configured.
+ *
+ * An install sets one path. Three separately configured URLs would let a deployment point its logs
+ * at one volume and its audit record at another, which is a way to lose half the record to a
+ * missing mount and not find out until someone goes looking.
+ *
+ * `LOGS_DATABASE_URL` overrides the derivation, and exists for one caller: the test suite runs each
+ * file in its own worker process against its own database file, and every worker shares one `data/`
+ * directory, so derivation alone would hand them all the same logs file. `prisma-logs.config.ts`
+ * gives the variable the same precedence, so the CLI and the running server always agree.
+ */
+export const LOGS_DATABASE_URL: string = env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "logs.db");
+
+/**
+ * Where the audit database lives, derived the same way {@link LOGS_DATABASE_URL} is.
+ *
+ * Its own file for the reason the record exists at all: the audit chain is what an investigation
+ * reads, and sharing a file with the tables that grow fastest is what let log volume decide how
+ * much of it survived. Deriving the path rather than configuring it keeps the whole record on one
+ * volume — a separately configured URL is how half of it ends up behind a mount that was never
+ * made, discovered by whoever goes looking for the half that is gone.
+ *
+ * `AUDIT_DATABASE_URL` overrides the derivation, and exists for one caller: the test suite runs each
+ * file in its own worker process against its own database file, and every worker shares one `data/`
+ * directory, so derivation alone would hand them all the same audit file. `prisma-audit.config.ts`
+ * gives the variable the same precedence, so the CLI and the running server always agree.
+ */
+export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
+
+/**
+ * Re-exported here so callers needing a sibling database reach it beside the URL it is derived
+ * from. It lives in its own module because `prisma-logs.config.ts` and `prisma-audit.config.ts`
+ * must import it too, and a Prisma config file cannot load anything carrying `server-only`.
+ */
+export { siblingDatabaseUrl };

@@ -1,0 +1,59 @@
+// FenPOS logs schema.
+//
+// A second database, not a second datasource block: Prisma has no multi-datasource schema, so each
+// database needs its own schema file, its own generated client and its own migration history.
+//
+// The datasource carries no url, exactly as schema.prisma's does not: Prisma 7 takes it from the
+// CLI config instead, which for this file is prisma-logs.config.ts. That config derives the path
+// from DATABASE_URL so an install configures one, not two — see lib/database-url.ts.
+//
+// Migrate this file with `pnpm db:migrate:logs`, never a bare `prisma migrate ... --schema`.
+// `--schema` still loads the default prisma.config.ts, so it would point the migration at the
+// application's database and its migration directory while reporting that it had loaded this file.
+//
+// Nothing in here may reference a model in prisma/schema.prisma. Two files cannot be joined, and
+// that is the point: log volume is bounded on its own budget and cannot evict anything else.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-logs"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// An operational log line, either raised by the server or forwarded from an agent.
+///
+/// Lives in its own database so log volume cannot evict audit history: this table is bounded by
+/// `logs.retentionDays`, which sweeps rows older than the window rather than capping the row
+/// count, so a burst of volume inside the window cannot evict history from before it. The audit
+/// record is bounded separately by its own settings. Ingestion from agents is rate-limited and
+/// length-capped at the protocol boundary. This table must never become a channel through which an
+/// agent can exhaust the disk.
+model LogEntry {
+  id       String   @id @default(cuid())
+  ts       DateTime @default(now())
+  /// DEBUG | INFO | WARN | ERROR
+  level    String
+  /// DEBUG 0, INFO 1, WARN 2, ERROR 3. Derived from level when the row is written.
+  ///
+  /// Stored rather than computed because both the severity filter and the Level column ordering
+  /// need it in the database: ordering the level string gives DEBUG, ERROR, INFO, WARN, which
+  /// looks like severity and is not, and a page of rows cannot be reordered after the fact.
+  severity Int      @default(1)
+  message  String
+  /// Plain columns, not relations: this database cannot join to the application's tables.
+  agentId    String?  @map("agent_id")
+  deviceId   String?  @map("device_id")
+  /// Denormalised, for the reason `AuditEvent` denormalises its actor: a deleted agent's lines
+  /// must keep their source rather than going null. The id stays for filtering while the agent
+  /// exists; the name is what survives it.
+  agentName  String?  @map("agent_name")
+  deviceName String?  @map("device_name")
+
+  @@index([ts])
+  @@index([severity, ts])
+  @@index([agentId, ts])
+  @@map("log_entries")
+}

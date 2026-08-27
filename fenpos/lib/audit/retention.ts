@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 
 /**
  * Retention: the only deletion the audit record has, anywhere.
@@ -28,38 +28,56 @@ export interface SweepOutcome {
 }
 
 /**
- * Removes the oldest events until the table is inside both bounds, and re-anchors the chain.
+ * Removes events older than the retention window, and re-anchors the chain.
  *
- * The two bounds are both oldest-first, so they do not add: whichever reaches further into the table
- * subsumes the other, and the boundary is the higher of the two `seq` values. Adding them would
- * remove rows twice over.
+ * By age alone, not by row count: audit is negligible in size — ~500-650 B a row, so even a busy
+ * install adds tens of megabytes a year — so there is no volume an operator needs protecting from,
+ * only a window of history they want kept. A count cap would evict by volume instead, and a burst of
+ * two hundred actions in one hour could silently destroy the year before it.
  *
- * The delete and the anchor write go in one transaction. Separately, a crash between them leaves
- * either a chain whose oldest row links to something gone with no anchor to vouch for it, or an
- * anchor naming an event that is still present — and the first of those reads, to
+ * The delete and the anchor write go in one transaction, and can: both tables live in `audit.db`,
+ * so this is one file's transaction rather than a promise spanning two. Separately, a crash between
+ * them leaves either a chain whose oldest row links to something gone with no anchor to vouch for
+ * it, or an anchor naming an event that is still present — and the first of those reads, to
  * `verifyAuditChain`, as tampering.
  *
- * @param bounds `audit.retentionDays` and `audit.maxRecords`, as configured
- * @returns what the sweep did, or null when the table was already inside both bounds
+ * @param bounds `audit.retentionDays`, as configured
+ * @returns what the sweep did, or null when nothing has aged out
  */
-export async function sweepAuditNow(bounds: {
-	retentionDays: number;
-	maxRecords: number;
-}): Promise<SweepOutcome | null> {
-	const boundary = Math.max(await ageBoundary(bounds.retentionDays), await countBoundary(bounds.maxRecords));
-	if (boundary === 0) {
+export async function sweepAuditNow(bounds: { retentionDays: number }): Promise<SweepOutcome | null> {
+	return await removeAuditThrough(await ageBoundary(bounds.retentionDays));
+}
+
+/**
+ * Removes every event up to and including `boundarySeq`, and re-anchors the chain on it.
+ *
+ * The mechanism behind {@link sweepAuditNow}, exposed separately because it has a second caller that
+ * knows its boundary as a `seq` rather than as an age. `lib/archive/rotate.ts` has already copied a
+ * prefix of the chain into a period file and has to remove **exactly** the rows it copied; deriving a
+ * retention window from that boundary and handing it back to `sweepAuditNow` would let the two
+ * disagree about which rows are going, which is the one mistake neither caller may make.
+ *
+ * Taking a `seq` rather than a set of them is not a convenience: retention and rotation both remove a
+ * prefix, because a chain with a hole anywhere but its oldest end cannot be vouched for by an anchor —
+ * see the module comment above. `lte` is what makes that structural rather than a caller's promise.
+ *
+ * @param boundarySeq the newest event to remove; 0 when there is nothing to remove
+ * @returns what was removed, or null when the boundary names nothing
+ */
+export async function removeAuditThrough(boundarySeq: number): Promise<SweepOutcome | null> {
+	if (boundarySeq === 0) {
 		return null;
 	}
 
 	// Read before the delete, and read for its hash: this row is about to stop existing, and its hash
 	// is the only thing that will let the row after it still verify.
-	const last = await prisma.auditEvent.findUnique({ where: { seq: boundary }, select: { seq: true, hash: true } });
+	const last = await auditDb.auditEvent.findUnique({ where: { seq: boundarySeq }, select: { seq: true, hash: true } });
 	if (!last) {
 		return null;
 	}
 
-	return await prisma.$transaction(async (tx) => {
-		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundary } } });
+	return await auditDb.$transaction(async (tx) => {
+		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundarySeq } } });
 		await tx.auditAnchor.upsert({
 			where: { id: 1 },
 			update: { seq: last.seq, hash: last.hash },
@@ -77,34 +95,10 @@ export async function sweepAuditNow(bounds: {
  */
 async function ageBoundary(retentionDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-	const oldest = await prisma.auditEvent.findFirst({
+	const oldest = await auditDb.auditEvent.findFirst({
 		where: { at: { lt: cutoff } },
 		orderBy: { seq: "desc" },
 		select: { seq: true },
 	});
 	return oldest?.seq ?? 0;
-}
-
-/**
- * The newest `seq` that has to go for the table to fit under the record cap.
- *
- * @param maxRecords rows kept before the oldest are swept
- * @returns that `seq`, or 0 when the table already fits
- */
-async function countBoundary(maxRecords: number): Promise<number> {
-	const total = await prisma.auditEvent.count();
-	if (total <= maxRecords) {
-		return 0;
-	}
-
-	// The last row of the excess, found by skipping to it rather than by loading the excess: on an
-	// install that has been running a year the excess is the larger half of the table.
-	const excess = total - maxRecords;
-	const last = await prisma.auditEvent.findMany({
-		orderBy: { seq: "asc" },
-		skip: excess - 1,
-		take: 1,
-		select: { seq: true },
-	});
-	return last[0]?.seq ?? 0;
 }

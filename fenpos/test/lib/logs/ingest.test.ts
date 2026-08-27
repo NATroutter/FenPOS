@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma } from "@/lib/db";
+import { logsDb, prisma } from "@/lib/db";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -12,12 +12,14 @@ import { setSetting } from "@/lib/settings/settings-service";
  * a bound it would fill the table with it and push out everything worth reading. The limit is per
  * agent, so one misbehaving site cannot drown out the others.
  */
+const DAY = 24 * 60 * 60 * 1000;
+
 describe("log ingestion", () => {
 	let agentId: string;
 	let otherAgentId: string;
 
 	beforeEach(async () => {
-		await prisma.logEntry.deleteMany();
+		await logsDb.logEntry.deleteMany();
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
 		await prisma.setting.deleteMany();
@@ -47,6 +49,18 @@ describe("log ingestion", () => {
 		expect(lines).toHaveLength(1);
 		expect(lines[0].message).toBe("something happened");
 		expect(lines[0].agentName).toBe("site-a");
+	});
+
+	it("keeps an agent's name on its line after the agent is deleted", async () => {
+		await ingestLog(agentId, line());
+
+		await prisma.agent.delete({ where: { id: agentId } });
+
+		// Goes red if `agentName` is not written onto the row at ingest time — the dominant path an
+		// agent-attributed line is written through, and the one the spec's survival claim is actually
+		// about. Once the agent is gone there is no relation left to read a name from, so a line
+		// holding only `agentId` would have no way to report where it came from.
+		expect((await listLogs()).lines[0].agentName).toBe("site-a");
 	});
 
 	it("attributes a line to the device it names", async () => {
@@ -85,7 +99,7 @@ describe("log ingestion", () => {
 		}
 
 		expect(accepted).toBe(120);
-		expect((await prisma.logEntry.count()).valueOf()).toBe(120);
+		expect((await logsDb.logEntry.count()).valueOf()).toBe(120);
 	});
 
 	it("limits each agent separately", async () => {
@@ -197,7 +211,7 @@ describe("log ingestion", () => {
 			expect((await listLogs()).lines[0].message).toHaveLength(200);
 		});
 
-		it("sweeps down to the configured row cap through the real ingest path, rather than the built-in one", async () => {
+		it("sweeps rows past the configured retention window through the real ingest path, rather than the built-in one", async () => {
 			// ingest.ts's own write counter (fenposLogWrites) is shared across every test in this
 			// file and persists between them. Reset it so logs.sweepEvery's gate — left at its
 			// built-in 500 in this test — trips at a known point in this test's own loop below,
@@ -207,75 +221,77 @@ describe("log ingestion", () => {
 			// High enough that the throttle — not what this test is exercising — never engages
 			// across the real calls below.
 			await setSetting("logs.linesPerMinutePerAgent", 600);
-			// 1000 is logs.maxRecords's declared minimum.
-			await setSetting("logs.maxRecords", 1000);
+			// 1 is logs.retentionDays's declared minimum, so anything older than a day is swept.
+			await setSetting("logs.retentionDays", 1);
 
-			// The backlog is seeded directly, so building it up past the cap stays one bulk query.
-			// Only the writes that need to be real — enough to cross logs.sweepEvery's built-in 500
-			// and trigger sweepOccasionally for real, through ingestLog itself rather than by calling
-			// the sweep entry point directly — go through the throttled, awaited ingestLog path below.
-			await prisma.logEntry.createMany({
+			// The backlog is seeded directly, so building it up stays one bulk query, and it is aged
+			// well past the one-day window so a real sweep removes every row of it. If retention
+			// regressed to a row-count cap, only the oldest slice of this backlog would be evicted to
+			// bring the total back under some fixed number — leaving some of it behind rather than
+			// none, which is exactly what "backlog count is 0" below would catch.
+			await logsDb.logEntry.createMany({
 				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
 					severity: 1,
 					message: `backlog ${index}`,
 					agentId,
-					ts: new Date(Date.now() + index),
+					ts: new Date(Date.now() - 40 * DAY + index),
 				})),
 			});
 
+			// Only the writes that need to be real — enough to cross logs.sweepEvery's built-in 500
+			// and trigger sweepOccasionally for real, through ingestLog itself rather than by calling
+			// the sweep entry point directly — go through the throttled, awaited ingestLog path below.
+			// These land inside the retention window, so they must survive the sweep.
 			for (let attempt = 0; attempt < 500; attempt++) {
-				await ingestLog(
-					agentId,
-					line({ message: `message ${attempt}`, at: new Date(Date.now() + 1000 + attempt).toISOString() }),
-				);
+				await ingestLog(agentId, line({ message: `message ${attempt}` }));
 			}
 
 			// The counter reset to 0 above and exactly 500 accepted writes below land the counter
 			// on exactly the built-in logs.sweepEvery, so sweepOccasionally's real gate fires once,
-			// on the last of these calls — via ingestLog -> sweepOccasionally(maxRows, sweepEvery) ->
-			// sweepLogsNow. That call is fire-and-forget (ingestLog does not await it), so the
+			// on the last of these calls — via ingestLog -> sweepOccasionally(retentionDays, sweepEvery)
+			// -> sweepLogsNow. That call is fire-and-forget (ingestLog does not await it), so the
 			// deletion this proves may still be in flight the instant the loop above returns; wait
 			// for it rather than asserting immediately.
 			await vi.waitFor(
 				async () => {
-					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+					expect(await logsDb.logEntry.count({ where: { message: { startsWith: "backlog" } } })).toBe(0);
 				},
 				{ timeout: 5000 },
 			);
+			// The in-window writes are untouched — a time window, unlike a row cap, does not evict
+			// volume just because it arrived alongside a sweep.
+			expect(await logsDb.logEntry.count({ where: { message: { startsWith: "message" } } })).toBe(500);
 		});
 
 		/**
 		 * The counterpart of the test above: a lower `logs.sweepEvery` makes the sweep trip after
 		 * far fewer writes than the built-in 500, proving the gate itself is configured rather than
-		 * only the row cap it sweeps down to.
+		 * only the retention window it sweeps against.
 		 */
 		it("sweeps at the configured interval rather than the built-in one", async () => {
 			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
 
 			// High enough that the throttle never engages across the real calls below.
 			await setSetting("logs.linesPerMinutePerAgent", 600);
-			// 1000 is logs.maxRecords's declared minimum.
-			await setSetting("logs.maxRecords", 1000);
+			// 1 is logs.retentionDays's declared minimum.
+			await setSetting("logs.retentionDays", 1);
 			// 50 is logs.sweepEvery's declared minimum — a tenth of the built-in 500, so the sweep
 			// fires after 50 real writes rather than needing ten times as many.
 			await setSetting("logs.sweepEvery", 50);
 
-			await prisma.logEntry.createMany({
+			await logsDb.logEntry.createMany({
 				data: Array.from({ length: 1000 }, (_, index) => ({
 					level: "INFO",
 					severity: 1,
 					message: `backlog ${index}`,
 					agentId,
-					ts: new Date(Date.now() + index),
+					ts: new Date(Date.now() - 40 * DAY + index),
 				})),
 			});
 
 			for (let attempt = 0; attempt < 50; attempt++) {
-				await ingestLog(
-					agentId,
-					line({ message: `message ${attempt}`, at: new Date(Date.now() + 1000 + attempt).toISOString() }),
-				);
+				await ingestLog(agentId, line({ message: `message ${attempt}` }));
 			}
 
 			// The counter reset to 0 above and exactly 50 accepted writes below land it on exactly
@@ -283,7 +299,7 @@ describe("log ingestion", () => {
 			// which the built-in 500 would not have reached with only 50 writes.
 			await vi.waitFor(
 				async () => {
-					expect(await prisma.logEntry.count()).toBeLessThanOrEqual(1000);
+					expect(await logsDb.logEntry.count({ where: { message: { startsWith: "backlog" } } })).toBe(0);
 				},
 				{ timeout: 5000 },
 			);

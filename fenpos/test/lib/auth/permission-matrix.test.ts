@@ -31,7 +31,7 @@ vi.mock("@/lib/auth/require-session", () => ({
 const { panelAction } = await import("@/lib/auth/panel-action");
 const { PANEL_ACTIONS } = await import("@/lib/auth/panel-actions");
 const { REFUSAL_MESSAGE } = await import("@/lib/auth/require-permission");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 
 /** Every entry the gate actually checks a permission for. */
 const gated = PANEL_ACTIONS.filter((entry) => entry.kind === "command" || entry.kind === "query");
@@ -47,7 +47,7 @@ async function account(isSuperuser = false) {
 }
 
 beforeEach(async () => {
-	await prisma.auditEvent.deleteMany({});
+	await auditDb.auditEvent.deleteMany({});
 	await prisma.userPermission.deleteMany({});
 	await prisma.userRole.deleteMany({});
 	await prisma.rolePermission.deleteMany({});
@@ -82,7 +82,7 @@ describe("permission matrix", () => {
 
 				// Permission probing has to be visible in the record. This is the assertion that makes
 				// it so for every action rather than for the one somebody tested.
-				const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+				const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 				expect(row.action).toBe(entry.id);
 				expect(row.outcome).toBe("DENIED");
 				expect(row.detail).toContain(entry.permission);

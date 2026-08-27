@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { logsDb } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
@@ -46,15 +46,15 @@ export interface LogFilter {
  * Keyed by {@link LogSortColumn}, so a column offered there without a mapping here is a type error
  * rather than a header that quietly does nothing.
  *
- * `source` orders by agent then device, which is how the column reads on screen. Lines an agent
- * recorded against no device sort first within that agent, since a null device name orders ahead of
- * any name.
+ * `source` groups by agent name then device name, which is the order the column reads in and
+ * keeps every line from one source together, alphabetically. Lines an agent recorded against no
+ * device sort first within that agent, since a null name orders ahead of any name.
  */
 const LOG_ORDER = {
 	time: (dir: SortDirection) => ({ ts: dir }),
 	// The stored number, not the level string: descending has to mean errors first.
 	level: (dir: SortDirection) => ({ severity: dir }),
-	source: (dir: SortDirection) => [{ agent: { name: dir } }, { device: { name: dir } }],
+	source: (dir: SortDirection) => [{ agentName: dir }, { deviceName: dir }],
 	message: (dir: SortDirection) => ({ message: dir }),
 } as const satisfies Record<LogSortColumn, (dir: SortDirection) => unknown>;
 
@@ -100,7 +100,7 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 	// swap places between one page view and the next, which would show one twice and hide another.
 	const orderBy = [...(Array.isArray(chosen) ? chosen : [chosen]), { ts: "desc" as const }];
 
-	const rows = await prisma.logEntry.findMany({
+	const rows = await logsDb.logEntry.findMany({
 		where: {
 			...(filter.agentId ? { agentId: filter.agentId } : {}),
 			...(filter.level ? { severity: { gte: LOG_SEVERITY[filter.level] } } : {}),
@@ -108,10 +108,6 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 		orderBy,
 		skip: filter.skip ?? 0,
 		take: take + 1,
-		include: {
-			agent: { select: { name: true } },
-			device: { select: { name: true } },
-		},
 	});
 
 	const page = rows.slice(0, take);
@@ -123,8 +119,8 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			at: row.ts.toISOString(),
 			level: (LogLevelSet.is(row.level) ? row.level : "INFO") as LogLevel,
 			message: row.message,
-			agentName: row.agent?.name ?? null,
-			deviceName: row.device?.name ?? null,
+			agentName: row.agentName,
+			deviceName: row.deviceName,
 		})),
 	};
 }
@@ -141,9 +137,9 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * a raw write refused because its audit line would not store is a fault, and one that happened and
  * then threw on the way out is the worst of the three.
  *
- * **Swept like any other row.** These lines land in the same table an agent's do, so they are
- * counted against `logs.maxRecords` through the same {@link sweepOccasionally} `ingestLog` uses
- * rather than growing behind it. That matters more here than there: the endpoint that writes these
+ * **Swept like any other row.** These lines land in the same table an agent's do, so they age out
+ * under `logs.retentionDays` through the same {@link sweepOccasionally} `ingestLog` uses rather
+ * than growing behind it. That matters more here than there: the endpoint that writes these
  * is a write, and writes are deliberately not counted against `api.readsPerMinute` (see
  * `requireApiRead`), so nothing upstream bounds how many of these a key can produce.
  *
@@ -156,12 +152,14 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  *
  * @param level severity of the line
  * @param message what happened; stored truncated to `logs.maxMessageChars`
- * @param target the agent and device it concerns, when it concerns one
+ * @param target the agent and device it concerns, when it concerns one. `agentName`/`deviceName`
+ * are denormalised onto the row exactly as `ingestLog` denormalises them for an agent's own lines,
+ * so the caller supplies them rather than this function looking them up — see `LogEntry.agentName`.
  */
 export async function recordServerLog(
 	level: LogLevel,
 	message: string,
-	target: { agentId?: string; deviceId?: string } = {},
+	target: { agentId?: string; agentName?: string; deviceId?: string; deviceName?: string } = {},
 ): Promise<void> {
 	try {
 		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
@@ -169,9 +167,9 @@ export async function recordServerLog(
 		// operator, so one settings read is not worth a second cache to avoid. Read before the insert
 		// because `maxMessageChars` bounds the row itself; the sweep below uses the other two of the
 		// three values this same read produces.
-		const { maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+		const { retentionDays, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
-		const entry = await prisma.logEntry.create({
+		const entry = await logsDb.logEntry.create({
 			data: {
 				level,
 				// Derived here rather than at read time, exactly as `ingestLog` does: the severity
@@ -180,7 +178,9 @@ export async function recordServerLog(
 				severity: LOG_SEVERITY[level],
 				message: message.slice(0, maxMessageChars),
 				agentId: target.agentId ?? null,
+				agentName: target.agentName ?? null,
 				deviceId: target.deviceId ?? null,
+				deviceName: target.deviceName ?? null,
 			},
 			select: { id: true, ts: true, level: true, message: true },
 		});
@@ -198,11 +198,11 @@ export async function recordServerLog(
 				level: entry.level as LogLevel,
 				message: entry.message,
 				agentId: target.agentId,
-				deviceName: null,
+				deviceName: target.deviceName ?? null,
 			});
 		}
 
-		void sweepOccasionally(maxRecords, sweepEvery);
+		void sweepOccasionally(retentionDays, sweepEvery);
 	} catch (error) {
 		logger.error("Could not record a server log line", error, { message });
 	}

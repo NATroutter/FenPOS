@@ -296,9 +296,8 @@ export default async function SecurityDocsPage() {
 
 							<P>
 								The one removal that exists at all is an automatic retention sweep, governed by{" "}
-								<Mono>audit.retentionDays</Mono> and <Mono>audit.maxRecords</Mono>, which drops the oldest rows once an
-								install exceeds either bound and re-anchors the chain behind whatever it removed — so a routine sweep
-								still leaves a chain that verifies clean.
+								<Mono>audit.retentionDays</Mono>, which drops rows older than the window and re-anchors the chain behind
+								whatever it removed — so a routine sweep still leaves a chain that verifies clean.
 							</P>
 
 							<P>

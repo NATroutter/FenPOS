@@ -20,7 +20,7 @@ vi.mock("@/lib/auth/require-session", () => ({ requireSession: async () => curre
 
 const { PAGE_VIEW_ACTION } = await import("@/lib/audit/system-actions");
 const { requirePagePermission } = await import("@/lib/auth/require-permission");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 
 /**
@@ -45,8 +45,8 @@ async function grantedAccount(id: string, ...permissions: string[]) {
 
 describe("page view recording", () => {
 	beforeEach(async () => {
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 		await prisma.setting.deleteMany({});
 		await prisma.userPermission.deleteMany({});
 		await prisma.user.deleteMany({});
@@ -58,7 +58,7 @@ describe("page view recording", () => {
 
 		await requirePagePermission("dashboard:read", "/dashboard");
 
-		expect(await prisma.auditEvent.count()).toBe(0);
+		expect(await auditDb.auditEvent.count()).toBe(0);
 		expect(user.id).toBe("pv1");
 	});
 
@@ -68,7 +68,7 @@ describe("page view recording", () => {
 
 		await requirePagePermission("jobs:read", "/jobs");
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(row.action).toBe(PAGE_VIEW_ACTION);
 		expect(row.outcome).toBe("SUCCESS");
 		expect(row.targetKind).toBe("page");
@@ -81,7 +81,7 @@ describe("page view recording", () => {
 
 		await requirePagePermission("logs:read", "/logs");
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(row.actorKind).toBe("USER");
 		expect(row.actorUserId).toBe("pv4");
 	});
@@ -96,6 +96,6 @@ describe("page view recording", () => {
 		// A refused page view is a redirect to `/no-access`, not a view. The refusal itself is not
 		// recorded either: a page is not an action, nothing happened, and `/no-access` is reachable by
 		// anyone signed in — recording every arrival at it would be recording navigation, not probing.
-		expect(await prisma.auditEvent.count()).toBe(0);
+		expect(await auditDb.auditEvent.count()).toBe(0);
 	});
 });

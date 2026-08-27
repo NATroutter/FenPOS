@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/generated/prisma/client";
+import type { PrismaClient as AuditPrismaClient } from "@/generated/prisma-audit/client";
 import type { AuditEventInput } from "@/lib/audit/audit-log";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
 import { NO_PROVENANCE } from "@/lib/audit/provenance-shape";
@@ -28,10 +28,10 @@ import { redact } from "@/lib/redact";
  * `audit-log.ts`; a caller that wants to know a write failed — the CLI included — gets a rejected
  * promise.
  *
- * @param prisma the client to write through
+ * @param auditDb the audit database's client to write through
  * @param input the event to record
  */
-export async function appendAuditEvent(prisma: PrismaClient, input: AuditEventInput): Promise<void> {
+export async function appendAuditEvent(auditDb: AuditPrismaClient, input: AuditEventInput): Promise<void> {
 	const provenance = input.provenance ?? NO_PROVENANCE;
 	const fields = {
 		// Captured here and written explicitly, never left to the column's default: the hash
@@ -58,10 +58,10 @@ export async function appendAuditEvent(prisma: PrismaClient, input: AuditEventIn
 	for (let attempt = 1; attempt <= MAX_CHAIN_ATTEMPTS; attempt++) {
 		// Re-read on every attempt: losing the constraint means somebody else's row is now the
 		// tail, and chaining onto the stale one would lose the same race again.
-		const prevHash = await tailHash(prisma);
+		const prevHash = await tailHash(auditDb);
 
 		try {
-			await prisma.auditEvent.create({ data: { ...fields, prevHash, hash: hashEvent(fields, prevHash) } });
+			await auditDb.auditEvent.create({ data: { ...fields, prevHash, hash: hashEvent(fields, prevHash) } });
 			return;
 		} catch (error) {
 			if (!isUniqueViolationOn(error, CHAIN_CONSTRAINT_COLUMNS) || attempt === MAX_CHAIN_ATTEMPTS) {
@@ -115,14 +115,14 @@ function encodeDetail(detail: Record<string, unknown> | undefined): string | nul
  *
  * Genesis is reached only on an install that has never recorded and never swept.
  *
- * @param prisma the client to read through
+ * @param auditDb the audit database's client to read through
  * @returns the tail row's hash, else the anchor's, else {@link GENESIS_HASH}
  */
-async function tailHash(prisma: PrismaClient): Promise<string> {
-	const tail = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { hash: true } });
+async function tailHash(auditDb: AuditPrismaClient): Promise<string> {
+	const tail = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { hash: true } });
 	if (tail) {
 		return tail.hash;
 	}
-	const anchor = await prisma.auditAnchor.findUnique({ where: { id: 1 }, select: { hash: true } });
+	const anchor = await auditDb.auditAnchor.findUnique({ where: { id: 1 }, select: { hash: true } });
 	return anchor?.hash ?? GENESIS_HASH;
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
-import { prisma } from "@/lib/db";
+import { logsDb, prisma } from "@/lib/db";
 import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -44,7 +44,7 @@ function call(body: unknown, device = "kitchen"): [Request, { params: Promise<{ 
 beforeEach(async () => {
 	vi.mocked(sendRawWrite).mockClear();
 
-	await prisma.logEntry.deleteMany();
+	await logsDb.logEntry.deleteMany();
 	await prisma.apiKeyDevice.deleteMany();
 	await prisma.apiKeyPermission.deleteMany();
 	await prisma.apiKey.deleteMany();
@@ -171,13 +171,43 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 	it("records an audit line naming the key and the size", async () => {
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await prisma.logEntry.findMany();
+		const rows = await logsDb.logEntry.findMany();
 		expect(rows).toHaveLength(1);
 		expect(rows[0].level).toBe("INFO");
 		expect(rows[0].message).toContain("label-printer integration");
 		// The whole phrase, not a bare "7". A single digit matches anywhere in the line — a digit
 		// inside a name, another number — so it would pass on a row that never mentioned the size at all.
 		expect(rows[0].message).toContain("Raw write of 7 bytes");
+	});
+
+	it("attributes the audit row to the agent and device by name, not only by id", async () => {
+		// The names are what let the row outlive the agent or device being deleted later —
+		// `LogEntry.agentName`/`deviceName` exist for exactly that, and this route is their
+		// motivating case: the audit row is the only record a raw write ever happened.
+		await POST(...call({ bytes: BYTES }));
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].agentName).toBe(agentName);
+		expect(rows[0].deviceName).toBe("kitchen");
+	});
+
+	it("does not invent an agent's name when nothing on the request identifies one", async () => {
+		// The path segment is the caller's claim, not a fact. Before this line is attributed by name,
+		// something must have actually matched it against a real agent — otherwise a request naming
+		// an agent that does not exist would store that invented name as if it were real.
+		await POST(
+			new Request(`https://fenpos.test/api/v1/devices/no-such-agent/kitchen/raw`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body: JSON.stringify({ bytes: BYTES }),
+			}),
+			{ params: Promise.resolve({ agent: "no-such-agent", device: "kitchen" }) },
+		);
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].agentName).toBeNull();
 	});
 
 	it("does not call a timed-out write a refusal, because nobody here knows what the printer did", async () => {
@@ -194,7 +224,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(response.status).toBe(503);
 
 		// Two rows for one write: the INFO recorded before the send, and this. The send happened.
-		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
 		expect(rows).toHaveLength(2);
 		expect(rows[1].level).toBe("WARN");
 		expect(rows[1].message).not.toContain("refused");
@@ -244,7 +274,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		expect(response.status).toBe(503);
 
-		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
 		const warnRow = rows.find((row) => row.level === "WARN");
 		expect(warnRow?.message.length).toBeLessThanOrEqual(200);
 		expect(warnRow?.message).toContain("may or may not have been written");
@@ -258,7 +288,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await prisma.logEntry.findMany();
+		const rows = await logsDb.logEntry.findMany();
 		expect(rows[0].message).toContain("refused");
 		expect(rows[0].message).toContain("Nothing was sent.");
 	});
@@ -273,7 +303,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		expect(response.status).toBe(500);
 
-		const rows = await prisma.logEntry.findMany({ orderBy: { ts: "asc" } });
+		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
 		expect(rows).toHaveLength(2);
 		expect(rows[1].level).toBe("WARN");
 		expect(rows[1].message).toContain("internal_error");
@@ -289,7 +319,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }, "d".repeat(5_000)));
 
-		const rows = await prisma.logEntry.findMany();
+		const rows = await logsDb.logEntry.findMany();
 		expect(rows).toHaveLength(1);
 		expect(rows[0].message).toContain(`'${"d".repeat(MAX_NAME_LENGTH)}'`);
 		expect(rows[0].message.length).toBeLessThan(MAX_NAME_LENGTH + 200);
@@ -300,7 +330,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await prisma.logEntry.findMany();
+		const rows = await logsDb.logEntry.findMany();
 		expect(rows).toHaveLength(1);
 		expect(rows[0].level).toBe("WARN");
 	});
@@ -316,6 +346,6 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
 		);
 
-		expect(await prisma.logEntry.count()).toBe(0);
+		expect(await logsDb.logEntry.count()).toBe(0);
 	});
 });

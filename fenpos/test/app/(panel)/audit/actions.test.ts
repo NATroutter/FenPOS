@@ -25,7 +25,7 @@ vi.mock("@/lib/auth/require-session", () => ({
 
 const { exportAuditCsv, verifyChain } = await import("@/app/(panel)/audit/actions");
 const { appendEvent, SYSTEM_ACTOR } = await import("@/lib/audit/audit-log");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 
 let nextAccount = 0;
 
@@ -40,8 +40,8 @@ async function superuser() {
 }
 
 beforeEach(async () => {
-	await prisma.auditEvent.deleteMany({});
-	await prisma.auditAnchor.deleteMany({});
+	await auditDb.auditEvent.deleteMany({});
+	await auditDb.auditAnchor.deleteMany({});
 	await prisma.session.deleteMany({});
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -63,8 +63,8 @@ describe("verifyChain", () => {
 		await superuser();
 		await appendEvent({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 		await appendEvent({ action: "test:two", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
-		const first = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "asc" } });
-		await prisma.auditEvent.update({ where: { seq: first.seq }, data: { action: "test:edited" } });
+		const first = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "asc" } });
+		await auditDb.auditEvent.update({ where: { seq: first.seq }, data: { action: "test:edited" } });
 
 		const status = await verifyChain();
 
@@ -77,7 +77,7 @@ describe("verifyChain", () => {
 
 		await verifyChain();
 
-		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 		expect(row.action).toBe("audit:verify");
 		expect(row.outcome).toBe("SUCCESS");
 	});
@@ -102,7 +102,7 @@ describe("exportAuditCsv", () => {
 
 		await exportAuditCsv({ action: "devices:delete" });
 
-		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 		expect(row.action).toBe("audit:export");
 		// The filter is in the row; the exported rows are not. A copy of the export inside the record
 		// would double the table every time somebody pressed the button.

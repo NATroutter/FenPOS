@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { recordAudit, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
 import { describeVerification, verifyAuditChain } from "@/lib/audit/verify";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 
 /**
  * Proving the record has not been edited.
@@ -12,8 +12,8 @@ import { prisma } from "@/lib/db";
  */
 describe("verifyAuditChain", () => {
 	beforeEach(async () => {
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 
 		for (const action of ["test:one", "test:two", "test:three", "test:four"]) {
 			await recordAudit({ action, outcome: "SUCCESS", actor: SYSTEM_ACTOR });
@@ -21,39 +21,47 @@ describe("verifyAuditChain", () => {
 	});
 
 	it("confirms an untouched chain", async () => {
-		const result = await verifyAuditChain(prisma);
+		const result = await verifyAuditChain(auditDb);
 
 		expect(result.ok).toBe(true);
 		expect(result).toMatchObject({ checked: 4 });
 	});
 
 	it("confirms an empty table", async () => {
-		await prisma.auditEvent.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
 
-		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: true, checked: 0, firstSeq: null, lastSeq: null });
+		expect(await verifyAuditChain(auditDb)).toMatchObject({ ok: true, checked: 0, firstSeq: null, lastSeq: null });
 	});
 
 	it("detects an altered row at that row", async () => {
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
-		await prisma.auditEvent.update({ where: { seq: rows[1].seq }, data: { action: "test:innocent" } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await auditDb.auditEvent.update({ where: { seq: rows[1].seq }, data: { action: "test:innocent" } });
 
-		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: false, brokenAt: rows[1].seq, reason: "hash-mismatch" });
+		expect(await verifyAuditChain(auditDb)).toMatchObject({
+			ok: false,
+			brokenAt: rows[1].seq,
+			reason: "hash-mismatch",
+		});
 	});
 
 	it("detects a removed row at its successor", async () => {
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
-		await prisma.auditEvent.delete({ where: { seq: rows[1].seq } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await auditDb.auditEvent.delete({ where: { seq: rows[1].seq } });
 
 		// The gap in `seq` is the symptom; the successor still claiming a predecessor that no longer
 		// precedes it is what actually detects the removal.
-		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "link-mismatch" });
+		expect(await verifyAuditChain(auditDb)).toMatchObject({
+			ok: false,
+			brokenAt: rows[2].seq,
+			reason: "link-mismatch",
+		});
 	});
 
 	it("detects a row inserted out of order", async () => {
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
 		// A forged row cannot claim an existing predecessor — `prev_hash` is unique — so the only
 		// insert available is one claiming a hash nothing has, which breaks the link at itself.
-		await prisma.auditEvent.create({
+		await auditDb.auditEvent.create({
 			data: {
 				at: new Date(),
 				actorKind: "SYSTEM",
@@ -64,25 +72,25 @@ describe("verifyAuditChain", () => {
 			},
 		});
 
-		const result = await verifyAuditChain(prisma);
+		const result = await verifyAuditChain(auditDb);
 		expect(result.ok).toBe(false);
 		expect(result).toMatchObject({ brokenAt: rows[3].seq + 1 });
 	});
 
 	it("verifies from the anchor when history has been swept", async () => {
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
-		await prisma.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: rows[1].hash } });
-		await prisma.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await auditDb.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: rows[1].hash } });
+		await auditDb.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
 
-		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: true, checked: 2, firstSeq: rows[2].seq });
+		expect(await verifyAuditChain(auditDb)).toMatchObject({ ok: true, checked: 2, firstSeq: rows[2].seq });
 	});
 
 	it("detects an anchor that does not match the oldest retained row", async () => {
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
-		await prisma.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: "not-what-was-swept" } });
-		await prisma.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await auditDb.auditAnchor.create({ data: { id: 1, seq: rows[1].seq, hash: "not-what-was-swept" } });
+		await auditDb.auditEvent.deleteMany({ where: { seq: { lte: rows[1].seq } } });
 
-		expect(await verifyAuditChain(prisma)).toMatchObject({
+		expect(await verifyAuditChain(auditDb)).toMatchObject({
 			ok: false,
 			brokenAt: rows[2].seq,
 			reason: "anchor-mismatch",
@@ -99,15 +107,40 @@ describe("verifyAuditChain", () => {
  */
 describe("describeVerification", () => {
 	it("confirms a whole chain with the range it covered", () => {
-		const text = describeVerification({ ok: true, checked: 1204, firstSeq: 41, lastSeq: 1244 });
+		const text = describeVerification({
+			ok: true,
+			checked: 1204,
+			archived: 0,
+			live: 1204,
+			firstSeq: 41,
+			lastSeq: 1244,
+		});
 
 		expect(text).toContain("1204");
 		expect(text).toContain("41");
 		expect(text).toContain("1244");
 	});
 
+	it("says where the events it verified were read from", () => {
+		const text = describeVerification({
+			ok: true,
+			checked: 1204,
+			archived: 900,
+			live: 304,
+			firstSeq: 1,
+			lastSeq: 1204,
+		});
+
+		// Always stated, including the `0 from archives` above: a directory named wrongly reads as an
+		// intact chain, and this split is the only part of the output that says what was actually walked.
+		expect(text).toContain("900 from archives");
+		expect(text).toContain("304 live");
+	});
+
 	it("says so when there is nothing to check", () => {
-		expect(describeVerification({ ok: true, checked: 0, firstSeq: null, lastSeq: null })).toContain("no audit events");
+		expect(
+			describeVerification({ ok: true, checked: 0, archived: 0, live: 0, firstSeq: null, lastSeq: null }),
+		).toContain("no audit events");
 	});
 
 	it("names the exact sequence number where the chain breaks", () => {
@@ -115,5 +148,19 @@ describe("describeVerification", () => {
 
 		expect(text).toContain("89");
 		expect(text).toContain("hash-mismatch");
+	});
+
+	it("prints the detail a join failure carries, which names both sides", () => {
+		const text = describeVerification({
+			ok: false,
+			checked: 12,
+			brokenAt: 12,
+			reason: "archive-join-mismatch",
+			detail: "The archives end at seq 11 (hash aaa), but the anchor names seq 12 (hash bbb).",
+		});
+
+		// Without this line the operator is told two records disagree and not which two values.
+		expect(text).toContain("hash aaa");
+		expect(text).toContain("hash bbb");
 	});
 });
