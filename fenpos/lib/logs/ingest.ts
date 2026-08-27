@@ -5,6 +5,7 @@ import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
+import { sweepLogsNow } from "@/lib/logs/retention";
 import { globalLogIngestSettings } from "@/lib/settings/settings-service";
 
 /**
@@ -44,8 +45,8 @@ interface LogIngestSettings {
 	maxLinesPerWindow: number;
 	/** `logs.maxMessageChars`: longest message stored. Anything beyond is truncated rather than rejected. */
 	maxMessageChars: number;
-	/** `logs.maxRecords`: rows kept before the oldest are swept. */
-	maxRows: number;
+	/** `logs.retentionDays`: how long a line is kept before it is swept. */
+	retentionDays: number;
 	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
 	sweepEvery: number;
 }
@@ -79,12 +80,12 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
  * @returns the settings just read
  */
 async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
-	const { linesPerMinutePerAgent, maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+	const { linesPerMinutePerAgent, retentionDays, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
 	const settings: LogIngestSettings = {
 		maxLinesPerWindow: linesPerMinutePerAgent,
 		maxMessageChars,
-		maxRows: maxRecords,
+		retentionDays,
 		sweepEvery,
 	};
 	globalForIngest.fenposLogIngestSettings = settings;
@@ -159,7 +160,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		deviceName,
 	});
 
-	void sweepOccasionally(settings.maxRows, settings.sweepEvery);
+	void sweepOccasionally(settings.retentionDays, settings.sweepEvery);
 	return true;
 }
 
@@ -200,20 +201,23 @@ async function allow(agentId: string): Promise<boolean> {
 }
 
 /**
- * Drops the oldest rows once the table has grown past its cap.
+ * Sweeps lines older than the retention window once enough writes have accumulated.
  *
  * Counted in writes rather than scheduled on a timer, so a quiet install does no work at all and
- * a busy one sweeps in proportion to what it is producing.
+ * a busy one sweeps in proportion to what it is producing. The actual removal is
+ * {@link sweepLogsNow} (`lib/logs/retention.ts`); this just decides when to call it and absorbs
+ * whatever it throws, since a failed sweep is not worth failing an ingest over — the next one will
+ * try again.
  *
  * Exported because agents are no longer the only writers of this table: `recordServerLog`
  * (`lib/logs/log-service.ts`) writes the server's own audit lines to it and calls this for the
  * same reason `ingestLog` does. Both share the one counter above, which is what makes the
- * retention cap a property of the table rather than of whoever happened to write the row.
+ * retention window a property of the table rather than of whoever happened to write the row.
  *
- * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
+ * @param retentionDays how long a line is kept before it is swept (`logs.retentionDays`)
  * @param sweepEvery how many recorded lines pass between sweeps (`logs.sweepEvery`)
  */
-export async function sweepOccasionally(maxRows: number, sweepEvery: number): Promise<void> {
+export async function sweepOccasionally(retentionDays: number, sweepEvery: number): Promise<void> {
 	const writes = (globalForIngest.fenposLogWrites ?? 0) + 1;
 	globalForIngest.fenposLogWrites = writes;
 
@@ -221,34 +225,10 @@ export async function sweepOccasionally(maxRows: number, sweepEvery: number): Pr
 		return;
 	}
 
-	await sweepLogsNow(maxRows);
-}
-
-/**
- * Sweeps the log table down to `maxRows`, deleting the oldest rows first.
- *
- * Exported so a test can trigger a sweep directly rather than ingesting `logs.sweepEvery` lines
- * to reach the point at which {@link sweepOccasionally} would trigger it on its own.
- *
- * @param maxRows rows kept before the oldest are swept (`logs.maxRecords`)
- */
-export async function sweepLogsNow(maxRows: number): Promise<void> {
 	try {
-		const total = await logsDb.logEntry.count();
-		if (total <= maxRows) {
-			return;
-		}
-
-		const cutoff = await logsDb.logEntry.findMany({
-			orderBy: { ts: "desc" },
-			skip: maxRows - 1,
-			take: 1,
-			select: { ts: true },
-		});
-
-		if (cutoff.length > 0) {
-			const removed = await logsDb.logEntry.deleteMany({ where: { ts: { lt: cutoff[0].ts } } });
-			logger.info("Swept old log entries", { removed: removed.count });
+		const { removed } = await sweepLogsNow(retentionDays);
+		if (removed > 0) {
+			logger.info("Swept old log entries", { removed });
 		}
 	} catch (error) {
 		// A failed sweep is not worth failing an ingest over; the next one will try again.

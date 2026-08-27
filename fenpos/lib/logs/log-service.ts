@@ -137,9 +137,9 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * a raw write refused because its audit line would not store is a fault, and one that happened and
  * then threw on the way out is the worst of the three.
  *
- * **Swept like any other row.** These lines land in the same table an agent's do, so they are
- * counted against `logs.maxRecords` through the same {@link sweepOccasionally} `ingestLog` uses
- * rather than growing behind it. That matters more here than there: the endpoint that writes these
+ * **Swept like any other row.** These lines land in the same table an agent's do, so they age out
+ * under `logs.retentionDays` through the same {@link sweepOccasionally} `ingestLog` uses rather
+ * than growing behind it. That matters more here than there: the endpoint that writes these
  * is a write, and writes are deliberately not counted against `api.readsPerMinute` (see
  * `requireApiRead`), so nothing upstream bounds how many of these a key can produce.
  *
@@ -167,7 +167,7 @@ export async function recordServerLog(
 		// operator, so one settings read is not worth a second cache to avoid. Read before the insert
 		// because `maxMessageChars` bounds the row itself; the sweep below uses the other two of the
 		// three values this same read produces.
-		const { maxRecords, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+		const { retentionDays, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
 
 		const entry = await logsDb.logEntry.create({
 			data: {
@@ -202,7 +202,7 @@ export async function recordServerLog(
 			});
 		}
 
-		void sweepOccasionally(maxRecords, sweepEvery);
+		void sweepOccasionally(retentionDays, sweepEvery);
 	} catch (error) {
 		logger.error("Could not record a server log line", error, { message });
 	}

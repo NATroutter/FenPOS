@@ -259,7 +259,7 @@ export const SETTING_KEYS = [
 	"variables.locale",
 	"logs.minimumLevel",
 	"logs.linesPerMinutePerAgent",
-	"logs.maxRecords",
+	"logs.retentionDays",
 	"logs.maxMessageChars",
 	"logs.sweepEvery",
 	"pairing.enabled",
@@ -610,15 +610,17 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "lines/min",
 	},
 	{
-		key: "logs.maxRecords",
-		label: "Log records kept",
-		description: "Hard cap, sweeping the oldest lines first. Bounds the table on a busy install.",
+		key: "logs.retentionDays",
+		label: "Log retention",
+		description:
+			"How long a log line is kept. Older lines are archived and then removed. Bounded by time rather than by " +
+			"a record count, so a noisy afternoon cannot evict the week before it.",
 		category: "logs",
 		type: "integer",
-		min: 1_000,
-		max: 1_000_000,
-		fallback: 20_000,
-		unit: "records",
+		min: 1,
+		max: 3_650,
+		fallback: 30,
+		unit: "days",
 	},
 	{
 		key: "logs.maxMessageChars",
@@ -1388,7 +1390,8 @@ export async function globalAgentSettings(): Promise<GlobalAgentSettings> {
 /** The log ingestion limits as configured, in the shape `lib/logs/ingest.ts` reads. */
 export interface GlobalLogIngestSettings {
 	linesPerMinutePerAgent: number;
-	maxRecords: number;
+	/** `logs.retentionDays`: how long a line is kept before it is swept. */
+	retentionDays: number;
 	maxMessageChars: number;
 	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
 	sweepEvery: number;
@@ -1413,7 +1416,7 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 
 	return {
 		linesPerMinutePerAgent: value("logs.linesPerMinutePerAgent"),
-		maxRecords: value("logs.maxRecords"),
+		retentionDays: value("logs.retentionDays"),
 		maxMessageChars: value("logs.maxMessageChars"),
 		sweepEvery: value("logs.sweepEvery"),
 	};

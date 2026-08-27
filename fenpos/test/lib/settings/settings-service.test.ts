@@ -147,11 +147,11 @@ describe("settings", () => {
 	});
 
 	it("reads log ingestion settings as one object, honouring overrides", async () => {
-		await prisma.setting.create({ data: { key: "logs.maxRecords", value: "5000" } });
+		await prisma.setting.create({ data: { key: "logs.retentionDays", value: "5" } });
 
 		expect(await globalLogIngestSettings()).toEqual({
 			linesPerMinutePerAgent: 120,
-			maxRecords: 5000,
+			retentionDays: 5,
 			maxMessageChars: 1000,
 			sweepEvery: 500,
 		});
@@ -292,7 +292,7 @@ describe("setting definitions", () => {
 			"variables.locale": "enum",
 			"logs.minimumLevel": "enum",
 			"logs.linesPerMinutePerAgent": "integer",
-			"logs.maxRecords": "integer",
+			"logs.retentionDays": "integer",
 			"logs.maxMessageChars": "integer",
 			"logs.sweepEvery": "integer",
 			"pairing.enabled": "boolean",

@@ -26,10 +26,11 @@ datasource db {
 /// An operational log line, either raised by the server or forwarded from an agent.
 ///
 /// Lives in its own database so log volume cannot evict audit history: this table is bounded by
-/// `logs.maxRecords`, which sweeps the oldest rows once the cap is passed, and the audit record is
-/// bounded separately by its own settings. Ingestion from agents is rate-limited and length-capped
-/// at the protocol boundary. This table must never become a channel through which an agent can
-/// exhaust the disk.
+/// `logs.retentionDays`, which sweeps rows older than the window rather than capping the row
+/// count, so a burst of volume inside the window cannot evict history from before it. The audit
+/// record is bounded separately by its own settings. Ingestion from agents is rate-limited and
+/// length-capped at the protocol boundary. This table must never become a channel through which an
+/// agent can exhaust the disk.
 model LogEntry {
   id       String   @id @default(cuid())
   ts       DateTime @default(now())
