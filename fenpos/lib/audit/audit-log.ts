@@ -5,6 +5,7 @@ import { sweepAuditNow } from "@/lib/audit/retention";
 import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
 import { auditDb } from "@/lib/db";
 import type { AuditOutcome } from "@/lib/domain/audit";
+import { AUDIT_DATABASE_URL, siblingDatabaseUrl } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { globalAuditSettings } from "@/lib/settings/settings-service";
 
@@ -171,6 +172,20 @@ const globalForAudit = globalThis as unknown as {
 const MINIMUM_SWEEP_EVERY = 50;
 
 /**
+ * Where the write-triggered sweep archives a period before removing it.
+ *
+ * Derived the same way `scripts/audit-verify.ts` derives its own — a sibling `archives` directory
+ * next to `audit.db`'s *resolved* URL — so both sides of the record agree on where its history lives
+ * without a second setting that could point somewhere else. There is no install step yet that creates
+ * this directory: on an install where it does not exist, `archivePeriod` refuses to create one and
+ * this sweep fails closed, logged and swallowed by {@link maybeSweep} like any other sweep failure —
+ * which is the property this whole plan exists for, applied to the one caller `sweepAuditNow` already
+ * had before it could archive anything. Provisioning the directory, and giving the sweep a caller that
+ * does not depend on write volume, is `lib/maintenance/pass.ts`'s job.
+ */
+const ARCHIVE_DIRECTORY = siblingDatabaseUrl(AUDIT_DATABASE_URL, "archives").replace(/^file:/, "");
+
+/**
  * Sweeps every `audit.sweepEvery` recorded events.
  *
  * The interval is cached rather than read per event, and that is why this reads as awkwardly as it
@@ -196,7 +211,7 @@ async function maybeSweep(): Promise<void> {
 		const { retentionDays, sweepEvery } = await globalAuditSettings();
 		globalForAudit.fenposAuditSweepEvery = sweepEvery;
 
-		const outcome = await sweepAuditNow({ retentionDays });
+		const outcome = await sweepAuditNow({ retentionDays }, { archiveDirectory: ARCHIVE_DIRECTORY });
 		if (outcome === null) {
 			return;
 		}
