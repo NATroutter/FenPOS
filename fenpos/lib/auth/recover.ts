@@ -78,6 +78,16 @@ export interface RecoverableAccount {
 	twoFactorEnabled: boolean;
 	/** When its lockout lifts on its own, or null when it is not locked. */
 	lockedUntil: Date | null;
+	/**
+	 * Whether Better Auth's admin plugin refuses this account at the credential layer.
+	 *
+	 * Listed even though **no command here clears it**, precisely because none does. A ban is one of
+	 * the ways an account cannot sign in, and it is the one that survives every operation below: an
+	 * operator who resets a banned account's password gets a working credential and a still-unusable
+	 * account, with nothing on screen to explain why. The remedy is the Users tab, from an account
+	 * that can still reach it.
+	 */
+	banned: boolean;
 }
 
 /**
@@ -92,7 +102,15 @@ export interface RecoverableAccount {
 export async function listAccounts(prisma: PrismaClient): Promise<RecoverableAccount[]> {
 	const rows = await prisma.user.findMany({
 		orderBy: { email: "asc" },
-		select: { id: true, email: true, name: true, isSuperuser: true, twoFactorEnabled: true, lockedUntil: true },
+		select: {
+			id: true,
+			email: true,
+			name: true,
+			isSuperuser: true,
+			twoFactorEnabled: true,
+			lockedUntil: true,
+			banned: true,
+		},
 	});
 
 	return rows.map((row) => ({
@@ -105,6 +123,7 @@ export async function listAccounts(prisma: PrismaClient): Promise<RecoverableAcc
 		isSuperuser: Boolean(row.isSuperuser),
 		twoFactorEnabled: Boolean(row.twoFactorEnabled),
 		lockedUntil: row.lockedUntil,
+		banned: Boolean(row.banned),
 	}));
 }
 
@@ -380,6 +399,14 @@ export async function clearTwoFactor(prisma: PrismaClient, email: string): Promi
  * identical: the same two columns, `failedSignInCount` reset to 0 and `lockedUntil` cleared to null,
  * in the one update — leaving either behind would either strand the account with a stale lock or let
  * one more failure lock it again on a count that was never actually reset.
+ *
+ * **This is the password lockout, and only that one.** An enrolled account carries a second lock that
+ * better-auth's two-factor plugin keeps on its own row — `TwoFactor.lockedUntil` and
+ * `failedVerificationCount`, ten wrong codes for fifteen minutes, governed by no setting on this
+ * install — and neither column is touched here. An administrator locked out by wrong *codes* is not
+ * helped by this command at all; the only thing in this module that reaches them is
+ * {@link clearTwoFactor}, which ends the lock by destroying the enrolment behind it. Widening
+ * `--unlock` to clear both is a design decision, not a repair, and has not been made.
  *
  * @param prisma the client to write through
  * @param email the account's address

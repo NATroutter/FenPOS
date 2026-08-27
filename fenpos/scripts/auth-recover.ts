@@ -148,6 +148,11 @@ export function parseRecoveryArgs(argv: string[]): RecoveryCommand {
 /**
  * Formats accounts as a table an operator can read at a glance, widest column first.
  *
+ * `BANNED` is here even though no flag below clears it, and that is the reason it is here: a ban is
+ * one of the ways an account cannot sign in, and the only one that survives every command this script
+ * offers. Without the column, resetting a banned account's password looks like it worked — a working
+ * credential on an account that still cannot sign in, with nothing on screen to say why.
+ *
  * @param accounts every account, as {@link listAccounts} returns them
  * @returns the table, newline-terminated, ready for `process.stdout.write`
  */
@@ -156,12 +161,13 @@ function formatAccountTable(accounts: RecoverableAccount[]): string {
 		return "No accounts.\n";
 	}
 
-	const headers = ["EMAIL", "NAME", "SUPERUSER", "2FA", "LOCKED UNTIL"];
+	const headers = ["EMAIL", "NAME", "SUPERUSER", "2FA", "BANNED", "LOCKED UNTIL"];
 	const rows = accounts.map((account) => [
 		account.email,
 		account.name,
 		account.isSuperuser ? "yes" : "no",
 		account.twoFactorEnabled ? "yes" : "no",
+		account.banned ? "yes" : "no",
 		account.lockedUntil ? account.lockedUntil.toISOString() : "-",
 	]);
 

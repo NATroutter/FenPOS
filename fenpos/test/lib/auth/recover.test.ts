@@ -75,6 +75,25 @@ describe("recovery", () => {
 		expect(accounts[0]?.lockedUntil).not.toBeNull();
 	});
 
+	/**
+	 * The one state in the listing that **no** command in this module clears, which is exactly why it
+	 * has to be in the listing: an operator who resets a banned account's password otherwise gets a
+	 * working credential, an account that still cannot sign in, and nothing on screen explaining the
+	 * difference. Both values are asserted, so a field hardcoded to either one goes red.
+	 */
+	it("reports a ban, the one refusal no recovery command lifts", async () => {
+		const { id } = await credentialUser("banned@example.test", "old password entirely");
+		await prisma.user.update({ where: { id }, data: { banned: true } });
+		await credentialUser("welcome@example.test", "old password entirely");
+
+		const accounts = await listAccounts(prisma);
+
+		expect(accounts.map((account) => [account.email, account.banned])).toEqual([
+			["banned@example.test", true],
+			["welcome@example.test", false],
+		]);
+	});
+
 	it("mints a password that actually works, and returns it once", async () => {
 		const user = await credentialUser("reset@example.test", "old password entirely");
 		const minted = await resetPassword(prisma, "reset@example.test");
