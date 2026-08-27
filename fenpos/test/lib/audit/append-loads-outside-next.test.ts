@@ -21,17 +21,38 @@ import { describe, expect, it } from "vitest";
  * real command the same way, for the same reason: some properties only hold up when checked by the
  * actual runtime rather than by a substitute vitest provides for convenience.
  */
-describe("lib/audit/append.ts and lib/auth/recover.ts", () => {
-	it("import cleanly outside Next, with no server-only alias to hide behind", () => {
-		const fixture = fileURLToPath(new URL("./fixtures/append-loads-outside-next.ts", import.meta.url));
-		const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
+/**
+ * This one spec's own timeout, well past the suite-wide `testTimeout` of 10s in `vitest.config.mts`.
+ *
+ * Everything else in the suite runs in-process; this spawns `npx tsx`, which resolves a binary, boots
+ * a second Node, and type-strips an import graph that reaches the generated Prisma client. On an
+ * unloaded machine that costs about five seconds — comfortably inside the default — but the suite
+ * runs its files in parallel, and under that contention the same spawn has been observed to pass the
+ * ten-second mark and fail while passing in four seconds when re-run on its own.
+ *
+ * Raised rather than left to be re-run, because the failure mode is the damaging one: a guard that
+ * goes red at random teaches whoever sees it to re-run rather than to read, which is precisely the
+ * habit that would let this guard's *real* failure — a `server-only` import creeping into either
+ * module and breaking `pnpm auth:recover` — be waved through as "the flaky one again". Deleting or
+ * skipping it is not an option: it is the only check that either module still loads outside Next.
+ */
+const SPAWN_TIMEOUT_MS = 60_000;
 
-		expect(() => {
-			execFileSync("npx", ["tsx", fixture], {
-				cwd: projectRoot,
-				stdio: "pipe",
-				shell: process.platform === "win32",
-			});
-		}).not.toThrow();
-	});
+describe("lib/audit/append.ts and lib/auth/recover.ts", () => {
+	it(
+		"import cleanly outside Next, with no server-only alias to hide behind",
+		() => {
+			const fixture = fileURLToPath(new URL("./fixtures/append-loads-outside-next.ts", import.meta.url));
+			const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
+
+			expect(() => {
+				execFileSync("npx", ["tsx", fixture], {
+					cwd: projectRoot,
+					stdio: "pipe",
+					shell: process.platform === "win32",
+				});
+			}).not.toThrow();
+		},
+		SPAWN_TIMEOUT_MS,
+	);
 });
