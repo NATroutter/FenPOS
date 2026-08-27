@@ -137,6 +137,62 @@ describe("verifyAuditChain across an archive boundary", () => {
 		}
 	});
 
+	it("reports a break when the anchor the archives join to has been deleted", async () => {
+		await chainAt(3, new Date("2026-01-15T00:00:00Z"));
+		await chainAt(3, new Date("2026-02-14T00:00:00Z"));
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		// The cheapest move available to somebody who wants the two halves uncoupled: with no anchor, the
+		// live rows have nothing to be checked against and the archive has nothing to be joined to. Goes
+		// red if the null branch of the join is dropped — the walk would then carry the archive's last hash
+		// straight into the live segment, the oldest live row would link to it, and six events would
+		// verify against a database that no longer records that any of them were archived.
+		await auditDb.auditAnchor.deleteMany({});
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory });
+
+		expect(result).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "archive-join-mismatch" });
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.detail).toContain("no anchor");
+		}
+	});
+
+	it("verifies an archive that holds the whole record, with nothing left live", async () => {
+		await chainAt(3, new Date("2026-01-15T00:00:00Z"));
+
+		await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		// An empty live table is a real answer here rather than an empty record: every event is in the
+		// file, and the anchor is all the database still has of them. The control for the case below.
+		expect(await auditDb.auditEvent.count()).toBe(0);
+		expect(await verifyAuditChain(auditDb, { archiveDirectory: directory })).toMatchObject({
+			ok: true,
+			checked: 3,
+			archived: 3,
+			live: 0,
+		});
+	});
+
+	it("detects a truncated archive when there are no live rows to catch it instead", async () => {
+		await chainAt(3, new Date("2026-01-15T00:00:00Z"));
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		const outcome = await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		editArchive(outcome.path, (archive) => {
+			archive.prepare("DELETE FROM audit_events WHERE seq = ?").run(rows[2].seq);
+		});
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory });
+
+		// Where the join is the only thing standing: with the live table empty there is no oldest live row
+		// whose `prevHash` could notice, so removing the join assertion does not merely mislabel this — it
+		// returns `ok: true` over an archive that has lost an event. The test above is what says the empty
+		// live table is not itself the reason this fails.
+		expect(result).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "archive-join-mismatch" });
+	});
+
 	it("carries the chain across two archived periods in period order", async () => {
 		await chainAt(2, new Date("2025-12-15T00:00:00Z"));
 		await chainAt(2, new Date("2026-01-15T00:00:00Z"));

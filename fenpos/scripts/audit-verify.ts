@@ -32,10 +32,10 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  * verifying a file the server is not writing to and reporting the chain intact.
  *
  * Archived periods are walked too, so the answer covers the whole record rather than the part of it
- * still in the database. Their directory is derived from `DATABASE_URL` the same way `audit.db` is,
- * and for the reason `.env.example` gives for the databases themselves: whatever volume the record is
- * on is the volume all of it is on, and a second setting is a second thing that can point somewhere
- * else. Nothing writes to that directory yet — nothing in this codebase schedules rotation — so on an
+ * still in the database. Their directory is derived from the audit database's own resolved URL, and
+ * for the reason `.env.example` gives for the databases themselves: whatever volume the record is on
+ * is the volume all of it is on, and a second setting is a second thing that can point somewhere else.
+ * Nothing writes to that directory yet — nothing in this codebase schedules rotation — so on an
  * ordinary install it does not exist, and a directory that is not there simply means no period has
  * been archived. The `0 from archives` in the output is what says so out loud.
  *
@@ -44,14 +44,14 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  */
 async function main(): Promise<void> {
 	const databaseUrl = process.env.DATABASE_URL ?? "";
-	const auditDb = new PrismaClient({
-		adapter: new PrismaBetterSqlite3({
-			url: process.env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(databaseUrl, "audit.db"),
-		}),
-	});
-	// `siblingDatabaseUrl` rather than `node:path`, so the directory archives are looked for in is
-	// derived by the one rule that also places `audit.db` — the `file:` prefix is all that is dropped.
-	const archiveDirectory = siblingDatabaseUrl(databaseUrl, "archives").replace(/^file:/, "");
+	const auditDatabaseUrl = process.env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(databaseUrl, "audit.db");
+	const auditDb = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: auditDatabaseUrl }) });
+	// From the audit database's *resolved* URL rather than from `DATABASE_URL`, because the two part
+	// company the moment `AUDIT_DATABASE_URL` is set: archives would then be looked for beside a database
+	// this command is not reading, and the only symptom would be `0 from archives` under a report saying
+	// the chain is intact. `siblingDatabaseUrl` rather than `node:path` so the directory is placed by the
+	// one rule that also places `audit.db`; the `file:` prefix is all that is dropped.
+	const archiveDirectory = siblingDatabaseUrl(auditDatabaseUrl, "archives").replace(/^file:/, "");
 
 	try {
 		const result = await verifyAuditChain(auditDb, { archiveDirectory });

@@ -99,6 +99,30 @@ export interface ChainVerifyOptions {
 	 * this codebase schedules rotation or creates this directory, so an install that has never archived
 	 * is the ordinary case and must not make `pnpm audit:verify` fail. The count of archived events in
 	 * the result is what distinguishes that from a directory named wrongly.
+	 *
+	 * **Walking archives assumes no audit row was ever deleted without being archived first, and nothing
+	 * enforces that assumption.** Two ordinary arrangements break it, and this code reports both as a
+	 * break in the record rather than as a history it cannot verify:
+	 *
+	 * - **A sweep that ran before archiving began.** The oldest archive's first row then links to a row
+	 *   `sweepAuditNow` deleted, and the anchor that recorded that boundary has since been overwritten by
+	 *   rotation's own. Nothing on disk says where the oldest archive should start, so {@link
+	 *   walkArchives} starts it at genesis and its first row reports `link-mismatch`.
+	 * - **A sweep that ran after a rotation** and re-anchored to a live row newer than the last archived
+	 *   one — which needs nothing more exotic than retention's cutoff being newer than rotation's
+	 *   boundary. The anchor then names a row no archive holds, and {@link joinToAnchor} reports
+	 *   `archive-join-mismatch`.
+	 *
+	 * Neither is reachable on this branch: `archivePeriod` has no production caller, so nothing is found
+	 * here and the plain anchor path runs as it always did. But `maybeSweep` in `lib/audit/audit-log.ts`
+	 * runs on the way out of every `recordAudit`, so on any install that has been running a while the
+	 * anchor has already moved past genesis — which makes the first case above the *default* state the
+	 * first time rotation is wired, not a corner of it. **Whoever gives `archivePeriod` a production
+	 * caller must reconcile rotation with `maybeSweep` before doing so**, and should give
+	 * swept-before-archived a `ChainBreak` of its own: `describeVerification` has exactly one failure
+	 * vocabulary and it is an accusation, so reporting "these rows were swept before archiving began"
+	 * through it says "the record was changed after it was written". Those are different findings and
+	 * this code cannot currently tell them apart.
 	 */
 	archiveDirectory?: string;
 }
@@ -329,6 +353,13 @@ function joinToAnchor(
  *
  * Each file's walk starts at `seq > 0` rather than at the position's cursor, so every row an archive
  * holds is checked rather than skipped over by a cursor left behind by the file before it.
+ *
+ * **The oldest archive is walked from genesis, and that is a precondition rather than something checked
+ * here.** It holds only while no audit row has ever been deleted without being archived first. An
+ * install that swept before it archived reports `link-mismatch` at the oldest archived row, and one that
+ * sweeps rows rotation has not archived reports `archive-join-mismatch` — in both cases an accusation
+ * where the truthful answer is that the history cannot be verified. {@link ChainVerifyOptions} sets out
+ * both modes and what the person who gives `archivePeriod` a production caller has to reconcile first.
  *
  * @param directory where the archives are
  * @param from where the walk stands before the first archive: genesis, on the oldest one
