@@ -23,6 +23,12 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * recording `auth:sign-out`, which made the sentence above false and offered `/audit` a filter that
  * could only ever return no rows. If you add an entry whose action writes its own row, make the two
  * match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second literal.
+ *
+ * That agreement is no longer left to a reading. `test/lib/auth/registry-coverage.test.ts` collects
+ * every action string written from a module under `app/` that calls `recordAudit` — an
+ * `AUTH_AUDIT_ACTIONS` member or a bare literal — and fails on any that names no entry here, which is
+ * exactly the shape the `self:sign-out` mismatch had. The sentence above is now checked, not just
+ * asserted.
  */
 
 /**
