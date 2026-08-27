@@ -156,6 +156,23 @@ export const LOGS_DATABASE_URL: string = env.LOGS_DATABASE_URL ?? siblingDatabas
 export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
 
 /**
+ * Where `lib/archive/rotate.ts` writes audit archives: a sibling `archives` directory next to
+ * `audit.db`'s *resolved* URL.
+ *
+ * One rule, computed once, for every caller running inside the server — `lib/audit/audit-log.ts`
+ * today, `lib/maintenance/pass.ts` once it exists — so two callers deriving it separately can never
+ * drift onto different directories. `scripts/audit-verify.ts` cannot import this module (it begins
+ * with `import "server-only"`, and that script runs outside Next), so it repeats this same one-line
+ * derivation from its own resolved audit URL rather than sharing this constant; keeping the *rule* —
+ * sibling `archives` next to the audit database's resolved URL, never `DATABASE_URL` directly — the
+ * same in both places is what matters. The storage plan's own history is why this is spelled out
+ * rather than assumed: a CLI that once derived an archive path from `DATABASE_URL` while the running
+ * server honoured `AUDIT_DATABASE_URL` diverged silently, and its only symptom was a report claiming
+ * the chain was intact with `0 from archives`.
+ */
+export const AUDIT_ARCHIVE_DIRECTORY: string = siblingDatabaseUrl(AUDIT_DATABASE_URL, "archives").replace(/^file:/, "");
+
+/**
  * Re-exported here so callers needing a sibling database reach it beside the URL it is derived
  * from. It lives in its own module because `prisma-logs.config.ts` and `prisma-audit.config.ts`
  * must import it too, and a Prisma config file cannot load anything carrying `server-only`.

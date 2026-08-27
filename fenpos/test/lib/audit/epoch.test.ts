@@ -19,14 +19,14 @@ describe("the audit epoch", () => {
 	});
 
 	it("records the seq and prevHash it was claimed with", async () => {
-		await claimEpoch(7, "a".repeat(64));
+		await claimEpoch(auditDb, 7, "a".repeat(64));
 
 		expect(await readEpoch()).toEqual({ seq: 7, prevHash: "a".repeat(64) });
 	});
 
 	it("ignores a second claim, so a later sweep cannot move it", async () => {
-		await claimEpoch(7, "a".repeat(64));
-		await claimEpoch(99, "b".repeat(64));
+		await claimEpoch(auditDb, 7, "a".repeat(64));
+		await claimEpoch(auditDb, 99, "b".repeat(64));
 
 		// Goes red if `claimEpoch` upserts: the epoch would follow rotation forward and stop
 		// meaning "where archived history begins".
@@ -34,7 +34,7 @@ describe("the audit epoch", () => {
 	});
 
 	it("moves only when advanced explicitly", async () => {
-		await claimEpoch(7, "a".repeat(64));
+		await claimEpoch(auditDb, 7, "a".repeat(64));
 		await advanceEpoch(42, "c".repeat(64));
 
 		expect(await readEpoch()).toEqual({ seq: 42, prevHash: "c".repeat(64) });

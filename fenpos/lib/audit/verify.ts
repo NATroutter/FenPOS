@@ -113,9 +113,10 @@ export interface ChainVerifyOptions {
 	 *   boundary. The anchor then names a row no archive holds, and {@link joinToAnchor} reports
 	 *   `archive-join-mismatch`.
 	 *
-	 * Neither is reachable on this branch: `archivePeriod` has no production caller, so nothing is found
-	 * here and the plain anchor path runs as it always did. But `maybeSweep` in `lib/audit/audit-log.ts`
-	 * runs on the way out of every `recordAudit`, so on any install that has been running a while the
+	 * The first case is reachable now: `maybeSweep` in `lib/audit/audit-log.ts` calls `sweepAuditNow`,
+	 * which calls `archivePeriod` directly. Task 5 is expected to remove that call in favour of its own
+	 * scheduled pass, and Task 7 is where reconciling this block belongs. `maybeSweep` runs on the way
+	 * out of every `recordAudit`, so on any install that has been running a while the
 	 * anchor has already moved past genesis — which makes the first case above the *default* state the
 	 * first time rotation is wired, not a corner of it. **Whoever gives `archivePeriod` a production
 	 * caller must reconcile rotation with `maybeSweep` before doing so**, and should give

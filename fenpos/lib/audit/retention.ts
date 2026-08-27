@@ -14,10 +14,9 @@ import { auditDb } from "@/lib/db";
  * **`sweepAuditNow` no longer deletes anything itself.** It resolves which whole calendar periods
  * have fully aged out and hands each to `lib/archive/rotate.ts`'s `archivePeriod`, which writes the
  * period to a file, verifies it, and only then calls `removeAuditThrough`. `removeAuditThrough` stays
- * in this module rather than moving to `rotate.ts` because it has a second caller that knows its
- * boundary as a `seq` — see its own doc comment — and because a single file holding the only function
- * that deletes is what lets `AuditAnchor` vouch for one boundary instead of two modules each thinking
- * they own it.
+ * in this module — `archivePeriod` is its only caller now — because a single file holding the only
+ * function that deletes is what lets `AuditAnchor` vouch for one boundary instead of two modules each
+ * thinking they own it.
  *
  * **Oldest-first, always, and re-anchored behind itself.** Removing from anywhere but the oldest end
  * would break the chain irreparably: every surviving row after the gap links to something that is
@@ -52,11 +51,9 @@ export interface SweepOutcome {
  * that up to one period more than `audit.retentionDays` is kept, which is stated in that setting's
  * own description.
  *
- * The epoch is claimed once the first due period's own archive is confirmed — not before, or a
- * directory that turns out not to exist would claim archived history begins at a row no file holds;
- * not after every period in this sweep, or a crash partway through a later one would leave rows
- * already archived-and-removed with nothing yet recording where that history starts. Only the first
- * sweep can answer where archived history begins — see `lib/audit/epoch.ts`.
+ * Only `oldest.at` is read here, not its `seq` or `prevHash`: this function no longer claims the
+ * epoch itself. `removeAuditThrough` does, from inside the same transaction as the delete it
+ * protects — see that function's doc comment for why the claim belongs there instead of here.
  *
  * @param bounds `audit.retentionDays`, as configured
  * @param options where archives are written; the directory must already exist
@@ -69,7 +66,7 @@ export async function sweepAuditNow(
 ): Promise<SweepOutcome | null> {
 	const oldest = await auditDb.auditEvent.findFirst({
 		orderBy: { seq: "asc" },
-		select: { seq: true, at: true, prevHash: true },
+		select: { at: true },
 	});
 	if (!oldest) {
 		return null;
@@ -82,7 +79,7 @@ export async function sweepAuditNow(
 	}
 
 	let removed = 0;
-	for (const [index, period] of due.entries()) {
+	for (const period of due) {
 		// Oldest first, and one at a time: each rotation removes a prefix of the chain, and a prefix
 		// is the only shape an anchor can vouch for.
 		const outcome = await archivePeriod({
@@ -91,14 +88,6 @@ export async function sweepAuditNow(
 			directory: options.archiveDirectory,
 		});
 		removed += outcome.rows;
-
-		if (index === 0) {
-			// Reached only once this period's archive is verified and its rows are already gone from
-			// live — see the doc comment above for why this is neither earlier nor later than that.
-			// `claimEpoch` writes once, ever, so calling it on every sweep that gets this far is
-			// harmless: only the very first successful archive can actually set it.
-			await claimEpoch(oldest.seq, oldest.prevHash);
-		}
 	}
 
 	const anchor = await auditDb.auditAnchor.findUnique({ where: { id: 1 } });
@@ -113,17 +102,27 @@ export async function sweepAuditNow(
 }
 
 /**
- * Removes every event up to and including `boundarySeq`, and re-anchors the chain on it.
+ * Removes every event up to and including `boundarySeq`, re-anchors the chain on it, and — the first
+ * time this ever succeeds — records where archived history begins.
  *
- * The mechanism behind {@link sweepAuditNow}, exposed separately because it has a second caller that
- * knows its boundary as a `seq` rather than as an age. `lib/archive/rotate.ts` has already copied a
- * prefix of the chain into a period file and has to remove **exactly** the rows it copied; deriving a
- * retention window from that boundary and handing it back to `sweepAuditNow` would let the two
- * disagree about which rows are going, which is the one mistake neither caller may make.
+ * The mechanism behind {@link sweepAuditNow}. `lib/archive/rotate.ts`'s `archivePeriod` is this
+ * function's only caller: it has already copied a prefix of the chain into a period file and calls
+ * this to remove **exactly** the rows it copied, once that archive has been written and verified.
  *
- * Taking a `seq` rather than a set of them is not a convenience: retention and rotation both remove a
- * prefix, because a chain with a hole anywhere but its oldest end cannot be vouched for by an anchor —
- * see the module comment above. `lte` is what makes that structural rather than a caller's promise.
+ * Taking a `seq` rather than a set of them is not a convenience: a chain with a hole anywhere but its
+ * oldest end cannot be vouched for by an anchor — see the module comment above. `lte` is what makes
+ * that structural rather than a caller's promise.
+ *
+ * **The epoch claim lives inside this same transaction, not beside it.** {@link claimEpoch} writes
+ * once, ever, so calling it on every removal is harmless — only the very first one that ever reaches
+ * this function can actually set it, using whatever is the oldest live row *before* this removal
+ * takes it away. Committing that claim with the delete and the anchor upsert closes the two failure
+ * windows a separate write would leave open: claiming before this transaction could name a row that
+ * a rolled-back delete never actually removes, and claiming after it could let the delete commit and
+ * then lose the claim to a crash before it landed — which an install that swept before it ever
+ * archived would have its oldest archive's first row read back as `link-mismatch`: a false accusation
+ * of tampering against history nobody touched. `claimEpoch` takes the transaction client rather than
+ * reaching for `auditDb` itself for exactly this reason; see its own doc comment.
  *
  * @param boundarySeq the newest event to remove; 0 when there is nothing to remove
  * @returns what was removed, or null when the boundary names nothing
@@ -141,6 +140,14 @@ export async function removeAuditThrough(boundarySeq: number): Promise<SweepOutc
 	}
 
 	return await auditDb.$transaction(async (tx) => {
+		// The oldest row still live, read before it is removed. `last` above proves the table is
+		// non-empty, so this always finds a row; the only question `claimEpoch` decides is whether an
+		// epoch already exists to protect.
+		const oldest = await tx.auditEvent.findFirst({ orderBy: { seq: "asc" }, select: { seq: true, prevHash: true } });
+		if (oldest) {
+			await claimEpoch(tx, oldest.seq, oldest.prevHash);
+		}
+
 		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundarySeq } } });
 		await tx.auditAnchor.upsert({
 			where: { id: 1 },

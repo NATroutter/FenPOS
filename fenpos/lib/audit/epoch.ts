@@ -1,4 +1,5 @@
 import "server-only";
+import type { PrismaClient } from "@/generated/prisma-audit/client";
 import { auditDb } from "@/lib/db";
 
 /**
@@ -42,25 +43,38 @@ export async function readEpoch(): Promise<AuditEpochRecord | null> {
  * overwrite the answer would turn the epoch into a follower of rotation rather than a record of
  * where rotation started.
  *
- * Implemented as a guarded create rather than `createMany` with `skipDuplicates` — SQLite has no
- * such option in either generated client. The read-then-create is not what makes this safe against
- * two concurrent writers; the maintenance loop that calls this has its own `running` guard, so only
- * one pass ever claims at a time. The `try`/`catch` below exists so "writes once, ever" holds as a
- * structural property of this function rather than as something that happens to be true only because
- * of how it is currently scheduled: if a unique-constraint violation (`P2002`) reaches here anyway,
- * it is swallowed as a no-op rather than allowed to overwrite the existing row.
+ * **Takes a client rather than reaching for `auditDb` itself, because the one caller that matters —
+ * `removeAuditThrough` in `lib/audit/retention.ts` — must call this from inside its own transaction,
+ * alongside the delete and the anchor upsert it protects.** Reaching for the module-level `auditDb`
+ * here would issue this write *outside* that transaction against the same SQLite file: it would lose
+ * the atomicity the transaction exists to buy, and could deadlock against the open write transaction.
+ * See `removeAuditThrough`'s doc comment for why the three writes have to land together or not at all.
  *
+ * Implemented as a guarded create rather than `createMany` with `skipDuplicates` — SQLite has no such
+ * option in either generated client. The read-then-create is not what makes this safe against two
+ * concurrent writers; running inside `removeAuditThrough`'s transaction is what does, since SQLite
+ * serialises writers against one file and this is one of them. The `try`/`catch` below exists so
+ * "writes once, ever" holds as a structural property of this function rather than as something that
+ * happens to be true only because of how it is currently called: if a unique-constraint violation
+ * (`P2002`) reaches here anyway, it is swallowed as a no-op rather than allowed to overwrite the
+ * existing row.
+ *
+ * @param client the transaction this write must commit or roll back with
  * @param seq the oldest event being archived
  * @param prevHash that event's `prevHash`
  */
-export async function claimEpoch(seq: number, prevHash: string): Promise<void> {
-	const existing = await auditDb.auditEpoch.findUnique({ where: { id: 1 }, select: { id: true } });
+export async function claimEpoch(
+	client: Pick<PrismaClient, "auditEpoch">,
+	seq: number,
+	prevHash: string,
+): Promise<void> {
+	const existing = await client.auditEpoch.findUnique({ where: { id: 1 }, select: { id: true } });
 	if (existing) {
 		return;
 	}
 
 	try {
-		await auditDb.auditEpoch.create({ data: { id: 1, seq, prevHash } });
+		await client.auditEpoch.create({ data: { id: 1, seq, prevHash } });
 	} catch (error) {
 		if (!isPrismaCode(error, "P2002")) {
 			throw error;

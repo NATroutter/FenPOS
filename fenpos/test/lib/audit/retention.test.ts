@@ -260,9 +260,13 @@ describe("sweepAuditNow", () => {
 			await appendEvent({ action: "audit:sweep", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 			vi.setSystemTime(new Date("2026-03-20T00:00:00Z"));
 
+			// The specific message, not a bare `.toThrow()`: a bare matcher would pass equally well on
+			// an early argument check that proved nothing about ordering. This pins the failure to the
+			// archive write itself — `new Database(path)` in `lib/archive/rotate.ts`'s `intoArchive`,
+			// the same failure `rotate.test.ts` pins for `archivePeriod` directly.
 			await expect(
 				sweepAuditNow({ retentionDays: 30 }, { archiveDirectory: join("/does/not/exist", "archives") }),
-			).rejects.toThrow();
+			).rejects.toThrow(/directory does not exist/i);
 
 			// The property this task exists for: the audit record is never deleted unarchived. Goes red
 			// the moment the sweep deletes first and archives afterwards.
