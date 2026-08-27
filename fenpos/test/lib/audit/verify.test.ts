@@ -107,15 +107,40 @@ describe("verifyAuditChain", () => {
  */
 describe("describeVerification", () => {
 	it("confirms a whole chain with the range it covered", () => {
-		const text = describeVerification({ ok: true, checked: 1204, firstSeq: 41, lastSeq: 1244 });
+		const text = describeVerification({
+			ok: true,
+			checked: 1204,
+			archived: 0,
+			live: 1204,
+			firstSeq: 41,
+			lastSeq: 1244,
+		});
 
 		expect(text).toContain("1204");
 		expect(text).toContain("41");
 		expect(text).toContain("1244");
 	});
 
+	it("says where the events it verified were read from", () => {
+		const text = describeVerification({
+			ok: true,
+			checked: 1204,
+			archived: 900,
+			live: 304,
+			firstSeq: 1,
+			lastSeq: 1204,
+		});
+
+		// Always stated, including the `0 from archives` above: a directory named wrongly reads as an
+		// intact chain, and this split is the only part of the output that says what was actually walked.
+		expect(text).toContain("900 from archives");
+		expect(text).toContain("304 live");
+	});
+
 	it("says so when there is nothing to check", () => {
-		expect(describeVerification({ ok: true, checked: 0, firstSeq: null, lastSeq: null })).toContain("no audit events");
+		expect(
+			describeVerification({ ok: true, checked: 0, archived: 0, live: 0, firstSeq: null, lastSeq: null }),
+		).toContain("no audit events");
 	});
 
 	it("names the exact sequence number where the chain breaks", () => {
@@ -123,5 +148,19 @@ describe("describeVerification", () => {
 
 		expect(text).toContain("89");
 		expect(text).toContain("hash-mismatch");
+	});
+
+	it("prints the detail a join failure carries, which names both sides", () => {
+		const text = describeVerification({
+			ok: false,
+			checked: 12,
+			brokenAt: 12,
+			reason: "archive-join-mismatch",
+			detail: "The archives end at seq 11 (hash aaa), but the anchor names seq 12 (hash bbb).",
+		});
+
+		// Without this line the operator is told two records disagree and not which two values.
+		expect(text).toContain("hash aaa");
+		expect(text).toContain("hash bbb");
 	});
 });
