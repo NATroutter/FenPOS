@@ -87,8 +87,9 @@ COPY --from=build --chown=fenpos:fenpos /build/prisma.config.ts ./prisma.config.
 # line. It reads lib/database-url.ts, which the lib/ copy further down brings along.
 COPY --from=build --chown=fenpos:fenpos /build/prisma-logs.config.ts ./prisma-logs.config.ts
 # The audit database's CLI config, for the same reason. Without it the container comes up with
-# nowhere to record what anybody did — and because that write is swallowed rather than raised, the
-# first sign of it would be an empty Audit tab.
+# nowhere to record what anybody did. The write itself fails silently — appendEvent (lib/audit/
+# audit-log.ts) swallows it — but a read does not: listAuditEvents (lib/audit/audit-query.ts) throws,
+# so the first sign of it is the Audit tab erroring the moment someone opens it, not an empty page.
 COPY --from=build --chown=fenpos:fenpos /build/prisma-audit.config.ts ./prisma-audit.config.ts
 COPY --from=build --chown=fenpos:fenpos /build/server.ts ./server.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation.ts ./instrumentation.ts
@@ -129,6 +130,9 @@ VOLUME ["/app/data"]
 # All three databases, in one command, because they are one install. The second is the logs
 # database and the third the audit record; both URLs are derived from DATABASE_URL above, so they
 # land in the same volume and no further path has to be configured. Migrating one and forgetting
-# another would start a server that serves every page and then fails on the first log line or
-# audit row it tries to record.
+# another does not crash the server: every write into either database swallows its own failure and
+# logs it instead (ingestLog in lib/logs/ingest.ts, appendEvent in lib/audit/audit-log.ts), the same
+# way recordServerLog already did. What it does mean is that nothing from that database is ever
+# recorded, and the first sign of it is the Logs or Audit tab erroring the moment someone opens it,
+# since the read paths behind those tabs do not swallow the same way.
 CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && ./node_modules/.bin/prisma migrate deploy --config prisma-audit.config.ts && exec ./node_modules/.bin/tsx server.ts"]

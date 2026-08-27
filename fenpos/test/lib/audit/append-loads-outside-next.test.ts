@@ -3,15 +3,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Proves `lib/audit/append.ts` and `lib/auth/recover.ts` are loadable from a plain node process, not
- * just from this suite.
+ * Proves `lib/audit/append.ts`, `lib/auth/recover.ts`, and `lib/audit/verify.ts` are loadable from a
+ * plain node process, not just from this suite.
  *
- * Being reachable outside Next is the entire reason both modules exist — `pnpm auth:recover` needs
- * them, and everything behind `import "server-only"` refuses that caller. But an ordinary
- * `import "@/lib/audit/append"` inside a vitest test cannot prove that: `vitest.config.mts` aliases
- * `server-only` to an empty stub so the rest of the suite can exercise server-gated modules at all,
- * which means an in-process import here would keep passing even if either module grew a
- * `server-only` dependency tomorrow — silently, since nothing else in the suite would notice.
+ * Being reachable outside Next is the entire reason all three modules exist — `pnpm auth:recover`
+ * needs the first two and `pnpm audit:verify` needs the third, and everything behind
+ * `import "server-only"` refuses those callers. But an ordinary `import "@/lib/audit/append"` inside
+ * a vitest test cannot prove that: `vitest.config.mts` aliases `server-only` to an empty stub so the
+ * rest of the suite can exercise server-gated modules at all, which means an in-process import here
+ * would keep passing even if any of the three grew a `server-only` dependency tomorrow — silently,
+ * since nothing else in the suite would notice.
  * `test/lib/audit/append.test.ts`'s fourth case even imports `audit-log.ts` in the same process,
  * which only works because of that same alias.
  *
@@ -38,7 +39,7 @@ import { describe, expect, it } from "vitest";
  */
 const SPAWN_TIMEOUT_MS = 60_000;
 
-describe("lib/audit/append.ts and lib/auth/recover.ts", () => {
+describe("lib/audit/append.ts, lib/auth/recover.ts, and lib/audit/verify.ts", () => {
 	it(
 		"import cleanly outside Next, with no server-only alias to hide behind",
 		() => {

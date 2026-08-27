@@ -33,6 +33,36 @@ export const envSchema = z.object({
 		}),
 
 	/**
+	 * Overrides the derived path to the logs database. See {@link LOGS_DATABASE_URL} for when to
+	 * set this — most installs should leave it unset and let it derive from `DATABASE_URL`.
+	 *
+	 * Optional, but validated the same way `DATABASE_URL` is when present: an unscoped string here
+	 * would reach `PrismaClient` unchecked and fail on the first query. Both `ingestLog` (`lib/logs/
+	 * ingest.ts`) and `recordServerLog` (`lib/logs/log-service.ts`) swallow that failure and log it
+	 * rather than raise it, so a typo here is how an install silently stops recording log lines.
+	 */
+	LOGS_DATABASE_URL: z
+		.string()
+		.refine((value) => value.startsWith("file:"), {
+			message: "must be a SQLite file URL beginning with file:",
+		})
+		.optional(),
+
+	/**
+	 * Overrides the derived path to the audit database. See {@link AUDIT_DATABASE_URL}.
+	 *
+	 * The same validation as `LOGS_DATABASE_URL` above, for the sharper version of the same reason:
+	 * `appendEvent` (`lib/audit/audit-log.ts`) swallows a write failure too, and the audit chain is
+	 * what an investigation reads, so a typo here is how an install silently stops recording it.
+	 */
+	AUDIT_DATABASE_URL: z
+		.string()
+		.refine((value) => value.startsWith("file:"), {
+			message: "must be a SQLite file URL beginning with file:",
+		})
+		.optional(),
+
+	/**
 	 * Signing key for Better Auth's cookies and tokens.
 	 *
 	 * Required with no default, deliberately. A generated-if-absent fallback would mean every
@@ -107,8 +137,7 @@ export const isProduction = env.NODE_ENV === "production";
  * directory, so derivation alone would hand them all the same logs file. `prisma-logs.config.ts`
  * gives the variable the same precedence, so the CLI and the running server always agree.
  */
-export const LOGS_DATABASE_URL: string =
-	process.env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "logs.db");
+export const LOGS_DATABASE_URL: string = env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "logs.db");
 
 /**
  * Where the audit database lives, derived the same way {@link LOGS_DATABASE_URL} is.
@@ -124,8 +153,7 @@ export const LOGS_DATABASE_URL: string =
  * directory, so derivation alone would hand them all the same audit file. `prisma-audit.config.ts`
  * gives the variable the same precedence, so the CLI and the running server always agree.
  */
-export const AUDIT_DATABASE_URL: string =
-	process.env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
+export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
 
 /**
  * Re-exported here so callers needing a sibling database reach it beside the URL it is derived

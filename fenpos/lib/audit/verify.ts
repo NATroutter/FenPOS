@@ -419,9 +419,10 @@ const AUDIT_ARCHIVE_NAME = /^audit-(\d{4}-\d{2})\.db(\.gz)?$/;
  * failure to read the directory is raised: a directory that cannot be read is not a directory known to
  * hold nothing, and reporting the chain intact because the archives were unreadable would be a lie.
  *
- * At most one file per period. When both a `.db.gz` and its `.db` are present — which is what rotation
- * leaves if compression succeeded and removing the plain file did not — they hold the same rows, so the
- * compressed one is taken and the period is walked once.
+ * At most one file per period. When both a `.db.gz` and its `.db` are present, the `.db` is taken:
+ * `compress` (`lib/archive/rotate.ts`) writes the `.gz` under its final name and removes the `.db`
+ * only once compression has succeeded, so a process killed mid-pipeline leaves a truncated `.gz`
+ * beside a complete `.db` — of the two, only the `.db` is guaranteed to hold every row.
  *
  * @param directory where the archives are
  * @returns one entry per archived period, in the order the chain runs through them
@@ -447,7 +448,7 @@ function auditArchives(directory: string): AuditArchive[] {
 		const [, periodKey, extension] = match;
 		const found: AuditArchive = { periodKey, path: join(directory, name), compressed: extension !== undefined };
 		const existing = byPeriod.get(periodKey);
-		if (existing === undefined || (found.compressed && !existing.compressed)) {
+		if (existing === undefined || (!found.compressed && existing.compressed)) {
 			byPeriod.set(periodKey, found);
 		}
 	}

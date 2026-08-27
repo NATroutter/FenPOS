@@ -95,6 +95,12 @@ async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
 /**
  * Records a log line an agent sent.
  *
+ * **Never throws**, for the same reason `recordServerLog` (`lib/logs/log-service.ts`) never does: the
+ * caller is `agent-connection.ts`'s frame switch, which invokes this as `void ingestLog(...)` with
+ * nothing to catch a rejection, and the project installs no `unhandledRejection` handler. An
+ * unmigrated, unwritable, or full `logs.db` must not turn one agent's log line into a crash — and
+ * under `compose.yaml`'s `restart: unless-stopped`, a crash there is a crash loop, not a one-off.
+ *
  * @param agentId the agent that sent it
  * @param frame the line
  * @returns whether it was recorded
@@ -108,60 +114,67 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 	// guaranteed to have run at least once by the time any window exists.
 	const settings = globalForIngest.fenposLogIngestSettings as LogIngestSettings;
 
-	// Resolved by name within this agent, so a agent cannot attribute a line to another's device
-	// by naming it. A name that matches nothing records the line against the agent alone.
-	//
-	// Run alongside the agent's own name, rather than after it: `LogEntry.agentName` denormalises
-	// the name onto the row for the same reason `AuditEvent` denormalises its actor (see
-	// `prisma/logs.prisma`), and `LogFrame` carries no name for the server to reuse, so a lookup is
-	// unavoidable — the two run together so it costs no extra round trip over resolving the device
-	// alone.
-	const [device, agent] = await Promise.all([
-		frame.device
-			? prisma.device.findFirst({
-					where: { agentId, name: frame.device },
-					select: { id: true },
-				})
-			: null,
-		prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } }),
-	]);
+	try {
+		// Resolved by name within this agent, so a agent cannot attribute a line to another's device
+		// by naming it. A name that matches nothing records the line against the agent alone.
+		//
+		// Run alongside the agent's own name, rather than after it: `LogEntry.agentName` denormalises
+		// the name onto the row for the same reason `AuditEvent` denormalises its actor (see
+		// `prisma/logs.prisma`), and `LogFrame` carries no name for the server to reuse, so a lookup is
+		// unavoidable — the two run together so it costs no extra round trip over resolving the device
+		// alone.
+		const [device, agent] = await Promise.all([
+			frame.device
+				? prisma.device.findFirst({
+						where: { agentId, name: frame.device },
+						select: { id: true },
+					})
+				: null,
+			prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } }),
+		]);
 
-	// Only when the name actually resolved to a device of this agent's: a name that matches
-	// nothing, or names another agent's device, attributes the line to no device at all (see the
-	// lookup above). Shared between the stored row and the published event below, so a live
-	// subscriber and a page reload cannot disagree about what the line was attributed to.
-	const deviceName = device ? (frame.device ?? null) : null;
+		// Only when the name actually resolved to a device of this agent's: a name that matches
+		// nothing, or names another agent's device, attributes the line to no device at all (see the
+		// lookup above). Shared between the stored row and the published event below, so a live
+		// subscriber and a page reload cannot disagree about what the line was attributed to.
+		const deviceName = device ? (frame.device ?? null) : null;
 
-	const entry = await logsDb.logEntry.create({
-		data: {
-			level: frame.level,
-			// Derived here rather than at read time: the filter and the Level ordering both run in the
-			// database, and neither can compare a level string.
-			severity: LOG_SEVERITY[frame.level],
-			message: frame.message.slice(0, settings.maxMessageChars),
+		const entry = await logsDb.logEntry.create({
+			data: {
+				level: frame.level,
+				// Derived here rather than at read time: the filter and the Level ordering both run in
+				// the database, and neither can compare a level string.
+				severity: LOG_SEVERITY[frame.level],
+				message: frame.message.slice(0, settings.maxMessageChars),
+				agentId,
+				agentName: agent?.name ?? null,
+				deviceId: device?.id ?? null,
+				deviceName,
+				// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
+				// the row's own sequence, since agent clocks are not synchronised with each other.
+				ts: new Date(frame.at),
+			},
+			select: { id: true, ts: true, level: true, message: true },
+		});
+
+		publish({
+			kind: "log",
+			id: entry.id,
+			at: entry.ts.toISOString(),
+			level: entry.level as LogLevel,
+			message: entry.message,
 			agentId,
-			agentName: agent?.name ?? null,
-			deviceId: device?.id ?? null,
 			deviceName,
-			// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
-			// the row's own sequence, since agent clocks are not synchronised with each other.
-			ts: new Date(frame.at),
-		},
-		select: { id: true, ts: true, level: true, message: true },
-	});
+		});
 
-	publish({
-		kind: "log",
-		id: entry.id,
-		at: entry.ts.toISOString(),
-		level: entry.level as LogLevel,
-		message: entry.message,
-		agentId,
-		deviceName,
-	});
-
-	void sweepOccasionally(settings.retentionDays, settings.sweepEvery);
-	return true;
+		void sweepOccasionally(settings.retentionDays, settings.sweepEvery);
+		return true;
+	} catch (error) {
+		// Swallowed on purpose — see the doc comment above. Logged with the agent id so a line missing
+		// from the Logs tab is diagnosable rather than merely absent.
+		logger.error("Could not record an agent's log line", error, { agentId });
+		return false;
+	}
 }
 
 /**

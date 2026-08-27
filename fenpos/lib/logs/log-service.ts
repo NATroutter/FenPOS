@@ -198,7 +198,7 @@ export async function recordServerLog(
 				level: entry.level as LogLevel,
 				message: entry.message,
 				agentId: target.agentId,
-				deviceName: null,
+				deviceName: target.deviceName ?? null,
 			});
 		}
 
