@@ -1,4 +1,6 @@
+import type { Database } from "better-sqlite3";
 import type { PrismaClient } from "@/generated/prisma-audit/client";
+import type { ChainedFields } from "@/lib/audit/chain";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
 
 /**
@@ -110,6 +112,122 @@ export async function verifyAuditChain(db: AuditChainReader): Promise<ChainVerif
 
 		cursor = rows[rows.length - 1].seq;
 	}
+}
+
+/**
+ * The chain state an archive is verified against.
+ *
+ * The same two columns `AuditAnchor` holds, and for the same reason — an archived chain's oldest row
+ * links to an event that is not in the file with it — but not read from an `AuditAnchor` row, because
+ * an archive has no such table. `lib/archive/rotate.ts` passes the live anchor as it stood before the
+ * rows left, which at that moment is exactly what precedes the archive's oldest row.
+ */
+export interface ArchiveAnchor {
+	/** `seq` of the last event swept or archived before this file's oldest row. */
+	seq: number;
+	/** That event's `hash`, which this file's oldest row's `prevHash` must equal. */
+	hash: string;
+}
+
+/**
+ * An archived audit row exactly as SQLite hands it back.
+ *
+ * Snake-case because an archive is written with the same DDL as `audit_events`, and `at` as text
+ * because that is the encoding `lib/archive/rotate.ts` writes: ISO-8601 with an explicit offset, the
+ * same form the live database stores, so reading one back never involves guessing.
+ */
+interface StoredAuditRow {
+	seq: number;
+	at: string;
+	actor_kind: string;
+	actor_user_id: string | null;
+	actor_name: string | null;
+	actor_email: string | null;
+	api_key_id: string | null;
+	api_key_name: string | null;
+	action: string;
+	target_kind: string | null;
+	target_id: string | null;
+	target_label: string | null;
+	outcome: string;
+	detail: string | null;
+	ip_address: string | null;
+	user_agent: string | null;
+	session_id: string | null;
+	prev_hash: string;
+	hash: string;
+}
+
+/**
+ * Presents an archive file to {@link verifyAuditChain} as though it were the audit database.
+ *
+ * An archived period has to be checkable, or it is a file nobody can trust and the rotation that made
+ * it destroyed the only copy that could be. This is what makes that check the *same* check: rather
+ * than a second implementation of the hash walk — which is how two implementations come to disagree
+ * about a stored contract — the archive is wrapped in the reads {@link AuditChainReader} names, and
+ * the one verifier walks it.
+ *
+ * Read-only in the same deliberate sense as the rest of this module: the object below implements
+ * exactly `auditAnchor.findUnique` and the `seq > cursor` form of `auditEvent.findMany`, which is all
+ * the walk calls, and nothing that could write. It is a structural stand-in and not a Prisma client,
+ * so it is cast rather than typed into place; anything the walk does not call is absent.
+ *
+ * **`at` comes back as a `Date`, and that is load-bearing.** It is one of the sixteen fields the hash
+ * covers, and `hashEvent` serialises a `Date` through `toISOString` — hand the walk the raw stored
+ * string and every row recomputes to a different digest and reads as tampered.
+ *
+ * @param archive an open handle on an archive file; the caller opens and closes it
+ * @param anchor what precedes the archive's oldest row, or null when the archive starts at genesis
+ * @returns a reader {@link verifyAuditChain} accepts
+ */
+export function archiveChainReader(archive: Database, anchor: ArchiveAnchor | null): AuditChainReader {
+	const select = archive.prepare("SELECT * FROM audit_events WHERE seq > ? ORDER BY seq ASC LIMIT ?");
+
+	const reader = {
+		auditAnchor: {
+			findUnique: async (): Promise<ArchiveAnchor | null> => anchor,
+		},
+		auditEvent: {
+			findMany: async (args: { where: { seq: { gt: number } }; take: number }) =>
+				(select.all(args.where.seq.gt, args.take) as StoredAuditRow[]).map(fromStored),
+		},
+	};
+
+	return reader as unknown as AuditChainReader;
+}
+
+/**
+ * Restores an archived row to the shape the chain was hashed over.
+ *
+ * The return type is {@link ChainedFields} plus the three chain columns rather than a hand-written
+ * list, so a field added to the canonical form is a type error here instead of a row that quietly
+ * hashes to something else.
+ *
+ * @param row the row as stored
+ * @returns the same row in the client's naming, with `at` back as a moment
+ */
+function fromStored(row: StoredAuditRow): ChainedFields & { seq: number; prevHash: string; hash: string } {
+	return {
+		seq: row.seq,
+		at: new Date(row.at),
+		actorKind: row.actor_kind,
+		actorUserId: row.actor_user_id,
+		actorName: row.actor_name,
+		actorEmail: row.actor_email,
+		apiKeyId: row.api_key_id,
+		apiKeyName: row.api_key_name,
+		action: row.action,
+		targetKind: row.target_kind,
+		targetId: row.target_id,
+		targetLabel: row.target_label,
+		outcome: row.outcome,
+		detail: row.detail,
+		ipAddress: row.ip_address,
+		userAgent: row.user_agent,
+		sessionId: row.session_id,
+		prevHash: row.prev_hash,
+		hash: row.hash,
+	};
 }
 
 /**

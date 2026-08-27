@@ -45,20 +45,39 @@ export interface SweepOutcome {
  * @returns what the sweep did, or null when nothing has aged out
  */
 export async function sweepAuditNow(bounds: { retentionDays: number }): Promise<SweepOutcome | null> {
-	const boundary = await ageBoundary(bounds.retentionDays);
-	if (boundary === 0) {
+	return await removeAuditThrough(await ageBoundary(bounds.retentionDays));
+}
+
+/**
+ * Removes every event up to and including `boundarySeq`, and re-anchors the chain on it.
+ *
+ * The mechanism behind {@link sweepAuditNow}, exposed separately because it has a second caller that
+ * knows its boundary as a `seq` rather than as an age. `lib/archive/rotate.ts` has already copied a
+ * prefix of the chain into a period file and has to remove **exactly** the rows it copied; deriving a
+ * retention window from that boundary and handing it back to `sweepAuditNow` would let the two
+ * disagree about which rows are going, which is the one mistake neither caller may make.
+ *
+ * Taking a `seq` rather than a set of them is not a convenience: retention and rotation both remove a
+ * prefix, because a chain with a hole anywhere but its oldest end cannot be vouched for by an anchor —
+ * see the module comment above. `lte` is what makes that structural rather than a caller's promise.
+ *
+ * @param boundarySeq the newest event to remove; 0 when there is nothing to remove
+ * @returns what was removed, or null when the boundary names nothing
+ */
+export async function removeAuditThrough(boundarySeq: number): Promise<SweepOutcome | null> {
+	if (boundarySeq === 0) {
 		return null;
 	}
 
 	// Read before the delete, and read for its hash: this row is about to stop existing, and its hash
 	// is the only thing that will let the row after it still verify.
-	const last = await auditDb.auditEvent.findUnique({ where: { seq: boundary }, select: { seq: true, hash: true } });
+	const last = await auditDb.auditEvent.findUnique({ where: { seq: boundarySeq }, select: { seq: true, hash: true } });
 	if (!last) {
 		return null;
 	}
 
 	return await auditDb.$transaction(async (tx) => {
-		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundary } } });
+		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundarySeq } } });
 		await tx.auditAnchor.upsert({
 			where: { id: 1 },
 			update: { seq: last.seq, hash: last.hash },
