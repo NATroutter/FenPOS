@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { PANEL_ACTIONS, registryEntryFor } from "@/lib/auth/panel-actions";
 
 /**
@@ -104,6 +105,45 @@ describe("panel action coverage", () => {
 		// permission, register it as `self` or `unauthenticated` and say why — the point is that
 		// ungated is a decision somebody wrote down, not an omission.
 		expect(missing).toEqual([]);
+	});
+
+	/**
+	 * The other half of "an entry's `id` is what the audit record stores in `action`".
+	 *
+	 * `panel-action.ts`'s `record()` writes `action: entry.id` straight from the registry, so most
+	 * entries keep that sentence true by construction. A handful write their own row instead — the
+	 * `unauthenticated` actions, sign-out, and `settings:save` — and for those the id here and the
+	 * string written there are two spellings that have to agree. They did not, once: `signOut` was
+	 * registered as `self:sign-out` while recording `auth:sign-out`, which made `panel-actions.ts`'s
+	 * own module comment false and offered `/audit` a filter that could only ever return no rows. A
+	 * human reading found that; nothing would have found it twice.
+	 *
+	 * Scoped to modules that actually call `recordAudit`, and reading only the two forms a written
+	 * action takes — an `AUTH_AUDIT_ACTIONS` member or a bare literal — so `/audit`'s own
+	 * `action: params.action` filter is not mistaken for a write.
+	 */
+	it("writes no audit action from app/ that the registry does not name", () => {
+		// Widened to `string` deliberately: `PANEL_ACTIONS`'s ids narrow to a literal union, and a
+		// `Set` of that union refuses `has(someString)` — which is the exact question being asked.
+		const registered = new Set<string>(PANEL_ACTIONS.map((entry) => entry.id));
+		const written: string[] = [];
+
+		for (const file of sourceFiles(APP_ROOT)) {
+			const source = withoutComments(readFileSync(join(APP_ROOT, file), "utf8"));
+			if (!source.includes("recordAudit(")) {
+				continue;
+			}
+			for (const match of source.matchAll(/\baction:\s*AUTH_AUDIT_ACTIONS\.(\w+)/g)) {
+				written.push(AUTH_AUDIT_ACTIONS[match[1] as keyof typeof AUTH_AUDIT_ACTIONS]);
+			}
+			for (const match of source.matchAll(/\baction:\s*"([^"]+)"/g)) {
+				written.push(match[1]);
+			}
+		}
+
+		// A guard on this scan, like the walker's own above: matching nothing would pass vacuously.
+		expect(written.length).toBeGreaterThanOrEqual(12);
+		expect([...new Set(written)].filter((action) => !registered.has(action))).toEqual([]);
 	});
 
 	it("has no registry entry pointing at an export that no longer exists", () => {

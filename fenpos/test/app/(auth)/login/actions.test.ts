@@ -96,8 +96,21 @@ describe("signIn", () => {
 	});
 
 	it("gives the same message for a malformed submission", async () => {
+		signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+		const wrongPassword = await signIn(
+			{ error: null, twoFactorRequired: false },
+			form({ email: "known@example.com", password: "nope" }),
+		);
+
+		signInLimiter.reset("203.0.113.30");
+		signInEmail.mockClear();
 		const malformed = await signIn({ error: null, twoFactorRequired: false }, form({ email: "", password: "" }));
-		expect(malformed.error).not.toBeNull();
+
+		// Compared against the wrong-password message rather than merely asserted non-null. "The same
+		// message" is the property this test is named for, and a bare non-null assertion stays green
+		// against a branch that answers "an email address is required" — which is the disclosure the
+		// uniform message exists to refuse.
+		expect(malformed.error).toBe(wrongPassword.error);
 		expect(signInEmail).not.toHaveBeenCalled();
 	});
 
@@ -241,6 +254,23 @@ describe("the gates before the credential", () => {
 			expect(signInEmail).not.toHaveBeenCalled();
 		});
 
+		it("gives a locked account the same message a wrong password gets", async () => {
+			// The branch's own comment says "deliberately not 'this account is locked'", because a message
+			// that said so would confirm the address holds an account and hand an attacker a way to
+			// enumerate them by locking each one in turn. The test above asserts only that *some* message
+			// came back, which stays green against exactly that disclosure — so the comparison lives here.
+			await setSetting("auth.lockoutAfterFailures", 2);
+			const email = await account("li6");
+			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
+			const wrongPassword = await signIn({ error: null, twoFactorRequired: false }, form({ email, password: "wrong" }));
+
+			signInLimiter.reset("203.0.113.30");
+			await prisma.user.update({ where: { id: "li6" }, data: { lockedUntil: new Date(Date.now() + 60_000) } });
+			const locked = await signIn({ error: null, twoFactorRequired: false }, form({ email, password: "wrong" }));
+
+			expect(locked.error).toBe(wrongPassword.error);
+		});
+
 		it("records a locked refusal as such", async () => {
 			await setSetting("auth.lockoutAfterFailures", 2);
 			const email = await account("li3");
@@ -279,6 +309,69 @@ describe("the gates before the credential", () => {
 			expect(user.failedSignInCount).toBe(0);
 			expect(user.lockedUntil).toBeNull();
 		});
+	});
+});
+
+/**
+ * A banned account, refused by the library rather than by the panel.
+ *
+ * `signIn`'s own doc comment claims the ban is "enforced at the credential layer rather than by a
+ * check the panel could forget to make", and this file's header names a banned account among the
+ * refusals that must be indistinguishable — but every test above mocks `signInEmail`, which refuses
+ * identically whatever the reason and so could never tell either claim from its opposite. This one
+ * drives the real endpoint with the account's *correct* password, leaving the ban as the only thing
+ * that can turn it away.
+ *
+ * **Which assertion is load-bearing, so nobody simplifies the wrong half away.** It is not
+ * `expect(banned.error).toBe(wrongPassword.error)` — on its own that is close to a tautology, since
+ * both values come from the single `return` in `signIn`'s one `catch` (`login/actions.ts:166`). What
+ * proves the ban is enforced is that the correct-password submission reached that catch at all: had
+ * it not been refused it would have redirected, and the `next/navigation` mock at the top of this
+ * file turns that into a thrown `REDIRECT:/dashboard` that fails the test before any assertion runs.
+ * `expect(await prisma.session.count()).toBe(0)` is the second half of the same statement — a ban
+ * that merely returned a message while minting a session would be no ban. Both depend on
+ * `signInEmail` being the *real* endpoint here: point it back at a mock and this test keeps passing
+ * while proving nothing.
+ */
+describe("a banned account", () => {
+	beforeEach(async () => {
+		signInLimiter.reset("203.0.113.30");
+		headersMock.mockReset().mockResolvedValue(new Headers());
+		signInEmail
+			.mockReset()
+			.mockImplementation((args: Parameters<typeof actualAuth.auth.api.signInEmail>[0]) =>
+				actualAuth.auth.api.signInEmail(args),
+			);
+
+		await prisma.session.deleteMany({});
+		await prisma.account.deleteMany({});
+		await prisma.user.deleteMany({});
+		await prisma.setting.deleteMany({});
+		await prisma.auditEvent.deleteMany({});
+		await prisma.auditAnchor.deleteMany({});
+	});
+
+	it("is refused with the message a wrong password gets, and is left with no session", async () => {
+		const { user } = await signedInUser("banned@example.test", "correct horse battery staple");
+		await prisma.user.update({ where: { id: user.id }, data: { banned: true, banReason: "testing" } });
+		// The sign-in `signedInUser` performed left a live session behind; the count below is about the
+		// session this test's own refused attempt did or did not create.
+		await prisma.session.deleteMany({});
+		headersMock.mockResolvedValue(new Headers());
+
+		const banned = await signIn(
+			{ error: null, twoFactorRequired: false },
+			form({ email: "banned@example.test", password: "correct horse battery staple" }),
+		);
+
+		signInLimiter.reset("203.0.113.30");
+		const wrongPassword = await signIn(
+			{ error: null, twoFactorRequired: false },
+			form({ email: "banned@example.test", password: "not the password at all" }),
+		);
+
+		expect(banned.error).toBe(wrongPassword.error);
+		expect(await prisma.session.count()).toBe(0);
 	});
 });
 

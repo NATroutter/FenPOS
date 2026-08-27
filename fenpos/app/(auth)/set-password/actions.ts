@@ -1,11 +1,10 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
-import { auth } from "@/lib/auth/auth";
+import { CREDENTIAL_ISSUER } from "@/lib/auth/credential-account";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
 import { assertNotReused, recordPasswordChange } from "@/lib/auth/password-history";
 import { currentUser } from "@/lib/auth/require-session";
@@ -84,28 +83,36 @@ export async function setPassword(_previous: SetPasswordState, formData: FormDat
 		return { error: error instanceof ApiError ? error.message : "That password is not acceptable." };
 	}
 
-	// `auth.api.setPassword` is the wrong endpoint for this: it throws `PASSWORD_ALREADY_SET`
-	// (better-auth/dist/api/routes/update-user.mjs) the moment the account already has a
-	// credential row, which every account reaching this page does — `setup.ts` writes
+	// Neither `auth.api.setPassword` nor `auth.api.setUserPassword` will do here.
+	// `auth.api.setPassword` (better-auth/dist/api/routes/update-user.mjs) throws
+	// `PASSWORD_ALREADY_SET` the moment the account already has a credential row, which every
+	// account reaching this page does — `setup.ts` and `account-service.ts` both write
 	// `account.password` directly, and nothing in this codebase creates a user without one. That
 	// would make this page a dead end: refused on the one submission it exists to accept.
-	// `auth.api.setUserPassword` (better-auth/dist/plugins/admin/routes.mjs) is built for exactly
-	// this — it updates an existing credential instead of refusing it — but it runs behind the
-	// admin plugin's `adminMiddleware` and a `user:["set-password"]` permission check, so the
-	// caller's own session must already carry the "admin" role. Right now every account does:
-	// `setup.ts` is the only place a user is created, and it always sets `role: "admin"`. Passing
-	// the signed-in user's own id lets an account clear its own forced reset. This stops being true
-	// the moment a later phase creates a non-admin account with "Require password reset" ticked —
-	// tracked there, not fixed here.
-	await auth.api.setUserPassword({
-		body: { userId: user.id, newPassword: parsed.data },
-		headers: await headers(),
+	// `auth.api.setUserPassword` (better-auth/dist/plugins/admin/routes.mjs) runs behind the admin
+	// plugin's `adminMiddleware`, which checks the caller's own session role against `adminRoles`
+	// (default `["admin"]`) — and `account-service.ts` makes `"user"` the default role for every
+	// panel-made account, so that endpoint refuses exactly the callers this page exists to unblock.
+	// Nor is this `setAccountPassword` (`lib/auth/account-security.ts`): that function ends every
+	// session the account holds, and the caller's own current session is one of them — the
+	// `redirect("/dashboard")` below would then bounce straight back to `/login`. So this writes the
+	// credential row directly instead, matching `setAccountPassword`'s own write: the row is found
+	// by `{ userId, issuer: CREDENTIAL_ISSUER }` rather than a key Prisma can address, so
+	// `updateMany` rather than `update`, and its count is checked so an account with no credential
+	// is reported rather than silently left with the password it had.
+	const passwordHash = await hashPassword(parsed.data);
+	const { count } = await prisma.account.updateMany({
+		where: { userId: user.id, issuer: CREDENTIAL_ISSUER },
+		data: { password: passwordHash, updatedAt: new Date() },
 	});
+	if (count === 0) {
+		return { error: "That account has no password to replace." };
+	}
 
-	// Recorded after the store, for the same reason the flag is cleared after it. The hash here is a
-	// second hash of the same password — argon2 salts each one, so it differs from the stored one by
-	// design and `verifyPassword` matches either.
-	await recordPasswordChange(user.id, await hashPassword(parsed.data));
+	// Recorded after the store, for the same reason the flag is cleared after it. The hash passed
+	// here is the same one just written above, not a second call to `hashPassword` — nothing needs
+	// two independently salted hashes of the same password, only the one that is now on the row.
+	await recordPasswordChange(user.id, passwordHash);
 
 	// Cleared after the password is actually stored, not before. The other order would leave an
 	// account free of the requirement but still holding the password it was told to replace, if

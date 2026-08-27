@@ -1,5 +1,8 @@
 import "server-only";
+import { NO_PROVENANCE, type RequestProvenance } from "@/lib/audit/provenance-shape";
 import { getClientAddress, getUserAgent } from "@/lib/request-context";
+
+export { NO_PROVENANCE, type RequestProvenance };
 
 /**
  * Where a request came from, as the audit record wants it.
@@ -9,26 +12,12 @@ import { getClientAddress, getUserAgent } from "@/lib/request-context";
  * length — the rightmost `X-Forwarded-For` hop, because the leftmost is whatever the client
  * claimed. An audit row that recorded a different address than the rate limiter keyed on would be
  * worse than one that recorded none.
+ *
+ * `RequestProvenance` and `NO_PROVENANCE` themselves live in `lib/audit/provenance-shape.ts` and are
+ * re-exported above unchanged: they carry no dependency on `next/headers`, so a module that only
+ * needs to name or default a provenance — `lib/audit/append.ts`, for the CLI's case — can import
+ * that file directly and skip the `import "server-only"` below.
  */
-
-/** Request details attached to an audit row. */
-export interface RequestProvenance {
-	ipAddress: string | null;
-	userAgent: string | null;
-	/**
-	 * The session the row names as having taken the action, when the caller knows one.
-	 *
-	 * Not a guarantee that this is the session that *authenticated* the request — a caller whose own
-	 * work rotates its session, such as `panel-action.ts`'s `record()` via `currentSessionId`, reads
-	 * it fresh at write time instead, so the row names the session the request ended up on rather
-	 * than the one it started with. A caller that never rotates its own session, which is every other
-	 * one in this codebase, passes the id it resolved at the top of the request, and the two coincide.
-	 */
-	sessionId: string | null;
-}
-
-/** What a writer outside any request — the CLI, a startup task — records. */
-export const NO_PROVENANCE: RequestProvenance = { ipAddress: null, userAgent: null, sessionId: null };
 
 /**
  * Reads this request's provenance.
