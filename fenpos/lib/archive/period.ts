@@ -34,11 +34,26 @@ export interface PeriodBoundary {
  * UTC throughout, for the reason {@link periodKeyFor} gives — a boundary that moved with the host's
  * zone would make two files claim the same month and neither hold all of it.
  *
+ * An invalid `Date` in either argument is refused rather than absorbed: `NaN` fields never satisfy
+ * the wraparound check and `before.getTime() > NaN` is always `false`, so a silent tolerance here
+ * would walk forever, pushing periods until the process runs out of memory. That is worse than a
+ * thrown error reaching an unattended caller — Task 5 runs this on an hourly timer from a cutoff
+ * derived from a stored setting, and a corrupt setting should fail one visible sweep, not hang the
+ * container it runs in.
+ *
  * @param oldest the oldest row still live; periods before it hold nothing
  * @param cutoff the retention boundary — rows older than this have aged out
  * @returns one entry per due period, oldest first; empty when nothing has fully aged out
+ * @throws {Error} if `oldest` or `cutoff` is not a valid `Date`
  */
 export function periodsFullyBefore(oldest: Date, cutoff: Date): PeriodBoundary[] {
+	if (Number.isNaN(oldest.getTime())) {
+		throw new Error("periodsFullyBefore: oldest is an invalid Date");
+	}
+	if (Number.isNaN(cutoff.getTime())) {
+		throw new Error("periodsFullyBefore: cutoff is an invalid Date");
+	}
+
 	const due: PeriodBoundary[] = [];
 
 	// The first instant of the month the oldest row is in, then walked forward a month at a time.
