@@ -86,6 +86,10 @@ COPY --from=build --chown=fenpos:fenpos /build/prisma.config.ts ./prisma.config.
 # Without this file that migration fails and the container comes up with nowhere to put a log
 # line. It reads lib/database-url.ts, which the lib/ copy further down brings along.
 COPY --from=build --chown=fenpos:fenpos /build/prisma-logs.config.ts ./prisma-logs.config.ts
+# The audit database's CLI config, for the same reason. Without it the container comes up with
+# nowhere to record what anybody did — and because that write is swallowed rather than raised, the
+# first sign of it would be an empty Audit tab.
+COPY --from=build --chown=fenpos:fenpos /build/prisma-audit.config.ts ./prisma-audit.config.ts
 COPY --from=build --chown=fenpos:fenpos /build/server.ts ./server.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation.ts ./instrumentation.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation-runtime.ts ./instrumentation-runtime.ts
@@ -122,8 +126,9 @@ VOLUME ["/app/data"]
 # volume the image has never seen. Deploy rather than dev: it applies what is
 # committed and refuses to invent a migration against a production database.
 #
-# Both databases, in one command, because they are one install. The second is the logs
-# database; its URL is derived from DATABASE_URL above, so it lands in the same volume and
-# no second path has to be configured. Migrating one and forgetting the other would start a
-# server that serves every page and then fails on the first log line it tries to record.
-CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && exec ./node_modules/.bin/tsx server.ts"]
+# All three databases, in one command, because they are one install. The second is the logs
+# database and the third the audit record; both URLs are derived from DATABASE_URL above, so they
+# land in the same volume and no further path has to be configured. Migrating one and forgetting
+# another would start a server that serves every page and then fails on the first log line or
+# audit row it tries to record.
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && ./node_modules/.bin/prisma migrate deploy --config prisma-audit.config.ts && exec ./node_modules/.bin/tsx server.ts"]

@@ -55,7 +55,7 @@ vi.mock("@/lib/auth/auth", () => ({
 
 const { signIn, verifyTwoFactor } = await import("@/app/(auth)/login/actions");
 const { signInLimiter } = await import("@/lib/auth/rate-limit");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 const { beginEnrolment, confirmEnrolment } = await import("@/lib/auth/two-factor");
 const actualAuth = await vi.importActual<typeof import("@/lib/auth/auth")>("@/lib/auth/auth");
@@ -74,8 +74,8 @@ describe("signIn", () => {
 		signInEmail.mockReset();
 		headersMock.mockReset().mockResolvedValue(new Headers());
 		await prisma.setting.deleteMany({});
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 	});
 
 	it("gives one message for a wrong password and for an unknown address", async () => {
@@ -159,8 +159,8 @@ describe("the gates before the credential", () => {
 		headersMock.mockReset().mockResolvedValue(new Headers());
 		await prisma.user.deleteMany({});
 		await prisma.setting.deleteMany({});
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 	});
 
 	describe("address allowlist", () => {
@@ -204,7 +204,7 @@ describe("the gates before the credential", () => {
 				form({ email: "known@example.com", password: "correct" }),
 			);
 
-			const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+			const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 			expect(row.outcome).toBe("DENIED");
 			expect(row.detail).toContain("address-not-allowed");
 		});
@@ -278,7 +278,7 @@ describe("the gates before the credential", () => {
 
 			await signIn({ error: null, twoFactorRequired: false }, form({ email, password: "correct" }));
 
-			const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+			const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 			expect(row.detail).toContain("locked");
 		});
 
@@ -347,8 +347,8 @@ describe("a banned account", () => {
 		await prisma.account.deleteMany({});
 		await prisma.user.deleteMany({});
 		await prisma.setting.deleteMany({});
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 	});
 
 	it("is refused with the message a wrong password gets, and is left with no session", async () => {
@@ -525,8 +525,8 @@ describe("two-factor at sign-in", () => {
 		await prisma.account.deleteMany({});
 		await prisma.user.deleteMany({});
 		await prisma.setting.deleteMany({});
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 	});
 
 	it("defers instead of signing in when the account is enrolled", async () => {
@@ -552,7 +552,7 @@ describe("two-factor at sign-in", () => {
 		expect(state.error).not.toBeNull();
 		expect(state.twoFactorRequired).toBe(true);
 
-		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 		expect(row.action).toBe("auth:two-factor");
 		expect(row.outcome).toBe("DENIED");
 		// The property under test: nothing about whose account this was reaches the row. Asserting only

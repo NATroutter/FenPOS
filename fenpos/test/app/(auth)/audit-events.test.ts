@@ -31,7 +31,7 @@ const { AUTH_AUDIT_ACTIONS } = await import("@/lib/audit/auth-events");
 const { verifyAuditChain } = await import("@/lib/audit/verify");
 const { rotateSetupKey } = await import("@/lib/auth/setup-key");
 const { setupLimiter, signInLimiter } = await import("@/lib/auth/rate-limit");
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 
 function form(fields: Record<string, string>): FormData {
 	const data = new FormData();
@@ -43,7 +43,7 @@ function form(fields: Record<string, string>): FormData {
 
 /** The most recent row, which is the one the action under test just wrote. */
 async function lastEvent() {
-	return prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+	return auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
 }
 
 describe("auth audit events", () => {
@@ -51,8 +51,8 @@ describe("auth audit events", () => {
 		signInLimiter.reset("203.0.113.40");
 		setupLimiter.reset("203.0.113.40");
 		signInEmail.mockReset();
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 		await prisma.setupKey.deleteMany({});
 		await prisma.session.deleteMany({});
 		await prisma.account.deleteMany({});
@@ -121,7 +121,7 @@ describe("auth audit events", () => {
 
 		// Passing this action proves nothing and grants nothing; the real check is inside
 		// `completeSetup`'s transaction. Recording the successes would bury the refusals.
-		expect(await prisma.auditEvent.count()).toBe(0);
+		expect(await auditDb.auditEvent.count()).toBe(0);
 	});
 
 	it("records the install being claimed", async () => {
@@ -135,7 +135,7 @@ describe("auth audit events", () => {
 			),
 		).rejects.toThrow("REDIRECT:/dashboard");
 
-		const row = await prisma.auditEvent.findFirstOrThrow({ where: { action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE } });
+		const row = await auditDb.auditEvent.findFirstOrThrow({ where: { action: AUTH_AUDIT_ACTIONS.SETUP_COMPLETE } });
 		expect(row.outcome).toBe("SUCCESS");
 		expect(row.actorKind).toBe("SETUP");
 		expect(row.targetLabel).toBe("owner@example.com");
@@ -150,6 +150,6 @@ describe("auth audit events", () => {
 		await checkSetupKey({ error: null }, form({ setupKey: "XXXX-XXXX-XXXX-XXXX-XXXX" }));
 		await checkSetupKey({ error: null }, form({ setupKey: "YYYY-YYYY-YYYY-YYYY-YYYY" }));
 
-		expect(await verifyAuditChain(prisma)).toMatchObject({ ok: true, checked: 3 });
+		expect(await verifyAuditChain(auditDb)).toMatchObject({ ok: true, checked: 3 });
 	});
 });

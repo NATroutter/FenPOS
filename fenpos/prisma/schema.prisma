@@ -560,100 +560,11 @@ model Setting {
   @@map("settings")
 }
 
-/// One thing somebody did, and what came of it.
-///
-/// Append-only. There is no delete or edit path in the application, for superusers either — the
-/// only deletion that exists is the retention sweep, which runs oldest-first and re-anchors the
-/// chain behind it. The threat this shape defends against is explicit: an attacker who has
-/// obtained superuser credentials and wants to erase what they did.
-///
-/// **Every row hashes itself together with the row before it.** `hash` is SHA-256 over this row's
-/// canonical fields and `prevHash` — see `lib/audit/chain.ts`, which owns the field order and is
-/// the only place that may change it. Editing any covered column breaks that row's hash; removing
-/// a row breaks the next row's link. Neither is repairable without recomputing every hash after
-/// the change, which requires the application's own hashing code rather than database access.
-///
-/// **What this does not detect: truncation at the tail.** Deleting the newest rows leaves a chain
-/// that verifies perfectly, because nothing in the table records how long it should be. That is
-/// inherent to a self-contained chain and is stated here rather than left for someone to discover:
-/// detecting it needs state kept somewhere the attacker does not control.
-///
-/// The actor is denormalised into plain columns rather than a relation, deliberately: deleting a
-/// user must not delete or blank their trail. `WebhookDelivery.jobId` already establishes that
-/// pattern in this schema and for the same reason — a record whose whole purpose is to survive is
-/// one that must not cascade.
-model AuditEvent {
-  /// The chain's ordering, and the row's identity. Autoincrement, so a gap means a row was removed.
-  seq         Int      @id @default(autoincrement())
-  /// Always written explicitly by `recordAudit`, never left to this default: the hash covers this
-  /// value, so the timestamp that was hashed and the timestamp that was stored must be the same
-  /// one. The default exists only so a hand-written row in a test is not a type error.
-  at          DateTime @default(now())
-  /// USER | API_KEY | SYSTEM | SETUP | CLI. See ActorKind in lib/domain/audit.ts.
-  actorKind   String   @map("actor_kind")
-  /// Null for a failed sign-in against an address that matches no account, and for every non-USER
-  /// actor. A plain column, not a relation — see the model comment.
-  actorUserId String?  @map("actor_user_id")
-  actorName   String?  @map("actor_name")
-  /// Recorded even when `actorUserId` is null: on a refused sign-in, the address that was tried is
-  /// the single most useful thing in the row.
-  actorEmail  String?  @map("actor_email")
-  apiKeyId    String?  @map("api_key_id")
-  apiKeyName  String?  @map("api_key_name")
-  /// Registry id, e.g. `devices:delete`. Free text at this phase; phase 3's action registry becomes
-  /// the authority for panel-action ids.
-  action      String
-  targetKind  String?  @map("target_kind")
-  targetId    String?  @map("target_id")
-  /// Denormalised for the same reason the actor is: a deleted device's name must survive it.
-  targetLabel String?  @map("target_label")
-  /// SUCCESS | DENIED | FAILURE. See AuditOutcome in lib/domain/audit.ts.
-  outcome     String
-  /// JSON text: parameters, before and after where meaningful, error text. Redacted through
-  /// `lib/redact.ts` before it is serialised, so this column and the process log cannot disagree
-  /// about what is unsafe to record.
-  detail      String?
-  ipAddress   String?  @map("ip_address")
-  userAgent   String?  @map("user_agent")
-  sessionId   String?  @map("session_id")
-  /// The previous row's `hash`, or the genesis constant for the first row.
-  ///
-  /// **Unique, and that is what makes the chain safe under concurrency without a lock.** Two
-  /// writers that read the same tail cannot both commit; the second gets a constraint violation and
-  /// retries against the row the first wrote. A forked chain stops being a race the application
-  /// hopes to win and becomes something the database refuses — the same reasoning
-  /// `WebhookDelivery`'s `@@unique([webhookId, jobId])` already applies to duplicate deliveries.
-  prevHash    String   @unique @map("prev_hash")
-  /// SHA-256 over this row's canonical fields plus `prevHash`. Unique because two identical rows
-  /// are not a thing that can honestly happen: they would have to share a predecessor.
-  hash        String   @unique
-
-  @@index([at])
-  @@index([action, at])
-  @@index([actorUserId, at])
-  @@index([outcome, at])
-  @@map("audit_events")
-}
-
-/// The chain state immediately before the oldest retained event.
-///
-/// A singleton, kept so by its fixed primary key. Retention deletes from the front of the chain, so
-/// without this the oldest surviving row would have a `prevHash` pointing at something that no
-/// longer exists and verification could not tell that from tampering. This records what was there.
-///
-/// Written by the retention sweep, which arrives in phase 5. Until then no row exists, and
-/// `verifyAuditChain` reads its absence as "the chain still starts at genesis" — which, on an
-/// install that has never swept, is exactly true.
-model AuditAnchor {
-  id        Int      @id @default(1)
-  /// `seq` of the last swept event.
-  seq       Int
-  /// That event's `hash`, which the oldest retained event's `prevHash` must equal.
-  hash      String
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("audit_anchor")
-}
+// The audit record — AuditEvent and AuditAnchor — lives in prisma/audit.prisma, on its own database
+// file. It was moved out for the reason LogEntry was: sharing a file meant sharing a size budget, so
+// whatever grew fastest decided how much audit history survived. Nothing here relates to it and
+// nothing can: a deleted user's trail outliving them was already the point, and now no foreign key
+// exists that could have taken it away.
 
 model Asset {
   id        String   @id @default(cuid())

@@ -3,7 +3,7 @@ import { appendAuditEvent } from "@/lib/audit/append";
 import type { RequestProvenance } from "@/lib/audit/provenance";
 import { sweepAuditNow } from "@/lib/audit/retention";
 import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 import type { AuditOutcome } from "@/lib/domain/audit";
 import { logger } from "@/lib/logger";
 import { globalAuditSettings } from "@/lib/settings/settings-service";
@@ -23,6 +23,12 @@ import { globalAuditSettings } from "@/lib/settings/settings-service";
  * **Two writers cannot fork the chain.** `AuditEvent.prevHash` is unique, so the second insert
  * claiming a given predecessor is refused by the database rather than accepted into a branch. This
  * catches that refusal and retries against whatever row won.
+ *
+ * **It writes to `audit.db`, through `auditDb`.** The record has its own file so its retention is
+ * decided by its own settings and no other table's growth can shorten it. The sweep's *bounds* are
+ * still read from the application database — {@link maybeSweep} calls `globalAuditSettings()` — so
+ * an unreadable `fenpos.db` leaves the record unswept and growing, which {@link maybeSweep} logs
+ * and swallows. The write itself touches nothing but `audit.db`.
  */
 
 /** Who an event is attributed to. A discriminated union, so a `USER` row cannot carry a key's name. */
@@ -118,7 +124,7 @@ export interface AuditEventInput {
  */
 export async function appendEvent(input: AuditEventInput): Promise<void> {
 	try {
-		await appendAuditEvent(prisma, input);
+		await appendAuditEvent(auditDb, input);
 	} catch (error) {
 		// Swallowed on purpose — see the module comment. Logged with the action so an event missing
 		// from the record is diagnosable rather than merely absent.

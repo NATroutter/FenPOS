@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordAudit, SETUP_ACTOR, SYSTEM_ACTOR, unknownUserActor, userActor } from "@/lib/audit/audit-log";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { REDACTION_MARKER } from "@/lib/redact";
 
@@ -15,15 +15,15 @@ import { REDACTION_MARKER } from "@/lib/redact";
  */
 describe("recordAudit", () => {
 	beforeEach(async () => {
-		await prisma.auditEvent.deleteMany({});
-		await prisma.auditAnchor.deleteMany({});
+		await auditDb.auditEvent.deleteMany({});
+		await auditDb.auditAnchor.deleteMany({});
 		vi.restoreAllMocks();
 	});
 
 	it("starts the chain at genesis", async () => {
 		await recordAudit({ action: "test:first", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 
-		const row = await prisma.auditEvent.findFirstOrThrow({ orderBy: { seq: "asc" } });
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "asc" } });
 		expect(row.prevHash).toBe(GENESIS_HASH);
 		expect(row.actorKind).toBe("SYSTEM");
 		expect(row.action).toBe("test:first");
@@ -33,7 +33,7 @@ describe("recordAudit", () => {
 		await recordAudit({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 		await recordAudit({ action: "test:two", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
 		expect(rows[1].prevHash).toBe(rows[0].hash);
 	});
 
@@ -47,7 +47,7 @@ describe("recordAudit", () => {
 		// `row` is passed as a variable rather than as an object literal: it carries `seq`, `prevHash`
 		// and `hash` on top of the sixteen covered fields, and excess-property checking would object
 		// to a literal. `canonicalise` reads only the names it declares, so the extras are ignored.
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(hashEvent(row, row.prevHash)).toBe(row.hash);
 	});
 
@@ -58,7 +58,7 @@ describe("recordAudit", () => {
 			actor: unknownUserActor("stranger@example.com"),
 		});
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(row.actorKind).toBe("USER");
 		expect(row.actorUserId).toBeNull();
 		expect(row.actorEmail).toBe("stranger@example.com");
@@ -72,7 +72,7 @@ describe("recordAudit", () => {
 			detail: { email: "owner@example.com", setupKey: "AAAA-BBBB-CCCC" },
 		});
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		const detail = JSON.parse(row.detail as string) as Record<string, unknown>;
 		expect(detail.email).toBe("owner@example.com");
 		expect(detail.setupKey).toBe(REDACTION_MARKER);
@@ -80,7 +80,7 @@ describe("recordAudit", () => {
 
 	it("does not throw when the write fails, and says so in the log", async () => {
 		const failed = vi.spyOn(logger, "error").mockImplementation(() => undefined);
-		vi.spyOn(prisma.auditEvent, "create").mockRejectedValue(new Error("disk is full"));
+		vi.spyOn(auditDb.auditEvent, "create").mockRejectedValue(new Error("disk is full"));
 
 		await expect(
 			recordAudit({ action: "test:doomed", outcome: "SUCCESS", actor: SYSTEM_ACTOR }),
@@ -111,7 +111,7 @@ describe("recordAudit", () => {
 			recordAudit({ action: "test:racer-b", outcome: "SUCCESS", actor: SYSTEM_ACTOR }),
 		]);
 
-		const rows = await prisma.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
 		expect(rows).toHaveLength(2);
 		expect(rows[0].prevHash).toBe(GENESIS_HASH);
 		expect(rows[1].prevHash).toBe(rows[0].hash);
@@ -122,11 +122,11 @@ describe("recordAudit", () => {
 		// anchor and expects the oldest surviving row to link to it, so a row that started again at
 		// genesis here would make an untouched chain report `anchor-mismatch` — the record accusing
 		// itself of tampering, with no tampering to find.
-		await prisma.auditAnchor.create({ data: { id: 1, seq: 40, hash: "a".repeat(64) } });
+		await auditDb.auditAnchor.create({ data: { id: 1, seq: 40, hash: "a".repeat(64) } });
 
 		await recordAudit({ action: "test:after-sweep", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(row.prevHash).toBe("a".repeat(64));
 	});
 
@@ -134,7 +134,7 @@ describe("recordAudit", () => {
 		// The other half, so the fix above cannot be made by simply always reading the anchor.
 		await recordAudit({ action: "test:fresh", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
 
-		const row = await prisma.auditEvent.findFirstOrThrow();
+		const row = await auditDb.auditEvent.findFirstOrThrow();
 		expect(row.prevHash).toBe(GENESIS_HASH);
 	});
 });

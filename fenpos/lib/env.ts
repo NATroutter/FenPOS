@@ -111,8 +111,25 @@ export const LOGS_DATABASE_URL: string =
 	process.env.LOGS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "logs.db");
 
 /**
+ * Where the audit database lives, derived the same way {@link LOGS_DATABASE_URL} is.
+ *
+ * Its own file for the reason the record exists at all: the audit chain is what an investigation
+ * reads, and sharing a file with the tables that grow fastest is what let log volume decide how
+ * much of it survived. Deriving the path rather than configuring it keeps the whole record on one
+ * volume — a separately configured URL is how half of it ends up behind a mount that was never
+ * made, discovered by whoever goes looking for the half that is gone.
+ *
+ * `AUDIT_DATABASE_URL` overrides the derivation, and exists for one caller: the test suite runs each
+ * file in its own worker process against its own database file, and every worker shares one `data/`
+ * directory, so derivation alone would hand them all the same audit file. `prisma-audit.config.ts`
+ * gives the variable the same precedence, so the CLI and the running server always agree.
+ */
+export const AUDIT_DATABASE_URL: string =
+	process.env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
+
+/**
  * Re-exported here so callers needing a sibling database reach it beside the URL it is derived
- * from. It lives in its own module because `prisma-logs.config.ts` must import it too, and a
- * Prisma config file cannot load anything carrying `server-only`.
+ * from. It lives in its own module because `prisma-logs.config.ts` and `prisma-audit.config.ts`
+ * must import it too, and a Prisma config file cannot load anything carrying `server-only`.
  */
 export { siblingDatabaseUrl };

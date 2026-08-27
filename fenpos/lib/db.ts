@@ -1,8 +1,9 @@
 import "server-only";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient as AuditPrismaClient } from "@/generated/prisma-audit/client";
 import { PrismaClient as LogsPrismaClient } from "@/generated/prisma-logs/client";
-import { env, isProduction, LOGS_DATABASE_URL } from "@/lib/env";
+import { AUDIT_DATABASE_URL, env, isProduction, LOGS_DATABASE_URL } from "@/lib/env";
 
 /**
  * The application's Prisma clients, one per database file.
@@ -48,9 +49,26 @@ function createLogsClient(): LogsPrismaClient {
 	});
 }
 
+/**
+ * Builds a client bound to the audit database file.
+ *
+ * @returns a client ready for queries against `audit_events` and `audit_anchor`
+ */
+function createAuditClient(): AuditPrismaClient {
+	const adapter = new PrismaBetterSqlite3({ url: AUDIT_DATABASE_URL });
+
+	return new AuditPrismaClient({
+		adapter,
+		// Off for the same reason as above, and more so: a statement here carries the actor, the
+		// address they came from and whatever `detail` the action recorded.
+		log: ["warn", "error"],
+	});
+}
+
 const globalForPrisma = globalThis as unknown as {
 	prisma: PrismaClient | undefined;
 	logsDb: LogsPrismaClient | undefined;
+	auditDb: AuditPrismaClient | undefined;
 };
 
 export const prisma: PrismaClient = globalForPrisma.prisma ?? createPrismaClient();
@@ -70,7 +88,29 @@ export const prisma: PrismaClient = globalForPrisma.prisma ?? createPrismaClient
  */
 export const logsDb: LogsPrismaClient = globalForPrisma.logsDb ?? createLogsClient();
 
+/**
+ * The audit database's client.
+ *
+ * Separate from {@link prisma} and {@link logsDb} because the audit record is the one thing here
+ * that has to survive everything else: its own file means its retention is decided by its own
+ * settings rather than by however many log lines or jobs an install happened to produce.
+ *
+ * Two things it deliberately does not buy. It does not make the record tamper-proof — that is the
+ * hash chain's job, and this file is as writable as the last one was. And it does not make the
+ * panel's auditing independent of the application database: the retention sweep reads its bounds
+ * through {@link prisma} (`globalAuditSettings`), and a caller like `require-permission.ts` reads a
+ * setting through {@link prisma} to decide whether to record a page view at all. What it buys is
+ * that nothing else's volume can decide how far back the record goes.
+ *
+ * It is a different generated client, not the same one pointed elsewhere, so `auditDb.auditEvent`
+ * and `prisma.user` cannot be written into one query. The two databases cannot be joined, and the
+ * typechecker is what enforces it — which is also why a deleted user still has a trail: there was
+ * never a foreign key that could have taken it away.
+ */
+export const auditDb: AuditPrismaClient = globalForPrisma.auditDb ?? createAuditClient();
+
 if (!isProduction) {
 	globalForPrisma.prisma = prisma;
 	globalForPrisma.logsDb = logsDb;
+	globalForPrisma.auditDb = auditDb;
 }

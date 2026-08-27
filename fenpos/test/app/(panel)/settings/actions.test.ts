@@ -70,7 +70,7 @@ vi.mock("next/cache", () => ({ revalidatePath: (...args: unknown[]) => revalidat
 const { changePassword, updateProfile, startTwoFactor, confirmTwoFactor } = await import(
 	"@/app/(panel)/settings/actions"
 );
-const { prisma } = await import("@/lib/db");
+const { auditDb, prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
 
 beforeEach(async () => {
@@ -252,7 +252,7 @@ describe("two-factor actions", () => {
 		const result = await startTwoFactor("correct horse battery staple");
 		expect(result.enrolment?.qrSvg.startsWith("<svg")).toBe(true);
 
-		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
 		expect(row?.action).toBe("self:begin-2fa");
 		expect(row?.outcome).toBe("SUCCESS");
 	});
@@ -262,7 +262,7 @@ describe("two-factor actions", () => {
 		const result = await startTwoFactor("correct horse battery staple");
 		const secret = new URL(result.enrolment?.totpUri ?? "otpauth://x").searchParams.get("secret") ?? "";
 
-		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
 		// Asserted before the containment checks below: without this, a run that wrote no row at all
 		// (or the wrong one) would fall through to `JSON.stringify(undefined)` / an empty
 		// `recoveryCodes ?? []` loop and pass having checked nothing.
@@ -293,7 +293,7 @@ describe("two-factor actions", () => {
 		expect(result.error).not.toBeNull();
 		expect(result.enrolment).toBeNull();
 
-		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
 		expect(row?.action).toBe("self:begin-2fa");
 		expect(row?.outcome).toBe("FAILURE");
 
@@ -308,7 +308,7 @@ describe("two-factor actions", () => {
 		const result = await confirmTwoFactor("000000");
 		expect(result.error).not.toBeNull();
 
-		const row = await prisma.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+		const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
 		expect(row?.action).toBe("self:confirm-2fa");
 		expect(row?.outcome).toBe("FAILURE");
 	});

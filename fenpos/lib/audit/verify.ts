@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/generated/prisma/client";
+import type { PrismaClient } from "@/generated/prisma-audit/client";
 import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
 
 /**
@@ -51,9 +51,13 @@ const BATCH_SIZE = 500;
 /**
  * The reads a walk needs.
  *
- * A structural subset of `PrismaClient` rather than the client itself, so the signature says what
- * this does: it reads two tables and writes nothing. Handing a verifier something that could
- * `update` or `delete` an audit row would contradict the whole shape of the record.
+ * A structural subset of the audit database's `PrismaClient` rather than the client itself, so the
+ * signature says what this does: it reads two tables and writes nothing. Handing a verifier
+ * something that could `update` or `delete` an audit row would contradict the whole shape of the
+ * record.
+ *
+ * The audit client, not the application's: `AuditEvent` and `AuditAnchor` live in `audit.db`, so
+ * the application's generated client has neither property and passing it here is a type error.
  */
 export type AuditChainReader = Pick<PrismaClient, "auditAnchor" | "auditEvent">;
 

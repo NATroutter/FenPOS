@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 
 /**
  * Retention: the only deletion the audit record has, anywhere.
@@ -34,9 +34,10 @@ export interface SweepOutcome {
  * subsumes the other, and the boundary is the higher of the two `seq` values. Adding them would
  * remove rows twice over.
  *
- * The delete and the anchor write go in one transaction. Separately, a crash between them leaves
- * either a chain whose oldest row links to something gone with no anchor to vouch for it, or an
- * anchor naming an event that is still present — and the first of those reads, to
+ * The delete and the anchor write go in one transaction, and can: both tables live in `audit.db`,
+ * so this is one file's transaction rather than a promise spanning two. Separately, a crash between
+ * them leaves either a chain whose oldest row links to something gone with no anchor to vouch for
+ * it, or an anchor naming an event that is still present — and the first of those reads, to
  * `verifyAuditChain`, as tampering.
  *
  * @param bounds `audit.retentionDays` and `audit.maxRecords`, as configured
@@ -53,12 +54,12 @@ export async function sweepAuditNow(bounds: {
 
 	// Read before the delete, and read for its hash: this row is about to stop existing, and its hash
 	// is the only thing that will let the row after it still verify.
-	const last = await prisma.auditEvent.findUnique({ where: { seq: boundary }, select: { seq: true, hash: true } });
+	const last = await auditDb.auditEvent.findUnique({ where: { seq: boundary }, select: { seq: true, hash: true } });
 	if (!last) {
 		return null;
 	}
 
-	return await prisma.$transaction(async (tx) => {
+	return await auditDb.$transaction(async (tx) => {
 		const removed = await tx.auditEvent.deleteMany({ where: { seq: { lte: boundary } } });
 		await tx.auditAnchor.upsert({
 			where: { id: 1 },
@@ -77,7 +78,7 @@ export async function sweepAuditNow(bounds: {
  */
 async function ageBoundary(retentionDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-	const oldest = await prisma.auditEvent.findFirst({
+	const oldest = await auditDb.auditEvent.findFirst({
 		where: { at: { lt: cutoff } },
 		orderBy: { seq: "desc" },
 		select: { seq: true },
@@ -92,7 +93,7 @@ async function ageBoundary(retentionDays: number): Promise<number> {
  * @returns that `seq`, or 0 when the table already fits
  */
 async function countBoundary(maxRecords: number): Promise<number> {
-	const total = await prisma.auditEvent.count();
+	const total = await auditDb.auditEvent.count();
 	if (total <= maxRecords) {
 		return 0;
 	}
@@ -100,7 +101,7 @@ async function countBoundary(maxRecords: number): Promise<number> {
 	// The last row of the excess, found by skipping to it rather than by loading the excess: on an
 	// install that has been running a year the excess is the larger half of the table.
 	const excess = total - maxRecords;
-	const last = await prisma.auditEvent.findMany({
+	const last = await auditDb.auditEvent.findMany({
 		orderBy: { seq: "asc" },
 		skip: excess - 1,
 		take: 1,

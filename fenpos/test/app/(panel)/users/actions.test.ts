@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma } from "@/lib/db";
+import { auditDb, prisma } from "@/lib/db";
 
 /**
  * The Users tab's actions.
@@ -48,11 +48,11 @@ const form = {
 
 /** The audit rows an action left, oldest first. */
 async function rows(action: string) {
-	return prisma.auditEvent.findMany({ where: { action }, orderBy: { seq: "asc" } });
+	return auditDb.auditEvent.findMany({ where: { action }, orderBy: { seq: "asc" } });
 }
 
 beforeEach(async () => {
-	await prisma.auditEvent.deleteMany({});
+	await auditDb.auditEvent.deleteMany({});
 	await prisma.userPermission.deleteMany({});
 	await prisma.userRole.deleteMany({});
 	await prisma.rolePermission.deleteMany({});

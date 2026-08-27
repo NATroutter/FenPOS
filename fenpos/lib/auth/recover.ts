@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createLocalAccountIssuer } from "better-auth";
 import type { PrismaClient } from "@/generated/prisma/client";
+import type { PrismaClient as AuditPrismaClient } from "@/generated/prisma-audit/client";
 import { appendAuditEvent } from "@/lib/audit/append";
 import type { AuditActor, AuditEventInput } from "@/lib/audit/audit-log";
 import { NO_PROVENANCE } from "@/lib/audit/provenance-shape";
@@ -17,6 +18,14 @@ import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
  * process against this module for exactly that reason: an in-process vitest import would keep
  * passing even if a `server-only` dependency crept in tomorrow, because `vitest.config.mts` aliases
  * that package away for the rest of the suite.
+ *
+ * **Two clients, because there are two databases.** The accounts these operations act on live in the
+ * application database and the rows describing what was done live in `audit.db`, so every export
+ * below that changes something takes both. Neither is imported: `lib/db.ts` opens with
+ * `import "server-only"`, which is the one thing this module cannot have — see above. A consequence
+ * worth naming, since it removes a guarantee that never actually held: an account change and the row
+ * describing it were never in one transaction (the next paragraph says why), and now they could not
+ * be even in principle.
  *
  * **Every operation writes an audit row, including a refusal.** A refused recovery attempt — an
  * address matching no account — is more interesting than a successful one: the successful one has a
@@ -184,7 +193,7 @@ const UNEXPECTED_FAILURE_REASON = "an unexpected error; the exception is rethrow
  * caller inspecting the exception still finds what `perform` actually failed with, even though that
  * never reached the row.
  *
- * @param prisma the client to write through
+ * @param auditDb the audit database's client to write the row through
  * @param action which {@link RECOVERY_AUDIT_ACTIONS} this is
  * @param userId the resolved account
  * @param normalizedEmail the address, already normalised
@@ -192,7 +201,7 @@ const UNEXPECTED_FAILURE_REASON = "an unexpected error; the exception is rethrow
  * @throws Error combining both failures, only when the append itself also fails
  */
 async function recordFailure(
-	prisma: PrismaClient,
+	auditDb: AuditPrismaClient,
 	action: string,
 	userId: string,
 	normalizedEmail: string,
@@ -201,7 +210,7 @@ async function recordFailure(
 	const reason = error instanceof RecoveryRefusal ? error.message : UNEXPECTED_FAILURE_REASON;
 
 	try {
-		await appendAuditEvent(prisma, {
+		await appendAuditEvent(auditDb, {
 			action,
 			outcome: "FAILURE",
 			actor: CLI_RECOVERY_ACTOR,
@@ -238,7 +247,8 @@ async function recordFailure(
  * `resetPassword`/`clearTwoFactor`/`unlockAccount` can `instanceof` it themselves to tell an
  * actionable refusal apart from an unexpected failure, exactly as this function does internally.
  *
- * @param prisma the client to read and write through
+ * @param prisma the application database's client, to resolve the account and make the change
+ * @param auditDb the audit database's client, to write the row
  * @param action which {@link RECOVERY_AUDIT_ACTIONS} this is
  * @param email the address naming the account
  * @param perform the change itself, given the resolved account id and the normalised address
@@ -249,6 +259,7 @@ async function recordFailure(
  */
 async function recoverAccount<T>(
 	prisma: PrismaClient,
+	auditDb: AuditPrismaClient,
 	action: string,
 	email: string,
 	perform: (userId: string, normalizedEmail: string) => Promise<T>,
@@ -263,7 +274,7 @@ async function recoverAccount<T>(
 		// account" literal — one text instead of two that could drift apart, and nothing new to leak:
 		// the address it names is already sitting in `target.label` on the same row.
 		const refusal = new RecoveryRefusal(`No account found for '${normalized}'.`);
-		await appendAuditEvent(prisma, {
+		await appendAuditEvent(auditDb, {
 			action,
 			outcome: "FAILURE",
 			actor: CLI_RECOVERY_ACTOR,
@@ -278,11 +289,11 @@ async function recoverAccount<T>(
 	try {
 		result = await perform(user.id, normalized);
 	} catch (error) {
-		await recordFailure(prisma, action, user.id, normalized, error);
+		await recordFailure(auditDb, action, user.id, normalized, error);
 		throw error;
 	}
 
-	await appendAuditEvent(prisma, {
+	await appendAuditEvent(auditDb, {
 		action,
 		outcome: "SUCCESS",
 		actor: CLI_RECOVERY_ACTOR,
@@ -343,31 +354,38 @@ function mintPassword(): string {
  * comment's note on that window. Between the two, the credential is already replaced and the minted
  * password already works, but no row says so yet.
  *
- * @param prisma the client to write through
+ * @param prisma the application database's client, to change the credential
+ * @param auditDb the audit database's client, to record that it was changed
  * @param email the account's address
  * @returns the minted password, in plaintext, exactly once — the caller must print it and discard it
  * @throws {@link RecoveryRefusal} when the address matches no account, or the account has no
  *   password credential
  */
-export async function resetPassword(prisma: PrismaClient, email: string): Promise<string> {
-	return recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD, email, async (userId, normalizedEmail) => {
-		const minted = mintPassword();
-		const passwordHash = await hashPassword(minted);
+export async function resetPassword(prisma: PrismaClient, auditDb: AuditPrismaClient, email: string): Promise<string> {
+	return recoverAccount(
+		prisma,
+		auditDb,
+		RECOVERY_AUDIT_ACTIONS.RESET_PASSWORD,
+		email,
+		async (userId, normalizedEmail) => {
+			const minted = mintPassword();
+			const passwordHash = await hashPassword(minted);
 
-		await prisma.$transaction(async (tx) => {
-			const { count } = await tx.account.updateMany({
-				where: { userId, issuer: CREDENTIAL_ISSUER },
-				data: { password: passwordHash, updatedAt: new Date() },
+			await prisma.$transaction(async (tx) => {
+				const { count } = await tx.account.updateMany({
+					where: { userId, issuer: CREDENTIAL_ISSUER },
+					data: { password: passwordHash, updatedAt: new Date() },
+				});
+				if (count === 0) {
+					throw new RecoveryRefusal(`Account '${normalizedEmail}' has no password credential to reset.`);
+				}
+				await tx.user.update({ where: { id: userId }, data: { mustChangePassword: true } });
+				await tx.session.deleteMany({ where: { userId } });
 			});
-			if (count === 0) {
-				throw new RecoveryRefusal(`Account '${normalizedEmail}' has no password credential to reset.`);
-			}
-			await tx.user.update({ where: { id: userId }, data: { mustChangePassword: true } });
-			await tx.session.deleteMany({ where: { userId } });
-		});
 
-		return minted;
-	});
+			return minted;
+		},
+	);
 }
 
 /**
@@ -379,12 +397,13 @@ export async function resetPassword(prisma: PrismaClient, email: string): Promis
  * be observed apart — a flag left set with no secret behind it is a challenge the account has nothing
  * to answer, which is a lockout rather than a reset.
  *
- * @param prisma the client to write through
+ * @param prisma the application database's client, to clear the enrolment
+ * @param auditDb the audit database's client, to record that it was cleared
  * @param email the account's address
  * @throws {@link RecoveryRefusal} when the address matches no account
  */
-export async function clearTwoFactor(prisma: PrismaClient, email: string): Promise<void> {
-	await recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.CLEAR_TWO_FACTOR, email, async (userId) => {
+export async function clearTwoFactor(prisma: PrismaClient, auditDb: AuditPrismaClient, email: string): Promise<void> {
+	await recoverAccount(prisma, auditDb, RECOVERY_AUDIT_ACTIONS.CLEAR_TWO_FACTOR, email, async (userId) => {
 		await prisma.$transaction([
 			prisma.twoFactor.deleteMany({ where: { userId } }),
 			prisma.user.update({ where: { id: userId }, data: { twoFactorEnabled: false } }),
@@ -408,12 +427,13 @@ export async function clearTwoFactor(prisma: PrismaClient, email: string): Promi
  * {@link clearTwoFactor}, which ends the lock by destroying the enrolment behind it. Widening
  * `--unlock` to clear both is a design decision, not a repair, and has not been made.
  *
- * @param prisma the client to write through
+ * @param prisma the application database's client, to clear the lockout
+ * @param auditDb the audit database's client, to record that it was cleared
  * @param email the account's address
  * @throws {@link RecoveryRefusal} when the address matches no account
  */
-export async function unlockAccount(prisma: PrismaClient, email: string): Promise<void> {
-	await recoverAccount(prisma, RECOVERY_AUDIT_ACTIONS.UNLOCK, email, async (userId) => {
+export async function unlockAccount(prisma: PrismaClient, auditDb: AuditPrismaClient, email: string): Promise<void> {
+	await recoverAccount(prisma, auditDb, RECOVERY_AUDIT_ACTIONS.UNLOCK, email, async (userId) => {
 		await prisma.user.update({ where: { id: userId }, data: { lockedUntil: null, failedSignInCount: 0 } });
 	});
 }
@@ -449,9 +469,10 @@ const IP_ALLOWLIST_SETTING_KEY = "auth.ipAllowlist";
  * would be: nothing changed, so there is nothing a row would be correcting the record about, and a
  * setting is not an account whose compromise this record exists to help investigate.
  *
- * @param prisma the client to write through
+ * @param prisma the application database's client, to write the setting
+ * @param auditDb the audit database's client, to record that it was written
  */
-export async function clearAllowlist(prisma: PrismaClient): Promise<void> {
+export async function clearAllowlist(prisma: PrismaClient, auditDb: AuditPrismaClient): Promise<void> {
 	const stored = JSON.stringify("");
 	await prisma.setting.upsert({
 		where: { key: IP_ALLOWLIST_SETTING_KEY },
@@ -459,7 +480,7 @@ export async function clearAllowlist(prisma: PrismaClient): Promise<void> {
 		create: { key: IP_ALLOWLIST_SETTING_KEY, value: stored },
 	});
 
-	await appendAuditEvent(prisma, {
+	await appendAuditEvent(auditDb, {
 		action: RECOVERY_AUDIT_ACTIONS.CLEAR_ALLOWLIST,
 		outcome: "SUCCESS",
 		actor: CLI_RECOVERY_ACTOR,

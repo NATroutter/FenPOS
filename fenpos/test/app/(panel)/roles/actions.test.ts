@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma } from "@/lib/db";
+import { auditDb, prisma } from "@/lib/db";
 
 /**
  * The Roles tab's actions.
@@ -34,7 +34,7 @@ const { createRole, deleteRole, updateRole } = await import("@/app/(panel)/roles
 const blank = { name: "Printer minder", description: "", permissions: [], memberIds: [] };
 
 beforeEach(async () => {
-	await prisma.auditEvent.deleteMany({});
+	await auditDb.auditEvent.deleteMany({});
 	await prisma.userRole.deleteMany({});
 	await prisma.rolePermission.deleteMany({});
 	await prisma.role.deleteMany({});
@@ -56,7 +56,7 @@ describe("createRole", () => {
 	it("records the name and everything the role now carries", async () => {
 		await createRole({ ...blank, permissions: ["devices:read", "tools:raw"] });
 
-		const [row] = await prisma.auditEvent.findMany({ where: { action: "roles:create" } });
+		const [row] = await auditDb.auditEvent.findMany({ where: { action: "roles:create" } });
 		expect(row.targetLabel).toBe("Printer minder");
 		expect(row.detail).toContain("tools:raw");
 	});
@@ -75,7 +75,7 @@ describe("updateRole", () => {
 
 		await updateRole(role.id, { ...blank, permissions: ["jobs:cancel"] });
 
-		const [row] = await prisma.auditEvent.findMany({ where: { action: "roles:update" } });
+		const [row] = await auditDb.auditEvent.findMany({ where: { action: "roles:update" } });
 		expect(row.detail).toContain("jobs:cancel");
 	});
 });
@@ -87,7 +87,7 @@ describe("deleteRole", () => {
 
 		await deleteRole(role.id);
 
-		const [row] = await prisma.auditEvent.findMany({ where: { action: "roles:delete" } });
+		const [row] = await auditDb.auditEvent.findMany({ where: { action: "roles:delete" } });
 		expect(row.targetLabel).toBe("Printer minder");
 		expect(await prisma.role.count()).toBe(0);
 	});

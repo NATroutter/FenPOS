@@ -4,7 +4,7 @@ import { toAuditCsv } from "@/lib/audit/audit-csv";
 import { type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
 import { describeVerification, verifyAuditChain } from "@/lib/audit/verify";
 import { panelQuery } from "@/lib/auth/panel-action";
-import { prisma } from "@/lib/db";
+import { auditDb } from "@/lib/db";
 import { AuditOutcome } from "@/lib/domain/audit";
 import { ApiError } from "@/lib/errors";
 
@@ -59,7 +59,7 @@ export async function verifyChain(): Promise<ChainStatus> {
 	return panelQuery<ChainStatus>(
 		"audit:verify",
 		async () => {
-			const result = await verifyAuditChain(prisma);
+			const result = await verifyAuditChain(auditDb);
 			return { ok: result.ok, message: describeVerification(result) };
 		},
 		{
