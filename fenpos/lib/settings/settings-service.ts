@@ -613,8 +613,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "logs.retentionDays",
 		label: "Log retention",
 		description:
-			"How long a log line is kept. Older lines are archived and then removed. Bounded by time rather than by " +
-			"a record count, so a noisy afternoon cannot evict the week before it.",
+			"How long a log line is kept before it is removed. Bounded by time rather than by a record count, so a " +
+			"noisy afternoon cannot evict the week before it.",
 		category: "logs",
 		type: "integer",
 		min: 1,
