@@ -150,6 +150,36 @@ describe("recordServerLog", () => {
 		expect(line?.agentName).toBe("kitchen");
 	});
 
+	it("stores and lists the API key that produced the line", async () => {
+		const key = await prisma.apiKey.create({
+			data: { name: "Till 4", keyHash: "hash-1", maskedHint: "ab12" },
+		});
+
+		await recordServerLog("INFO", "a raw write from Till 4", { apiKeyId: key.id });
+
+		const row = await logsDb.logEntry.findFirst();
+		expect(row?.apiKeyId).toBe(key.id);
+
+		const page = await listLogs({});
+		const line = page.lines.find((entry) => entry.message === "a raw write from Till 4");
+		expect(line?.apiKeyId).toBe(key.id);
+	});
+
+	it("still lists a line with its message intact once its API key no longer resolves", async () => {
+		// There is no relation to an API key — logs.db cannot reach the application's tables, the same
+		// reason `agentId` has none — so a deleted key leaves an id nothing resolves, rather than one
+		// nulled out by a foreign key action. What keeps the line meaningful is that the key's *name*
+		// is written into the message itself, not into a denormalised column: this test's whole point
+		// goes red if the message ever stopped carrying that name.
+		await recordServerLog("WARN", "raw write refused for key Till 4", { apiKeyId: "key-now-gone" });
+
+		const page = await listLogs({});
+		const line = page.lines.find((entry) => entry.message === "raw write refused for key Till 4");
+
+		expect(line?.apiKeyId).toBe("key-now-gone");
+		expect(line?.message).toBe("raw write refused for key Till 4");
+	});
+
 	it("does not throw when the row cannot be written", async () => {
 		// Audit logging must never be the reason a request fails. A line lost is bad; a raw write
 		// refused because its audit line could not be stored is worse, and a raw write that *happened*

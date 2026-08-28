@@ -138,11 +138,13 @@ CREATE TABLE "log_entries" (
     "agent_id" TEXT,
     "device_id" TEXT,
     "agent_name" TEXT,
-    "device_name" TEXT
+    "device_name" TEXT,
+    "api_key_id" TEXT
 );
 CREATE INDEX "log_entries_ts_idx" ON "log_entries"("ts");
 CREATE INDEX "log_entries_severity_ts_idx" ON "log_entries"("severity", "ts");
 CREATE INDEX "log_entries_agent_id_ts_idx" ON "log_entries"("agent_id", "ts");
+CREATE INDEX "log_entries_api_key_id_ts_idx" ON "log_entries"("api_key_id", "ts");
 `;
 
 /**
@@ -353,8 +355,9 @@ function storedAt(at: Date): string {
 async function drainLogs(before: Date, path: string): Promise<number> {
 	const archived = await intoArchive(path, LOG_ENTRIES_DDL, async (archive) => {
 		const insert = archive.prepare(
-			`INSERT INTO log_entries (id, ts, level, severity, message, agent_id, device_id, agent_name, device_name)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO log_entries
+			 (id, ts, level, severity, message, agent_id, device_id, agent_name, device_name, api_key_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 		const ids: string[] = [];
 
@@ -381,6 +384,7 @@ async function drainLogs(before: Date, path: string): Promise<number> {
 						row.deviceId,
 						row.agentName,
 						row.deviceName,
+						row.apiKeyId,
 					);
 				}
 			})();

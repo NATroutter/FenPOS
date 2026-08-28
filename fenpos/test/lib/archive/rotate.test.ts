@@ -160,6 +160,7 @@ describe("archivePeriod", () => {
 				deviceId: "device-1",
 				agentName: "Till agent",
 				deviceName: "Kitchen printer",
+				apiKeyId: "key-1",
 			},
 		});
 
@@ -178,6 +179,7 @@ describe("archivePeriod", () => {
 			expect(row.device_id).toBe("device-1");
 			expect(row.agent_name).toBe("Till agent");
 			expect(row.device_name).toBe("Kitchen printer");
+			expect(row.api_key_id).toBe("key-1");
 			// The timestamp must survive as a moment, not as whatever the host's zone made of it.
 			expect(new Date(row.ts as string).toISOString()).toBe("2026-01-15T09:30:15.250Z");
 		} finally {

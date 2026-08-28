@@ -263,6 +263,7 @@ export const SETTING_KEYS = [
 	"logs.archiveEnabled",
 	"logs.archiveRetentionDays",
 	"logs.maxMessageChars",
+	"logs.recordApiReads",
 	"pairing.enabled",
 	"pairing.codeMinutes",
 	"auth.sessionHours",
@@ -656,6 +657,18 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 8_000,
 		fallback: 1_000,
 		unit: "characters",
+	},
+	{
+		key: "logs.recordApiReads",
+		label: "Record successful API reads",
+		description:
+			"Whether a successful read is written to the API request log, not only one that was refused. A till " +
+			"polling status once a second produces 86,400 rows a day, and five tills over thirty days is about " +
+			"3.9 GB, which is why this defaults off. A refused read is recorded regardless of this setting: what " +
+			"it gates is noise, never evidence.",
+		category: "logs",
+		type: "boolean",
+		fallback: false,
 	},
 	{
 		key: "pairing.enabled",

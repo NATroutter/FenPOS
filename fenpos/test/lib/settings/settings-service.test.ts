@@ -297,6 +297,7 @@ describe("setting definitions", () => {
 			"logs.archiveEnabled": "boolean",
 			"logs.archiveRetentionDays": "integer",
 			"logs.maxMessageChars": "integer",
+			"logs.recordApiReads": "boolean",
 			"pairing.enabled": "boolean",
 			"pairing.codeMinutes": "integer",
 			"auth.sessionHours": "integer",

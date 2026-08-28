@@ -107,6 +107,9 @@ export function LogStream({ lines, sortable = true }: { lines: LogLine[]; sortab
 					message: payload.message,
 					agentName: null,
 					deviceName: payload.deviceName,
+					// LogEvent carries no apiKeyId — the live stream only ever fires from `agentId`-bearing
+					// writes (see recordServerLog's doc comment) — so a live line is never an API key's.
+					apiKeyId: null,
 				},
 				...current,
 			]);

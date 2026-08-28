@@ -51,9 +51,16 @@ model LogEntry {
   /// exists; the name is what survives it.
   agentName  String?  @map("agent_name")
   deviceName String?  @map("device_name")
+  /// Which API key produced the line, when one did.
+  ///
+  /// A plain column with no relation, for the same reason `agentId` has none: this database cannot
+  /// join to the application's tables. So a deleted key leaves an id that resolves to nothing, and
+  /// the key's *name* is written into the message to keep the line meaningful afterwards.
+  apiKeyId String? @map("api_key_id")
 
   @@index([ts])
   @@index([severity, ts])
   @@index([agentId, ts])
+  @@index([apiKeyId, ts])
   @@map("log_entries")
 }

@@ -23,6 +23,13 @@ export interface LogLine {
 	message: string;
 	agentName: string | null;
 	deviceName: string | null;
+	/**
+	 * The API key that produced the line, when one did. No relation backs this — `logs.db` cannot
+	 * join to the application's tables — so once the key is deleted this id resolves to nothing; the
+	 * key's name lives in `message` instead, which is what stays readable after that happens. See
+	 * `LogEntry.apiKeyId`.
+	 */
+	apiKeyId: string | null;
 }
 
 /** What the list is narrowed to. */
@@ -120,6 +127,7 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			message: row.message,
 			agentName: row.agentName,
 			deviceName: row.deviceName,
+			apiKeyId: row.apiKeyId,
 		})),
 	};
 }
@@ -156,11 +164,14 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * @param target the agent and device it concerns, when it concerns one. `agentName`/`deviceName`
  * are denormalised onto the row exactly as `ingestLog` denormalises them for an agent's own lines,
  * so the caller supplies them rather than this function looking them up — see `LogEntry.agentName`.
+ * `apiKeyId` names the API key that caused the line, when one did; unlike `agentName`/`deviceName`
+ * it has no denormalised name column, so a caller that wants the line to stay meaningful after the
+ * key is deleted must put the key's name in `message` itself — see `LogEntry.apiKeyId`.
  */
 export async function recordServerLog(
 	level: LogLevel,
 	message: string,
-	target: { agentId?: string; agentName?: string; deviceId?: string; deviceName?: string } = {},
+	target: { agentId?: string; agentName?: string; deviceId?: string; deviceName?: string; apiKeyId?: string } = {},
 ): Promise<void> {
 	try {
 		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
@@ -181,6 +192,7 @@ export async function recordServerLog(
 				agentName: target.agentName ?? null,
 				deviceId: target.deviceId ?? null,
 				deviceName: target.deviceName ?? null,
+				apiKeyId: target.apiKeyId ?? null,
 			},
 			select: { id: true, ts: true, level: true, message: true },
 		});
