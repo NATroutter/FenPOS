@@ -1,14 +1,10 @@
 import { z } from "zod";
+import { apiRoute } from "@/lib/api/api-route";
 import { readBoundedJson } from "@/lib/api/bounded-body";
 import { prisma } from "@/lib/db";
 import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
-import { ApiError, toErrorResponse } from "@/lib/errors";
-import {
-	type AuthenticatedKey,
-	authenticateKey,
-	requireGrantedDevice,
-	requirePermission,
-} from "@/lib/keys/authenticate";
+import { ApiError } from "@/lib/errors";
+import { requireGrantedDevice } from "@/lib/keys/authenticate";
 import { sendRawWrite } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
 import { recordServerLog } from "@/lib/logs/log-service";
@@ -29,9 +25,19 @@ import { booleanSetting, integerSetting } from "@/lib/settings/settings-service"
  * `requireGrantedDevice` exists to close.
  *
  * **Nothing here can say what was printed.** The server never reads the bytes, and the printer does
- * not report back what it did with them. The audit row is therefore the only record that a write
- * happened at all, which is why it is written for refusals as well as for successes, and why it goes
- * to the Logs tab rather than to stdout.
+ * not report back what it did with them. The rows this route writes itself are therefore the only
+ * record of what reached the hardware, which is why one is written for refusals as well as for
+ * successes, and why they go to the Logs tab rather than to stdout.
+ *
+ * **This route writes two rows for one request, and both are load-bearing.** `apiRoute` records
+ * every request's outcome, and that row cannot replace either of these. The row below is written
+ * *before* the bytes are handed off, so it survives a process that dies mid-send — the envelope's
+ * row is written after the handler returns and would not exist at all. The failure row is the only
+ * one that knows whether anything left this server, which is the whole `handedOff` distinction
+ * {@link auditFailure} is built on; the envelope's row can only say the request failed. What the
+ * envelope adds, and these rows deliberately do not, is the *level*: an unexpected fault here is
+ * recorded at `WARN` by this route because "may have reached paper" is what its wording is about,
+ * and at `ERROR` by the envelope because that is what the outcome was.
  *
  * `sendRawWrite`'s timeout message — "the bytes may or may not have been written" — is passed
  * through unchanged. It is the honest answer, and the operator is the only one who can go and look
@@ -43,77 +49,79 @@ const rawWriteSchema = z.object({
 	bytes: z.string().min(1),
 });
 
-export async function POST(
-	request: Request,
-	context: { params: Promise<{ agent: string; device: string }> },
-): Promise<Response> {
-	const { agent, device } = await context.params;
-	let key: AuthenticatedKey | null = null;
-	let target: Awaited<ReturnType<typeof requireGrantedDevice>> | null = null;
+export const POST = apiRoute<{ agent: string; device: string }>(
+	"api:POST /v1/devices/{agent}/{device}/raw",
+	async ({ key, request, params }) => {
+		const { agent, device } = params;
+		let target: Awaited<ReturnType<typeof requireGrantedDevice>> | null = null;
 
-	// How many bytes were handed to `sendRawWrite`, or null while nothing has been. This is what
-	// separates a refusal from a failure of unknown outcome in the audit trail below: everything
-	// before the send is a refusal — nothing was written, and the row may say so — while a failure
-	// once this is set has to leave the question open, because the timeout case genuinely is open.
-	//
-	// Set before the call, not after, which deliberately conflates two of the three outcomes: see
-	// {@link auditFailure}.
-	let handedOff: number | null = null;
-
-	try {
-		key = await authenticateKey(request);
-		requirePermission(key, "devices:raw");
-
-		// Before the device grant, deliberately — see the module comment. An install with this off
-		// gives one answer to everybody, and the answer names nothing about this install.
-		if (!(await booleanSetting("link.allowRawApiWrites"))) {
-			throw new ApiError(
-				"raw_writes_disabled",
-				"Raw writes are switched off for this install. An administrator can enable them under Settings → Security.",
-			);
-		}
-
-		target = await requireGrantedDevice(key, agent, device);
-
-		const cap = await integerSetting("link.maxRawWriteBytes");
-		const bytes = await readBytes(request, cap);
-
-		// Recorded before the write, not after. A write that reaches the printer and then fails on the
-		// way back must still leave a trace — the paper has moved either way, and an audit trail that
-		// only records the writes that returned cleanly is not an audit trail.
+		// How many bytes were handed to `sendRawWrite`, or null while nothing has been. This is what
+		// separates a refusal from a failure of unknown outcome in the audit trail below: everything
+		// before the send is a refusal — nothing was written, and the row may say so — while a failure
+		// once this is set has to leave the question open, because the timeout case genuinely is open.
 		//
-		// `target.name` rather than the path segment: this line is written after the grant check, so
-		// the stored name is available and is the one an operator recognises. `agent` is the path
-		// segment too, but the grant check having succeeded means it is not merely untrusted input
-		// here: `requireGrantedDevice` matched it against the device's actual agent by exact name, so
-		// it is the verified name, not the caller's claim of it — the same reasoning `target.name`
-		// already relies on for the device.
-		await recordServerLog("INFO", `Raw write of ${bytes.length} bytes to '${target.name}' by key '${key.name}'.`, {
-			agentId: target.agentId,
-			agentName: agent,
-			deviceId: target.id,
-			deviceName: target.name,
-		});
+		// Set before the call, not after, which deliberately conflates two of the three outcomes: see
+		// {@link auditFailure}.
+		let handedOff: number | null = null;
 
-		handedOff = bytes.length;
-		const message = await sendRawWrite(target.agentId, target.name, bytes.toString("base64"));
+		try {
+			// Before the device grant, deliberately — see the module comment. An install with this off
+			// gives one answer to everybody, and the answer names nothing about this install.
+			if (!(await booleanSetting("link.allowRawApiWrites"))) {
+				throw new ApiError(
+					"raw_writes_disabled",
+					"Raw writes are switched off for this install. An administrator can enable them under Settings → Security.",
+				);
+			}
 
-		logger.info("Raw write accepted", {
-			keyId: key.id,
-			agentName: agent,
-			deviceName: device,
-			bytes: bytes.length,
-		});
+			target = await requireGrantedDevice(key, agent, device);
 
-		return Response.json({ agent, device, bytes: bytes.length, message: message ?? null });
-	} catch (error) {
-		// An identified caller leaves a trace whatever went wrong; an unidentified one does not,
-		// because there is nothing to attribute it to and a row per unauthenticated request is a way
-		// to fill a disk. `authenticateKey`'s own failures are the only ones that reach here with a
-		// null key. An unexpected fault is recorded too, under the code the caller was given for it:
-		// "every write and every refusal is recorded" cannot hold only for the failures this route
-		// anticipated, since an operator has no other way to learn that one happened.
-		if (key) {
+			const cap = await integerSetting("link.maxRawWriteBytes");
+			const bytes = await readBytes(request, cap);
+
+			// Recorded before the write, not after. A write that reaches the printer and then fails on
+			// the way back must still leave a trace — the paper has moved either way, and an audit trail
+			// that only records the writes that returned cleanly is not an audit trail. `apiRoute`'s own
+			// row cannot stand in for this one: it is written after the handler returns, so a process
+			// that dies mid-send leaves this line and nothing else.
+			//
+			// `target.name` rather than the path segment: this line is written after the grant check, so
+			// the stored name is available and is the one an operator recognises. `agent` is the path
+			// segment too, but the grant check having succeeded means it is not merely untrusted input
+			// here: `requireGrantedDevice` matched it against the device's actual agent by exact name, so
+			// it is the verified name, not the caller's claim of it — the same reasoning `target.name`
+			// already relies on for the device.
+			await recordServerLog("INFO", `Raw write of ${bytes.length} bytes to '${target.name}' by key '${key.name}'.`, {
+				agentId: target.agentId,
+				agentName: agent,
+				deviceId: target.id,
+				deviceName: target.name,
+			});
+
+			handedOff = bytes.length;
+			const message = await sendRawWrite(target.agentId, target.name, bytes.toString("base64"));
+
+			logger.info("Raw write accepted", {
+				keyId: key.id,
+				agentName: agent,
+				deviceName: device,
+				bytes: bytes.length,
+			});
+
+			return {
+				response: Response.json({ agent, device, bytes: bytes.length, message: message ?? null }),
+				// The outcome, not a restatement of the line above: that one says bytes were handed off,
+				// this one says the agent answered for them. Worded so the two cannot be mistaken for
+				// each other in the Logs tab, where they sit adjacent.
+				message: `Agent acknowledged a raw write of ${bytes.length} bytes to '${target.name}'`,
+				target: { agentId: target.agentId, agentName: agent, deviceId: target.id, deviceName: target.name },
+			};
+		} catch (error) {
+			// Every failure past authentication leaves this line, including an unexpected fault, under
+			// the code the caller was given for it. `apiRoute` records the outcome and its level; this
+			// row records the one thing the envelope cannot know — whether anything left this server —
+			// so "every write and every refusal is recorded" is a claim about the paper rather than
+			// about the request.
 			const code = error instanceof ApiError ? error.code : "internal_error";
 
 			// Named even on the refusals that never got as far as resolving a device, so every line
@@ -133,11 +141,12 @@ export async function POST(
 				deviceId: target?.id,
 				deviceName: target?.name,
 			});
-		}
 
-		return toErrorResponse(error, { route: "POST /api/v1/devices/[agent]/[device]/raw", agent, device });
-	}
-}
+			// Rethrown rather than answered here: the envelope owns the response and the level.
+			throw error;
+		}
+	},
+);
 
 /**
  * The audit line for a request that did not return a write.

@@ -1,8 +1,8 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
 import { requireApiRead } from "@/lib/auth/rate-limit";
-import { toErrorResponse } from "@/lib/errors";
 import { compilePreview } from "@/lib/jobs/preview";
-import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
+import { requireGrantedDevice } from "@/lib/keys/authenticate";
 
 /**
  * `POST /api/v1/preview/{agent}/{device}` — what this body would print, without printing it.
@@ -20,15 +20,10 @@ import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/
  * printer, only its configuration, which this server owns.
  */
 
-export async function POST(
-	request: Request,
-	context: { params: Promise<{ agent: string; device: string }> },
-): Promise<Response> {
-	const { agent, device } = await context.params;
-
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "print");
+export const POST = apiRoute<{ agent: string; device: string }>(
+	"api:POST /v1/preview/{agent}/{device}",
+	async ({ key, request, params }) => {
+		const { agent, device } = params;
 
 		await requireApiRead(key.id);
 
@@ -41,8 +36,18 @@ export async function POST(
 		// this endpoint makes — that what comes back is what the printer would produce — stays true for
 		// such a receipt. It is not merely the substituted text that would otherwise differ: a name of
 		// a different length wraps differently and changes the `outputLines` the response reports.
-		return Response.json({ agent, device, ...(await compilePreview(target.id, body, key.name)) });
-	} catch (error) {
-		return toErrorResponse(error, { route: "POST /api/v1/preview/[agent]/[device]", agent, device });
-	}
-}
+		const preview = await compilePreview(target.id, body, key.name);
+
+		return {
+			response: Response.json({ agent, device, ...preview }),
+			// A receipt that did not compile is still a 200 — see this module's own note — so the line
+			// has to say which of the two happened, or the Logs tab would report every preview as the
+			// same event.
+			message:
+				preview.errors.length === 0
+					? `Previewed ${preview.outputLines} lines for '${target.name}'`
+					: `Previewed markup for '${target.name}' that would not compile: ${preview.errors.length} faults`,
+			target: { agentId: target.agentId, agentName: agent, deviceId: target.id, deviceName: target.name },
+		};
+	},
+);

@@ -1,7 +1,7 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { deviceView } from "@/lib/api/device-view";
 import { requireApiRead } from "@/lib/auth/rate-limit";
-import { toErrorResponse } from "@/lib/errors";
-import { authenticateKey, grantedDevices, requirePermission } from "@/lib/keys/authenticate";
+import { grantedDevices } from "@/lib/keys/authenticate";
 import { getDeviceStatus } from "@/lib/link/device-status";
 
 /**
@@ -19,19 +19,16 @@ import { getDeviceStatus } from "@/lib/link/device-status";
 /** Never cached: pause state and queue depth are the reason anyone calls this. */
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<Response> {
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "devices:read");
+export const GET = apiRoute("api:GET /v1/devices", async ({ key }) => {
+	await requireApiRead(key.id);
 
-		await requireApiRead(key.id);
+	const devices = await grantedDevices(key);
 
-		const devices = await grantedDevices(key);
-
-		return Response.json({
+	return {
+		response: Response.json({
 			devices: devices.map((device) => deviceView(device, getDeviceStatus(device.agentId, device.name))),
-		});
-	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/v1/devices" });
-	}
-}
+		}),
+		// No target: a listing is about the grant as a whole, not about any one device in it.
+		message: `Listed ${devices.length} granted devices`,
+	};
+});

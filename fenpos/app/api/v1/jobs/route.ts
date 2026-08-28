@@ -1,9 +1,9 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
-import { ApiError, toErrorResponse } from "@/lib/errors";
-import { authenticateKey, requirePermission } from "@/lib/keys/authenticate";
+import { ApiError } from "@/lib/errors";
 
 /**
  * `GET /api/v1/jobs` — the jobs this key submitted.
@@ -24,55 +24,52 @@ import { authenticateKey, requirePermission } from "@/lib/keys/authenticate";
 /** Never cached: a job's state is the entire content. */
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<Response> {
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "jobs:read");
+export const GET = apiRoute("api:GET /v1/jobs", async ({ key, request }) => {
+	await requireApiRead(key.id);
 
-		await requireApiRead(key.id);
+	const url = new URL(request.url);
+	const { take, cursor } = await readPageParams(url);
 
-		const url = new URL(request.url);
-		const { take, cursor } = await readPageParams(url);
+	const where = {
+		apiKeyId: key.id,
+		...statusFilter(url),
+		...nameFilters(url),
+		...sinceFilter(url),
+	};
 
-		const where = {
-			apiKeyId: key.id,
-			...statusFilter(url),
-			...nameFilters(url),
-			...sinceFilter(url),
-		};
+	// A cursor naming a row Prisma would resolve regardless of `where` (another key's job, one
+	// this page's status/agent/device/since filter excludes, or nothing at all) must be refused
+	// rather than silently mishandled — see assertCursorInFilter's own doc comment for why.
+	if (cursor !== null) {
+		await assertCursorInFilter(cursor, () =>
+			prisma.job.findFirst({ where: { ...where, id: cursor }, select: { id: true } }),
+		);
+	}
 
-		// A cursor naming a row Prisma would resolve regardless of `where` (another key's job, one
-		// this page's status/agent/device/since filter excludes, or nothing at all) must be refused
-		// rather than silently mishandled — see assertCursorInFilter's own doc comment for why.
-		if (cursor !== null) {
-			await assertCursorInFilter(cursor, () =>
-				prisma.job.findFirst({ where: { ...where, id: cursor }, select: { id: true } }),
-			);
-		}
+	const rows = await prisma.job.findMany({
+		where,
+		orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+		take: take + 1,
+		...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+		select: {
+			id: true,
+			status: true,
+			submittedAt: true,
+			queuedAt: true,
+			startedAt: true,
+			finishedAt: true,
+			lines: true,
+			bytes: true,
+			errorCode: true,
+			errorMessage: true,
+			device: { select: { name: true, agent: { select: { name: true } } } },
+		},
+	});
 
-		const rows = await prisma.job.findMany({
-			where,
-			orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
-			take: take + 1,
-			...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-			select: {
-				id: true,
-				status: true,
-				submittedAt: true,
-				queuedAt: true,
-				startedAt: true,
-				finishedAt: true,
-				lines: true,
-				bytes: true,
-				errorCode: true,
-				errorMessage: true,
-				device: { select: { name: true, agent: { select: { name: true } } } },
-			},
-		});
+	const { page, nextCursor } = pageOf(rows, take);
 
-		const { page, nextCursor } = pageOf(rows, take);
-
-		return Response.json({
+	return {
+		response: Response.json({
 			jobs: page.map((job) => ({
 				jobId: job.id,
 				status: job.status,
@@ -88,11 +85,11 @@ export async function GET(request: Request): Promise<Response> {
 				errorMessage: job.errorMessage,
 			})),
 			nextCursor,
-		});
-	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/v1/jobs" });
-	}
-}
+		}),
+		// No target: a page of jobs may span every device this key ever printed to.
+		message: `Listed ${page.length} jobs`,
+	};
+});
 
 /**
  * Narrows to one job status.

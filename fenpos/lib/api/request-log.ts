@@ -123,14 +123,30 @@ async function recordsSuccessfulReads(): Promise<boolean> {
 }
 
 /**
+ * The `404`s that are authorization decisions wearing a 404's clothes.
+ *
+ * Both are returned for a resource the key may not see *precisely* so the answer is
+ * indistinguishable from one that does not exist — `lib/errors.ts` says so for `unknown_device`, and
+ * `app/api/v1/jobs/[id]/route.ts` says it verbatim for `unknown_job`: "distinguishing them would
+ * confirm that an identifier exists". Filed under refusals, because an operator asking "what did
+ * this key get turned away from" must see both beside the `403`s; left at `ERROR`, id probing would
+ * sit among the server's own faults, which is not where anybody looks for it.
+ *
+ * **The other two `404`s are deliberately not here.** `unknown_asset` is not an authorization
+ * decision at all: assets are install-wide, so `assets:read` and `assets:write` grant the whole
+ * namespace and a 404 there means the image genuinely is not stored — filing that as a refusal would
+ * put "no such image" beside the probing and dilute the one filter that answers for it.
+ * `unknown_agent` is raised by the panel's own services and never by a v1 route, so listing it would
+ * be a rule about a case that cannot arise, which is worse than no rule.
+ */
+const REFUSALS_REPORTED_AS_NOT_FOUND: ReadonlySet<string> = new Set(["unknown_device", "unknown_job"]);
+
+/**
  * Which level carries this outcome.
  *
- * `unknown_device` is the one code classified by name rather than by status. It is a `404`, and
- * `lib/errors.ts` says why: it is returned for a device the key holds no grant for *precisely* so
- * that answer is indistinguishable from a device that does not exist, which is what stops a caller
- * mapping the install's printers by probing names. Filed under refusals, because that is what it is
- * — an authorization decision wearing a 404's clothes — and an operator asking "what did this key
- * get turned away from" must see it beside the `403`s.
+ * Refusals are recognised by status, so a new `403` in `lib/errors.ts` is classified as one without
+ * anyone widening a list — except for the `404`s in {@link REFUSALS_REPORTED_AS_NOT_FOUND}, which
+ * cannot be told from a genuine miss by their status and are therefore named.
  *
  * @param outcome how the request ended
  * @returns the level to record it at
@@ -142,7 +158,7 @@ function levelFor(outcome: ApiRequestOutcome): LogLevel {
 	if (!(outcome.error instanceof ApiError)) {
 		return "ERROR";
 	}
-	if (outcome.error.code === "unknown_device") {
+	if (REFUSALS_REPORTED_AS_NOT_FOUND.has(outcome.error.code)) {
 		return "WARN";
 	}
 	return REFUSAL_STATUSES.has(outcome.error.status) ? "WARN" : "ERROR";

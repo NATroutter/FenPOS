@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { API_ROUTES } from "@/lib/api/api-routes";
 import { prisma } from "@/lib/db";
 import { PERMISSION_IDS } from "@/lib/domain/permissions";
 import { TAGS } from "@/lib/markup/tags";
@@ -99,14 +100,22 @@ async function device(name: string): Promise<string> {
 }
 
 /**
- * Every permission some route under `app/api` actually requires, read from the routes themselves.
+ * Every permission some route under `app/api` actually requires.
  *
- * Walked rather than listed, so a route file added tomorrow is covered without anyone remembering
- * to add it here — the whole point being that the page's claim cannot quietly stop matching the
- * code. The routes are read as text for the same reason the pages are: they are Next.js server
- * modules and this suite is a plain Node environment.
+ * **The v1 permissions come from `API_ROUTES`, because that is where the check now lives.** A v1
+ * handler no longer calls `requirePermission` itself; `apiRoute` does, reading the permission from
+ * the registry entry whose id the handler names. The property this function was written for is
+ * unchanged — a route added tomorrow is covered without anyone remembering to add it here — because
+ * `test/lib/api/route-coverage.test.ts` fails on a handler with no registry entry, so the registry
+ * cannot fall behind `app/api/v1/`.
  *
- * @returns the permission identifiers passed to `requirePermission`
+ * **The walk over the route files stays, for everything outside that registry.** Nothing under
+ * `app/api` but v1 gates on an API key today, and the point of walking rather than listing is that a
+ * route which starts to must be counted rather than exempted by the source of truth having moved.
+ * Those files are read as text for the same reason the pages are: they are Next.js server modules
+ * and this suite is a plain Node environment.
+ *
+ * @returns the permission identifiers a caller must hold to reach some endpoint
  */
 function permissionsRoutesRequire(): string[] {
 	const routes = readdirSync("app/api", { recursive: true, encoding: "utf8" }).filter((entry) =>
@@ -114,7 +123,9 @@ function permissionsRoutesRequire(): string[] {
 	);
 	expect(routes.length, "no route files were found under app/api — has the walk broken?").toBeGreaterThan(0);
 
-	const required = new Set<string>();
+	const required = new Set<string>(API_ROUTES.map((entry) => entry.permission));
+	expect(required.size, "API_ROUTES declares no permissions — has the registry been emptied?").toBeGreaterThan(0);
+
 	for (const route of routes) {
 		const source = readFileSync(`app/api/${route}`, "utf8");
 		for (const call of source.matchAll(/requirePermission\([^,)]+,\s*"([^"]+)"\)/g)) {
@@ -122,10 +133,6 @@ function permissionsRoutesRequire(): string[] {
 		}
 	}
 
-	expect(
-		required.size,
-		"no requirePermission call was found in any route — has the call been renamed?",
-	).toBeGreaterThan(0);
 	return [...required].sort();
 }
 

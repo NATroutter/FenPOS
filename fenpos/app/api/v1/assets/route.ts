@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { apiRoute } from "@/lib/api/api-route";
 import { readBoundedJson } from "@/lib/api/bounded-body";
 import { assertCursorInFilter, pageOf, readPageParams } from "@/lib/api/pagination";
 import {
@@ -11,8 +12,7 @@ import {
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
 import { MAX_NAME_LENGTH } from "@/lib/domain/naming";
-import { ApiError, toErrorResponse } from "@/lib/errors";
-import { authenticateKey, requirePermission } from "@/lib/keys/authenticate";
+import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 
 /**
@@ -61,78 +61,74 @@ const createSchema = z.object({
 	url: z.string().optional(),
 });
 
-export async function GET(request: Request): Promise<Response> {
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "assets:read");
+export const GET = apiRoute("api:GET /v1/assets", async ({ key, request }) => {
+	await requireApiRead(key.id);
 
-		await requireApiRead(key.id);
+	const { take, cursor } = await readPageParams(new URL(request.url));
 
-		const { take, cursor } = await readPageParams(new URL(request.url));
+	// Assets are install-wide — there is no per-key `where` to compose here, unlike the jobs
+	// listing — but the query below is filtered to IMAGE assets, so the cursor has to be checked
+	// against that same filter: a cursor naming a row of some other kind would otherwise pass this
+	// guard while never appearing in the listing it is meant to resume. See
+	// `assertCursorInFilter`'s own doc comment for why a cursor naming nothing must be refused
+	// rather than silently answered with a short page.
+	if (cursor !== null) {
+		await assertCursorInFilter(cursor, () =>
+			prisma.asset.findFirst({ where: { id: cursor, kind: "IMAGE" }, select: { id: true } }),
+		);
+	}
 
-		// Assets are install-wide — there is no per-key `where` to compose here, unlike the jobs
-		// listing — but the query below is filtered to IMAGE assets, so the cursor has to be checked
-		// against that same filter: a cursor naming a row of some other kind would otherwise pass this
-		// guard while never appearing in the listing it is meant to resume. See
-		// `assertCursorInFilter`'s own doc comment for why a cursor naming nothing must be refused
-		// rather than silently answered with a short page.
-		if (cursor !== null) {
-			await assertCursorInFilter(cursor, () =>
-				prisma.asset.findFirst({ where: { id: cursor, kind: "IMAGE" }, select: { id: true } }),
-			);
-		}
+	// `listAssets()` is not used here because it returns everything: on an install with hundreds
+	// of images that is a page this endpoint cannot bound. The columns are the same ones it
+	// selects, and `data` is excluded for the same reason — a listing must not be as large as the
+	// images it describes.
+	//
+	// Filtered to IMAGE for the same reason `DELETE /assets/{name}` addresses a row by
+	// `kind_name: { kind: "IMAGE", name }` rather than by name alone: `AssetKind` has one member
+	// today, so this is a no-op in practice, but the schema anticipates a later kind reusing a
+	// name, and an unfiltered listing would then return rows the delete path could not address.
+	const rows = await prisma.asset.findMany({
+		where: { kind: "IMAGE" },
+		// Ascending by name, not newest-first like the jobs listing — an asset library is browsed
+		// alphabetically, the way the Assets tab presents it, rather than by when each image was
+		// added.
+		orderBy: [{ name: "asc" }, { id: "asc" }],
+		take: take + 1,
+		...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+		select: SUMMARY_COLUMNS,
+	});
 
-		// `listAssets()` is not used here because it returns everything: on an install with hundreds
-		// of images that is a page this endpoint cannot bound. The columns are the same ones it
-		// selects, and `data` is excluded for the same reason — a listing must not be as large as the
-		// images it describes.
-		//
-		// Filtered to IMAGE for the same reason `DELETE /assets/{name}` addresses a row by
-		// `kind_name: { kind: "IMAGE", name }` rather than by name alone: `AssetKind` has one member
-		// today, so this is a no-op in practice, but the schema anticipates a later kind reusing a
-		// name, and an unfiltered listing would then return rows the delete path could not address.
-		const rows = await prisma.asset.findMany({
-			where: { kind: "IMAGE" },
-			// Ascending by name, not newest-first like the jobs listing — an asset library is browsed
-			// alphabetically, the way the Assets tab presents it, rather than by when each image was
-			// added.
-			orderBy: [{ name: "asc" }, { id: "asc" }],
-			take: take + 1,
-			...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-			select: SUMMARY_COLUMNS,
-		});
+	const { page, nextCursor } = pageOf(rows, take);
 
-		const { page, nextCursor } = pageOf(rows, take);
-
-		return Response.json({
+	return {
+		response: Response.json({
 			// `summarise` rather than a second, hand-rolled mapping: it is the one place that coerces a
 			// nullable `width`/`height` to the integers the OpenAPI schema declares required and narrows
 			// `kind` to the closed enum, so this listing cannot describe a row differently than the rest
 			// of this module does.
 			assets: page.map((row) => toPublicAsset(summarise(row))),
 			nextCursor,
-		});
-	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/v1/assets" });
-	}
-}
+		}),
+		// No target: an asset belongs to the install rather than to any one printer, which is this
+		// module's whole first paragraph.
+		message: `Listed ${page.length} images`,
+	};
+});
 
-export async function POST(request: Request): Promise<Response> {
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "assets:write");
+export const POST = apiRoute("api:POST /v1/assets", async ({ key, request }) => {
+	const { name, data, url } = await readCreate(request);
 
-		const { name, data, url } = await readCreate(request);
+	const asset = data === undefined ? await importAssetFromUrl(name, url as string) : await storeUpload(name, data);
 
-		const asset = data === undefined ? await importAssetFromUrl(name, url as string) : await storeUpload(name, data);
+	logger.info("Asset stored through the API", { keyId: key.id, name: asset.name, imported: data === undefined });
 
-		logger.info("Asset stored through the API", { keyId: key.id, name: asset.name, imported: data === undefined });
-
-		return Response.json(toPublicAsset(asset), { status: 201 });
-	} catch (error) {
-		return toErrorResponse(error, { route: "POST /api/v1/assets" });
-	}
-}
+	return {
+		response: Response.json(toPublicAsset(asset), { status: 201 }),
+		// Which door it came through, because the two fail in different places and an operator
+		// reconciling a missing image needs to know which one to look at.
+		message: `Stored image '${asset.name}' ${data === undefined ? "imported from a URL" : "from an upload"}`,
+	};
+});
 
 /**
  * Strips the row id `asset-service.ts` carries for the panel's own use.

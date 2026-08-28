@@ -1,7 +1,7 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { deviceView } from "@/lib/api/device-view";
 import { requireApiRead } from "@/lib/auth/rate-limit";
-import { toErrorResponse } from "@/lib/errors";
-import { authenticateKey, grantedDevice, requirePermission } from "@/lib/keys/authenticate";
+import { grantedDevice } from "@/lib/keys/authenticate";
 import { getDeviceStatus } from "@/lib/link/device-status";
 
 /**
@@ -15,22 +15,25 @@ import { getDeviceStatus } from "@/lib/link/device-status";
 /** Never cached: pause state and queue depth are the reason anyone calls this. */
 export const dynamic = "force-dynamic";
 
-export async function GET(
-	request: Request,
-	context: { params: Promise<{ agent: string; device: string }> },
-): Promise<Response> {
-	const { agent, device } = await context.params;
-
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "devices:read");
-
+export const GET = apiRoute<{ agent: string; device: string }>(
+	"api:GET /v1/devices/{agent}/{device}",
+	async ({ key, params }) => {
 		await requireApiRead(key.id);
 
-		const target = await grantedDevice(key, agent, device);
+		const target = await grantedDevice(key, params.agent, params.device);
 
-		return Response.json(deviceView(target, getDeviceStatus(target.agentId, target.name)));
-	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/v1/devices/[agent]/[device]", agent, device });
-	}
-}
+		return {
+			response: Response.json(deviceView(target, getDeviceStatus(target.agentId, target.name))),
+			message: `Read device '${target.name}' on '${target.agentName}'`,
+			// The stored names rather than the path segments, and available here because the grant
+			// check resolved the row — see the raw-write route's own note on why that distinction
+			// matters for a line an operator reads.
+			target: {
+				agentId: target.agentId,
+				agentName: target.agentName,
+				deviceId: target.id,
+				deviceName: target.name,
+			},
+		};
+	},
+);

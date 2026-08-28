@@ -1,8 +1,8 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { deviceView } from "@/lib/api/device-view";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { prisma } from "@/lib/db";
-import { toErrorResponse } from "@/lib/errors";
-import { authenticateKey, type GrantedDevice, grantedDevices, requirePermission } from "@/lib/keys/authenticate";
+import { type GrantedDevice, grantedDevices } from "@/lib/keys/authenticate";
 import { getDeviceStatus } from "@/lib/link/device-status";
 
 /**
@@ -14,37 +14,35 @@ import { getDeviceStatus } from "@/lib/link/device-status";
  *
  * Distinct from `/api/health`, which stays deliberately contentless because it is unauthenticated —
  * counts of agents and devices there would turn a container probe into a way to watch an install
- * from outside it. This endpoint is behind `status:read` and may therefore say more.
+ * from outside it. This endpoint requires `status:read`, which `API_ROUTES` declares and `apiRoute`
+ * enforces, and may therefore say more.
  */
 
 /** Never cached: liveness is the entire content. */
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<Response> {
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "status:read");
+export const GET = apiRoute("api:GET /v1/status", async ({ key }) => {
+	await requireApiRead(key.id);
 
-		await requireApiRead(key.id);
-
-		const devices = await grantedDevices(key);
-		const byAgent = new Map<string, GrantedDevice[]>();
-		for (const device of devices) {
-			const existing = byAgent.get(device.agentId);
-			if (existing) {
-				existing.push(device);
-			} else {
-				byAgent.set(device.agentId, [device]);
-			}
+	const devices = await grantedDevices(key);
+	const byAgent = new Map<string, GrantedDevice[]>();
+	for (const device of devices) {
+		const existing = byAgent.get(device.agentId);
+		if (existing) {
+			existing.push(device);
+		} else {
+			byAgent.set(device.agentId, [device]);
 		}
+	}
 
-		const rows = await prisma.agent.findMany({
-			where: { id: { in: [...byAgent.keys()] } },
-			select: { id: true, name: true, status: true, lastSeenAt: true, agentVersion: true },
-			orderBy: { name: "asc" },
-		});
+	const rows = await prisma.agent.findMany({
+		where: { id: { in: [...byAgent.keys()] } },
+		select: { id: true, name: true, status: true, lastSeenAt: true, agentVersion: true },
+		orderBy: { name: "asc" },
+	});
 
-		return Response.json({
+	return {
+		response: Response.json({
 			agents: rows.map((row) => ({
 				agent: row.name,
 				status: row.status,
@@ -54,8 +52,9 @@ export async function GET(request: Request): Promise<Response> {
 					deviceView(device, getDeviceStatus(device.agentId, device.name)),
 				),
 			})),
-		});
-	} catch (error) {
-		return toErrorResponse(error, { route: "GET /api/v1/status" });
-	}
-}
+		}),
+		// No target: the answer spans every agent this key grants, so naming one on the row would be
+		// picking an arbitrary member of the set the request was about.
+		message: `Reported status for ${rows.length} agents and ${devices.length} devices`,
+	};
+});

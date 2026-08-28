@@ -11,8 +11,15 @@ import { setSetting } from "@/lib/settings/settings-service";
  * This is the one endpoint in the system whose effect this server cannot describe afterwards: the
  * bytes go to the hardware unread, so nothing here knows what was printed. Three things follow, and
  * this file tests all three: the double gate (a permission *and* an install setting), the ordering
- * that keeps a disabled install from leaking which devices exist, and the audit row, which is the
- * only record that a write ever happened.
+ * that keeps a disabled install from leaking which devices exist, and the audit rows, which are the
+ * only record of what reached the hardware.
+ *
+ * **Every request now leaves the envelope's line too.** `apiRoute` records each request's outcome,
+ * so the rows below are picked out by what only this route writes rather than by position — a test
+ * indexing into `findMany()` would be asserting on whichever of the pair came back first. The
+ * envelope's own rows are `test/lib/api/api-route.test.ts`'s subject, not this file's; what this
+ * file keeps testing is the audit trail, which says the one thing the envelope cannot know, namely
+ * whether any bytes left this server.
  */
 vi.mock("@/lib/link/commands", () => ({ sendRawWrite: vi.fn(async () => "wrote 12 bytes") }));
 
@@ -39,6 +46,35 @@ function call(body: unknown, device = "kitchen"): [Request, { params: Promise<{ 
 		}),
 		{ params: Promise.resolve({ agent: agentName, device }) },
 	];
+}
+
+/** Every row this route wrote itself. The envelope's lines never open with these words. */
+async function auditRows() {
+	const rows = await logsDb.logEntry.findMany();
+	return rows.filter((row) => row.message.startsWith("Raw write "));
+}
+
+/**
+ * The line written before any bytes were handed off, or undefined when none was.
+ *
+ * Picked by its wording rather than by position, because whether it exists at all is the fact the
+ * failure line's two wordings turn on — a request refused before the send leaves no handoff line.
+ *
+ * @returns the row, or undefined
+ */
+async function handoffRow() {
+	return (await auditRows()).find((row) => row.message.startsWith("Raw write of "));
+}
+
+/**
+ * The line written for a request that did not return a write, or undefined when none was.
+ *
+ * @returns the row, or undefined
+ */
+async function failureRow() {
+	return (await auditRows()).find(
+		(row) => row.message.startsWith("Raw write refused") || row.message.startsWith("Raw write did not complete"),
+	);
 }
 
 beforeEach(async () => {
@@ -171,25 +207,39 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 	it("records an audit line naming the key and the size", async () => {
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows).toHaveLength(1);
-		expect(rows[0].level).toBe("INFO");
-		expect(rows[0].message).toContain("label-printer integration");
+		const audit = await auditRows();
+		expect(audit).toHaveLength(1);
+		expect(audit[0].level).toBe("INFO");
+		expect(audit[0].message).toContain("label-printer integration");
 		// The whole phrase, not a bare "7". A single digit matches anywhere in the line — a digit
 		// inside a name, another number — so it would pass on a row that never mentioned the size at all.
-		expect(rows[0].message).toContain("Raw write of 7 bytes");
+		expect(audit[0].message).toContain("Raw write of 7 bytes");
+	});
+
+	it("leaves its own audit line beside the envelope's, and they say different things", async () => {
+		// The pairing is deliberate and neither half is redundant. This route's line is written before
+		// the bytes are handed off, so it survives a process that dies mid-send; the envelope's is
+		// written after the handler returns and is the one that says the agent answered. Goes red if
+		// either is dropped, and red if they collapse into two copies of one sentence — which is what
+		// would happen if this route's success message were reworded to restate the handoff.
+		await POST(...call({ bytes: BYTES }));
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(2);
+		expect(rows.filter((row) => row.message.startsWith("Raw write of "))).toHaveLength(1);
+		expect(rows.filter((row) => row.message.startsWith("Agent acknowledged a raw write"))).toHaveLength(1);
 	});
 
 	it("attributes the audit row to the agent and device by name, not only by id", async () => {
 		// The names are what let the row outlive the agent or device being deleted later —
 		// `LogEntry.agentName`/`deviceName` exist for exactly that, and this route is their
-		// motivating case: the audit row is the only record a raw write ever happened.
+		// motivating case: the audit row is the only record of what reached the hardware.
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows).toHaveLength(1);
-		expect(rows[0].agentName).toBe(agentName);
-		expect(rows[0].deviceName).toBe("kitchen");
+		const audit = await auditRows();
+		expect(audit).toHaveLength(1);
+		expect(audit[0].agentName).toBe(agentName);
+		expect(audit[0].deviceName).toBe("kitchen");
 	});
 
 	it("does not invent an agent's name when nothing on the request identifies one", async () => {
@@ -205,9 +255,9 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 			{ params: Promise.resolve({ agent: "no-such-agent", device: "kitchen" }) },
 		);
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows).toHaveLength(1);
-		expect(rows[0].agentName).toBeNull();
+		const audit = await auditRows();
+		expect(audit).toHaveLength(1);
+		expect(audit[0].agentName).toBeNull();
 	});
 
 	it("does not call a timed-out write a refusal, because nobody here knows what the printer did", async () => {
@@ -223,13 +273,15 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		expect(response.status).toBe(503);
 
-		// Two rows for one write: the INFO recorded before the send, and this. The send happened.
-		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
-		expect(rows).toHaveLength(2);
-		expect(rows[1].level).toBe("WARN");
-		expect(rows[1].message).not.toContain("refused");
-		expect(rows[1].message).toContain("did not complete");
-		expect(rows[1].message).toContain("may or may not have been written");
+		// Two audit rows for one write: the INFO recorded before the send, and this. The send happened,
+		// and the presence of the first is what makes the second's wording the honest one.
+		expect(await auditRows()).toHaveLength(2);
+		expect(await handoffRow()).toBeDefined();
+		const failure = await failureRow();
+		expect(failure?.level).toBe("WARN");
+		expect(failure?.message).not.toContain("refused");
+		expect(failure?.message).toContain("did not complete");
+		expect(failure?.message).toContain("may or may not have been written");
 	});
 
 	it("keeps the outcome readable when logs.maxMessageChars sits at its floor with maximum-length names", async () => {
@@ -274,10 +326,9 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		expect(response.status).toBe(503);
 
-		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
-		const warnRow = rows.find((row) => row.level === "WARN");
-		expect(warnRow?.message.length).toBeLessThanOrEqual(200);
-		expect(warnRow?.message).toContain("may or may not have been written");
+		const failure = await failureRow();
+		expect(failure?.message.length).toBeLessThanOrEqual(200);
+		expect(failure?.message).toContain("may or may not have been written");
 	});
 
 	it("says plainly that nothing was sent when the write never reached the agent", async () => {
@@ -288,26 +339,32 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows[0].message).toContain("refused");
-		expect(rows[0].message).toContain("Nothing was sent.");
+		// No handoff line at all, which is the fact this wording rests on.
+		expect(await handoffRow()).toBeUndefined();
+		const failure = await failureRow();
+		expect(failure?.message).toContain("refused");
+		expect(failure?.message).toContain("Nothing was sent.");
 	});
 
 	it("records an audit line for an unexpected fault, not only for a refusal it anticipated", async () => {
 		// A fault the route did not plan for is exactly the one an operator most needs to see, and it
-		// is answered as `internal_error` with the details deliberately kept out of the response — so
-		// the audit row is the only place the caller's own name is attached to it.
+		// is answered as `internal_error` with the details deliberately kept out of the response. The
+		// envelope now records it too — at `ERROR`, because that is what the outcome was — but only
+		// this row can say whether the bytes had already been handed off when it happened.
 		vi.mocked(sendRawWrite).mockRejectedValueOnce(new Error("the link registry exploded"));
 
 		const response = await POST(...call({ bytes: BYTES }));
 
 		expect(response.status).toBe(500);
 
-		const rows = await logsDb.logEntry.findMany({ orderBy: { ts: "asc" } });
-		expect(rows).toHaveLength(2);
-		expect(rows[1].level).toBe("WARN");
-		expect(rows[1].message).toContain("internal_error");
-		expect(rows[1].message).toContain("label-printer integration");
+		expect(await auditRows()).toHaveLength(2);
+		const failure = await failureRow();
+		expect(failure?.level).toBe("WARN");
+		expect(failure?.message).toContain("internal_error");
+		expect(failure?.message).toContain("label-printer integration");
+		// And the envelope's own row carries the severity this one deliberately does not.
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows.filter((row) => row.level === "ERROR")).toHaveLength(1);
 	});
 
 	it("bounds the device name it writes into an audit line", async () => {
@@ -319,10 +376,10 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }, "d".repeat(5_000)));
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows).toHaveLength(1);
-		expect(rows[0].message).toContain(`'${"d".repeat(MAX_NAME_LENGTH)}'`);
-		expect(rows[0].message.length).toBeLessThan(MAX_NAME_LENGTH + 200);
+		const audit = await auditRows();
+		expect(audit).toHaveLength(1);
+		expect(audit[0].message).toContain(`'${"d".repeat(MAX_NAME_LENGTH)}'`);
+		expect(audit[0].message.length).toBeLessThan(MAX_NAME_LENGTH + 200);
 	});
 
 	it("records an audit line when a write is refused for a reason other than a bad credential", async () => {
@@ -330,14 +387,16 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 
 		await POST(...call({ bytes: BYTES }));
 
-		const rows = await logsDb.logEntry.findMany();
-		expect(rows).toHaveLength(1);
-		expect(rows[0].level).toBe("WARN");
+		const audit = await auditRows();
+		expect(audit).toHaveLength(1);
+		expect(audit[0].level).toBe("WARN");
 	});
 
-	it("records nothing for a caller who never identified themselves", async () => {
-		// Nothing to attribute the line to, and an unauthenticated endpoint that writes a database row
-		// per request is a way to fill a disk.
+	it("writes no audit line of its own for a caller who never identified themselves", async () => {
+		// The handler never runs for a request the envelope refused, so there is nothing here that
+		// could name a key. The envelope does record the 401 — it takes that cost knowingly, see
+		// `recordApiRequest` — but the audit trail this route keeps is about writes, and no write was
+		// ever attempted.
 		await POST(
 			new Request(`https://fenpos.test/api/v1/devices/${agentName}/kitchen/raw`, {
 				method: "POST",
@@ -346,6 +405,7 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
 		);
 
-		expect(await logsDb.logEntry.count()).toBe(0);
+		expect(await auditRows()).toHaveLength(0);
+		expect(vi.mocked(sendRawWrite)).not.toHaveBeenCalled();
 	});
 });

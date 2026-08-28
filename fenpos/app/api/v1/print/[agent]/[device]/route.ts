@@ -1,8 +1,9 @@
+import { type ApiRouteResult, apiRoute } from "@/lib/api/api-route";
 import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
-import { ApiError, toErrorResponse } from "@/lib/errors";
+import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { bodyHash, findReplay, type IdempotentReplay, isIdempotencyKeyRace } from "@/lib/jobs/idempotency";
-import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
+import { requireGrantedDevice } from "@/lib/keys/authenticate";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
 
@@ -33,21 +34,26 @@ import { getClientAddress } from "@/lib/request-context";
  * then failed to compile or reach the agent (see `fail` in `lib/jobs/dispatch.ts`). Only a request
  * that actually reached `202 QUEUED` can be
  * replayed.
+ *
+ * **The client address is on the accepted-job line and nowhere else.** It used to be on this route's
+ * error context too, which `apiRoute` now owns and a handler cannot extend. The loss was taken
+ * knowingly. Restoring it would mean the wrapper reading `next/headers` itself: either once per
+ * request, on a path where almost every request never faults, or inside its own `catch` — the one
+ * place in the request path that must not throw, which would then need a guard swallowing whatever
+ * that read did. Neither is worth one field on the fault path, and what replaced it is better
+ * attribution rather than none: every fault here now leaves a durable `LogEntry` row naming the
+ * key's id and name, where before there was a stdout line and nothing else. That answers "which
+ * integration is failing"; only "which machine" is gone, and the accepted-job line below still
+ * carries that for every job this key does get through.
  */
 
 /** Largest `Idempotency-Key` accepted. Long enough for a UUID or an order reference, and bounded. */
 const MAX_IDEMPOTENCY_KEY_CHARS = 255;
 
-export async function POST(
-	request: Request,
-	context: { params: Promise<{ agent: string; device: string }> },
-): Promise<Response> {
-	const { agent, device } = await context.params;
-	const address = await getClientAddress();
-
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "print");
+export const POST = apiRoute<{ agent: string; device: string }>(
+	"api:POST /v1/print/{agent}/{device}",
+	async ({ key, request, params }) => {
+		const { agent, device } = params;
 
 		// Resolved before the body is read: a caller with no grant for this device learns that
 		// without the server doing any parsing work on their behalf.
@@ -68,7 +74,7 @@ export async function POST(
 					keyId: key.id,
 					idempotencyKey: idempotency.key,
 				});
-				return replayResponse(replay);
+				return replayResult(replay, target, agent);
 			}
 		}
 
@@ -91,7 +97,7 @@ export async function POST(
 						keyId: key.id,
 						idempotencyKey: idempotency.key,
 					});
-					return replayResponse(replay);
+					return replayResult(replay, target, agent);
 				}
 				// The unique constraint says a row exists, but this lookup found none. The cause is `fail`
 				// in `lib/jobs/dispatch.ts`, which clears a job's idempotency key the moment it settles a
@@ -115,41 +121,58 @@ export async function POST(
 			agentName: agent,
 			deviceName: device,
 			lines: job.lines,
-			address,
+			address: await getClientAddress(),
 		});
 
-		// 202 rather than 201: the job is accepted and queued, and the paper has not moved yet.
-		// A 201 would claim a completed print that has not happened.
-		return Response.json(
-			{ jobId: job.id, status: "QUEUED", device: job.deviceName, lines: job.lines },
-			{ status: 202 },
-		);
-	} catch (error) {
-		return toErrorResponse(error, { route: "POST /api/v1/print", agent, device, address });
-	}
-}
+		return {
+			// 202 rather than 201: the job is accepted and queued, and the paper has not moved yet.
+			// A 201 would claim a completed print that has not happened.
+			response: Response.json(
+				{ jobId: job.id, status: "QUEUED", device: job.deviceName, lines: job.lines },
+				{ status: 202 },
+			),
+			// "Queued", not "printed": the paper has not moved, and the job's own GET is where the
+			// outcome eventually shows up.
+			message: `Queued ${job.lines} lines for '${job.deviceName}' as job ${job.id}`,
+			target: { agentId: target.agentId, agentName: agent, deviceId: target.id, deviceName: target.name },
+		};
+	},
+);
 
 /**
- * Builds the response for a replayed submit, sequential or raced.
+ * Builds the result for a replayed submit, sequential or raced.
  *
  * One function for both callers of it, so the two places that can decide "this is a replay" — the
  * lookup made before dispatching, and the one re-run after losing an insert race — can never drift
  * into answering the same situation two different ways.
  *
  * @param replay the original job, as {@link findReplay} resolved it
- * @returns the 202 response carrying the original job and the replay marker
+ * @param target the device the replay was addressed to, which {@link findReplay} has already
+ *   matched against the original job's own device
+ * @param agentName the agent named in the path, verified by the grant check that resolved `target`
+ * @returns the 202 carrying the original job and the replay marker, and the line to record
  */
-function replayResponse(replay: IdempotentReplay): Response {
-	return Response.json(
-		{ jobId: replay.jobId, status: replay.status, device: replay.deviceName, lines: replay.lines },
-		{
-			status: 202,
-			// A caller reconciling their own records needs to know nothing new was printed.
-			// A header rather than a body field, so the body stays byte-identical to the
-			// original answer and a client comparing responses sees no difference.
-			headers: { "Idempotent-Replay": "true" },
-		},
-	);
+function replayResult(
+	replay: IdempotentReplay,
+	target: { id: string; name: string; agentId: string },
+	agentName: string,
+): ApiRouteResult {
+	return {
+		response: Response.json(
+			{ jobId: replay.jobId, status: replay.status, device: replay.deviceName, lines: replay.lines },
+			{
+				status: 202,
+				// A caller reconciling their own records needs to know nothing new was printed.
+				// A header rather than a body field, so the body stays byte-identical to the
+				// original answer and a client comparing responses sees no difference.
+				headers: { "Idempotent-Replay": "true" },
+			},
+		),
+		// Said plainly, because a replay and a fresh submit answer with the same status and nearly the
+		// same body: an operator counting prints from the Logs tab would otherwise double-count one.
+		message: `Replayed job ${replay.jobId} for '${replay.deviceName}'; nothing new was printed`,
+		target: { agentId: target.agentId, agentName, deviceId: target.id, deviceName: target.name },
+	};
 }
 
 /**

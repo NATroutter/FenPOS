@@ -1,7 +1,8 @@
+import { apiRoute } from "@/lib/api/api-route";
 import { type ApiDeviceAction, apiActionSchema, commandFor, PERSISTS_PAUSE } from "@/lib/api/device-actions";
 import { setDevicePaused } from "@/lib/devices/device-service";
-import { ApiError, toErrorResponse } from "@/lib/errors";
-import { authenticateKey, requireGrantedDevice, requirePermission } from "@/lib/keys/authenticate";
+import { ApiError } from "@/lib/errors";
+import { requireGrantedDevice } from "@/lib/keys/authenticate";
 import { sendDeviceCommand } from "@/lib/link/commands";
 import { logger } from "@/lib/logger";
 
@@ -29,15 +30,10 @@ import { logger } from "@/lib/logger";
  */
 const MAX_BODY_BYTES = 256;
 
-export async function POST(
-	request: Request,
-	context: { params: Promise<{ agent: string; device: string }> },
-): Promise<Response> {
-	const { agent, device } = await context.params;
-
-	try {
-		const key = await authenticateKey(request);
-		requirePermission(key, "devices:control");
+export const POST = apiRoute<{ agent: string; device: string }>(
+	"api:POST /v1/devices/{agent}/{device}/actions",
+	async ({ key, request, params }) => {
+		const { agent, device } = params;
 
 		const target = await requireGrantedDevice(key, agent, device);
 		const action = await readAction(request);
@@ -56,11 +52,16 @@ export async function POST(
 			action,
 		});
 
-		return Response.json({ agent, device, action, message: message ?? null });
-	} catch (error) {
-		return toErrorResponse(error, { route: "POST /api/v1/devices/[agent]/[device]/actions", agent, device });
-	}
-}
+		return {
+			response: Response.json({ agent, device, action, message: message ?? null }),
+			message: `Sent '${action}' to '${target.name}'`,
+			// `agent` is the path segment, but the grant check matched it against the device's actual
+			// agent by exact name, so it is the verified name rather than the caller's claim of it —
+			// the same reasoning the raw-write route relies on for this field.
+			target: { agentId: target.agentId, agentName: agent, deviceId: target.id, deviceName: target.name },
+		};
+	},
+);
 
 /**
  * Reads the requested action from the body.
