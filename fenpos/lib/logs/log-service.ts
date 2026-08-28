@@ -188,11 +188,23 @@ export interface LogRange {
  * filtered is not asking about a stretch of history, and an archive offered on every default page
  * load would be noise wearing a signpost's clothes.
  *
- * **Why this needs no separate reading of where the live window starts.** An archive exists for a
- * period only once that period has been drained out of `logs.db` — `archivePeriod` writes the file
- * and deletes the rows in one transaction. So a match *is* the evidence that the range reaches back
- * before the live window; deriving that boundary a second time here would be a second opinion about
- * it, and the file on disk is the one that is true.
+ * **Why this needs no separate reading of where the live window starts.** A file at a period's
+ * finished name is only reachable after that period's live rows are gone. `archivePeriod` writes
+ * under a provisional `*.partial` name, verifies it, deletes the live rows in a transaction, and only
+ * *then* renames to `<source>-<period>.db` and compresses — the delete and the rename are not one
+ * transaction, and `lib/archive/rotate.ts` says what that costs: a crash between any two steps leaves
+ * rows **duplicated**, never lost. Duplication is the only direction the ordering allows, so a listed
+ * archive still implies the delete happened. That makes a match evidence that the range reaches back
+ * before the live window, and deriving that boundary a second time here would be a second opinion
+ * about it.
+ *
+ * **The converse does not hold, and the gap is real rather than theoretical.** `listArchives` matches
+ * `.db.gz` only, deliberately (`lib/archive/read.ts`), so a period whose *compression* failed is a
+ * complete, named archive that nothing here can see — its rows are out of the live window and no
+ * signpost appears for them until somebody compresses or moves that file. This reader inherits that
+ * blind spot rather than opening a second way to read an archive beside the one the panel already
+ * has; Task 13's delete refuses outright on the same seam, because there the cost is a false tamper
+ * report and here it is one banner that does not appear.
  *
  * **Audit archives are never offered**, and the test for that is the parsed `source` rather than the
  * filename: this reader holds `logs:read` and may be holding nothing else, and the audit record is

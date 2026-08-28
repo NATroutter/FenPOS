@@ -10,8 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 /** The value used for "no filter", since a select cannot hold an empty string as a choice. */
 const ANY = "__any__";
 
-/** One filterable dimension. */
-export interface FilterOption {
+/**
+ * One filterable dimension.
+ *
+ * Module-local: the pages that use this component build their option arrays inline, in the `filters`
+ * prop itself, so nothing outside needs the name. It was exported for `audit-filters.tsx`, which
+ * declared the Audit tab's three dimensions as typed arguments; that component is gone, folded into
+ * this one, and an export whose only importer was deleted is surface nothing is holding up.
+ */
+interface FilterOption {
 	value: string;
 	label: string;
 }
@@ -30,8 +37,10 @@ interface Filter {
  * Both are the `yyyy-mm-dd` a native date input reads and writes, empty when that end is unbounded.
  * The page turns them into instants with `dayBound` (`lib/format/datetime.ts`) — this component
  * only carries the strings, because they are exactly what lives in the URL.
+ *
+ * Module-local for the same reason {@link FilterOption} is: both pages pass an object literal.
  */
-export interface FilterRange {
+interface FilterRange {
 	from: string;
 	to: string;
 }

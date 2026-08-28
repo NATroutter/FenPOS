@@ -303,9 +303,25 @@ describe("archiveCovering", () => {
 			to: new Date("2026-03-20T00:00:00.000Z"),
 		});
 
-		// Goes red if the tab silently returns an empty page: that is the failure this whole project
-		// exists to remove, relocated from "the data is gone" to "the data is somewhere you were not
-		// told to look".
+		// Goes red when a range that reaches into an archived period is answered with nothing — which
+		// is the half of the signpost that lives here. The other half is the tab's: `page.tsx` asks
+		// only when a range was filtered on, and renders nothing when the answer is null. Neither of
+		// those two conditions is observable from this file, so this assertion is about
+		// `archiveCovering` naming the period, not about what the page does with the name.
+		expect(covering).toBe("2026-03");
+	});
+
+	it("takes a range with no end as reaching up to now", async () => {
+		// The period is in the past relative to any clock this suite can run on, and the range has no
+		// upper bound — which is how "everything since March" arrives from the tab, and the most common
+		// way an operator asks this question at all.
+		archived("logs-2026-03.db.gz");
+
+		const covering = await archiveCovering({ from: new Date("2026-03-05T00:00:00.000Z") });
+
+		// Goes red if the open end is resolved to anything earlier than the present: the archive falls
+		// outside the range, and every unbounded filter silently loses its signpost. Every other test
+		// here either passes an explicit `to` or expects null, so this is the only one that can see it.
 		expect(covering).toBe("2026-03");
 	});
 
