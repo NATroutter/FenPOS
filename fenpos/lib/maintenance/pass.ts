@@ -1,5 +1,6 @@
 import "server-only";
 import { mkdirSync } from "node:fs";
+import { pruneLogArchives } from "@/lib/archive/prune";
 import { appendEvent, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
 import { sweepAuditNow } from "@/lib/audit/retention";
 import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
@@ -63,10 +64,19 @@ export async function runMaintenancePass(): Promise<void> {
 		// before either half had started. Called once per half rather than once per pass for that reason
 		// alone; it is one idempotent syscall.
 		const directory = archiveDirectory();
-		const { retentionDays, archiveEnabled } = await globalLogIngestSettings();
+		const { retentionDays, archiveEnabled, archiveRetentionDays } = await globalLogIngestSettings();
 		const { removed } = await sweepLogsNow(retentionDays, { archiveEnabled, archiveDirectory: directory });
 		if (removed > 0) {
 			logger.info("Swept log lines past the retention window", { removed });
+		}
+
+		// Bulk and bounded by their own setting, never the audit half's: a log archive is deleted once
+		// its period ages past `archiveRetentionDays`, but an audit archive is deleted only by the panel
+		// action that advances the epoch alongside it (Task 13) — see `pruneLogArchives`'s doc comment
+		// for why a timer must never be the thing that moves that epoch.
+		const { removed: prunedArchives } = await pruneLogArchives(directory, archiveRetentionDays);
+		if (prunedArchives.length > 0) {
+			logger.info("Deleted log archives past their retention window", { removed: prunedArchives });
 		}
 	} catch (error) {
 		// Reported rather than swallowed quietly, and this is the reason `periodsFullyBefore` refuses an
