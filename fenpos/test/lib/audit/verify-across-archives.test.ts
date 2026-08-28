@@ -132,8 +132,9 @@ describe("verifyAuditChain across an archive boundary", () => {
 		await archivePeriod({ source: "audit", before: new Date("2026-03-01T00:00:00Z"), directory });
 
 		// The same install as the case above, asked with an epoch but no archive directory, so nothing in
-		// front of the anchor is opened at all. Both callers that exist pass a directory; this is what
-		// holds the answer honest for one that does not.
+		// front of the anchor is opened at all. No caller passes an epoch without a directory — the panel
+		// and the CLI pass both, `lib/archive/rotate.ts` passes neither — and this is what holds the
+		// answer honest for one that does.
 		const result = await verifyAuditChain(auditDb, { epoch: await readEpoch() });
 
 		// Goes red if `"incomplete"` is returned on the strength of the epoch alone. That answer reads

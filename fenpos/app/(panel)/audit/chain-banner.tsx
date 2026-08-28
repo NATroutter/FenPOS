@@ -82,20 +82,32 @@ export function ChainBanner({
  * **An incomplete chain is drawn as a note rather than as a warning, and that is the point of it.** A
  * chain that verifies from the epoch onwards is a correctly configured install whose oldest history
  * left before archiving existed to catch it — the state every install upgraded from the storage
- * foundation is in. Sky is the hue this panel keeps for a state rather than a verdict — the Jobs tab's
- * in-flight rows, the reference's reads — and of the three that do carry one, emerald says it worked,
- * amber says somebody has something to attend to and destructive says the record was altered. Muted is
- * spoken for by the branch below it, where nobody has asked yet. What actually distinguishes this from
- * a whole chain is `describeVerification`'s sentence, which names the `seq` verification reaches back
- * to; the colour's job is only to not contradict it.
+ * foundation is in.
+ *
+ * **Sky is borrowed here, not inherited.** The convention this panel states is `doc-section.tsx`'s:
+ * emerald "it worked", sky "in flight", destructive "it failed", and the Jobs tab uses sky for
+ * `PRINTING`. It has no hue for "verified as far as the record goes", because nothing before this had
+ * to say it. Sky is taken because of the three named, it is the only one that is not a verdict on
+ * whether something worked — and the two that are wrong here are wrong in opposite directions:
+ * emerald would claim the whole record verified, destructive would say it was altered. Amber, this
+ * panel's "attend to this", would say an operator has a problem they do not have. Muted is spoken for
+ * by the branch below, where nobody has asked yet.
+ *
+ * What actually distinguishes this from a whole chain is `describeVerification`'s sentence, which
+ * names the `seq` verification reaches back to; the colour's job is only to not contradict it.
  *
  * Compared by value at every branch and never for truthiness: `"incomplete"` is a truthy string, so
  * `ok ? … : …` would draw it exactly as a whole chain and no compiler would say so.
  *
+ * Exported for `test/app/(panel)/audit/chain-banner.test.ts`, which is what pins the distinction the
+ * paragraphs above argue for — that this state draws as neither the whole chain, the failure, nor the
+ * banner nobody has asked anything of yet. It is a pure function of `ok` precisely so that can be
+ * checked without a DOM: reordering or collapsing these four branches is otherwise silent.
+ *
  * @param ok what the walk found, or null before anybody has asked in this session
  * @returns the border, background and text classes, and the icon that goes beside them
  */
-function presentation(ok: ChainStatus["ok"]): { tone: string; Icon: LucideIcon } {
+export function presentation(ok: ChainStatus["ok"]): { tone: string; Icon: LucideIcon } {
 	if (ok === true) {
 		return { tone: "border-emerald-900 bg-emerald-950/40 text-emerald-300", Icon: CheckCircle2 };
 	}
