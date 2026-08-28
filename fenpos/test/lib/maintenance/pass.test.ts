@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendEvent, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
@@ -123,6 +123,20 @@ describe("a maintenance pass", () => {
 		// Goes red if the two halves share one try block: the audit record would stop being swept
 		// because the log database had a bad day.
 		expect(readdirSync(AUDIT_ARCHIVE_DIRECTORY)).toContain("audit-2026-01.db.gz");
+	});
+
+	it("does not throw when the archive directory cannot be created", async () => {
+		const failed = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+		// A file where the directory should be: `mkdirSync` refuses this exactly as it would refuse a
+		// read-only volume, and it is the one such failure a test can arrange for real. It happens
+		// before either sweep starts, which is why the provisioning has to sit inside the guards rather
+		// than above them — outside, the pass would reject and take an unwatched interval with it.
+		writeFileSync(AUDIT_ARCHIVE_DIRECTORY, "not a directory");
+
+		await expect(runMaintenancePass()).resolves.toBeUndefined();
+
+		expect(failed).toHaveBeenCalledWith("A log retention pass could not run", expect.any(Error));
+		expect(failed).toHaveBeenCalledWith("An audit retention pass could not run", expect.any(Error));
 	});
 
 	it("says which half failed rather than swallowing it", async () => {

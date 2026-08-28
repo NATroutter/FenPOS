@@ -57,9 +57,12 @@ export function archiveDirectory(): string {
  * @returns when both halves have been attempted, whether or not either succeeded
  */
 export async function runMaintenancePass(): Promise<void> {
-	const directory = archiveDirectory();
-
 	try {
+		// Inside the guard, not above both of them: `mkdirSync` throws on a read-only volume or a path
+		// that is already a file, and a pass that threw there would be a pass that broke its own promise
+		// before either half had started. Called once per half rather than once per pass for that reason
+		// alone; it is one idempotent syscall.
+		const directory = archiveDirectory();
 		const { retentionDays, archiveEnabled } = await globalLogIngestSettings();
 		const { removed } = await sweepLogsNow(retentionDays, { archiveEnabled, archiveDirectory: directory });
 		if (removed > 0) {
@@ -73,6 +76,7 @@ export async function runMaintenancePass(): Promise<void> {
 	}
 
 	try {
+		const directory = archiveDirectory();
 		const { retentionDays } = await globalAuditSettings();
 		const outcome = await sweepAuditNow({ retentionDays }, { archiveDirectory: directory });
 		if (outcome) {
