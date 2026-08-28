@@ -117,6 +117,7 @@ export const PANEL_PERMISSION_IDS = [
 	"audit:read",
 	"audit:verify",
 	"audit:export",
+	"audit:archive-delete",
 
 	"settings:read",
 	"settings:write:general",
@@ -294,6 +295,10 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 			{ id: "audit:read", description: "See the audit record: who did what, and what came of it." },
 			{ id: "audit:verify", description: "Run chain verification from the panel." },
 			{ id: "audit:export", description: "Export a filtered range of the audit record." },
+			{
+				id: "audit:archive-delete",
+				description: "Delete an archived audit period for good. Held apart from reading it: this destroys evidence.",
+			},
 		],
 	},
 	{

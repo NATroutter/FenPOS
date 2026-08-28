@@ -1,25 +1,29 @@
 "use server";
 
+import { rmSync } from "node:fs";
 import type Database from "better-sqlite3";
+import { revalidatePath } from "next/cache";
 import { type ArchiveDescriptor, listArchives, readArchive } from "@/lib/archive/read";
 import type { ArchiveSource } from "@/lib/archive/rotate";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
+import { advanceEpoch } from "@/lib/audit/epoch";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { userHolds } from "@/lib/auth/effective-permissions";
-import { panelSelf } from "@/lib/auth/panel-action";
+import { panelAction, panelSelf } from "@/lib/auth/panel-action";
 import type { PanelActionId } from "@/lib/auth/panel-actions";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { currentSessionId, type PanelUser } from "@/lib/auth/require-session";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
 import { archiveDirectory } from "@/lib/maintenance/pass";
+import type { ActionState } from "@/lib/panel/action-state";
 
 /**
  * Server actions behind the Archives tab.
  *
  * An archive nobody can read is storage, not a record. Everything else on this branch moves whole
- * periods out of the live databases and into `<source>-<period>.db.gz`; these two are what turn that
- * from "the rows are gone" into "the rows are over here".
+ * periods out of the live databases and into `<source>-<period>.db.gz`; the two reads here are what
+ * turn that from "the rows are gone" into "the rows are over here".
  *
  * **Opened on demand, never on page load.** {@link listArchivePeriods} reads a directory listing and
  * a size per file, which is cheap and safe to do while rendering. {@link readArchivePage}
@@ -27,23 +31,26 @@ import { archiveDirectory } from "@/lib/maintenance/pass";
  * month is the most expensive read the panel can perform — so it runs when somebody asks for a
  * period, and never as a side effect of arriving at the tab.
  *
- * **No new permission, and no gate that could name one.** An archive is the same data through a
- * different file, so a log period is `logs:read` and an audit period is `audit:read` — and which of
- * those governs a call is decided by the call's own argument. A registry entry names one permission,
- * so any string written there would be wrong for one of the two sources and would lock that source's
- * readers out of the tab. Both are registered `custom` for exactly that reason, which is the kind's
- * stated purpose, and both check per source here.
+ * **The two reads take no new permission, and no gate could name one for them.** An archive is the
+ * same data through a different file, so a log period is `logs:read` and an audit period is
+ * `audit:read` — and which of those governs a call is decided by the call's own argument. A registry
+ * entry names one permission, so any string written there would be wrong for one of the two sources
+ * and would lock that source's readers out of the tab. Both are registered `custom` for exactly that
+ * reason, which is the kind's stated purpose, and both check per source here.
  *
- * **Registered `custom` means these owe their own audit rows, and they pay it.** A refusal is written
- * as `DENIED` naming the permission the caller was missing, so permission probing stays visible; a
- * broken archive directory is written as `FAILURE`. Success is deliberately not recorded: arriving at
- * the tab lists, and an operator hunting through a period opens it over and over, so a row per success
- * would bury the rows worth reading. That is the argument `query` makes, kept even though the kind
- * could not be. {@link record} encodes it — it does not accept `SUCCESS`.
+ * **Registered `custom` means those two owe their own audit rows, and they pay it.** A refusal is
+ * written as `DENIED` naming the permission the caller was missing, so permission probing stays
+ * visible; a broken archive directory is written as `FAILURE`. Success is deliberately not recorded:
+ * arriving at the tab lists, and an operator hunting through a period opens it over and over, so a row
+ * per success would bury the rows worth reading. That is the argument `query` makes, kept even though
+ * the kind could not be. {@link record} encodes it — it does not accept `SUCCESS`.
  *
- * **Neither of these two removes anything.** Log archives are pruned by `pruneLogArchives` on the
- * maintenance pass; an audit archive may only be removed alongside the epoch that vouches for it,
- * which is a deliberate action under a permission of its own rather than anything a read does.
+ * **Neither of those two removes anything; {@link deleteAuditArchive} does, and it is shaped nothing
+ * like them.** Log archives are pruned by age by `pruneLogArchives` on the maintenance pass. Audit
+ * archives never are, because they are evidence — so an operator who needs the space removes one
+ * deliberately, under `audit:archive-delete` and nothing else, and the epoch moves with the file in the
+ * same call. Having exactly one governing permission is what lets it be an ordinary `command`, gate and
+ * audit row and all, rather than another `custom` entry checking itself.
  */
 
 /** One archived period, as the tab lists it before anybody opens anything. */
@@ -149,6 +156,40 @@ const READ_FAILURE_MESSAGE = "The archive could not be read. Check the server lo
  */
 const LIST_FAILURE_MESSAGE =
 	"The archive directory could not be read, so this is not what is on disk. Check the server log.";
+
+/**
+ * A period key that is not one, said once for the two actions that check for it.
+ *
+ * Both {@link readArchivePage} and {@link deleteAuditArchive} refuse a key that is not `yyyy-mm`, and
+ * two spellings of one sentence is how they come to differ by a word nobody meant to change.
+ */
+const NOT_A_PERIOD_MESSAGE = "That is not an archive period.";
+
+/**
+ * The four ways {@link deleteAuditArchive} refuses a period it will not remove.
+ *
+ * All four are raised as `invalid_type`, as is {@link NOT_A_PERIOD_MESSAGE} — the code every other
+ * panel action reaches for when an argument names something it cannot act on. None of them ever
+ * reaches the public API, because a server action is not an endpoint, so the code here does one job:
+ * it tells {@link panelAction} that this is a message written to be read rather than an internal
+ * failure it must replace. Inventing a code for a refusal that exists solely in the panel would widen
+ * a contract clients branch on, for nothing.
+ */
+const NO_SUCH_ARCHIVE_MESSAGE = "No archive on disk for that audit period.";
+
+/** See {@link NO_SUCH_ARCHIVE_MESSAGE}. */
+const NEWEST_ARCHIVE_MESSAGE =
+	"The newest audit archive cannot be deleted: the live record links back to it, and nothing " +
+	"else can vouch for that join.";
+
+/** See {@link NO_SUCH_ARCHIVE_MESSAGE}. */
+const OLDER_ARCHIVE_FIRST_MESSAGE =
+	"Only the oldest audit archive can be deleted. Removing one from the middle would leave the " +
+	"archive after it linking to a file that is gone.";
+
+/** See {@link NO_SUCH_ARCHIVE_MESSAGE}. */
+const NO_NEW_BEGINNING_MESSAGE =
+	"The next audit archive holds no events, so there is nowhere for the record to begin from.";
 
 /**
  * The two registry ids this module writes rows under.
@@ -293,6 +334,112 @@ export async function readArchivePage(descriptor: ArchiveRef, filters: ArchivePa
 }
 
 /**
+ * Deletes one archived audit period, and moves the epoch behind it in the same call.
+ *
+ * The only path that removes an audit archive. Nothing on a timer does: log archives age out because
+ * they are output, and audit archives do not because they are evidence — so this is a person deciding
+ * they need the space, gated by a permission of its own and written into the record it shortens.
+ *
+ * **The epoch moves with the file, or the file does not move.** `AuditEpoch` is what says how far back
+ * the archives should reach; leaving it naming a period that is gone makes the next verification report
+ * `archive-missing`, which accuses the operator of losing evidence they deliberately removed. That is
+ * the same false accusation the epoch exists to prevent, arriving from the other end.
+ *
+ * @param periodKey the audit period to remove, e.g. `2026-01`
+ * @returns the state to render
+ */
+export async function deleteAuditArchive(periodKey: string): Promise<ActionState> {
+	// Read before the gate runs, and only far enough to decide whether the row may name it: `target`
+	// has to be built here, and a key that has not been checked is a caller writing whatever they like
+	// into the audit record. The body checks it again and refuses — this only decides whether there is
+	// a period worth naming in the row.
+	const named = typeof periodKey === "string" && PERIOD_KEY.test(periodKey);
+
+	return panelAction("audit:archive-delete", () => removeAuditArchive(periodKey), {
+		revalidate: () => revalidatePath("/archives"),
+		target: named ? targetOf({ source: "audit", periodKey }) : undefined,
+	});
+}
+
+/**
+ * Removes the file and advances the epoch, having established that this period is the one that may go.
+ *
+ * **Only a prefix may go, and never the whole of it.** Removing from the newest end would leave the
+ * live rows linking to an archived row that no longer exists, and removing from the middle would leave
+ * the archive after the hole doing the same — neither is something the epoch can describe, because the
+ * epoch says where the record begins and not where it is interrupted. Refusing the newest is also what
+ * keeps the last archive on disk: with none left, an epoch reports `archive-missing` and no epoch at
+ * all reports the surviving live rows as though they were the whole record, and there is no third
+ * answer that is true.
+ *
+ * **Order matters at every step.** The period that will become the oldest is read *before* anything is
+ * deleted, so an archive whose first row cannot be read costs nothing rather than leaving an epoch with
+ * nowhere to point. The file then goes before the epoch moves: a crash in that window leaves an
+ * `archive-missing` naming the file that is genuinely no longer there, beside the row saying who took
+ * it, where the other order would leave the surviving archives read against an epoch they do not start
+ * on and report tampering instead.
+ *
+ * @param periodKey the audit period named by the caller, still unchecked
+ * @throws ApiError when the key is unreadable, names no audit archive, or names one that may not go
+ */
+async function removeAuditArchive(periodKey: string): Promise<void> {
+	if (typeof periodKey !== "string" || !PERIOD_KEY.test(periodKey)) {
+		throw new ApiError("invalid_type", NOT_A_PERIOD_MESSAGE);
+	}
+
+	// Audit only, and oldest first. `listArchives` promises no order at all, and both checks below are
+	// about position — an unordered list would make "the oldest" whichever file the directory happened
+	// to hand back first.
+	const archives = (await listArchives(archiveDirectory()))
+		.filter((archive) => archive.source === "audit")
+		.sort((left, right) => left.periodKey.localeCompare(right.periodKey));
+
+	const index = archives.findIndex((archive) => archive.periodKey === periodKey);
+	if (index === -1) {
+		throw new ApiError("invalid_type", NO_SUCH_ARCHIVE_MESSAGE);
+	}
+	// Before the oldest check, so the one archive on disk — which is both — is refused as the newest.
+	// That is the honest reading: what makes it undeletable is the live record hanging off it.
+	if (index === archives.length - 1) {
+		throw new ApiError("invalid_type", NEWEST_ARCHIVE_MESSAGE);
+	}
+	if (index !== 0) {
+		throw new ApiError("invalid_type", OLDER_ARCHIVE_FIRST_MESSAGE);
+	}
+
+	const begins = await oldestArchivedEvent(archives[1]);
+
+	rmSync(archives[0].path, { force: true });
+	await advanceEpoch(begins.seq, begins.prevHash);
+}
+
+/**
+ * Reads the row an archive's chain starts on.
+ *
+ * Exactly what the epoch records: the oldest archived `seq` and the hash it links back to, which is
+ * what `verifyAuditChain` walks the oldest archive from. Read out of the file rather than derived from
+ * anything the caller said, because the file is what the walk will actually open.
+ *
+ * @param archive the period that is about to become the oldest on disk
+ * @returns the `seq` and `prevHash` of its first event
+ * @throws ApiError when it holds no events at all
+ */
+async function oldestArchivedEvent(archive: ArchiveDescriptor): Promise<{ seq: number; prevHash: string }> {
+	const row = await readArchive(
+		archive,
+		(opened) =>
+			opened.prepare("SELECT seq, prev_hash AS prevHash FROM audit_events ORDER BY seq ASC LIMIT 1").get() as
+				| { seq: number; prevHash: string }
+				| undefined,
+	);
+
+	if (row === undefined) {
+		throw new ApiError("invalid_type", NO_NEW_BEGINNING_MESSAGE);
+	}
+	return row;
+}
+
+/**
  * Reads a caller's descriptor, checking every field rather than trusting the type on it.
  *
  * A server action's arguments are whatever was posted to it. TypeScript says this is an
@@ -321,7 +468,7 @@ function askedArchive(descriptor: ArchiveRef): AskedArchive {
 		throw new ApiError("invalid_type", "That is not a kind of archive this install writes.");
 	}
 	if (typeof periodKey !== "string" || !PERIOD_KEY.test(periodKey)) {
-		throw new ApiError("invalid_type", "That is not an archive period.");
+		throw new ApiError("invalid_type", NOT_A_PERIOD_MESSAGE);
 	}
 
 	return { ...named, periodKey };
@@ -372,10 +519,13 @@ function matches(candidate: ArchiveDescriptor, asked: AskedArchive): boolean {
 /**
  * What an audit row names when one of these actions is about a particular period.
  *
- * @param asked the period the call was about
+ * Takes the two fields it reads rather than an {@link AskedArchive}, so the delete — which resolves no
+ * permission, because its own is the only one — can name its period the same way the reads name theirs.
+ *
+ * @param asked the period the call was about, its source and key already checked
  * @returns the row's target
  */
-function targetOf(asked: AskedArchive): { kind: string; id: string } {
+function targetOf(asked: { source: ArchiveSource; periodKey: string }): { kind: string; id: string } {
 	return { kind: "archive", id: `${asked.source}-${asked.periodKey}` };
 }
 

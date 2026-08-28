@@ -102,9 +102,16 @@ function isPrismaCode(error: unknown, code: string): boolean {
 /**
  * Moves the epoch forward after an archive is deliberately deleted.
  *
- * The one path that may move it, and it is reached only from the panel action gated by
- * `audit:archive-delete`. Advancing it is what keeps verification honest about a shortened record:
- * the history is gone, and the epoch says so rather than leaving the walk to report a missing file.
+ * The one path that may move it, and it is reached from exactly one caller: `deleteAuditArchive` in
+ * `app/(panel)/archives/actions.ts`, gated by `audit:archive-delete`. Advancing it is what keeps
+ * verification honest about a shortened record: the history is gone, and the epoch says so rather than
+ * leaving the walk to report a missing file.
+ *
+ * **This function does not decide what the epoch should become, and cannot.** It writes what it is
+ * given. What makes the values right is the caller's own rule — that only the oldest archive may go and
+ * never the newest, so the file that becomes the oldest is still on disk to be read for the `seq` and
+ * `prevHash` written here. Called with anything else, this will happily record a beginning the archives
+ * do not have.
  *
  * @param seq the oldest event still archived
  * @param prevHash that event's `prevHash`

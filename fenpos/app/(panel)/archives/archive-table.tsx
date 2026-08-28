@@ -1,13 +1,27 @@
 "use client";
 
+import { Trash2 } from "lucide-react";
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
 import {
 	type ArchivePage,
 	type ArchivePeriod,
 	type ArchiveRef,
 	type ArchiveRow,
+	deleteAuditArchive,
 	readArchivePage,
 } from "@/app/(panel)/archives/actions";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -69,6 +83,19 @@ export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; err
 		setPage(null);
 	};
 
+	/**
+	 * Closes the reader when the period it is showing has just been deleted.
+	 *
+	 * Only that period: a reader left open on a file that no longer exists would answer every page and
+	 * every search with "no archive on disk", and closing whichever period happened to be open would
+	 * throw away a search somebody is in the middle of.
+	 */
+	const closeIfOpen = (period: ArchivePeriod): void => {
+		if (opened?.source === period.source && opened.periodKey === period.periodKey) {
+			close();
+		}
+	};
+
 	// The failure is shown before the list is judged empty, and it replaces the empty state rather than
 	// sitting above it: "nothing has been archived yet" is a claim about the record, and a directory the
 	// server could not read is precisely the case where nobody knows whether it is true.
@@ -116,10 +143,17 @@ export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; err
 									<Badge variant="outline">{period.source}</Badge>
 								</TableCell>
 								<TableCell className={MUTED_CELL}>{describeBytes(period.bytes)}</TableCell>
-								<TableCell className="text-right">
-									<Button variant="outline" size="sm" disabled={pending} onClick={() => open(period)}>
-										Open
-									</Button>
+								<TableCell>
+									<div className="flex items-center justify-end gap-1.5">
+										<Button variant="outline" size="sm" disabled={pending} onClick={() => open(period)}>
+											Open
+										</Button>
+										{/* Only audit periods, because only they have a delete: a log archive ages out on the
+										    maintenance pass, and there is no action to remove one by hand. */}
+										{period.source === "audit" ? (
+											<DeleteAuditPeriod periodKey={period.periodKey} onDeleted={() => closeIfOpen(period)} />
+										) : null}
+									</div>
 								</TableCell>
 							</TableRow>
 						))}
@@ -201,6 +235,70 @@ export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; err
 				</div>
 			)}
 		</div>
+	);
+}
+
+/**
+ * The one control on this tab that removes anything.
+ *
+ * Behind a confirmation, because this is the panel's only deliberate destruction of evidence: log
+ * archives age out on a timer, audit archives never do, and what goes here does not come back. The
+ * rule about *which* period may go is stated in the dialog and enforced only on the server — a button
+ * that hid itself according to a second copy of the rule would be a second authority on it, and the
+ * one that matters is the one holding the file.
+ *
+ * @param periodKey the audit period this button would remove
+ * @param onDeleted run once the period is gone, so a reader open on it can close
+ */
+function DeleteAuditPeriod({ periodKey, onDeleted }: { periodKey: string; onDeleted: () => void }) {
+	const [pending, startTransition] = useTransition();
+
+	return (
+		<AlertDialog>
+			<AlertDialogTrigger
+				disabled={pending}
+				render={
+					<Button
+						variant="outline"
+						size="icon"
+						className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+						title="Delete this archived period"
+						aria-label={`Delete the audit archive for ${periodKey}`}
+					>
+						{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+					</Button>
+				}
+			/>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>Delete the audit archive for {periodKey}?</AlertDialogTitle>
+					<AlertDialogDescription>
+						These events exist nowhere else, and nothing can restore them. Verification will report the record as
+						beginning after them from now on, and this deletion is itself written into the record. Only the oldest
+						archived period can be deleted, and never the newest.
+					</AlertDialogDescription>
+				</AlertDialogHeader>
+				<AlertDialogFooter>
+					<AlertDialogCancel>Cancel</AlertDialogCancel>
+					<AlertDialogAction
+						className="bg-destructive text-white hover:bg-destructive/90"
+						onClick={() =>
+							startTransition(async () => {
+								const result = await deleteAuditArchive(periodKey);
+								if (result.error) {
+									toast.error(result.error);
+								} else {
+									toast.success(`The audit archive for ${periodKey} was deleted.`);
+									onDeleted();
+								}
+							})
+						}
+					>
+						Delete
+					</AlertDialogAction>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
 	);
 }
 

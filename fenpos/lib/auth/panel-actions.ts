@@ -19,12 +19,13 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * `self` actions cannot drift. The `unauthenticated` entries and `auth:sign-out` are written by the
  * actions themselves, through `AUTH_AUDIT_ACTIONS` (`lib/audit/auth-events.ts`), and `settings:save`
  * through a literal of its own — so for those the id here and the string written there are two
- * spellings that have to agree. The two `archives:*` entries write all of their own rows, for the
- * reason their block below gives, so they are in that set too. They did not agree, once: `signOut` was
- * registered as `self:sign-out` while recording `auth:sign-out`, which made the sentence above false
- * and offered `/audit` a filter that could only ever return no rows. If you add an entry whose action
- * writes its own row, make the two match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second
- * literal.
+ * spellings that have to agree. The two `archives:*` reads write all of their own rows, for the
+ * reason their block below gives, so they are in that set too. `audit:archive-delete`, which lives in
+ * the same module, does not: it is an ordinary `command`, and the gate writes its row from this entry
+ * like any other. They did not agree, once: `signOut` was registered as `self:sign-out` while recording
+ * `auth:sign-out`, which made the sentence above false and offered `/audit` a filter that could only
+ * ever return no rows. If you add an entry whose action writes its own row, make the two match, and
+ * prefer the `AUTH_AUDIT_ACTIONS` constant to a second literal.
  *
  * That agreement is no longer left to a reading. `test/lib/auth/registry-coverage.test.ts` collects
  * every action string written from a module under `app/` that calls `recordAudit` — an
@@ -605,6 +606,23 @@ export const PANEL_ACTIONS = [
 		module: "(panel)/archives/actions.ts",
 		exportName: "readArchivePage",
 		description: "Opened an archived period and read a page of it",
+	},
+	// The third action on this tab, and deliberately not shaped like the two above it. It has exactly
+	// one permission — deleting an archived audit period is never governed by anything else — so it is
+	// an ordinary `command`, which keeps it inside `permission-matrix.test.ts`'s per-entry coverage that
+	// the two `custom` entries had to give up. `custom` is for an action the gate cannot check, not for
+	// an action that happens to sit beside two of them.
+	//
+	// A permission of its own rather than `audit:export`, which is the nearest existing fit and the
+	// wrong one: an export is read-shaped, so reusing it would mean anyone who can produce a report can
+	// destroy evidence.
+	{
+		id: "audit:archive-delete",
+		kind: "command",
+		permission: "audit:archive-delete",
+		module: "(panel)/archives/actions.ts",
+		exportName: "deleteAuditArchive",
+		description: "Deleted an archived audit period and moved the epoch behind it",
 	},
 
 	// --- Settings ---
