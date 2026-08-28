@@ -382,6 +382,28 @@ describe("POST /api/v1/devices/{agent}/{device}/raw", () => {
 		expect(audit[0].message.length).toBeLessThan(MAX_NAME_LENGTH + 200);
 	});
 
+	it("leaves the envelope's row and none of its own when the key lacks devices:raw", async () => {
+		// A narrowing worth pinning, because it is invisible from this file's other tests. The previous
+		// version checked the permission itself and filed a `Raw write refused: insufficient_permission`
+		// line; `apiRoute` now refuses before this handler runs, so this route's trail says nothing
+		// about that caller at all. Nothing is lost — the envelope records it at WARN, naming the key —
+		// but the two trails now answer different questions and both halves of that need holding.
+		await prisma.apiKeyPermission.deleteMany({ where: { apiKeyId: keyId } });
+
+		const response = await POST(...call({ bytes: BYTES }));
+
+		expect(response.status).toBe(403);
+		expect((await response.json()).error).toBe("insufficient_permission");
+		// This route wrote nothing: it never learned there was a write to refuse.
+		expect(await auditRows()).toHaveLength(0);
+		// And the refusal is still recorded, once, as the refusal it is.
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].level).toBe("WARN");
+		expect(rows[0].message).toContain("insufficient_permission");
+		expect(rows[0].message).toContain("label-printer integration");
+	});
+
 	it("records an audit line when a write is refused for a reason other than a bad credential", async () => {
 		await setSetting("link.allowRawApiWrites", false);
 

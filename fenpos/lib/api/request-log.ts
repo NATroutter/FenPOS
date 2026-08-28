@@ -132,12 +132,18 @@ async function recordsSuccessfulReads(): Promise<boolean> {
  * this key get turned away from" must see both beside the `403`s; left at `ERROR`, id probing would
  * sit among the server's own faults, which is not where anybody looks for it.
  *
- * **The other two `404`s are deliberately not here.** `unknown_asset` is not an authorization
- * decision at all: assets are install-wide, so `assets:read` and `assets:write` grant the whole
- * namespace and a 404 there means the image genuinely is not stored — filing that as a refusal would
- * put "no such image" beside the probing and dilute the one filter that answers for it.
- * `unknown_agent` is raised by the panel's own services and never by a v1 route, so listing it would
- * be a rule about a case that cannot arise, which is worse than no rule.
+ * **The other three `404`s are deliberately not here**, for two different reasons.
+ *
+ * `unknown_asset` is not an authorization decision at all: assets are install-wide, so `assets:read`
+ * and `assets:write` grant the whole namespace and a 404 there means the image genuinely is not
+ * stored — filing that as a refusal would put "no such image" beside the probing and dilute the one
+ * filter that answers for it.
+ *
+ * `unknown_agent` and `unknown_endpoint` cannot reach this function. The first is raised only by the
+ * panel's own services (`lib/agents/agent-service.ts`, `lib/devices/device-service.ts`); the second
+ * by `app/api/[...unknown]/route.ts`, which is the catch-all for paths no route serves and is
+ * outside the envelope entirely. Listing either would be a rule about a case that cannot arise,
+ * which reads as a claim that it can.
  */
 const REFUSALS_REPORTED_AS_NOT_FOUND: ReadonlySet<string> = new Set(["unknown_device", "unknown_job"]);
 

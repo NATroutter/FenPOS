@@ -51,9 +51,16 @@ function routeFiles(directory: string = V1_ROOT): string[] {
 /**
  * Removes comments, so an `apiRoute(` written *about* the wrapper is not read as a call to it.
  *
- * The same trap `registry-coverage.test.ts` avoids for `"use server"`, and this file has a live
- * instance of it below: the openapi route is asserted to contain no `apiRoute(`, and a comment
- * explaining why it stays outside the wrapper is exactly what a reader would write there.
+ * The same trap `registry-coverage.test.ts` avoids for `"use server"`, and there are two ways to
+ * fall into it here. A route module explaining itself with an example — `export const GET =
+ * apiRoute("api:GET /v1/status", …)` inside a doc comment — would be scanned as a handler that does
+ * not exist. And the openapi route is asserted below to contain no `apiRoute(` at all, so a comment
+ * there explaining why it stays outside the wrapper, which is exactly what a reader would write,
+ * would fail that assertion on its own explanation.
+ *
+ * No v1 route writes either today, which is why this is pinned by its own test rather than left to
+ * the scans to exercise incidentally — see "does not mistake an `apiRoute` written about the
+ * wrapper".
  */
 function withoutComments(source: string): string {
 	return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
@@ -106,28 +113,40 @@ function expectedIdFor(file: string, method: string): string {
 	return `api:${method} /v1/${path}`;
 }
 
-/** Every exported handler of every keyed v1 route module. */
-function handlers(): Handler[] {
+/**
+ * Every exported handler one route module declares.
+ *
+ * Takes the source rather than reading it, so the comment-stripping trap can be handed a module
+ * that falls into it — no v1 route does today, and a helper only ever fed real files would have no
+ * path to red of its own.
+ *
+ * @param file the module, relative to `app/api/v1/`
+ * @param source its text, comments and all
+ * @returns one entry per exported HTTP method
+ */
+function handlersIn(file: string, source: string): Handler[] {
+	const stripped = withoutComments(source);
 	const found: Handler[] = [];
 
-	for (const file of routeFiles()) {
-		if (file === UNWRAPPED_BY_DESIGN) {
-			continue;
-		}
-		const source = withoutComments(readFileSync(join(V1_ROOT, file), "utf8"));
-		for (const match of source.matchAll(HANDLER_EXPORT)) {
-			const at = match.index ?? 0;
-			const built = WRAPPED.exec(source.slice(at, at + CALL_WINDOW));
-			found.push({
-				file,
-				method: match[1],
-				declaredId: built?.[1] ?? null,
-				expectedId: expectedIdFor(file, match[1]),
-			});
-		}
+	for (const match of stripped.matchAll(HANDLER_EXPORT)) {
+		const at = match.index ?? 0;
+		const built = WRAPPED.exec(stripped.slice(at, at + CALL_WINDOW));
+		found.push({
+			file,
+			method: match[1],
+			declaredId: built?.[1] ?? null,
+			expectedId: expectedIdFor(file, match[1]),
+		});
 	}
 
 	return found;
+}
+
+/** Every exported handler of every keyed v1 route module. */
+function handlers(): Handler[] {
+	return routeFiles()
+		.filter((file) => file !== UNWRAPPED_BY_DESIGN)
+		.flatMap((file) => handlersIn(file, readFileSync(join(V1_ROOT, file), "utf8")));
 }
 
 describe("v1 route coverage", () => {
@@ -141,6 +160,33 @@ describe("v1 route coverage", () => {
 		expect(files).toContain(UNWRAPPED_BY_DESIGN);
 		expect(files).toContain("print/[agent]/[device]/route.ts");
 		expect(handlers().length).toBeGreaterThanOrEqual(13);
+	});
+
+	it("does not mistake an `apiRoute` written about the wrapper for a call to it", () => {
+		// `registry-coverage.test.ts` pins the same trap for `"use server"` against a module that
+		// actually contains one. No v1 route writes `apiRoute` in a comment today, so the module is
+		// constructed here — and it is the module a reader would plausibly write: the openapi route,
+		// explaining what it is deliberately not.
+		const source = [
+			"/**",
+			" * Unauthenticated, deliberately. A keyed route would be built as:",
+			' *   export const GET = apiRoute("api:GET /v1/status", async ({ key }) => …);',
+			" */",
+			"export async function GET(): Promise<Response> {",
+			"	return Response.json({});",
+			"}",
+		].join("\n");
+
+		// Read as written, the comment carries both things the scans match on.
+		expect(source).toContain("apiRoute(");
+		expect(source).toContain("export const GET =");
+
+		// Stripped, neither survives — so the openapi assertion below cannot fail on an explanation…
+		expect(withoutComments(source)).not.toContain("apiRoute(");
+		// …and the handler scan counts the one real export, unwrapped, rather than an example beside it.
+		expect(handlersIn("status/route.ts", source)).toEqual([
+			{ file: "status/route.ts", method: "GET", declaredId: null, expectedId: "api:GET /v1/status" },
+		]);
 	});
 
 	it("builds every exported v1 handler with apiRoute", () => {

@@ -3,6 +3,7 @@ import { DELETE, GET } from "@/app/api/v1/jobs/[id]/route";
 import { hashSecret } from "@/lib/auth/secrets";
 import { logsDb, prisma } from "@/lib/db";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * `GET /api/v1/jobs/{id}` and `DELETE /api/v1/jobs/{id}` — one job, read and cancelled.
@@ -133,6 +134,21 @@ describe("GET /api/v1/jobs/{id}", () => {
 		expect(others.status).toBe(404);
 		expect(absent.status).toBe(404);
 		expect(await absent.json()).toEqual(othersBody);
+	});
+
+	it("names the printer on the line an operator reads", async () => {
+		// The `agentId`/`deviceId` columns this handler selects exist for this row and nothing else —
+		// they are absent from the response body — so without an assertion here they could be dropped
+		// with every other test still green. A read is suppressed by default, hence the setting: the
+		// gate silences successful reads, and this is asking what such a row says when it is kept.
+		await setSetting("logs.recordApiReads", true);
+
+		await GET(...call(jobId));
+
+		const rows = await logsDb.logEntry.findMany();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].agentName).toBe(agentName);
+		expect(rows[0].deviceName).toBe(deviceName);
 	});
 
 	it("records another key's job as a refusal rather than as a fault", async () => {

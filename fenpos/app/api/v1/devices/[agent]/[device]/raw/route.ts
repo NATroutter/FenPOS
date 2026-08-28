@@ -26,18 +26,26 @@ import { booleanSetting, integerSetting } from "@/lib/settings/settings-service"
  *
  * **Nothing here can say what was printed.** The server never reads the bytes, and the printer does
  * not report back what it did with them. The rows this route writes itself are therefore the only
- * record of what reached the hardware, which is why one is written for refusals as well as for
- * successes, and why they go to the Logs tab rather than to stdout.
+ * record of what reached the hardware, which is why one is written for the refusals this handler
+ * decides as well as for successes, and why they go to the Logs tab rather than to stdout.
  *
- * **This route writes two rows for one request, and both are load-bearing.** `apiRoute` records
- * every request's outcome, and that row cannot replace either of these. The row below is written
- * *before* the bytes are handed off, so it survives a process that dies mid-send — the envelope's
- * row is written after the handler returns and would not exist at all. The failure row is the only
- * one that knows whether anything left this server, which is the whole `handedOff` distinction
- * {@link auditFailure} is built on; the envelope's row can only say the request failed. What the
- * envelope adds, and these rows deliberately do not, is the *level*: an unexpected fault here is
- * recorded at `WARN` by this route because "may have reached paper" is what its wording is about,
- * and at `ERROR` by the envelope because that is what the outcome was.
+ * **This route's trail starts where the handler does, which is narrower than it used to be.** The
+ * key and its `devices:raw` grant are checked by `apiRoute` before this handler runs, so a caller
+ * refused there leaves *no* row from this route — where the previous version checked the permission
+ * itself and filed its own `Raw write refused: insufficient_permission` line. Nothing is lost: the
+ * envelope records that refusal at `WARN` with the key's name. But this route's rows are now a
+ * record of writes it was actually asked to attempt, not of every request that named the endpoint,
+ * and a reader reconciling the two trails has to know which one answers which question.
+ *
+ * **This route writes two rows for one request it does handle, and both are load-bearing.**
+ * `apiRoute` records every request's outcome, and that row cannot replace either of these. The row
+ * below is written *before* the bytes are handed off, so it survives a process that dies mid-send —
+ * the envelope's row is written after the handler returns and would not exist at all. The failure
+ * row is the only one that knows whether anything left this server, which is the whole `handedOff`
+ * distinction {@link auditFailure} is built on; the envelope's row can only say the request failed.
+ * What the envelope adds, and these rows deliberately do not, is the *level*: an unexpected fault
+ * here is recorded at `WARN` by this route because "may have reached paper" is what its wording is
+ * about, and at `ERROR` by the envelope because that is what the outcome was.
  *
  * `sendRawWrite`'s timeout message — "the bytes may or may not have been written" — is passed
  * through unchanged. It is the honest answer, and the operator is the only one who can go and look
@@ -117,11 +125,12 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 				target: { agentId: target.agentId, agentName: agent, deviceId: target.id, deviceName: target.name },
 			};
 		} catch (error) {
-			// Every failure past authentication leaves this line, including an unexpected fault, under
-			// the code the caller was given for it. `apiRoute` records the outcome and its level; this
-			// row records the one thing the envelope cannot know — whether anything left this server —
-			// so "every write and every refusal is recorded" is a claim about the paper rather than
-			// about the request.
+			// Every failure this handler reaches leaves this line, including an unexpected fault, under
+			// the code the caller was given for it. Not every failure of the *request*: a caller the
+			// envelope refused never got here, and the envelope's own row is the record of that — see
+			// the module comment. `apiRoute` records the outcome and its level; this row records the one
+			// thing the envelope cannot know — whether anything left this server — so "every write and
+			// every refusal is recorded" is a claim about the paper rather than about the request.
 			const code = error instanceof ApiError ? error.code : "internal_error";
 
 			// Named even on the refusals that never got as far as resolving a device, so every line
@@ -184,7 +193,9 @@ export const POST = apiRoute<{ agent: string; device: string }>(
  * 64-character key name, the most `MAX_NAME_LENGTH` allows on each, already consume most of that
  * budget. If the sentence that actually answers "was anything sent" sat after them, that setting's
  * minimum would cut it away and leave only the preamble, which is the one trade the audit trail
- * cannot afford — the whole reason this row exists is that it is the only record a write happened.
+ * cannot afford — the whole reason this row exists is that it is the only record of what reached the
+ * hardware. The envelope's own row for the same request says the request failed; it cannot say
+ * whether the paper moved, which is the sentence that must survive truncation here.
  * So the code and, on the second wording, the honest detail come immediately after the fixed lead-in,
  * comfortably inside 200 characters on their own; the byte count and the two names are parenthesised
  * afterward and are what gives way if the line is still too long.

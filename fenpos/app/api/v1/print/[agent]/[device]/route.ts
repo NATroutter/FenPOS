@@ -55,6 +55,13 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 	async ({ key, request, params }) => {
 		const { agent, device } = params;
 
+		// Read up front, before anything can have been written, which is where the pre-envelope
+		// version read it too. Only the accepted-job line below uses it, so reading it there would be
+		// cheaper — and would mean a failure to resolve the address answering `500` for a job that is
+		// already queued and will print. Ordering it here costs one header read on requests that go on
+		// to be refused; the alternative costs a caller the truth about a receipt.
+		const address = await getClientAddress();
+
 		// Resolved before the body is read: a caller with no grant for this device learns that
 		// without the server doing any parsing work on their behalf.
 		const target = await requireGrantedDevice(key, agent, device);
@@ -121,7 +128,7 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 			agentName: agent,
 			deviceName: device,
 			lines: job.lines,
-			address: await getClientAddress(),
+			address,
 		});
 
 		return {
