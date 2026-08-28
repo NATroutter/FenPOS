@@ -33,10 +33,16 @@ datasource db {
 
 /// One thing somebody did, and what came of it.
 ///
-/// Append-only. There is no delete or edit path in the application, for superusers either — the
-/// only deletion that exists is the retention sweep, which runs oldest-first and re-anchors the
-/// chain behind it. The threat this shape defends against is explicit: an attacker who has
-/// obtained superuser credentials and wants to erase what they did.
+/// Append-only at the row level: no path, for superusers either, edits or deletes a single event. Two
+/// things remove rows at all, and neither touches one in isolation — both take a whole span from the
+/// oldest end. The retention sweep, which runs unattended, archives a period before removing it and
+/// re-anchors the chain behind what remains. `deleteAuditArchive` (`app/(panel)/archives/actions.ts`), gated by
+/// `audit:archive-delete`, is the other: a person removing a whole archived-and-verified month by hand,
+/// once retention has already swept it, advancing `AuditEpoch` and writing its own audit row so the
+/// shortened record stays an honest one. The threat this shape defends against is explicit: an attacker
+/// who has obtained superuser credentials and wants to erase what they did — and `audit:archive-delete`
+/// narrows that defense rather than voiding it, since what it grants is bounded, evidenced and logged,
+/// never a single row made to vanish quietly.
 ///
 /// **Every row hashes itself together with the row before it.** `hash` is SHA-256 over this row's
 /// canonical fields and `prevHash` — see `lib/audit/chain.ts`, which owns the field order and is

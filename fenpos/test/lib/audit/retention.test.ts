@@ -9,7 +9,9 @@ import { verifyAuditChain } from "@/lib/audit/verify";
 import { auditDb } from "@/lib/db";
 
 /**
- * The only deletion the audit record has.
+ * The retention sweep: one of the two things that can remove audit rows, and the only one that runs
+ * unattended. `deleteAuditArchive` (`app/(panel)/archives/actions.ts`) is the other, gated by
+ * `audit:archive-delete` and reached only by a person's deliberate choice — not exercised here.
  *
  * The property under test is not "old rows go away" — that is easy and uninteresting. It is that
  * what survives a sweep still verifies, which is the whole reason `AuditAnchor` exists: the oldest
