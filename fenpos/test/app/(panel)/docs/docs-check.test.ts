@@ -324,26 +324,55 @@ describe("the security page's audit:verify samples", () => {
 	});
 });
 
+/** Every page under `app/(panel)/docs`, keyed by the path a failure should name. */
+const DOC_PAGES: readonly [string, string][] = [
+	["app/(panel)/docs/api/page.tsx", API_PAGE],
+	["app/(panel)/docs/markup/page.tsx", MARKUP_PAGE],
+	["app/(panel)/docs/security/page.tsx", SECURITY_PAGE],
+];
+
 /**
- * Every setting a reference page names, as the page writes it.
+ * The namespaces a name of this kind is built from, taken from the declaration that owns them.
  *
- * Anchored on the whole of a `<Mono>` or a `label=` value rather than searched for loosely, so this
- * can only be satisfied by a name a reader actually sees — the same anchoring the tag table's check
- * uses. Anchoring is also what keeps it quiet: `pnpm auth:recover`, `audit-2026-01.db.gz` and
- * `DATABASE_URL` all sit in a `<Mono>` on these pages and none of them is a setting.
+ * Derived rather than listed, so a new one — the `audit` settings category was new once — widens
+ * the scan without anyone remembering to. It is also what keeps the scan quiet: `auth` is a setting
+ * namespace and not a permission one, so `pnpm auth:recover` is invisible to the permission scan
+ * while `auth.sessionHours` is visible to the settings scan, which is exactly right for both.
+ *
+ * @param names every declared identifier
+ * @param separator `.` for settings, `:` for permissions
+ * @returns the distinct prefixes, e.g. `audit`, `logs`
+ */
+function namespacesOf(names: readonly string[], separator: string): string[] {
+	return [...new Set(names.filter((name) => name.includes(separator)).map((name) => name.split(separator)[0]))];
+}
+
+/**
+ * Every name of one kind that a page writes, wherever on it they are written.
+ *
+ * **Deliberately not anchored on `<Mono>`.** An earlier version of this scan was, and it had a hole
+ * a reader could fall into: `audit:archive-delete` is plain text inside a `Fact`, and the setting
+ * names in `SECTIONS`' `note:` strings are plain text too, so neither was checked while the test's
+ * name implied both were. The rule here is the shape of the name itself, so a name is covered
+ * wherever the page happens to put it — prose, a `Fact`, a section note, a `CodeBlock`, or the
+ * page's own code.
+ *
+ * Two things bound the false positives that come with scanning everything. The namespace has to be
+ * one the owning declaration actually has, and the match may not follow a `.` or a word character —
+ * which is what keeps `device?.agent.name`, the page's own Prisma read, out of a scan whose
+ * namespaces include `agent`. Both are checked by this suite passing: every hit on all three pages
+ * is a real identifier today, so a new hit is a real finding rather than noise this has learned to
+ * tolerate.
  *
  * @param source the page's own text
- * @returns the setting keys it names, each once
+ * @param namespaces the prefixes to look for
+ * @param separator `.` for settings, `:` for permissions
+ * @returns the names it writes, each once
  */
-function settingsNamed(source: string): string[] {
-	const found = new Set<string>();
-	for (const match of source.matchAll(/<Mono>([a-z]+\.[a-zA-Z0-9]+)<\/Mono>/g)) {
-		found.add(match[1]);
-	}
-	for (const match of source.matchAll(/label="([a-z]+\.[a-zA-Z0-9]+)"/g)) {
-		found.add(match[1]);
-	}
-	return [...found].sort();
+function namesWritten(source: string, namespaces: readonly string[], separator: string): string[] {
+	const [delimiter, tail] = separator === "." ? ["\\.", "[a-zA-Z0-9]+"] : [":", "[a-z0-9:-]+"];
+	const pattern = new RegExp(`(?<![.\\w])(?:${namespaces.join("|")})${delimiter}${tail}`, "g");
+	return [...new Set([...source.matchAll(pattern)].map((match) => match[0]))].sort();
 }
 
 /**
@@ -353,29 +382,42 @@ function settingsNamed(source: string): string[] {
  * to hunt for a row that was renamed or withdrawn, which is the shape of documentation failure this
  * branch produced most: `logs.sweepEvery` and `audit.sweepEvery` were both real when these pages were
  * last edited and are neither of them settings now.
+ *
+ * **What this does not cover**, so the claim is not read wider than it is: a name written in some
+ * other shape entirely — a label prose-cased as "Log archive retention", or a permission described
+ * rather than named — is invisible here, because there is nothing in it to match. This checks the
+ * names, not the descriptions of them.
  */
 describe("what the reference pages name", () => {
 	it("names only settings this build has", () => {
-		const named = [...settingsNamed(API_PAGE), ...settingsNamed(SECURITY_PAGE)];
-		expect(named.length, "no settings were found on either page — has the markup changed shape?").toBeGreaterThan(10);
+		const namespaces = namespacesOf(SETTING_KEYS, ".");
+		let total = 0;
 
-		for (const key of named) {
-			expect(SETTING_KEYS, `a docs page names "${key}" and no such setting exists`).toContain(key);
+		for (const [path, source] of DOC_PAGES) {
+			for (const key of namesWritten(source, namespaces, ".")) {
+				total++;
+				expect(SETTING_KEYS, `${path} names "${key}" and no such setting exists`).toContain(key);
+			}
 		}
+
+		expect(total, "no settings were found on any page — has the scan stopped matching?").toBeGreaterThan(20);
 	});
 
-	it("names only permissions the panel defines", () => {
-		const named = new Set<string>();
-		for (const match of SECURITY_PAGE.matchAll(/<Mono>([a-z]+:[a-z0-9:-]+)<\/Mono>/g)) {
-			named.add(match[1]);
+	it("names only permissions this build defines", () => {
+		// Both vocabularies, because these pages speak to both readers: the security page names panel
+		// grants and the API page names what an API key can hold, and neither list contains the other's.
+		const permissions = [...PANEL_PERMISSION_IDS, ...PERMISSION_IDS];
+		const namespaces = namespacesOf(permissions, ":");
+		let total = 0;
+
+		for (const [path, source] of DOC_PAGES) {
+			for (const permission of namesWritten(source, namespaces, ":")) {
+				total++;
+				expect(permissions, `${path} names "${permission}" and there is no such grant`).toContain(permission);
+			}
 		}
 
-		expect(named.size, "no permissions were found on the security page").toBeGreaterThan(0);
-		for (const permission of named) {
-			expect(PANEL_PERMISSION_IDS, `the security page names "${permission}" and the panel has no such grant`).toContain(
-				permission,
-			);
-		}
+		expect(total, "no permissions were found on any page — has the scan stopped matching?").toBeGreaterThan(10);
 	});
 });
 

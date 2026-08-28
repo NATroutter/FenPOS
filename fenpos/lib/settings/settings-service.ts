@@ -876,7 +876,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "audit.retentionDays",
 		label: "Audit retention",
 		description:
-			"How long an audit event is kept. Sweeping is the only deletion this record has, it runs oldest-first, and it re-anchors the chain behind itself so what survives stays verifiable.",
+			"How long an audit event is kept in the live database. Events past the window are archived a whole " +
+			"calendar month at a time and are never deleted unarchived, so up to a month more than this is retained. " +
+			"Sweeping runs oldest-first and re-anchors the chain behind itself, so what survives stays verifiable; " +
+			"the only other way history leaves this record is an archived month deleted by hand on the Archives tab.",
 		category: "audit",
 		type: "integer",
 		min: 1,

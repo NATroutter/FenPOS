@@ -304,12 +304,15 @@ export default async function ApiDocsPage() {
 							<P>
 								Every request to a keyed endpoint here leaves one line on the panel's <strong>Logs</strong> tab —
 								returned, refused and failed alike, with the one exception the setting below carves out. The level is
-								the outcome: <Mono>INFO</Mono> for a request that returned, <Mono>WARN</Mono> for one something said no
-								to — a missing or unusable key, a permission it does not hold, <ErrorRef code="rate_limited" />,{" "}
-								<ErrorRef code="unknown_device" /> or <ErrorRef code="unknown_job" /> — and <Mono>ERROR</Mono> for
-								everything else. The line is attributed to the key that made the request — a request refused before its
-								key was identified has none to name — and carries that key's <em>name</em> in its own text, so it still
-								says who once the key is deleted; the Logs tab filters by key.
+								the outcome: <Mono>INFO</Mono> for a request that returned, and <Mono>WARN</Mono> for one an access
+								control refused — <strong>every</strong> <Status>401</Status>, <Status>403</Status> and{" "}
+								<Status>429</Status>, which is a missing or unusable key, a permission the key does not hold,{" "}
+								<ErrorRef code="raw_writes_disabled" /> and <ErrorRef code="rate_limited" /> alike, plus{" "}
+								<ErrorRef code="unknown_device" /> and <ErrorRef code="unknown_job" />, which are refusals wearing a
+								404's clothes. <Mono>ERROR</Mono> is everything else. The line is attributed to the key that made the
+								request — a request refused before its key was identified has none to name — and carries that key's{" "}
+								<em>name</em> in its own text, so it still says who once the key is deleted; the Logs tab filters by
+								key.
 							</P>
 
 							<Aside>
@@ -1187,9 +1190,10 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 								printed: the bytes are never read, and the printer does not report back. A write that times out says so
 								plainly — the bytes may or may not have been written, and only the paper settles it. The Logs tab is the
 								only record that any of it happened, and this endpoint writes there itself rather than leaving it to the
-								line every endpoint leaves: once <em>before</em> the bytes are handed off, so a send interrupted halfway
-								still leaves a trace, and again if the write does not complete — saying whether anything left this
-								server at all, which is the one thing the other line cannot know.
+								line every endpoint leaves. One line goes down <em>before</em> the bytes are handed off, so a send
+								interrupted halfway still leaves a trace, and one for a request that returns no write — which says
+								whether anything left this server at all, the one thing the other line cannot know. A refusal decided
+								before the send leaves only the second of those, and it says plainly that nothing was sent.
 							</P>
 						</Col>
 

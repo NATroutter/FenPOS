@@ -300,18 +300,20 @@ export default async function SecurityDocsPage() {
 								What writes rows is the panel itself, and <Mono>pnpm auth:recover</Mono> below.{" "}
 								<strong>The v1 API writes none.</strong> A key that prints a job, cancels one, uploads an asset or
 								pauses a device leaves nothing here, and neither does a key refused for a permission it does not hold.
-								Those requests are recorded on the Logs tab instead, naming the key: every refusal, everything that
-								changed something, and successful reads too where <Mono>logs.recordApiReads</Mono> is on. So what an API
-								key did is answerable there rather than here.
+								Those requests are recorded on the Logs tab instead: every refusal, everything that changed something,
+								and successful reads too where <Mono>logs.recordApiReads</Mono> is on. Each line names the key that made
+								it, unless the request was turned away before any key was resolved — a bad token names nobody. So what
+								an API key did is answerable there rather than here.
 							</P>
 
 							<P>
-								The one removal is retention, governed by <Mono>audit.retentionDays</Mono> (
-								<strong>{auditRetentionDays}</strong> days on this install), and it never deletes an event that has not
-								been archived first. A whole calendar month is copied into an archive file, the copy is checked — its
-								row count against what was read, and its hash chain walked end to end — and only then are those rows
-								removed from the live database and the chain re-anchored behind them. Because an archive is named for a
-								month, only a month that has fully aged out may go, so up to a month more than the window is kept.
+								The one removal that happens on its own — as against an archive somebody deletes — is retention,
+								governed by <Mono>audit.retentionDays</Mono> (<strong>{auditRetentionDays}</strong> days on this
+								install), and it never deletes an event that has not been archived first. A whole calendar month is
+								copied into an archive file, the copy is checked — its row count against what was read, and its hash
+								chain walked end to end — and only then are those rows removed from the live database and the chain
+								re-anchored behind them. Because an archive is named for a month, only a month that has fully aged out
+								may go, so up to a month more than the window is kept.
 							</P>
 
 							<P>
@@ -387,8 +389,8 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 							</Aside>
 
 							<P>
-								Log archives are deleted by age, on the same pass that writes them, once a month is older than{" "}
-								<Mono>logs.archiveRetentionDays</Mono> (<strong>{logArchiveRetentionDays}</strong> days here).{" "}
+								Log archives are deleted by age, on the same pass that writes them, once the month one covers has been
+								over for <Mono>logs.archiveRetentionDays</Mono> (<strong>{logArchiveRetentionDays}</strong> days here).{" "}
 								<strong>Audit archives are never deleted on a timer.</strong> They are evidence, and a timer that
 								removed evidence is one an attacker could wait for rather than defeat.
 							</P>
@@ -415,7 +417,9 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 							<Fact label="logs.archiveEnabled">
 								{logArchiveEnabled ? "On — aged-out lines are archived first" : "Off — aged-out lines are deleted"}
 							</Fact>
-							<Fact label="logs.archiveRetentionDays">{logArchiveRetentionDays} days, then the file is deleted</Fact>
+							<Fact label="logs.archiveRetentionDays">
+								{logArchiveRetentionDays} days past the month it covers, then the file goes
+							</Fact>
 							<Fact label="Audit archives">Deleted only by hand, under audit:archive-delete</Fact>
 						</Facts>
 					</Split>
