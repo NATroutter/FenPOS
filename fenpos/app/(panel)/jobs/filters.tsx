@@ -1,8 +1,10 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** The value used for "no filter", since a select cannot hold an empty string as a choice. */
@@ -23,20 +25,43 @@ interface Filter {
 }
 
 /**
+ * A date range, as the page describes it: the `from` and `to` parameters' current values.
+ *
+ * Both are the `yyyy-mm-dd` a native date input reads and writes, empty when that end is unbounded.
+ * The page turns them into instants with `dayBound` (`lib/format/datetime.ts`) — this component
+ * only carries the strings, because they are exactly what lives in the URL.
+ */
+export interface FilterRange {
+	from: string;
+	to: string;
+}
+
+/**
  * Filters held in the URL rather than in component state.
  *
  * That makes a filtered view something an operator can bookmark, send to a colleague, and return
  * to after a reload — all of which matter when the thing being looked at is "why did the kitchen
  * printer fail twice this morning". It also means the server does the filtering, so the page
  * never holds more rows than it shows.
+ *
+ * The optional date range is part of the same row, and follows the same two rules as every select
+ * here: it writes straight into the URL, and it drops `skip` when it changes. It lives here rather
+ * than beside this component so the Audit tab and the Logs tab read a range the same way — the two
+ * pages that filter by one, and two spellings of one control is how they come to differ.
+ *
+ * Native `type="date"` inputs rather than a picker component: two fields do not justify a
+ * dependency, and the native control is the one an operator's browser already localises for them.
  */
-export function Filters({ filters }: { filters: Filter[] }) {
+export function Filters({ filters, range }: { filters: Filter[]; range?: FilterRange }) {
 	const router = useRouter();
 	const params = useSearchParams();
+	// Unique per instance, so two filter rows on one page cannot give two inputs the same id — which
+	// would make a label point at whichever the browser found first.
+	const field = useId();
 
-	const set = (name: string, value: string): void => {
+	const set = (name: string, value: string | null): void => {
 		const next = new URLSearchParams(params.toString());
-		if (value === ANY) {
+		if (value === null) {
 			next.delete(name);
 		} else {
 			next.set(name, value);
@@ -47,13 +72,46 @@ export function Filters({ filters }: { filters: Filter[] }) {
 		router.push(`?${next.toString()}`);
 	};
 
-	const active = filters.some((filter) => filter.value !== null);
+	const active = filters.some((filter) => filter.value !== null) || Boolean(range?.from) || Boolean(range?.to);
 
 	return (
-		<div className="flex flex-wrap items-center gap-2">
+		<div className="flex flex-wrap items-end gap-2">
 			{filters.map((filter) => (
-				<FilterSelect key={filter.name} filter={filter} onChange={(value) => set(filter.name, value)} />
+				<FilterSelect
+					key={filter.name}
+					filter={filter}
+					onChange={(value) => set(filter.name, value === ANY ? null : value)}
+				/>
 			))}
+
+			{range === undefined ? null : (
+				<div className="flex items-end gap-2">
+					<div className="flex flex-col gap-1">
+						<Label htmlFor={`${field}-from`} className="text-[11px] text-subtle-foreground">
+							From
+						</Label>
+						<Input
+							id={`${field}-from`}
+							type="date"
+							value={range.from}
+							onChange={(changed) => set("from", changed.target.value || null)}
+							className="h-8 w-[150px] text-[12px]"
+						/>
+					</div>
+					<div className="flex flex-col gap-1">
+						<Label htmlFor={`${field}-to`} className="text-[11px] text-subtle-foreground">
+							To
+						</Label>
+						<Input
+							id={`${field}-to`}
+							type="date"
+							value={range.to}
+							onChange={(changed) => set("to", changed.target.value || null)}
+							className="h-8 w-[150px] text-[12px]"
+						/>
+					</div>
+				</div>
+			)}
 
 			{active ? (
 				<Button variant="ghost" size="sm" className="h-8 text-[12px]" onClick={() => router.push("?")}>

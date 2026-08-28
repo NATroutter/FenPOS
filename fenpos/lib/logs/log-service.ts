@@ -1,9 +1,12 @@
 import "server-only";
+import { periodKeyFor } from "@/lib/archive/period";
+import { listArchives } from "@/lib/archive/read";
 import { logsDb } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
+import { archiveDirectory } from "@/lib/maintenance/pass";
 import { globalLogIngestSettings, integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
 
@@ -35,8 +38,18 @@ export interface LogLine {
 /** What the list is narrowed to. */
 export interface LogFilter {
 	agentId?: string;
+	/**
+	 * The API key that produced the line. Matched on the id alone — a key that has since been
+	 * deleted still narrows to its own lines, because nothing nulls the column out. See
+	 * {@link LogLine.apiKeyId}.
+	 */
+	apiKeyId?: string;
 	/** Minimum severity: this level and anything above it. */
 	level?: LogLevel;
+	/** The earliest moment to list, inclusive. */
+	from?: Date;
+	/** The latest moment to list, inclusive. */
+	to?: Date;
 	skip?: number;
 	/** How many rows to return. Defaults to the configured `panel.logPageSize`. */
 	take?: number;
@@ -109,7 +122,13 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 	const rows = await logsDb.logEntry.findMany({
 		where: {
 			...(filter.agentId ? { agentId: filter.agentId } : {}),
+			...(filter.apiKeyId ? { apiKeyId: filter.apiKeyId } : {}),
 			...(filter.level ? { severity: { gte: LOG_SEVERITY[filter.level] } } : {}),
+			// One `ts` key or none: two spread objects would have the second overwrite the first, so a
+			// range with both ends would silently lose its lower bound.
+			...(filter.from || filter.to
+				? { ts: { ...(filter.from ? { gte: filter.from } : {}), ...(filter.to ? { lte: filter.to } : {}) } }
+				: {}),
 		},
 		orderBy,
 		skip: filter.skip ?? 0,
@@ -130,6 +149,94 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 			apiKeyId: row.apiKeyId,
 		})),
 	};
+}
+
+/**
+ * The stretch of time a filtered view is asking about.
+ *
+ * Both ends optional, because the tab's two date fields are set independently: "everything since
+ * March" and "everything up to March" are both ranges an operator can ask for, and either can reach
+ * back past the live window. A range with neither end is the whole log, which is the unfiltered tab
+ * — see {@link archiveCovering} for why that is a question the caller does not ask.
+ */
+export interface LogRange {
+	/** The earliest moment asked for. Absent means the range is open at that end. */
+	from?: Date;
+	/** The latest moment asked for. Absent means "up to now", which is what an open range ends at. */
+	to?: Date;
+}
+
+/**
+ * Finds the archived period a filtered range reaches into, if there is one.
+ *
+ * This is the signpost behind the Logs tab. Retention moves whole months out of `logs.db` and into
+ * `<archives>/logs-<period>.db.gz`; without something saying so, a range that reaches back past the
+ * live window returns a short page or an empty one, and the operator's failure is no longer "the
+ * data is gone" but "the data is somewhere nobody told you to look" — which is the failure this
+ * whole split was supposed to remove rather than relocate.
+ *
+ * **Which archive covers a range.** A `logs` archive covers it when its period holds any moment the
+ * range asks for: `periodKeyFor(from) <= periodKey <= periodKeyFor(to ?? now)`, with a range open at
+ * the start matching every period up to its end. When several do — a range reaching back across
+ * months that have each been archived — the **oldest** is returned, because that is where the
+ * requested history begins and so the period to open first. An archive later than the range's end is
+ * not offered at all: it holds nothing that was asked for, and a signpost pointing at data outside
+ * the range is worse than none.
+ *
+ * **A range with neither end is every archive there is, and answering that is not this function's
+ * mistake to prevent.** The caller asks when a range was filtered on; a tab that has not been
+ * filtered is not asking about a stretch of history, and an archive offered on every default page
+ * load would be noise wearing a signpost's clothes.
+ *
+ * **Why this needs no separate reading of where the live window starts.** An archive exists for a
+ * period only once that period has been drained out of `logs.db` — `archivePeriod` writes the file
+ * and deletes the rows in one transaction. So a match *is* the evidence that the range reaches back
+ * before the live window; deriving that boundary a second time here would be a second opinion about
+ * it, and the file on disk is the one that is true.
+ *
+ * **Audit archives are never offered**, and the test for that is the parsed `source` rather than the
+ * filename: this reader holds `logs:read` and may be holding nothing else, and the audit record is
+ * not theirs to be pointed at.
+ *
+ * **Never throws.** The Logs tab's job is showing live lines; an archive directory an operator has
+ * provisioned wrongly must not be the reason the tab stops rendering. The failure goes to the server
+ * log and the signpost simply does not appear — the same silence as "nothing has been archived yet",
+ * which is the honest answer when nobody can tell.
+ *
+ * @param range what the filtered view is asking about; at least one end should be set, or the answer
+ *   is about the whole log rather than about anything the operator narrowed to
+ * @returns the period key of the oldest log archive holding any of it, e.g. `2026-03`, or null when
+ *   no archive does, or when the archive directory could not be read
+ */
+export async function archiveCovering(range: LogRange): Promise<string | null> {
+	// UTC on both sides of every comparison below, because archive periods are UTC — `periodKeyFor`
+	// says why, and a boundary that moved with the host's zone would put a range that ends at 22:30
+	// on the last of March into April on this machine and not on the next one.
+	//
+	// The empty string sorts before every `yyyy-mm`, so an open start matches every period rather than
+	// none — which is what "everything up to March" asks for.
+	const first = range.from === undefined ? "" : periodKeyFor(range.from);
+	const last = periodKeyFor(range.to ?? new Date());
+
+	try {
+		let covering: string | null = null;
+
+		for (const archive of await listArchives(archiveDirectory())) {
+			if (archive.source !== "logs" || archive.periodKey < first || archive.periodKey > last) {
+				continue;
+			}
+			// `periodKey` is `yyyy-mm` with the month zero-padded, so comparing two of them as text
+			// orders them exactly as comparing them as dates would.
+			if (covering === null || archive.periodKey < covering) {
+				covering = archive.periodKey;
+			}
+		}
+
+		return covering;
+	} catch (error) {
+		logger.error("Could not look for an archive covering the filtered range", error, { from: first, to: last });
+		return null;
+	}
 }
 
 /**

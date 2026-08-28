@@ -1,5 +1,5 @@
 /**
- * Timestamp formatting for the panel.
+ * Timestamps for the panel: formatting them, and reading a date input's value back into a bound.
  *
  * **The locale is pinned rather than taken from the runtime.** `toLocaleString()` with no argument
  * asks whatever is running the code what it prefers, and the answer differs on the two sides of a
@@ -127,4 +127,35 @@ export function formatDateTime(value: string | number | Date): string {
 /** A date alone: `8/19/2026`. For things whose time of day carries nothing. */
 export function formatDate(value: string | number | Date): string {
 	return DATE.format(new Date(value));
+}
+
+/**
+ * Turns a `yyyy-mm-dd` from a native date input into a bound on an instant.
+ *
+ * The end of the day rather than its start for the upper bound, because an operator who types
+ * today's date into "To" means today inclusive — a literal reading would exclude everything that
+ * happened after midnight, which is everything.
+ *
+ * Here rather than in each page that filters by a date range: the Audit tab and the Logs tab both
+ * do, and two spellings of one reading is how they come to differ by a word nobody meant to change.
+ *
+ * **The host's zone, not UTC, and not `panel.timezone`.** The value comes from a control the
+ * operator's own browser rendered in their own zone, so a day means their day. `panel.timezone`
+ * moves what the columns *display* and would be the better reading, but this module cannot ask a
+ * setting synchronously and the two zones agree on the installs this panel is built for — the
+ * server and the printers it drives are normally on one site. Archive periods are a different
+ * question and are UTC throughout; see `periodKeyFor` (`lib/archive/period.ts`).
+ *
+ * @param value the input's value, or undefined when the field is empty
+ * @param edge which end of the day to take
+ * @returns the bound, or undefined when there is no readable date to bound by
+ */
+export function dayBound(value: string | undefined, edge: "start" | "end"): Date | undefined {
+	if (!value) {
+		return undefined;
+	}
+	const at = new Date(edge === "start" ? `${value}T00:00:00.000` : `${value}T23:59:59.999`);
+	// Undefined rather than the Invalid Date `new Date` hands back: that value reaches a query as
+	// `{ gte: Invalid Date }`, which is neither a filter nor the absence of one.
+	return Number.isNaN(at.getTime()) ? undefined : at;
 }

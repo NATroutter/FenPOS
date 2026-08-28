@@ -1,7 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
-import { formatDate, formatDateTime, resetFormatting, setFormatting } from "@/lib/format/datetime";
+import { dayBound, formatDate, formatDateTime, resetFormatting, setFormatting } from "@/lib/format/datetime";
 import { applyPushedSettings, clearSetting } from "@/lib/settings/settings-service";
+
+/**
+ * Tests for the other direction: a date input's value read back into a bound on an instant.
+ *
+ * Both the Audit tab and the Logs tab filter by a date range, and both take it from a native date
+ * input, so the reading of `yyyy-mm-dd` is one rule rather than one per page.
+ */
+describe("dayBound", () => {
+	it("takes a date input's value as the whole of that day", () => {
+		const start = dayBound("2026-05-10", "start");
+		const end = dayBound("2026-05-10", "end");
+
+		// Goes red if the upper bound is the start of the day: an operator who types today's date into
+		// "To" means today inclusive, and a literal reading excludes everything that happened after
+		// midnight, which is everything.
+		expect([start?.getHours(), start?.getMinutes(), start?.getSeconds()]).toEqual([0, 0, 0]);
+		expect([end?.getHours(), end?.getMinutes(), end?.getSeconds(), end?.getMilliseconds()]).toEqual([23, 59, 59, 999]);
+		// The operator's own day, not one shifted by however the value was read.
+		expect([start?.getFullYear(), start?.getMonth(), start?.getDate()]).toEqual([2026, 4, 10]);
+	});
+
+	it("reads nothing from an empty or unreadable value", () => {
+		// Goes red if a bad value becomes an Invalid Date instead of nothing: that reaches a query as
+		// `{ gte: Invalid Date }`, which is not "no filter" and is not a filter either.
+		expect(dayBound("", "start")).toBeUndefined();
+		expect(dayBound(undefined, "start")).toBeUndefined();
+		expect(dayBound("the tenth of May", "start")).toBeUndefined();
+	});
+});
 
 /**
  * Tests for `formatDate`/`formatDateTime` and the push pair (`setFormatting`/`resetFormatting`)

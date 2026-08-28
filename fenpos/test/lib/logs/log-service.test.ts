@@ -1,7 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logsDb, prisma } from "@/lib/db";
-import { listLogs, recordServerLog } from "@/lib/logs/log-service";
+import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
+import { logger } from "@/lib/logger";
+import { archiveCovering, listLogs, recordServerLog } from "@/lib/logs/log-service";
 import { setSetting } from "@/lib/settings/settings-service";
+
+/**
+ * `AUDIT_ARCHIVE_DIRECTORY` resolves to `data/archives`, which is where a developer's own archives
+ * live — and `archiveCovering` reads whatever is in it. Redirected at the one module that owns the
+ * rule, the way `test/lib/maintenance/pass.test.ts` redirects it, so the code under test still reads
+ * the constant it reads in production and only the value differs.
+ */
+vi.mock("@/lib/env", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/env")>();
+	const { mkdtempSync: makeTemp } = await import("node:fs");
+	const { tmpdir: temp } = await import("node:os");
+	const { join: joinPath } = await import("node:path");
+	return { ...actual, AUDIT_ARCHIVE_DIRECTORY: joinPath(makeTemp(joinPath(temp(), "fenpos-logs-")), "archives") };
+});
 
 /**
  * Tests for the Logs tab's paging.
@@ -197,6 +215,177 @@ describe("recordServerLog", () => {
 			expect(create).toHaveBeenCalledTimes(1);
 		} finally {
 			create.mockRestore();
+		}
+	});
+});
+
+/**
+ * Tests for the two filters the Logs tab's own controls put into the URL.
+ *
+ * The date range is not decoration: the signpost tells an operator their range reaches back before
+ * the live window, and a list that ignored the range while the signpost talked about it would be
+ * two views of two different questions on one page.
+ */
+describe("listLogs narrowed by key and by range", () => {
+	beforeEach(async () => {
+		await logsDb.logEntry.deleteMany();
+		await prisma.setting.deleteMany();
+	});
+
+	it("filters live lines by API key", async () => {
+		const till = await prisma.apiKey.create({ data: { name: "Till 4", keyHash: "hash-till-4", maskedHint: "ab12" } });
+		const kiosk = await prisma.apiKey.create({ data: { name: "Kiosk", keyHash: "hash-kiosk", maskedHint: "cd34" } });
+
+		await recordServerLog("INFO", "a raw write from Till 4", { apiKeyId: till.id });
+		await recordServerLog("INFO", "a raw write from Kiosk", { apiKeyId: kiosk.id });
+		await recordServerLog("INFO", "something the panel itself did");
+
+		const page = await listLogs({ apiKeyId: till.id });
+
+		// Goes red if the filter is dropped on the floor: without it all three lines come back, since
+		// the other two are exactly the lines an operator asking "what has this key been doing" does
+		// not want to read.
+		expect(page.lines.map((line) => line.message)).toEqual(["a raw write from Till 4"]);
+	});
+
+	it("filters live lines to the range asked for", async () => {
+		await logsDb.logEntry.createMany({
+			data: [
+				{ level: "INFO", severity: 1, message: "before", ts: new Date("2026-05-01T12:00:00.000Z") },
+				{ level: "INFO", severity: 1, message: "inside", ts: new Date("2026-05-10T12:00:00.000Z") },
+				{ level: "INFO", severity: 1, message: "after", ts: new Date("2026-05-20T12:00:00.000Z") },
+			],
+		});
+
+		const page = await listLogs({
+			from: new Date("2026-05-05T00:00:00.000Z"),
+			to: new Date("2026-05-15T00:00:00.000Z"),
+		});
+
+		// Goes red if either bound is dropped: losing `from` brings "before" back, losing `to` brings
+		// "after" back, and losing both brings all three.
+		expect(page.lines.map((line) => line.message)).toEqual(["inside"]);
+	});
+});
+
+/**
+ * Tests for the signpost.
+ *
+ * This is the affordance that makes the live/archived split honest. Without it, separating the two
+ * relocates the operator's failure from "the data is gone" to "the data is somewhere you were not
+ * told to look", which is an improvement only in principle.
+ *
+ * Every fixture here is an empty file with an archive's name. That is a faithful fixture rather than
+ * a shortcut: `archiveCovering` never opens an archive — it reads the directory listing and decides
+ * from the parsed `source` and `periodKey` — so a real compressed period would prove nothing this
+ * does not, at the cost of a `mkdtemp` and a rotation per test.
+ */
+describe("archiveCovering", () => {
+	beforeEach(() => {
+		rmSync(AUDIT_ARCHIVE_DIRECTORY, { recursive: true, force: true });
+		mkdirSync(AUDIT_ARCHIVE_DIRECTORY, { recursive: true });
+	});
+
+	afterAll(() => {
+		rmSync(dirname(AUDIT_ARCHIVE_DIRECTORY), { recursive: true, force: true });
+	});
+
+	/** Puts one archive on disk, under exactly the name `archivePeriod` would have left. */
+	function archived(name: string): void {
+		writeFileSync(join(AUDIT_ARCHIVE_DIRECTORY, name), "");
+	}
+
+	it("offers the archive covering a range that starts before the live window", async () => {
+		archived("logs-2026-03.db.gz");
+
+		const covering = await archiveCovering({
+			from: new Date("2026-03-05T00:00:00.000Z"),
+			to: new Date("2026-03-20T00:00:00.000Z"),
+		});
+
+		// Goes red if the tab silently returns an empty page: that is the failure this whole project
+		// exists to remove, relocated from "the data is gone" to "the data is somewhere you were not
+		// told to look".
+		expect(covering).toBe("2026-03");
+	});
+
+	it("offers nothing when no archive covers the range", async () => {
+		// Both files are near misses, and they are what gives this test teeth: an implementation that
+		// always answered null would pass it, but so would one that never looked at the range's end
+		// (offering September) or one that matched on the filename instead of the parsed `source`
+		// (offering the audit record's March to somebody reading the log).
+		archived("logs-2026-09.db.gz");
+		archived("audit-2026-03.db.gz");
+
+		const covering = await archiveCovering({
+			from: new Date("2026-03-01T00:00:00.000Z"),
+			to: new Date("2026-03-31T23:59:59.999Z"),
+		});
+
+		expect(covering).toBeNull();
+	});
+
+	it("offers the oldest period the range reaches into, not the newest", async () => {
+		archived("logs-2026-02.db.gz");
+		archived("logs-2026-04.db.gz");
+
+		const covering = await archiveCovering({
+			from: new Date("2026-01-10T00:00:00.000Z"),
+			to: new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		// Goes red on a newest-first pick, which is the plausible mistake here: the Archives tab
+		// deliberately sorts newest first, because the period somebody came looking for is usually the
+		// one that just aged out. This question is the other way round — the range starts in January,
+		// so where its history begins is February, and April is somewhere in the middle of it.
+		expect(covering).toBe("2026-02");
+	});
+
+	it("offers the oldest period a range that is open at the start reaches into", async () => {
+		archived("logs-2026-02.db.gz");
+		archived("logs-2026-03.db.gz");
+		archived("logs-2026-05.db.gz");
+
+		const covering = await archiveCovering({ to: new Date("2026-03-31T23:59:59.999Z") });
+
+		// "Everything up to the end of March" is a range and it does reach back, so it gets a signpost.
+		// Goes red two ways: if a missing start is read as the present rather than as an open end, in
+		// which case nothing matches and an operator who filled in one of the tab's two date fields is
+		// told there is nothing to find; and if the newest match is offered rather than the oldest,
+		// which gives "2026-03". May is out of scope either way, which is the sibling test's job.
+		expect(covering).toBe("2026-02");
+	});
+
+	it("places the range's months in UTC, not the host's zone", async () => {
+		archived("logs-2026-03.db.gz");
+		archived("logs-2026-04.db.gz");
+
+		// 22:30Z on the last day of March is already April on any host east of Greenwich, and 01:00Z on
+		// the first of April is still March on any host west of it. So the first assertion goes red for
+		// a local-time reading on a positive offset and the second for one on a negative offset — one
+		// of the two is live wherever this runs, except on a host at exactly UTC, where local and UTC
+		// field accessors are numerically identical and no assertion can tell the two apart.
+		const endOfMarch = new Date("2026-03-31T22:30:00.000Z");
+		const startOfApril = new Date("2026-04-01T01:00:00.000Z");
+
+		expect(await archiveCovering({ from: endOfMarch, to: startOfApril })).toBe("2026-03");
+		expect(await archiveCovering({ from: new Date("2026-04-01T00:00:00.000Z"), to: startOfApril })).toBe("2026-04");
+	});
+
+	it("says nothing rather than failing the whole page when the archive directory cannot be read", async () => {
+		// A file where the directory should be: `archiveDirectory()`'s mkdirSync refuses it, which is
+		// the narrow, real case of a path an operator has provisioned wrongly. The Logs tab's job is
+		// showing live lines, so a signpost that could not be looked up must not be the reason the tab
+		// itself stops rendering — but it must still reach the server log rather than vanish.
+		rmSync(AUDIT_ARCHIVE_DIRECTORY, { recursive: true, force: true });
+		writeFileSync(AUDIT_ARCHIVE_DIRECTORY, "");
+		const failed = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		try {
+			await expect(archiveCovering({ from: new Date("2026-03-05T00:00:00.000Z") })).resolves.toBeNull();
+			expect(failed).toHaveBeenCalledTimes(1);
+		} finally {
+			failed.mockRestore();
 		}
 	});
 });

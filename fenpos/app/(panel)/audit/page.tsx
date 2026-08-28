@@ -1,13 +1,14 @@
 import Link from "next/link";
-import { AuditFilters } from "@/app/(panel)/audit/audit-filters";
 import { AuditTable } from "@/app/(panel)/audit/audit-table";
 import { ChainBanner } from "@/app/(panel)/audit/chain-banner";
+import { Filters } from "@/app/(panel)/jobs/filters";
 import { Button } from "@/components/ui/button";
 import { auditFilterOptions, listAuditEvents } from "@/lib/audit/audit-query";
 import { isAuditSortColumn } from "@/lib/audit/audit-sort";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { AuditOutcome } from "@/lib/domain/audit";
+import { dayBound } from "@/lib/format/datetime";
 
 export const metadata = { title: "Audit record" };
 
@@ -52,8 +53,8 @@ export default async function AuditPage({
 	const outcome = params.outcome && AuditOutcome.is(params.outcome) ? params.outcome : undefined;
 	const sort = params.sort && isAuditSortColumn(params.sort) ? params.sort : undefined;
 	const desc = params.dir ? params.dir !== "asc" : undefined;
-	const from = parseDay(params.from, "start");
-	const to = parseDay(params.to, "end");
+	const from = dayBound(params.from, "start");
+	const to = dayBound(params.to, "end");
 
 	const [options, page, canVerify, canExport] = await Promise.all([
 		auditFilterOptions(),
@@ -99,17 +100,28 @@ export default async function AuditPage({
 				}}
 			/>
 
-			<AuditFilters
-				actors={options.actors.map((actor) => ({ value: actor.id, label: actor.label }))}
-				actions={options.actions.map((action) => ({ value: action, label: action }))}
-				outcomes={AuditOutcome.values.map((value) => ({ value, label: value.toLowerCase() }))}
-				selected={{
-					actor: params.actor ?? null,
-					action: params.action ?? null,
-					outcome: outcome ?? null,
-					from: params.from ?? "",
-					to: params.to ?? "",
-				}}
+			<Filters
+				filters={[
+					{
+						name: "actor",
+						label: "Actor",
+						value: params.actor ?? null,
+						options: options.actors.map((actor) => ({ value: actor.id, label: actor.label })),
+					},
+					{
+						name: "action",
+						label: "Action",
+						value: params.action ?? null,
+						options: options.actions.map((action) => ({ value: action, label: action })),
+					},
+					{
+						name: "outcome",
+						label: "Outcome",
+						value: outcome ?? null,
+						options: AuditOutcome.values.map((value) => ({ value, label: value.toLowerCase() })),
+					},
+				]}
+				range={{ from: params.from ?? "", to: params.to ?? "" }}
 			/>
 
 			<AuditTable events={page.events} />
@@ -134,23 +146,4 @@ export default async function AuditPage({
 			) : null}
 		</div>
 	);
-}
-
-/**
- * Turns a `yyyy-mm-dd` from a date input into a bound on an instant.
- *
- * The end of the day rather than its start for the upper bound, because an operator who types today's
- * date into "To" means today inclusive — a literal reading would exclude everything that happened
- * after midnight, which is everything.
- *
- * @param value the input's value, or undefined
- * @param edge which end of the day to take
- * @returns the bound, or undefined when there is nothing to bound by
- */
-function parseDay(value: string | undefined, edge: "start" | "end"): Date | undefined {
-	if (!value) {
-		return undefined;
-	}
-	const at = new Date(edge === "start" ? `${value}T00:00:00.000` : `${value}T23:59:59.999`);
-	return Number.isNaN(at.getTime()) ? undefined : at;
 }
