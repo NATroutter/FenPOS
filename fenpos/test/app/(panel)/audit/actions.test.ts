@@ -40,10 +40,10 @@ vi.mock("@/lib/env", async (importOriginal) => {
 	return { ...actual, AUDIT_ARCHIVE_DIRECTORY: join(root, "archives") };
 });
 
-const { exportAuditCsv, verifyChain } = await import("@/app/(panel)/audit/actions");
+const { auditArchiveCovering, exportAuditCsv, verifyChain } = await import("@/app/(panel)/audit/actions");
 const { archivePeriod } = await import("@/lib/archive/rotate");
 const { appendEvent, SYSTEM_ACTOR } = await import("@/lib/audit/audit-log");
-const { auditDb, prisma } = await import("@/lib/db");
+const { auditDb, logsDb, prisma } = await import("@/lib/db");
 const { AUDIT_ARCHIVE_DIRECTORY } = await import("@/lib/env");
 
 let nextAccount = 0;
@@ -96,10 +96,46 @@ async function sweptBeforeArchiving() {
 	return rows;
 }
 
+/**
+ * Puts a real audit archive for one month on disk, by recording an event in it and rotating.
+ *
+ * The clock is moved rather than the row backdated, for the reason {@link sweptBeforeArchiving} gives:
+ * `at` is one of the sixteen fields the chain hashes. Rotation would refuse to delete a prefix that did
+ * not verify, so an archive that exists here is one the whole pipeline actually produced.
+ *
+ * @param at when the archived event happened
+ * @param before the first instant after the period, which is what names the archive
+ */
+async function archivedAuditMonth(at: Date, before: Date): Promise<void> {
+	vi.useFakeTimers({ toFake: ["Date"], now: at });
+	try {
+		await appendEvent({ action: "test:archived", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+	} finally {
+		vi.useRealTimers();
+	}
+	await archivePeriod({ source: "audit", before, directory: AUDIT_ARCHIVE_DIRECTORY });
+}
+
+/**
+ * Puts a real log archive for one month on disk, the same way.
+ *
+ * Rotated rather than written as an empty file with the right name, so what these cases see is a
+ * `logs-<period>.db.gz` the log half genuinely produced — which is the file an audit reader must not be
+ * pointed at.
+ *
+ * @param at when the archived line was recorded
+ * @param before the first instant after the period
+ */
+async function archivedLogMonth(at: Date, before: Date): Promise<void> {
+	await logsDb.logEntry.create({ data: { level: "INFO", severity: 1, message: "archived line", ts: at } });
+	await archivePeriod({ source: "logs", before, directory: AUDIT_ARCHIVE_DIRECTORY });
+}
+
 beforeEach(async () => {
 	await auditDb.auditEvent.deleteMany({});
 	await auditDb.auditAnchor.deleteMany({});
 	await auditDb.auditEpoch.deleteMany({});
+	await logsDb.logEntry.deleteMany({});
 	await prisma.session.deleteMany({});
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -213,5 +249,92 @@ describe("exportAuditCsv", () => {
 
 		expect(result.csv).toBeNull();
 		expect(result.error).toContain("outcome");
+	});
+});
+
+/**
+ * The Audit tab's signpost.
+ *
+ * The tab has `from`/`to` filters and the record now archives instead of deleting, so a range that
+ * reaches back past the live window returns an empty table over rows that are sitting in an
+ * `audit-*.db.gz`. Before this branch that table was truthful; it is not any more, which is what makes
+ * this the same affordance the Logs tab already had rather than an ornament copied onto a second page.
+ *
+ * Every fixture here is a real archive, rotated by `archivePeriod` into the mocked directory, so what
+ * these cases read is what the maintenance pass actually leaves on disk.
+ */
+describe("auditArchiveCovering", () => {
+	it("offers the archive covering a range that starts before the live window", async () => {
+		await superuser();
+		await archivedAuditMonth(new Date("2026-03-15T00:00:00Z"), new Date("2026-04-01T00:00:00Z"));
+
+		const covering = await auditArchiveCovering({
+			from: new Date("2026-03-05T00:00:00.000Z"),
+			to: new Date("2026-03-20T00:00:00.000Z"),
+		});
+
+		// Goes red when a range reaching into an archived period is answered with nothing, which is the
+		// half of the signpost that lives in this function. The other half is the page's: it asks only
+		// when a range was filtered on and renders nothing when the answer is null.
+		expect(covering).toBe("2026-03");
+	});
+
+	it("does not offer a log archive to a reader of the record", async () => {
+		await superuser();
+		// The same month, from the other database. An implementation matching on the period alone — or on
+		// the filename rather than the parsed `source` — offers this one, which points somebody holding
+		// `audit:read` and possibly nothing else at the log.
+		await archivedLogMonth(new Date("2026-03-15T00:00:00Z"), new Date("2026-04-01T00:00:00Z"));
+		const range = {
+			from: new Date("2026-03-01T00:00:00.000Z"),
+			to: new Date("2026-03-31T23:59:59.999Z"),
+		};
+
+		expect(await auditArchiveCovering(range)).toBeNull();
+
+		// And the null above is an answer rather than the only answer this function has: the audit archive
+		// for exactly that month is offered as soon as there is one. Without this second half a mutation
+		// that always returned null would pass the assertion above.
+		await archivedAuditMonth(new Date("2026-03-15T00:00:00Z"), new Date("2026-04-01T00:00:00Z"));
+
+		expect(await auditArchiveCovering(range)).toBe("2026-03");
+	});
+
+	it("does not offer an archived month the range never asked about", async () => {
+		await superuser();
+		await archivedAuditMonth(new Date("2026-09-15T00:00:00Z"), new Date("2026-10-01T00:00:00Z"));
+
+		// September is after the range ends, and an archive outside the range holds nothing that was asked
+		// for — a signpost pointing at data the operator did not ask about is worse than none.
+		expect(
+			await auditArchiveCovering({
+				from: new Date("2026-03-01T00:00:00.000Z"),
+				to: new Date("2026-03-31T23:59:59.999Z"),
+			}),
+		).toBeNull();
+
+		// The teeth on the assertion above: widen the range to reach September and the same archive is
+		// offered, so the null was the range being consulted rather than the archive being invisible.
+		expect(
+			await auditArchiveCovering({
+				from: new Date("2026-03-01T00:00:00.000Z"),
+				to: new Date("2026-09-30T23:59:59.999Z"),
+			}),
+		).toBe("2026-09");
+	});
+
+	it("stays quiet in the record about having been asked", async () => {
+		await superuser();
+		await archivedAuditMonth(new Date("2026-03-15T00:00:00Z"), new Date("2026-04-01T00:00:00Z"));
+		// The one event this test wrote is now in the archive, so the live table is empty and any row
+		// found afterwards was written by the call below and by nothing else.
+		expect(await auditDb.auditEvent.count()).toBe(0);
+
+		expect(await auditArchiveCovering({ from: new Date("2026-03-05T00:00:00.000Z") })).toBe("2026-03");
+
+		// Registered `query`, not `command`, and this is what that buys: the page asks on every render of
+		// a filtered view, so a recorded success would be a row per page load, and the rows worth reading
+		// would be buried under them. Goes red if the entry's `kind` becomes `command`.
+		expect(await auditDb.auditEvent.count()).toBe(0);
 	});
 });

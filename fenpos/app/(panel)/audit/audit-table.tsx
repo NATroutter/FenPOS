@@ -37,7 +37,9 @@ const OUTCOME_STYLE: Record<AuditOutcome, string> = {
  * The columns, at module scope so the table is not rebuilt on every render.
  *
  * There is no action column beyond the detail button, and that absence is the tab's main statement:
- * the record has no edit path and no delete path, so there is nothing else a row could offer.
+ * no row has an edit path or a delete path, so there is nothing else one could offer. Audit history is
+ * removed from the panel only a whole archived month at a time, on the Archives tab, under
+ * `audit:archive-delete` — never a row, and never from here.
  */
 const columns: DataTableColumns<AuditEventSummary> = [
 	{

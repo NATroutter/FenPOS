@@ -60,6 +60,11 @@ describe("panel action registry", () => {
 		"users:set-permissions": "users:grant",
 		// Reading an account's sessions is part of reading the account.
 		"users:list-sessions": "users:read",
+		// Being pointed at the archived month a filtered range reaches into is part of reading the
+		// record: it says a period of the audit history exists and where it went, which is exactly what
+		// `audit:read` governs. A permission of its own would gate the signpost separately from the table
+		// it stands beside, so a reader could be shown an empty range and not told why.
+		"audit:archive-covering": "audit:read",
 	};
 
 	it("gives every gated entry the permission its id names, or a documented shared one", () => {

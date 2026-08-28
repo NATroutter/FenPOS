@@ -18,7 +18,7 @@ import type { ActionState } from "@/lib/panel/action-state";
  * superuser bypasses the check while being audited identically, because a superuser's actions are
  * the ones most worth having in the record.
  *
- * Two entry points rather than one, because eleven of the panel's actions shape their own result:
+ * Two entry points rather than one, because fifteen of the panel's actions shape their own result:
  * a key mint returns its one-time secret, a preview returns rendered text. {@link panelAction} is
  * for the ones that return {@link ActionState}; {@link panelQuery} is for the rest. Which wrapper
  * an action uses is a fact about its return type and says nothing about what gets audited — that

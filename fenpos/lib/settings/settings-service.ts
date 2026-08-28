@@ -638,8 +638,12 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "logs.archiveRetentionDays",
 		label: "Log archive retention",
 		description:
-			"How long a log archive is kept before it is deleted. Bounds what archiving can cost in disk; " +
-			"the audit record's archives are not deleted on a timer and have no equivalent setting.",
+			"How long a log archive is kept before it is deleted. Measured from the end of the month it " +
+			"covers, and the whole month has to have aged past this window before the file goes, so up to " +
+			"a month more than this is kept — the same rounding the log retention setting above carries, " +
+			"and for the same reason: an archive is named for a calendar month. Bounds what archiving can " +
+			"cost in disk; the audit record's archives are not deleted on a timer and have no equivalent " +
+			"setting.",
 		category: "logs",
 		type: "integer",
 		min: 1,

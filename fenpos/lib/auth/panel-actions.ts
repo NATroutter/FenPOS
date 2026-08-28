@@ -45,7 +45,7 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * working. Permission probing is still visible in the log, which is the property actually argued
  * for. When the `audit.*` settings arrive, a setting can turn query successes on.
  *
- * **`kind` decides what is written; it does not decide which wrapper an action uses.** Eleven
+ * **`kind` decides what is written; it does not decide which wrapper an action uses.** Fifteen
  * actions shape their own result and therefore go through `panelQuery` rather than `panelAction` —
  * minting a key returns the secret, scanning ports returns the ports — and most of those are
  * `command` all the same, because they change something and their success belongs in the record.
@@ -554,10 +554,11 @@ export const PANEL_ACTIONS = [
 	},
 
 	// --- Audit ---
-	// Both are reads, and both are `command`. `kind` decides what is written, not what the action
-	// does: a `query` stays quiet about succeeding because `preview` runs on every keystroke, and
-	// neither of these does. Verification is a button press, and an export is somebody taking a copy
-	// of the record away with them — the single most worth-recording read in the system.
+	// All three are reads, and the first two are `command`. `kind` decides what is written, not what
+	// the action does: a `query` stays quiet about succeeding because `preview` runs on every
+	// keystroke, and neither of those two does. Verification is a button press, and an export is
+	// somebody taking a copy of the record away with them — the single most worth-recording read in
+	// the system.
 	{
 		id: "audit:verify",
 		kind: "command",
@@ -573,6 +574,18 @@ export const PANEL_ACTIONS = [
 		module: "(panel)/audit/actions.ts",
 		exportName: "exportAuditCsv",
 		description: "Exported a filtered range of the audit record",
+	},
+	// The third one is where `query` earns its keep: the tab's signpost asks this on every render of a
+	// filtered view, so a recorded success would be a row per page load and would bury the two above.
+	// Being refused and being broken are still written, which is the whole of what `query` gives up and
+	// the whole of what it keeps.
+	{
+		id: "audit:archive-covering",
+		kind: "query",
+		permission: "audit:read",
+		module: "(panel)/audit/actions.ts",
+		exportName: "auditArchiveCovering",
+		description: "Looked for the archived month a filtered range reaches into",
 	},
 
 	// --- Archives ---

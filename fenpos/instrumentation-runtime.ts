@@ -166,8 +166,13 @@ function attachLink(): void {
  *
  * `unref()`'d, like the DNS race timer in `lib/webhooks/deliver.ts`'s `rejectAfter`, so this
  * interval can never by itself hold the process open at shutdown.
+ *
+ * Exported so that `unref()` can be asserted directly by a test, the way {@link startMaintenance} is
+ * exported for its own guard; {@link registerRuntime} is its only caller in the running server. A
+ * dropped `unref()` has no symptom a functional test can see — the deliveries still go out — and shows
+ * up only as a container that will not stop, which is why it is worth a test of its own.
  */
-function startDeliveryDrain(): void {
+export function startDeliveryDrain(): void {
 	let running = false;
 
 	const timer = setInterval(() => {

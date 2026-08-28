@@ -102,6 +102,15 @@ export function apiRoute<P extends Record<string, string> = Record<string, never
 		//
 		// The `{}` fallback is for a route with no dynamic segments, whose parameters are `{}` anyway.
 		// Next supplies a context to every route handler; nothing here depends on it doing so.
+		//
+		// **This await is the one v1 path that leaves no line, and the only exception to "every API v1
+		// request is logged".** A rejection here is outside the `try`, so it is neither recorded by
+		// `recordApiRequest` nor converted by `toErrorResponse` — the caller gets Next's own unconverted
+		// 500 and the Logs tab gets nothing. Kept here anyway, and deliberately: moving the await inside
+		// would buy that one line at the cost of every *other* line's error context, since `params` is
+		// what names what was being attempted. No rejection of this promise has been observed in
+		// practice, so the exception is narrow — but it is real, and a reader checking the headline
+		// claim should find it written down here rather than have to work it out from the brace.
 		const params = ((await context?.params) ?? {}) as P;
 
 		// Null until authentication succeeds. A `401` has no key to attribute its line to, and

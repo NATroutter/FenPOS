@@ -8,11 +8,13 @@ import { logger } from "@/lib/logger";
 /**
  * Writing the audit record.
  *
- * This is the only writer. There is no update path and no delete path here — the sole deletion that
- * exists anywhere is `lib/audit/retention.ts`, which runs oldest-first and re-anchors the chain
- * behind it, and which nothing on this path triggers: retention is `lib/maintenance/pass.ts`'s
+ * This is the only writer. There is no update path and no delete path here — the sole deletion of a
+ * live row that exists anywhere is `lib/audit/retention.ts`, which runs oldest-first and re-anchors the
+ * chain behind it, and which nothing on this path triggers: retention is `lib/maintenance/pass.ts`'s
  * hourly pass, because a sweep now archives before it deletes and that does not belong behind a
- * request.
+ * request. Past the live window the record is a set of `audit-*.db.gz` files rather than rows, and one
+ * of those can be deleted by hand on the panel's Archives tab under `audit:archive-delete` — a second
+ * way history leaves the install, reaching none of the rows this module writes.
  *
  * **It never throws.** A line lost is a nuisance; an action refused because its audit row would not
  * store is a fault; and an action that happened and then threw on the way out is the worst of the

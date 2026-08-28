@@ -24,6 +24,18 @@ import { listArchives } from "@/lib/archive/read";
  * `.db` whose compression failed, a file this codebase never wrote — is invisible to this function
  * exactly as it is invisible to `listArchives`, and so is left alone.
  *
+ * **"Left alone" means forever, and on the log side that is the whole cost.** A `logs-<period>.db`
+ * whose gzip failed is a complete archive that the Archives tab cannot list, chain verification has no
+ * reason to look for, and this function will never remove — so it is unreadable from the panel,
+ * unpruned for the life of the install, and larger than the `.db.gz` it stands in for. Nothing here
+ * repairs that, and nothing here reports it either: `lib/archive/rotate.ts`'s `compress` already writes
+ * one `logger.error` naming the file at the moment it happens, and a second complaint on every hourly
+ * pass would be an alarm nobody can silence about a file only an operator can deal with. Compressing or
+ * moving it aside is that operator's job, and until they do it the file stays exactly where it is. The
+ * audit side has the same blind spot and a harder edge on it: `deleteAuditArchive` refuses the whole
+ * operation while an uncompressed audit archive is on disk, because there the cost is a false tamper
+ * report rather than disk.
+ *
  * @param directory where archives live; must already exist, and is read but never created here
  * @param retentionDays how many days a log archive is kept, i.e. `logs.archiveRetentionDays`
  * @returns the basenames of the files removed, oldest and newest alike, in no particular order

@@ -333,6 +333,25 @@ export default async function ApiDocsPage() {
 							</P>
 
 							<P>
+								A request that never gets past authentication is recorded like every other one — a <Status>401</Status>{" "}
+								at <Mono>WARN</Mono>, attributed to <strong>nobody</strong>, because there is no key to name. Nothing
+								rate-limits those: <Mono>api.readsPerMinute</Mono> is charged against a key, and a request that
+								presented none never reaches the check. So an unauthenticated caller can write one row per request, and
+								only time removes them — log retention is by age with no row cap, so a flood evicts nothing that was
+								already there. Those rows leave the live database after <Mono>logs.retentionDays</Mono>, and while{" "}
+								<Mono>logs.archiveEnabled</Mono> is on they are then compressed into that month's archive and kept for{" "}
+								<Mono>logs.archiveRetentionDays</Mono> — a year by default, on the volume the audit record's own
+								archives sit on. An install reachable from the internet should set those retention windows with that in
+								mind.
+							</P>
+
+							<Aside>
+								The behaviour is deliberate rather than an oversight to be tuned away. A burst of <Status>401</Status>s
+								is the shape credential stuffing has, and a refusal that left no trace is exactly the request an
+								operator asked "why has this till stopped printing" cannot diagnose.
+							</Aside>
+
+							<P>
 								<Mono>/api/health</Mono> and <Mono>{`${API_BASE}/openapi.json`}</Mono> take no key, and leave no line
 								here either.
 							</P>
@@ -1194,6 +1213,16 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 								interrupted halfway still leaves a trace, and one for a request that returns no write — which says
 								whether anything left this server at all, the one thing the other line cannot know. A refusal decided
 								before the send leaves only the second of those, and it says plainly that nothing was sent.
+							</P>
+
+							<P>
+								A refusal decided <em>before this endpoint runs at all</em> leaves <strong>neither</strong> of those
+								two. A missing or unusable key, and a key without <Mono>devices:raw</Mono>, are turned away by the same
+								envelope every endpoint here sits behind, so nothing specific to raw writes is ever reached. That
+								attempt is still recorded — one line, at <Mono>WARN</Mono>, carrying the key's name when there was a key
+								to name, exactly as for any other refused request. Reconciling the two trails means knowing which
+								answers which: these rows are the writes this endpoint was actually asked to attempt, and the envelope's
+								line is every request that named it.
 							</P>
 						</Col>
 

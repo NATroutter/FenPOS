@@ -68,11 +68,20 @@ export type ApiRequestOutcome =
  * reader to wonder which of the two is load-bearing. The *settings read* above it is a different
  * matter and is guarded — see {@link recordsSuccessfulReads}.
  *
- * **An unauthenticated request still leaves a line, and nothing bounds how many.** `requireApiRead`
- * runs inside the handlers, which is past the point a `401` gets to, so a caller with no credential
- * can write one row per request until `logs.retentionDays` sweeps them. That is a real cost, taken
- * knowingly: a `401` that leaves no trace is exactly the request an operator asked "why has this till
- * stopped printing" cannot diagnose. The row names no key, because there is no key to name.
+ * **An unauthenticated request still leaves a line, and nothing bounds how many.** The gate above tests
+ * `outcome.status === "returned"` first, so a refusal is recorded whatever `logs.recordApiReads` says;
+ * and `requireApiRead` takes a key id and runs inside the handlers, which is past the point a `401`
+ * gets to, so a caller with no credential is not rate-limited at all and can write one row per request.
+ * The row names no key, because there is no key to name.
+ *
+ * **The ceiling on that is longer than a first reading of retention suggests.** `sweepLogsNow` is
+ * purely time-based with no row cap, so a flood evicts nothing already stored — it grows `logs.db` for
+ * `logs.retentionDays`. Then, because `logs.archiveEnabled` ships **on**, those rows are compressed into
+ * `logs-<period>.db.gz` rather than deleted, and kept for `logs.archiveRetentionDays`, which defaults to
+ * 365. So the practical bound on unauthenticated flooding is about a year of compressed junk, on the
+ * volume the audit archives share. That is a real cost, taken knowingly: a `401` that leaves no trace is
+ * exactly the request an operator asked "why has this till stopped printing" cannot diagnose. `/docs/api`
+ * says the same to an operator, beside the settings that are the only levers on it.
  *
  * @param entry the route's registry entry
  * @param key the authenticated caller, or null when authentication itself is what failed

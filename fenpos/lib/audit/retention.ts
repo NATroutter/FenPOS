@@ -5,11 +5,21 @@ import { claimEpoch } from "@/lib/audit/epoch";
 import { auditDb } from "@/lib/db";
 
 /**
- * Retention: home to the audit record's one deletion path, {@link removeAuditThrough}.
+ * Retention: home to the one path that deletes a row from `audit.db`, {@link removeAuditThrough}.
  *
- * There is no update path and no other delete path — not here, not in `audit-log.ts`, not in the
- * panel. That is what the `/audit` tab's missing edit and delete controls are telling the truth
- * about, and it is why `removeAuditThrough` is small enough to read in one sitting.
+ * There is no update path anywhere, and no other path that removes a live row — not here, not in
+ * `audit-log.ts`, not in the panel. That is what the `/audit` tab's missing edit and delete controls
+ * are telling the truth about, and it is why `removeAuditThrough` is small enough to read in one
+ * sitting.
+ *
+ * **That is a claim about rows in `audit.db`, and not about the record as a whole.** Since a period
+ * leaving the live window is a move into `<archives>/audit-<period>.db.gz` rather than a deletion, the
+ * rest of the record is on disk in those files — and `deleteAuditArchive`
+ * (`app/(panel)/archives/actions.ts`) removes one of them from the panel, under `audit:archive-delete`,
+ * moving the epoch behind it in the same call. It deletes no row and touches nothing here, but it is
+ * the second way audit history leaves this install, and the only one a person performs. The
+ * `audit.retentionDays` setting's own description and `/docs/security` say the same thing to an
+ * operator.
  *
  * **`sweepAuditNow` no longer deletes anything itself.** It resolves which whole calendar periods
  * have fully aged out and hands each to `lib/archive/rotate.ts`'s `archivePeriod`, which writes the

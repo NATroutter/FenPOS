@@ -172,6 +172,16 @@ describe("archivePeriod", () => {
 				string,
 				unknown
 			>;
+			// First, and by column rather than by name: this is the half the column-set guard below cannot
+			// see. `pragma_table_info` compares the archive's DDL against the live table's and says nothing
+			// about the INSERT beside that DDL, so a column added to both schemas but left out of the
+			// insert's column list exists in the archive and is null in every row of it. The line above
+			// sets all ten, so a null here is a column nothing copied — named, because the assertion has to
+			// say which one.
+			for (const [column, value] of Object.entries(row)) {
+				expect(value, `${column} was not copied into the archive`).not.toBeNull();
+			}
+
 			expect(row.level).toBe("ERROR");
 			expect(row.severity).toBe(3);
 			expect(row.message).toBe("printer on fire");

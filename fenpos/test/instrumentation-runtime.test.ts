@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { startMaintenance } from "@/instrumentation-runtime";
+import { startDeliveryDrain, startMaintenance } from "@/instrumentation-runtime";
 import { auditDb, logsDb } from "@/lib/db";
 import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -178,5 +178,40 @@ describe("startMaintenance", () => {
 		}
 
 		await finish(watcher);
+	});
+});
+
+/**
+ * The other interval this module starts, and the older of the two.
+ *
+ * Only its reference is pinned here. Everything else about the drain — the skip-while-running flag, the
+ * guard around `deliverDue` — belongs to `lib/webhooks/deliver.ts` and is covered there; what is only
+ * true of this module is that the timer it creates must not be able to keep a container alive.
+ */
+describe("startDeliveryDrain", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("does not hold the process open", () => {
+		// Real timers deliberately, for the reason the maintenance case above gives: under
+		// `vi.useFakeTimers` the returned object is the fake scheduler's and its `hasRef` answers for
+		// that scheduler rather than for the process. Nothing is awaited, so the five-second tick cannot
+		// arrive and `deliverDue` is never called.
+		const created = vi.spyOn(globalThis, "setInterval");
+
+		startDeliveryDrain();
+
+		const timer = created.mock.results[created.mock.results.length - 1].value as NodeJS.Timeout;
+		try {
+			// Goes red if `timer.unref()` is dropped: a five-second interval that keeps its reference holds
+			// the process open indefinitely, which on a container asked to stop is a hang rather than a
+			// delay.
+			expect(timer.hasRef()).toBe(false);
+		} finally {
+			// Mandatory rather than tidy: under the mutation above this timer *is* referenced, and leaving
+			// it would keep the worker alive and calling `deliverDue` every five seconds.
+			clearInterval(timer);
+		}
 	});
 });

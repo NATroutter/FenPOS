@@ -1,5 +1,7 @@
 "use server";
 
+import { periodKeyFor } from "@/lib/archive/period";
+import { listArchives } from "@/lib/archive/read";
 import { toAuditCsv } from "@/lib/audit/audit-csv";
 import { type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
 import { readEpoch } from "@/lib/audit/epoch";
@@ -13,11 +15,18 @@ import { archiveDirectory } from "@/lib/maintenance/pass";
 /**
  * Server actions behind the Audit tab.
  *
- * There is no create, no edit and no delete here, and there never will be: the record has one writer
- * (`lib/audit/audit-log.ts`) and one deleter (`lib/audit/retention.ts`), and neither is reachable
- * from the panel. Both of these are reads, registered as `command` so their successes are recorded —
- * verification is a deliberate button press, and an export is somebody taking a copy of the record
- * away with them.
+ * All three are reads. There is no create, no edit and no delete **here**, and there never will be:
+ * the record has one writer (`lib/audit/audit-log.ts`) and one deleter of live rows
+ * (`lib/audit/retention.ts`), and neither is reachable from this tab. The one way a person removes
+ * audit history from the panel is deleting an archived month on the Archives tab, under
+ * `audit:archive-delete` — `deleteAuditArchive` in `app/(panel)/archives/actions.ts`, which is
+ * deliberately not one of these and deliberately not on this page.
+ *
+ * {@link verifyChain} and {@link exportAuditCsv} are registered as `command` so their successes are
+ * recorded — verification is a deliberate button press, and an export is somebody taking a copy of the
+ * record away with them. {@link auditArchiveCovering} is a `query` and stays quiet about working,
+ * because it runs on every render of a filtered tab rather than when anybody presses anything; a row
+ * per page load would bury the two above it.
  */
 
 /** What verification found, in the shape the banner renders. */
@@ -131,6 +140,99 @@ export async function exportAuditCsv(request: ExportRequest): Promise<ExportResu
 			// The filter, and nothing else. A copy of the exported rows inside the record would double
 			// the table every time somebody pressed the button.
 			detail: { ...request },
+		},
+	);
+}
+
+/**
+ * The stretch of time a filtered view of the record is asking about.
+ *
+ * Both ends optional, because the tab's two date fields are set independently: "everything since
+ * March" and "everything up to March" are both ranges an operator can ask for, and either can reach
+ * back past the live window. A range with neither end is the whole record, which is the unfiltered tab,
+ * and the page does not ask this about it: an archive offered under every default page load is scenery,
+ * and stops being read long before it matters.
+ *
+ * Deliberately not `ExportRequest`'s strings. This one is called from the page itself rather than from
+ * the browser, so the bounds have already been parsed by `dayBound` and re-spelling them as text would
+ * mean parsing them a second time, in a second place, with a second idea of what a bad one means.
+ */
+export interface AuditRange {
+	/** The earliest moment asked for. Absent means the range is open at that end. */
+	from?: Date;
+	/** The latest moment asked for. Absent means "up to now", which is what an open range ends at. */
+	to?: Date;
+}
+
+/**
+ * Finds the archived audit period a filtered range reaches into, if there is one.
+ *
+ * The Audit tab's signpost, and the sibling of `archiveCovering` in `lib/logs/log-service.ts`. That one
+ * answers this question for the Logs tab and offers **log** archives only, correctly: its caller holds
+ * `logs:read` and may hold nothing else. This one is the same question about the other record, so it
+ * filters to `source === "audit"` and is gated by `audit:read`.
+ *
+ * **It has to exist, and it could not simply be that function called twice.** Before this branch an
+ * aged-out audit row was deleted, so a filtered range that found nothing was telling the truth — the
+ * rows really were gone. They are archived now, so the same empty table has become the exact failure
+ * the split was supposed to remove rather than relocate: the data is somewhere the operator was not
+ * told to look. On the record this system calls evidence, that is worse than it is on the log, and
+ * archiving is not optional here the way `logs.archiveEnabled` makes it optional there.
+ *
+ * **Which archive covers a range.** An `audit` archive covers it when its period holds any moment the
+ * range asks for: `periodKeyFor(from) <= periodKey <= periodKeyFor(to ?? now)`, with a range open at
+ * the start matching every period up to its end. When several do, the **oldest** is returned, because
+ * that is where the requested history begins and so the period to open first. An archive later than the
+ * range's end is not offered: it holds nothing that was asked for, and a signpost pointing outside the
+ * range is worse than none. `archiveCovering`'s own comment carries the longer argument for each of
+ * these, including why a listed archive is already evidence that the range reaches back before the live
+ * window and why a period whose *compression* failed is invisible to both of us.
+ *
+ * **UTC, from `periodKeyFor` and nowhere else.** Archive periods are named in UTC deliberately, and a
+ * boundary that moved with the host's zone would put a range ending at 22:30 on the last of March into
+ * April on this machine and not on the next one.
+ *
+ * **Never a reason the tab fails to render.** A refusal and a broken archive directory both answer
+ * null, and the page renders no banner — the same silence as "nothing has been archived yet", which is
+ * the honest answer when nobody can tell. The refusal and the failure are still written into the record
+ * by the gate; only the success is not, because this runs on every filtered render.
+ *
+ * `/archives`, which the banner links to, opens for a caller holding **either** `logs:read` or
+ * `audit:read` (`archives:list` is `custom` for exactly that reason), so the link works for a reader
+ * who holds nothing but the permission that got them this answer.
+ *
+ * @param range what the filtered view is asking about; at least one end should be set, or the answer is
+ *   about the whole record rather than about anything the operator narrowed to
+ * @returns the period key of the oldest audit archive holding any of it, e.g. `2026-03`, or null when
+ *   no archive does, when the caller may not read the record, or when the directory could not be read
+ */
+export async function auditArchiveCovering(range: AuditRange): Promise<string | null> {
+	return panelQuery(
+		"audit:archive-covering",
+		async () => {
+			// The empty string sorts before every `yyyy-mm`, so an open start matches every period rather
+			// than none — which is what "everything up to March" asks for.
+			const first = range.from === undefined ? "" : periodKeyFor(range.from);
+			const last = periodKeyFor(range.to ?? new Date());
+
+			let covering: string | null = null;
+
+			for (const archive of await listArchives(archiveDirectory())) {
+				if (archive.source !== "audit" || archive.periodKey < first || archive.periodKey > last) {
+					continue;
+				}
+				// `periodKey` is `yyyy-mm` with the month zero-padded, so comparing two of them as text
+				// orders them exactly as comparing them as dates would.
+				if (covering === null || archive.periodKey < covering) {
+					covering = archive.periodKey;
+				}
+			}
+
+			return covering;
+		},
+		{
+			refused: () => null,
+			failed: () => null,
 		},
 	);
 }
