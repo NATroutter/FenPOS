@@ -359,12 +359,12 @@ export async function verifyAuditChain(
 	// begins after the chain does, and the rows in between are gone rather than altered.
 	//
 	// `archived > 0` is what says this walk actually opened the archived segment. Without it,
-	// `verifyAuditChain(db, { epoch })` with no `archiveDirectory` — which is the shape the panel's
-	// `verifyChain` calls in — would answer "intact from seq N" while having read nothing older than the
-	// anchor, claiming verification of rows it never touched. That is this outcome's own false
-	// reassurance pointed the other way, and it is worse than the accusation it replaced. Where a
-	// directory *was* given, {@link missingArchive} has already refused an epoch with no archive behind
-	// it, so reaching here with an epoch means at least one archived row verified against it.
+	// `verifyAuditChain(db, { epoch })` with no `archiveDirectory` — a call nothing in the options
+	// forbids — would answer "intact from seq N" while having read nothing older than the anchor,
+	// claiming verification of rows it never touched. That is this outcome's own false reassurance
+	// pointed the other way, and it is worse than the accusation it replaced. Where a directory *was*
+	// given, {@link missingArchive} has already refused an epoch with no archive behind it, so reaching
+	// here with an epoch means at least one archived row verified against it.
 	if (epoch !== null && epoch.prevHash !== GENESIS_HASH && archived > 0) {
 		return { ok: "incomplete", verifiedFrom: epoch.seq, ...verified };
 	}

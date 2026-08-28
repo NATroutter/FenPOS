@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Download, ShieldAlert, ShieldQuestion } from "lucide-react";
+import { CheckCircle2, Download, type LucideIcon, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { type ChainStatus, type ExportRequest, exportAuditCsv, verifyChain } from "@/app/(panel)/audit/actions";
@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button";
 /**
  * Chain status, and the export button beside it.
  *
- * **Verification runs on request, not on render.** The walk recomputes a SHA-256 for every retained
- * row; paying that on each load of a page that shows fifty of them would make the tab's cost the
- * whole table's size. So the banner is always here, and it says the chain has not been verified in
- * this session until somebody asks — which is also what gives `audit:verify` something to gate.
+ * **Verification runs on request, not on render.** The walk recomputes a SHA-256 for every row in the
+ * record, decompressing each archived period to reach the ones no longer in the database; paying that
+ * on each load of a page that shows fifty rows would make the tab's cost the whole record's size. So
+ * the banner is always here, and it says the chain has not been verified in this session until
+ * somebody asks — which is also what gives `audit:verify` something to gate.
  *
  * Both controls are rendered only when the account holds the permission behind them. The actions
  * check again regardless; that is the boundary, and this is the courtesy.
@@ -33,14 +34,7 @@ export function ChainBanner({
 	const [verifying, startVerify] = useTransition();
 	const [exporting, startExport] = useTransition();
 
-	const tone =
-		status.ok === true
-			? "border-emerald-900 bg-emerald-950/40 text-emerald-300"
-			: status.ok === false
-				? "border-destructive/40 bg-destructive/10 text-destructive"
-				: "border-border bg-muted/40 text-muted-foreground";
-
-	const Icon = status.ok === true ? CheckCircle2 : status.ok === false ? ShieldAlert : ShieldQuestion;
+	const { tone, Icon } = presentation(status.ok);
 
 	return (
 		<div className={`flex flex-wrap items-center gap-3 rounded-md border p-3 ${tone}`}>
@@ -80,6 +74,38 @@ export function ChainBanner({
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * The colour and the icon for each of the four things this banner can be saying.
+ *
+ * **An incomplete chain is drawn as a note rather than as a warning, and that is the point of it.** A
+ * chain that verifies from the epoch onwards is a correctly configured install whose oldest history
+ * left before archiving existed to catch it — the state every install upgraded from the storage
+ * foundation is in. Sky is the hue this panel keeps for a state rather than a verdict — the Jobs tab's
+ * in-flight rows, the reference's reads — and of the three that do carry one, emerald says it worked,
+ * amber says somebody has something to attend to and destructive says the record was altered. Muted is
+ * spoken for by the branch below it, where nobody has asked yet. What actually distinguishes this from
+ * a whole chain is `describeVerification`'s sentence, which names the `seq` verification reaches back
+ * to; the colour's job is only to not contradict it.
+ *
+ * Compared by value at every branch and never for truthiness: `"incomplete"` is a truthy string, so
+ * `ok ? … : …` would draw it exactly as a whole chain and no compiler would say so.
+ *
+ * @param ok what the walk found, or null before anybody has asked in this session
+ * @returns the border, background and text classes, and the icon that goes beside them
+ */
+function presentation(ok: ChainStatus["ok"]): { tone: string; Icon: LucideIcon } {
+	if (ok === true) {
+		return { tone: "border-emerald-900 bg-emerald-950/40 text-emerald-300", Icon: CheckCircle2 };
+	}
+	if (ok === "incomplete") {
+		return { tone: "border-sky-900 bg-sky-950/40 text-sky-300", Icon: ShieldCheck };
+	}
+	if (ok === false) {
+		return { tone: "border-destructive/40 bg-destructive/10 text-destructive", Icon: ShieldAlert };
+	}
+	return { tone: "border-border bg-muted/40 text-muted-foreground", Icon: ShieldQuestion };
 }
 
 /**

@@ -2,11 +2,13 @@
 
 import { toAuditCsv } from "@/lib/audit/audit-csv";
 import { type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
+import { readEpoch } from "@/lib/audit/epoch";
 import { describeVerification, verifyAuditChain } from "@/lib/audit/verify";
 import { panelQuery } from "@/lib/auth/panel-action";
 import { auditDb } from "@/lib/db";
 import { AuditOutcome } from "@/lib/domain/audit";
 import { ApiError } from "@/lib/errors";
+import { archiveDirectory } from "@/lib/maintenance/pass";
 
 /**
  * Server actions behind the Audit tab.
@@ -21,14 +23,17 @@ import { ApiError } from "@/lib/errors";
 /** What verification found, in the shape the banner renders. */
 export interface ChainStatus {
 	/**
-	 * True when nothing is wrong, false when the chain is broken, null when it has not been run this
-	 * session.
+	 * True when the whole record verified, `"incomplete"` when everything the walk could reach did,
+	 * false when the chain is broken, null when it has not been run this session.
 	 *
-	 * Two states rather than `ChainVerification`'s three: this drives a colour and an icon, and an
-	 * unverifiable prefix is not a red banner — the message carries what is different about it. See
-	 * {@link verifyChain} for why that state cannot currently reach here at all.
+	 * `ChainVerification`'s three states, carried through rather than collapsed: this drives a colour
+	 * and an icon, and history that left before archiving existed is a retention setting rather than an
+	 * incident — a red banner over it is the false alarm the third state was added to end.
+	 *
+	 * Spelled out rather than aliased to `ChainVerification["ok"]`, so a state added there is a type
+	 * error here instead of a value the banner has no branch for and draws as "not verified".
 	 */
-	ok: boolean | null;
+	ok: boolean | "incomplete" | null;
 	/** The operator-facing sentence, from `describeVerification`. */
 	message: string;
 }
@@ -53,31 +58,43 @@ export interface ExportResult {
 const EXPORT_LIMIT = 10_000;
 
 /**
- * Walks the retained chain and reports what it found.
+ * Walks the record and reports what it found.
  *
- * Run on demand rather than on every render of the tab: the walk recomputes a SHA-256 per row across
- * the whole table, and a page that shows fifty rows should not cost what two hundred thousand cost.
+ * Run on demand rather than on every render of the tab, and more so now than when only the live rows
+ * were walked: this recomputes a SHA-256 per row and decompresses every period the install has ever
+ * archived. A page that shows fifty rows must not cost that on arrival, so it costs it when somebody
+ * presses the button — which is also what gives `audit:verify` something to gate.
  *
- * **The retained chain, not the archives.** No archive directory is passed and no epoch with it, which
- * is the same reason: walking the archives means decompressing every period the install has ever
- * written, and this runs behind a button on a page. `pnpm audit:verify` is the command that covers the
- * whole record, and it is the one an operator reaches for when they have stopped trusting this page.
+ * **The archives and the epoch are both passed, and neither is optional.** Without the directory the
+ * answer covers only what is still in the database, which on an install that archives is a fraction of
+ * the record presented as the whole of it. Without the epoch a walk cannot tell history swept before
+ * archiving existed — the state every install upgraded from the storage foundation is in — from an
+ * archive somebody deleted, and reports the first as `link-mismatch`: an accusation of tampering
+ * against a retention setting nobody touched. `verifyAuditChain` answers `"incomplete"` only when it
+ * has both, so passing one without the other would leave that state unreachable from this page.
  *
- * @returns whether the chain is whole, and the sentence to show
+ * `pnpm audit:verify` still exists and still asks the same question of the same files. It is the one an
+ * operator reaches for when they have stopped trusting this page, which is the only thing this page
+ * cannot do for them.
+ *
+ * @returns which of the three states the record is in, and the sentence to show
  */
 export async function verifyChain(): Promise<ChainStatus> {
 	// The type argument is given rather than inferred: without it `T` is fixed by the body's return,
-	// where `ok` is a `boolean`, and the `refused`/`failed` shapes carrying `ok: null` no longer fit.
+	// where `ok` is the walk's own three states, and the `refused`/`failed` shapes carrying `ok: null`
+	// no longer fit.
 	return panelQuery<ChainStatus>(
 		"audit:verify",
 		async () => {
-			const result = await verifyAuditChain(auditDb);
-			// `!== false` rather than `result.ok`, which no longer fits: `ChainVerification.ok` has an
-			// `"incomplete"` member, and it is a truthy string. That member needs an epoch to arise and
-			// none is passed above, so it cannot reach here today — this is written for the day one is,
-			// and it resolves the right way round. An unverifiable prefix is not a broken chain, and the
-			// banner turning red over a retention setting is the false alarm the third state exists to end.
-			return { ok: result.ok !== false, message: describeVerification(result) };
+			const result = await verifyAuditChain(auditDb, {
+				archiveDirectory: archiveDirectory(),
+				epoch: await readEpoch(),
+			});
+			// Carried through rather than narrowed. `ChainVerification.ok` has an `"incomplete"` member and
+			// it is a truthy string, so every collapse of it to a boolean — `result.ok !== false` included —
+			// hands the banner the state that means "whole", which claims verification reached further back
+			// than it did.
+			return { ok: result.ok, message: describeVerification(result) };
 		},
 		{
 			refused: () => ({ ok: null, message: "You do not have permission to verify the audit chain." }),

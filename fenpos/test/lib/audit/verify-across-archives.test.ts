@@ -131,8 +131,9 @@ describe("verifyAuditChain across an archive boundary", () => {
 		await auditDb.auditAnchor.create({ data: { id: 1, seq: rows[2].seq, hash: rows[2].hash } });
 		await archivePeriod({ source: "audit", before: new Date("2026-03-01T00:00:00Z"), directory });
 
-		// The same install as the case above, asked the question the panel asks: an epoch, but no archive
-		// directory, so nothing in front of the anchor is opened at all.
+		// The same install as the case above, asked with an epoch but no archive directory, so nothing in
+		// front of the anchor is opened at all. Both callers that exist pass a directory; this is what
+		// holds the answer honest for one that does not.
 		const result = await verifyAuditChain(auditDb, { epoch: await readEpoch() });
 
 		// Goes red if `"incomplete"` is returned on the strength of the epoch alone. That answer reads
