@@ -1,19 +1,23 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
+import Database from "better-sqlite3";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArchiveRef, ArchiveRow } from "@/app/(panel)/archives/actions";
 
 /**
- * The Archives tab's two actions.
+ * The Archives tab's three actions.
  *
- * Both are reads of a file that used to be rows, and the whole point of the tab is that an archive
- * nobody can open is storage rather than a record.
+ * Two are reads of a file that used to be rows, and the whole point of the tab is that an archive
+ * nobody can open is storage rather than a record. The third deletes one, which is the only deliberate
+ * destruction of evidence the panel offers and is held to a great deal more.
  *
- * **This file carries the gate for both actions, not just their bodies.** They are registered
+ * **This file carries the gate for the two reads, not just their bodies.** They are registered
  * `custom`, because which permission governs a call is decided by the period the call names, and
  * `permission-matrix.test.ts` walks only `command` and `query`. So what the matrix does generically
  * for every other action is done specifically here: refused holding neither permission, allowed
- * holding either, and refused per source in both directions.
+ * holding either, and refused per source in both directions. The delete needs none of that — it has
+ * one permission, is registered `command`, and the matrix covers its gate like any other action's.
  */
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 // `revalidatePath` needs a request Next only builds while rendering, so the delete's refresh is stubbed
@@ -154,6 +158,53 @@ async function auditArchive(periodKey: string, actions: string[]): Promise<{ seq
  */
 function auditArchiveExists(periodKey: string): boolean {
 	return existsSync(join(AUDIT_ARCHIVE_DIRECTORY, `audit-${periodKey}.db.gz`));
+}
+
+/**
+ * Leaves a finished archive uncompressed, exactly as a failed gzip does.
+ *
+ * `lib/archive/rotate.ts` writes `audit-<period>.db`, verifies it, and only then compresses — so a gzip
+ * that fails leaves this file behind, complete, holding rows that are in it and nowhere else.
+ * `listArchives` matches `.db.gz` alone and cannot see it; `verifyAuditChain` matches both and walks it.
+ * Reproduced from a real archive rather than written by hand, so it is the file rotation actually
+ * leaves.
+ *
+ * @param periodKey the period to leave uncompressed
+ */
+function decompressInPlace(periodKey: string): void {
+	const compressed = join(AUDIT_ARCHIVE_DIRECTORY, `audit-${periodKey}.db.gz`);
+	writeFileSync(join(AUDIT_ARCHIVE_DIRECTORY, `audit-${periodKey}.db`), gunzipSync(readFileSync(compressed)));
+	rmSync(compressed);
+}
+
+/**
+ * Empties an archive's table, leaving a compressed file with no events in it.
+ *
+ * Nothing in production writes one: `archivePeriod` archives a period because it has rows. It is built
+ * by taking a real archive's own schema and removing what is in it, rather than by composing a file
+ * from a hand-written DDL that could drift from the real one — the defensive branch under test is about
+ * an archive that holds nothing, not about a file shaped differently.
+ *
+ * Decompressed to the temporary root above the archive directory, so the working copy is never itself
+ * mistaken for an archive by anything scanning that directory.
+ *
+ * @param periodKey the period to empty
+ */
+function emptyArchive(periodKey: string): void {
+	const compressed = join(AUDIT_ARCHIVE_DIRECTORY, `audit-${periodKey}.db.gz`);
+	const plain = join(dirname(AUDIT_ARCHIVE_DIRECTORY), `emptied-${periodKey}.db`);
+	writeFileSync(plain, gunzipSync(readFileSync(compressed)));
+
+	const handle = new Database(plain);
+	try {
+		handle.prepare("DELETE FROM audit_events").run();
+	} finally {
+		// Before the file is read back and removed: Windows will not remove a file with an open handle.
+		handle.close();
+	}
+
+	writeFileSync(compressed, gzipSync(readFileSync(plain)));
+	rmSync(plain, { force: true });
 }
 
 /**
@@ -581,6 +632,67 @@ describe("deleteAuditArchive", () => {
 		expect(result.error).toContain("No archive");
 		expect(existsSync(join(AUDIT_ARCHIVE_DIRECTORY, "logs-2026-01.db.gz"))).toBe(true);
 		expect(await readEpoch()).toEqual(february);
+	});
+
+	it("refuses every delete while an audit archive on disk was never compressed", async () => {
+		await account([], true);
+		const january = await auditArchive("2026-01", ["test:january"]);
+		await auditArchive("2026-02", ["test:february"]);
+		await auditArchive("2026-03", ["test:march"]);
+		decompressInPlace("2026-02");
+
+		const result = await deleteAuditArchive("2026-01");
+
+		// The consequence first, because it is the whole of the finding. `listArchives` cannot see
+		// `audit-2026-02.db`, so without this guard 2026-01 looks like the oldest of *two* and is deleted,
+		// and 2026-03's first row is written as the epoch. The next walk — which does see the
+		// uncompressed file — then starts on 2026-02 from the wrong link and reports `anchor-mismatch`:
+		// "the record was changed after it was written", said of a record nobody changed, reached through
+		// the panel's own delete button.
+		const verified = await verifyAuditChain(auditDb, {
+			archiveDirectory: AUDIT_ARCHIVE_DIRECTORY,
+			epoch: await readEpoch(),
+		});
+		expect(verified).toMatchObject({ ok: true });
+
+		expect(result.error).toContain("compressed");
+		expect(auditArchiveExists("2026-01")).toBe(true);
+		expect(await readEpoch()).toEqual(january);
+	});
+
+	it("refuses when the archive that would become the oldest holds no events", async () => {
+		await account([], true);
+		const january = await auditArchive("2026-01", ["test:january"]);
+		await auditArchive("2026-02", ["test:february"]);
+		await auditArchive("2026-03", ["test:march"]);
+		emptyArchive("2026-02");
+
+		const result = await deleteAuditArchive("2026-01");
+
+		// An archive with nothing in it offers no `seq` and no `prevHash`, so there is nothing to move the
+		// epoch to. Read before the delete precisely so this costs nothing: goes red if the empty archive
+		// is discovered after the file is gone, which would leave the epoch naming a period that has been
+		// deleted.
+		expect(result.error).toContain("no events");
+		expect(auditArchiveExists("2026-01")).toBe(true);
+		expect(await readEpoch()).toEqual(january);
+	});
+
+	it("refuses a period key with a line of its own after it", async () => {
+		await account([], true);
+		await auditArchive("2026-01", ["test:january"]);
+		await auditArchive("2026-02", ["test:february"]);
+
+		const result = await deleteAuditArchive("2026-01\nand whatever else");
+
+		// Pins the absence of the `m` flag on `PERIOD_KEY`, which is the one edit that would let this
+		// through: in ECMAScript a bare `$` asserts the end of the input, and `m` redefines it as the end
+		// of a *line*. Such a key could still delete nothing — no listed archive is named after it — but
+		// it reaches the audit row's target, and what goes into the record is not a caller's to choose.
+		expect(result.error).toContain("not an archive period");
+		expect(auditArchiveExists("2026-01")).toBe(true);
+		const row = await newestAuditRow();
+		expect(row.targetId).toBeNull();
 	});
 
 	it("reports a period key it cannot read rather than deleting anything", async () => {

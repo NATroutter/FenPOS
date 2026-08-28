@@ -1,6 +1,6 @@
 "use server";
 
-import { rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { revalidatePath } from "next/cache";
 import { type ArchiveDescriptor, listArchives, readArchive } from "@/lib/archive/read";
@@ -166,9 +166,9 @@ const LIST_FAILURE_MESSAGE =
 const NOT_A_PERIOD_MESSAGE = "That is not an archive period.";
 
 /**
- * The four ways {@link deleteAuditArchive} refuses a period it will not remove.
+ * The five ways {@link deleteAuditArchive} refuses a period it will not remove.
  *
- * All four are raised as `invalid_type`, as is {@link NOT_A_PERIOD_MESSAGE} — the code every other
+ * All five are raised as `invalid_type`, as is {@link NOT_A_PERIOD_MESSAGE} — the code every other
  * panel action reaches for when an argument names something it cannot act on. None of them ever
  * reaches the public API, because a server action is not an endpoint, so the code here does one job:
  * it tells {@link panelAction} that this is a message written to be read rather than an internal
@@ -190,6 +190,21 @@ const OLDER_ARCHIVE_FIRST_MESSAGE =
 /** See {@link NO_SUCH_ARCHIVE_MESSAGE}. */
 const NO_NEW_BEGINNING_MESSAGE =
 	"The next audit archive holds no events, so there is nowhere for the record to begin from.";
+
+/** See {@link NO_SUCH_ARCHIVE_MESSAGE}, and {@link uncompressedAuditArchive} for what it is about. */
+const UNCOMPRESSED_ARCHIVE_MESSAGE =
+	"An audit archive in this directory was never compressed, so this list is not the one chain " +
+	"verification reads. Compress it or move it aside before deleting anything.";
+
+/**
+ * Names an audit archive that was written but never compressed: `audit-<periodKey>.db`, no `.gz`.
+ *
+ * `lib/archive/rotate.ts` leaves exactly this when gzip fails — a complete, verified archive whose rows
+ * are in it and nowhere else — and can leave one beside its own `.db.gz` when the post-compress delete
+ * fails. `listArchives` matches only `.db.gz` and says so; `verifyAuditChain` matches both and prefers
+ * the `.db`, deliberately, because those rows are part of the chain either way.
+ */
+const UNCOMPRESSED_AUDIT_ARCHIVE = /^audit-\d{4}-\d{2}\.db$/;
 
 /**
  * The two registry ids this module writes rows under.
@@ -222,7 +237,16 @@ const ARCHIVE_SOURCES = new Map<string, NamedSource>([
 /** Every permission that governs any archive, derived rather than spelled a second time. */
 const ARCHIVE_PERMISSIONS: readonly PanelPermission[] = [...ARCHIVE_SOURCES.values()].map((named) => named.permission);
 
-/** The shape `periodKeyFor` writes, and so the only shape a listed archive can ever carry. */
+/**
+ * The shape `periodKeyFor` writes, and so the only shape a listed archive can ever carry.
+ *
+ * **The absence of the `m` flag is load-bearing, and is pinned by a test.** In ECMAScript `$` without
+ * it asserts the end of the input and nothing else — unlike PCRE and Python, where it also matches
+ * before a final newline. Adding `m` here would make `$` mean "end of a line", so `"2026-01\nanything"`
+ * would pass; the key could still open and delete nothing, since no listed archive is named that, but
+ * both callers put what they were handed into an audit row's `target`, and that is a caller choosing
+ * what goes into the record.
+ */
 const PERIOD_KEY = /^\d{4}-\d{2}$/;
 
 /** An archive a caller asked for, once its fields have been checked rather than assumed. */
@@ -372,6 +396,23 @@ export async function deleteAuditArchive(periodKey: string): Promise<ActionState
  * all reports the surviving live rows as though they were the whole record, and there is no third
  * answer that is true.
  *
+ * **"Oldest" and "newest" have to mean the same thing here as they do to the verifier, and one file
+ * can make them differ.** This walks `listArchives`, which matches `<source>-<period>.db.gz` and
+ * nothing else; `verifyAuditChain` walks `audit-<period>.db` *and* `.db.gz`, deliberately, because
+ * `lib/archive/rotate.ts` leaves an uncompressed archive behind when gzip fails and its rows are in it
+ * and nowhere else. Positions taken in the narrower list are then wrong in the wider one: with
+ * `2026-01.db.gz`, `2026-02.db` and `2026-03.db.gz` on disk, deleting `2026-01` looks like removing the
+ * oldest of two and is actually removing the oldest of three *and* writing `2026-03`'s first row as the
+ * epoch, which starts the next walk on `2026-02` from the wrong link — `anchor-mismatch`, rendered as
+ * "the record was changed after it was written", about a record nobody changed. The other state
+ * rotation can leave, a `.db` beside its own `.db.gz`, is quieter and no better: the period would be
+ * deleted and stepped past while its rows are still on disk in the file this list cannot see.
+ *
+ * So an uncompressed audit archive refuses the **whole** operation rather than being read here. Giving
+ * this a second way to read an archive would put a second opinion about what an archive is next to the
+ * verifier's, which is the disagreement `lib/archive/read.ts` declined to start and this is not the
+ * place to start it either.
+ *
  * **Order matters at every step.** The period that will become the oldest is read *before* anything is
  * deleted, so an archive whose first row cannot be read costs nothing rather than leaving an epoch with
  * nowhere to point. The file then goes before the epoch moves: a crash in that window leaves an
@@ -380,17 +421,26 @@ export async function deleteAuditArchive(periodKey: string): Promise<ActionState
  * on and report tampering instead.
  *
  * @param periodKey the audit period named by the caller, still unchecked
- * @throws ApiError when the key is unreadable, names no audit archive, or names one that may not go
+ * @throws ApiError when the key is unreadable, when an uncompressed audit archive is present, or when
+ *   the period names no audit archive or one that may not go
  */
 async function removeAuditArchive(periodKey: string): Promise<void> {
 	if (typeof periodKey !== "string" || !PERIOD_KEY.test(periodKey)) {
 		throw new ApiError("invalid_type", NOT_A_PERIOD_MESSAGE);
 	}
 
-	// Audit only, and oldest first. `listArchives` promises no order at all, and both checks below are
-	// about position — an unordered list would make "the oldest" whichever file the directory happened
-	// to hand back first.
-	const archives = (await listArchives(archiveDirectory()))
+	const directory = archiveDirectory();
+	// Before anything is positioned, and regardless of which period was named: while one of these is on
+	// disk, no position in the list below is the position the verifier would agree with.
+	if (uncompressedAuditArchive(directory) !== null) {
+		throw new ApiError("invalid_type", UNCOMPRESSED_ARCHIVE_MESSAGE);
+	}
+
+	// Audit only, and oldest first — and, the guard above having run, oldest first among exactly the
+	// audit archives `verifyAuditChain` will walk. `listArchives` promises no order at all, and both
+	// checks below are about position: an unordered list would make "the oldest" whichever file the
+	// directory happened to hand back first.
+	const archives = (await listArchives(directory))
 		.filter((archive) => archive.source === "audit")
 		.sort((left, right) => left.periodKey.localeCompare(right.periodKey));
 
@@ -414,13 +464,39 @@ async function removeAuditArchive(periodKey: string): Promise<void> {
 }
 
 /**
+ * Finds an audit archive that was never compressed, if the directory holds one.
+ *
+ * The one file that can make this module's idea of "the oldest audit archive" differ from the
+ * verifier's — see {@link UNCOMPRESSED_AUDIT_ARCHIVE} and {@link removeAuditArchive}. Read straight
+ * from the directory rather than through `listArchives`, which is precisely the reader that cannot see
+ * these.
+ *
+ * `pruneLogArchives` (`lib/archive/prune.ts`) has the same blind spot and is safe under it, because
+ * leaving one log archive unpruned costs disk and nothing else. Here the cost is a verification that
+ * accuses an operator of tampering, so it is refused rather than noted.
+ *
+ * @param directory where the archives are
+ * @returns the name of one such file, or null when there is none
+ */
+function uncompressedAuditArchive(directory: string): string | null {
+	for (const name of readdirSync(directory)) {
+		if (UNCOMPRESSED_AUDIT_ARCHIVE.test(name)) {
+			return name;
+		}
+	}
+	return null;
+}
+
+/**
  * Reads the row an archive's chain starts on.
  *
  * Exactly what the epoch records: the oldest archived `seq` and the hash it links back to, which is
  * what `verifyAuditChain` walks the oldest archive from. Read out of the file rather than derived from
  * anything the caller said, because the file is what the walk will actually open.
  *
- * @param archive the period that is about to become the oldest on disk
+ * @param archive the next compressed audit archive after the one being deleted — which is the period
+ *   about to become the oldest only because {@link removeAuditArchive} has already refused to proceed
+ *   while an uncompressed one, invisible to `listArchives` and not to the verifier, is on disk
  * @returns the `seq` and `prevHash` of its first event
  * @throws ApiError when it holds no events at all
  */

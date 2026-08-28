@@ -108,10 +108,12 @@ function isPrismaCode(error: unknown, code: string): boolean {
  * leaving the walk to report a missing file.
  *
  * **This function does not decide what the epoch should become, and cannot.** It writes what it is
- * given. What makes the values right is the caller's own rule — that only the oldest archive may go and
- * never the newest, so the file that becomes the oldest is still on disk to be read for the `seq` and
- * `prevHash` written here. Called with anything else, this will happily record a beginning the archives
- * do not have.
+ * given. What makes the values right is entirely the caller's: it deletes only the oldest audit archive
+ * and never the newest, so a file remains to be read for the `seq` and `prevHash` written here — and it
+ * refuses to act at all while an uncompressed `audit-<period>.db` is on disk, since that file is one
+ * `verifyAuditChain` walks and `listArchives` cannot see, which would otherwise make the caller's
+ * "oldest" a different file from the walk's. Called with anything else, this will happily record a
+ * beginning the archives do not have.
  *
  * @param seq the oldest event still archived
  * @param prevHash that event's `prevHash`
