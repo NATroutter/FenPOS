@@ -71,12 +71,15 @@ beforeEach(async () => {
 	});
 });
 
+/** The print route's path parameters, named once so every call below agrees with `PrintParams`. */
+type PrintParams = { agent: string; device: string };
+
 /**
  * @param credential the bearer token to present
  * @param device the device to address
  * @returns the arguments to spread into a print route handler
  */
-function printCall(credential = token, device = "kitchen"): [Request, { params: Promise<Record<string, string>> }] {
+function printCall(credential = token, device = "kitchen"): [Request, { params: Promise<PrintParams> }] {
 	return [
 		new Request(`https://fenpos.test/api/v1/print/${agentName}/${device}`, {
 			method: "POST",
@@ -101,7 +104,7 @@ async function lines() {
 
 describe("apiRoute", () => {
 	it("logs INFO for a successful write", async () => {
-		const route = apiRoute(PRINT, async () => ({
+		const route = apiRoute<PrintParams>(PRINT, async () => ({
 			response: Response.json({ jobId: "j1", status: "QUEUED", lines: 24 }, { status: 202 }),
 			message: "Printed 24 lines to 'kitchen'",
 			target: { deviceName: "kitchen" },
@@ -162,7 +165,7 @@ describe("apiRoute", () => {
 	});
 
 	it("logs WARN for insufficient permission", async () => {
-		const route = apiRoute(PRINT, async () => {
+		const route = apiRoute<PrintParams>(PRINT, async () => {
 			throw new Error("the handler must not run for a caller the wrapper refused");
 		});
 
@@ -181,7 +184,7 @@ describe("apiRoute", () => {
 		// throws `unknown_device`; the wrapper catches a 404 and has to classify it as the refusal it
 		// actually is — per `lib/errors.ts`, that code exists so a caller cannot map the install's
 		// printers, which makes it authorization wearing a 404's clothes.
-		const route = apiRoute(PRINT, async ({ key, params }) => {
+		const route = apiRoute<PrintParams>(PRINT, async ({ key, params }) => {
 			await requireGrantedDevice(key, params.agent, params.device);
 			throw new Error("the grant check must have refused before this line");
 		});
@@ -197,7 +200,7 @@ describe("apiRoute", () => {
 	});
 
 	it("logs ERROR for a validation failure", async () => {
-		const route = apiRoute(PRINT, async () => {
+		const route = apiRoute<PrintParams>(PRINT, async () => {
 			throw new ApiError("invalid_type", "'bytes' is not valid base64.");
 		});
 
@@ -210,6 +213,58 @@ describe("apiRoute", () => {
 		expect(rows[0].message).toContain("invalid_type");
 	});
 
+	it("logs ERROR for a handler that threw something other than an ApiError", async () => {
+		// The third row of the level table, and the only branch of either module nothing else reaches.
+		// Tests 4 and 5 do hand the wrapper handlers that throw plain `Error`s, but by construction
+		// those handlers never run — that is exactly what they assert — so neither pins this path.
+		const route = apiRoute<PrintParams>(PRINT, async () => {
+			throw new TypeError("Cannot read properties of undefined (reading 'columns')");
+		});
+
+		const response = await route(...printCall());
+
+		expect(response.status).toBe(500);
+		expect(await response.json()).toMatchObject({ error: "internal_error" });
+		const rows = await lines();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].level).toBe("ERROR");
+		// The row has to name the code the caller was actually answered with, or an operator matching
+		// a complaint against the log is comparing two different accounts of one request.
+		expect(rows[0].message).toContain("internal_error");
+		// And it has to keep the detail the caller is deliberately never shown: `toErrorResponse`
+		// returns a bare `internal_error`, so this row is where the reason survives for a person.
+		expect(rows[0].message).toContain("reading 'columns'");
+	});
+
+	it("still answers a successful read when the read gate's setting cannot be read", async () => {
+		// `booleanSetting` is a bare `prisma.setting.findMany` and it runs inside the wrapper's own
+		// `try`. Unguarded, a settings read that threw would be caught there and turn a request that
+		// had already succeeded into a 500 — which is the one thing the logging path must never do to
+		// a caller. Test 7 cannot reach this: it uses a command, where the gate short-circuits on the
+		// outcome before `booleanSetting` is called at all.
+		const settings = vi.spyOn(prisma.setting, "findMany").mockRejectedValueOnce(new Error("database is locked"));
+
+		try {
+			const route = apiRoute(JOBS, async () => ({
+				response: Response.json({ jobs: [], nextCursor: null }),
+				message: "Listed 0 jobs",
+			}));
+
+			const response = await route(jobsRequest());
+
+			expect(response.status).toBe(200);
+			// Proves the injected failure was reached rather than the guard never being exercised.
+			expect(settings).toHaveBeenCalled();
+			// And it fails toward the record: suppression is the branch that throws information away,
+			// so it must not be what an unreadable rule defaults to.
+			const rows = await lines();
+			expect(rows).toHaveLength(1);
+			expect(rows[0].level).toBe("INFO");
+		} finally {
+			settings.mockRestore();
+		}
+	});
+
 	it("returns 202 when the log write fails", async () => {
 		// The write is stubbed to reject rather than the test merely asserting that nothing threw: a
 		// version that only checked for the absence of a throw would pass with the logging removed
@@ -217,7 +272,7 @@ describe("apiRoute", () => {
 		const create = vi.spyOn(logsDb.logEntry, "create").mockRejectedValueOnce(new Error("no space left on device"));
 
 		try {
-			const route = apiRoute(PRINT, async () => ({
+			const route = apiRoute<PrintParams>(PRINT, async () => ({
 				response: Response.json({ jobId: "j1", status: "QUEUED", lines: 24 }, { status: 202 }),
 				message: "Printed 24 lines to 'kitchen'",
 			}));

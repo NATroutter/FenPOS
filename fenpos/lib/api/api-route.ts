@@ -76,12 +76,21 @@ export type ApiRouteHandler<P> = (input: ApiRequest<P>) => Promise<ApiRouteResul
  * any of those steps except the parameter resolution is recorded and converted by `toErrorResponse`,
  * which is passed through unchanged — the wrapper decides nothing about what a caller is told.
  *
+ * **A route with path parameters must name their type.** `P` defaults to `Record<string, never>` —
+ * the shape of a route that has none — rather than to `Record<string, string>`, which would have
+ * accepted every route silently. That default matters because `tsconfig.json` does not set
+ * `noUncheckedIndexedAccess`: under the looser default, a dynamic route converted without its type
+ * argument still compiles, `params.devcie` types as `string` rather than as an error, and the typo
+ * surfaces as `undefined` at runtime. With this default, `Promise<{ agent: string; device: string }>`
+ * is not assignable to `Promise<Record<string, never>>`, so leaving the argument off fails typegen
+ * instead — write `apiRoute<{ agent: string; device: string }>(...)`.
+ *
  * @param id the route's registry id, e.g. `api:GET /v1/jobs`
  * @param handler what the route does once the caller is allowed to do it
  * @returns the function to export as `GET`/`POST`/`DELETE`
  * @throws Error when no route is registered under that id
  */
-export function apiRoute<P extends Record<string, string> = Record<string, string>>(
+export function apiRoute<P extends Record<string, string> = Record<string, never>>(
 	id: string,
 	handler: ApiRouteHandler<P>,
 ): (request: Request, context?: { params: Promise<P> }) => Promise<Response> {

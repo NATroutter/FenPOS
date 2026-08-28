@@ -3,6 +3,7 @@ import type { ApiRouteEntry } from "@/lib/api/api-routes";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import type { AuthenticatedKey } from "@/lib/keys/authenticate";
+import { logger } from "@/lib/logger";
 import { recordServerLog } from "@/lib/logs/log-service";
 import { booleanSetting } from "@/lib/settings/settings-service";
 
@@ -64,7 +65,8 @@ export type ApiRequestOutcome =
  *
  * **Nothing here guards against a failed write.** {@link recordServerLog} never throws and truncates
  * to `logs.maxMessageChars` itself; a second `try` around it would only be a place for a future
- * reader to wonder which of the two is load-bearing.
+ * reader to wonder which of the two is load-bearing. The *settings read* above it is a different
+ * matter and is guarded — see {@link recordsSuccessfulReads}.
  *
  * **An unauthenticated request still leaves a line, and nothing bounds how many.** `requireApiRead`
  * runs inside the handlers, which is past the point a `401` gets to, so a caller with no credential
@@ -81,7 +83,7 @@ export async function recordApiRequest(
 	key: AuthenticatedKey | null,
 	outcome: ApiRequestOutcome,
 ): Promise<void> {
-	if (outcome.status === "returned" && entry.kind === "query" && !(await booleanSetting("logs.recordApiReads"))) {
+	if (outcome.status === "returned" && entry.kind === "query" && !(await recordsSuccessfulReads())) {
 		return;
 	}
 
@@ -89,6 +91,35 @@ export async function recordApiRequest(
 		...(outcome.status === "returned" ? outcome.target : {}),
 		...(key ? { apiKeyId: key.id } : {}),
 	});
+}
+
+/**
+ * Whether this install keeps its successful reads.
+ *
+ * **Guarded, and the guard is not the one the brief warned against.** That warning is about wrapping
+ * {@link recordServerLog}, which already never throws; this wraps `booleanSetting`, which is a bare
+ * `prisma.setting.findMany` with nothing between it and the caller. That call runs *inside*
+ * `apiRoute`'s own `try`, so an unguarded read that threw would be caught there and turn a request
+ * that had already succeeded into a `500` — the precise thing `recordServerLog`'s contract promises
+ * never to do to a caller, broken one statement above the call that promises it.
+ *
+ * **A read that fails answers "record it."** Suppression is the branch that throws information away,
+ * so it must not be what an unreadable rule defaults to — the same instinct `panelAction`'s gate
+ * follows when a permission is missing. It costs at most one extra row, on an install whose settings
+ * table is already failing to read, and {@link recordServerLog} swallows its own failure if the
+ * database is unwell enough that the row cannot be written either.
+ *
+ * @returns the value of `logs.recordApiReads`, or true when it cannot be read
+ */
+async function recordsSuccessfulReads(): Promise<boolean> {
+	try {
+		return await booleanSetting("logs.recordApiReads");
+	} catch (error) {
+		logger.warn("Could not read logs.recordApiReads; recording this read rather than dropping it", {
+			error: String(error),
+		});
+		return true;
+	}
 }
 
 /**
