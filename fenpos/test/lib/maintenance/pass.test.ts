@@ -106,20 +106,29 @@ describe("a maintenance pass", () => {
 		// at the client rather than at `sweepLogsNow` itself, which is a named ESM export and cannot be
 		// spied; what is asserted is the pass's behaviour, not that Prisma was called.
 		vi.spyOn(logsDb.logEntry, "findFirst").mockRejectedValue(new Error("disk is gone"));
-		vi.spyOn(logger, "error").mockImplementation(() => undefined);
+		const failed = vi.spyOn(logger, "error").mockImplementation(() => undefined);
 
 		// Goes red the moment the pass lets a rejection escape: the interval that calls this has nobody
 		// above it to catch one, and an unhandled rejection takes the container down.
 		await expect(runMaintenancePass()).resolves.toBeUndefined();
+
+		// The precondition, asserted rather than assumed. Injecting at the client means the failure only
+		// happens if the pass reaches that query at all — if `logs.archiveEnabled`'s built-in value
+		// flips, or `sweepLogsNow`'s archiving branch stops opening with this call, the assertion above
+		// would still pass while proving only that a pass with nothing wrong in it resolves.
+		expect(failed).toHaveBeenCalledWith("A log retention pass could not run", expect.any(Error));
 	});
 
 	it("sweeps the audit record even when the log sweep failed", async () => {
 		vi.spyOn(logsDb.logEntry, "findFirst").mockRejectedValue(new Error("disk is gone"));
-		vi.spyOn(logger, "error").mockImplementation(() => undefined);
+		const failed = vi.spyOn(logger, "error").mockImplementation(() => undefined);
 		await agedAuditPeriod();
 
 		await runMaintenancePass();
 
+		// The same precondition: without this, a log half that quietly succeeded would leave this test
+		// asserting that the audit half works when nothing went wrong, which is not what it is named.
+		expect(failed).toHaveBeenCalledWith("A log retention pass could not run", expect.any(Error));
 		// Goes red if the two halves share one try block: the audit record would stop being swept
 		// because the log database had a bad day.
 		expect(readdirSync(AUDIT_ARCHIVE_DIRECTORY)).toContain("audit-2026-01.db.gz");

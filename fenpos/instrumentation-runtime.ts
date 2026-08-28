@@ -195,23 +195,33 @@ function startDeliveryDrain(): void {
  * run on the way out of a write, which meant an install that stopped writing stopped sweeping, and
  * meant a print request paid for whatever a sweep did.
  *
+ * **One pass runs at startup, before the first tick.** Without it the first sweep of a process lands a
+ * full hour after boot, which means an install that restarts more often than hourly never sweeps at
+ * all — the same "stops writing, stops sweeping" failure this whole change exists to remove, arriving
+ * by a different door, and `compose.yaml`'s `restart: unless-stopped` is what makes it reachable. A
+ * pass is idempotent, so paying for one at every boot costs nothing an install cannot afford.
+ *
  * A pass is skipped, not queued, while the previous one is still running — the same rule the delivery
  * drain above follows, and it matters more here. Archiving opens a database, copies a period, verifies
  * it and gzips it, so a pass can genuinely outlast an hour on a large period; a second one started on
  * top would be two rotations racing over one period's archive file, and the next tick an hour later
- * picks up whatever the running one has not reached anyway.
+ * picks up whatever the running one has not reached anyway. The startup pass goes through that same
+ * flag rather than around it, so a slow first pass cannot stack with the first tick either.
  *
  * Guarded and `unref()`'d for the reasons {@link startDeliveryDrain} gives. `runMaintenancePass`
  * already promises never to throw, and as there, that promise is not this function's to rely on.
  *
- * Exported so the skip-while-running guard above can be driven directly by a test, in the way
+ * Exported so the skip-while-running guard below can be driven directly by a test, in the way
  * `lib/webhooks/deliver.ts` exports `sweepDeliveriesNow`; {@link registerRuntime} is its only caller
  * in the running server.
  */
 export function startMaintenance(): void {
 	let running = false;
 
-	const timer = setInterval(() => {
+	// Named rather than written inline twice, because the startup pass and the tick must share one
+	// `running` flag: two copies of this body would be two flags, and the thing the flag prevents is
+	// exactly a startup pass and a tick overlapping.
+	const pass = (): void => {
 		if (running) {
 			return;
 		}
@@ -223,7 +233,11 @@ export function startMaintenance(): void {
 			.finally(() => {
 				running = false;
 			});
-	}, MAINTENANCE_INTERVAL_MS);
+	};
+
+	pass();
+
+	const timer = setInterval(pass, MAINTENANCE_INTERVAL_MS);
 
 	timer.unref();
 }

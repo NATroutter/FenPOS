@@ -31,8 +31,8 @@ describe("sweepAuditNow", () => {
 	 * production rows are.
 	 *
 	 * `appendEvent` rather than `recordAudit` because that is the name a writer outside a request
-	 * says; the two do the same thing now that retention has left the write path. `prefix` lets a test tell which period a surviving row came from without relying on a shared
-	 * counter across calls.
+	 * says; the two do the same thing now that retention has left the write path. `prefix` lets a test
+	 * tell which period a surviving row came from without relying on a shared counter across calls.
 	 */
 	async function chain(count: number, prefix = "test"): Promise<void> {
 		for (let index = 0; index < count; index++) {

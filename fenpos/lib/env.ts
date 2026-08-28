@@ -156,8 +156,9 @@ export const LOGS_DATABASE_URL: string = env.LOGS_DATABASE_URL ?? siblingDatabas
 export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
 
 /**
- * Where `lib/archive/rotate.ts` writes audit archives: a sibling `archives` directory next to
- * `audit.db`'s *resolved* URL.
+ * Where `lib/archive/rotate.ts` writes archives — the audit record's and the log table's alike, since
+ * `lib/maintenance/pass.ts` hands this one directory to both sweeps: a sibling `archives` directory
+ * next to `audit.db`'s *resolved* URL.
  *
  * One rule, computed once, for every caller running inside the server — `lib/maintenance/pass.ts`'s
  * `archiveDirectory()`, which is the only one — so two callers deriving it separately can never
