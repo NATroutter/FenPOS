@@ -60,6 +60,12 @@ describe("panel action registry", () => {
 		"users:set-permissions": "users:grant",
 		// Reading an account's sessions is part of reading the account.
 		"users:list-sessions": "users:read",
+		// An archive is the same data through a different file, so this plan adds no permission for
+		// reading one. `logs:read` is what opens the Archives tab and what the gate checks; an audit
+		// period additionally needs `audit:read`, which the registry cannot express because the
+		// governing permission depends on which period was asked for rather than on the action.
+		"archives:list": "logs:read",
+		"archives:read": "logs:read",
 	};
 
 	it("gives every gated entry the permission its id names, or a documented shared one", () => {

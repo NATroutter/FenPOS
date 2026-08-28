@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+	Archive,
 	BookOpen,
 	Braces,
 	CodeXml,
@@ -102,6 +103,21 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				title: "Logs",
 				description: "What the agents forwarded. Each also keeps its own complete log on the machine it runs on.",
 				icon: ScrollText,
+				permission: "logs:read",
+			},
+			{
+				href: "/archives",
+				label: "Archives",
+				title: "Archived periods",
+				description:
+					"Whole months moved out of the live databases into compressed files. Opened one at a time, on request.",
+				icon: Archive,
+				// `logs:read`, though the tab lists archived audit periods too. A section carries one
+				// permission, and this is the one that has to be it: the log archives are what accumulate
+				// month after month, and `/logs` is where an operator is standing when they discover the
+				// lines they wanted have aged out. An audit period is still governed by `audit:read` —
+				// `listArchivePeriods` will not offer one without it — so what this reveals is the tab, not
+				// the record.
 				permission: "logs:read",
 			},
 		],

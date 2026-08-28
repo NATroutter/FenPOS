@@ -82,7 +82,9 @@ describe("permittedNavHrefs", () => {
 		await prisma.rolePermission.create({ data: { roleId: role.id, permission: "logs:read" } });
 		await prisma.userRole.create({ data: { userId: user.id, roleId: role.id } });
 
-		expect(await permittedNavHrefs(user)).toEqual(["/logs"]);
+		// Two sections, one permission: `logs:read` reveals the Logs tab and the Archives tab beside it,
+		// because an archived period is the same lines through a different file.
+		expect(await permittedNavHrefs(user)).toEqual(["/logs", "/archives"]);
 	});
 
 	it("offers Users to an account that may read it, and not Roles", async () => {

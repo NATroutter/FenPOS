@@ -19,10 +19,13 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * `self` actions cannot drift. The `unauthenticated` entries and `auth:sign-out` are written by the
  * actions themselves, through `AUTH_AUDIT_ACTIONS` (`lib/audit/auth-events.ts`), and `settings:save`
  * through a literal of its own — so for those the id here and the string written there are two
- * spellings that have to agree. They did not, once: `signOut` was registered as `self:sign-out` while
- * recording `auth:sign-out`, which made the sentence above false and offered `/audit` a filter that
- * could only ever return no rows. If you add an entry whose action writes its own row, make the two
- * match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second literal.
+ * spellings that have to agree. `archives:read` writes one row of its own too: the gate has already
+ * let it through on `logs:read` by the time it finds the caller may not read *this* period's source,
+ * so the refusal it files is a second, hand-written `DENIED`. They did not agree, once: `signOut` was
+ * registered as `self:sign-out` while recording `auth:sign-out`, which made the sentence above false
+ * and offered `/audit` a filter that could only ever return no rows. If you add an entry whose action
+ * writes its own row, make the two match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second
+ * literal.
  *
  * That agreement is no longer left to a reading. `test/lib/auth/registry-coverage.test.ts` collects
  * every action string written from a module under `app/` that calls `recordAudit` — an
@@ -565,6 +568,34 @@ export const PANEL_ACTIONS = [
 		module: "(panel)/audit/actions.ts",
 		exportName: "exportAuditCsv",
 		description: "Exported a filtered range of the audit record",
+	},
+
+	// --- Archives ---
+	// Both are `query`: a listing is what arriving at the tab does, and an operator hunting through a
+	// period opens it repeatedly, so a row per success would bury the ones worth reading. Refusals are
+	// still recorded, which is the property that matters.
+	//
+	// Both name `logs:read` rather than a permission of their own, because reading an archive is
+	// reading the same data through a different file and this plan adds no permission for it. That is
+	// only half the rule: an *audit* period additionally needs `audit:read`, which the registry cannot
+	// say because it names one permission per action while the governing permission depends on which
+	// period was asked for. `(panel)/archives/actions.ts` checks that half itself and writes its own
+	// `DENIED` row when it refuses — one of the few rows under `app/` the gate does not write.
+	{
+		id: "archives:list",
+		kind: "query",
+		permission: "logs:read",
+		module: "(panel)/archives/actions.ts",
+		exportName: "listArchivePeriods",
+		description: "Listed the archived periods on disk",
+	},
+	{
+		id: "archives:read",
+		kind: "query",
+		permission: "logs:read",
+		module: "(panel)/archives/actions.ts",
+		exportName: "readArchivePage",
+		description: "Opened an archived period and read a page of it",
 	},
 
 	// --- Settings ---
