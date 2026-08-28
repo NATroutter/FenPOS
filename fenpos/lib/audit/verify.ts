@@ -113,17 +113,16 @@ export interface ChainVerifyOptions {
 	 *   boundary. The anchor then names a row no archive holds, and {@link joinToAnchor} reports
 	 *   `archive-join-mismatch`.
 	 *
-	 * The first case is reachable now: `maybeSweep` in `lib/audit/audit-log.ts` calls `sweepAuditNow`,
-	 * which calls `archivePeriod` directly. Task 5 is expected to remove that call in favour of its own
-	 * scheduled pass, and Task 7 is where reconciling this block belongs. `maybeSweep` runs on the way
-	 * out of every `recordAudit`, so on any install that has been running a while the
-	 * anchor has already moved past genesis — which makes the first case above the *default* state the
-	 * first time rotation is wired, not a corner of it. **Whoever gives `archivePeriod` a production
-	 * caller must reconcile rotation with `maybeSweep` before doing so**, and should give
-	 * swept-before-archived a `ChainBreak` of its own: `describeVerification` has exactly one failure
-	 * vocabulary and it is an accusation, so reporting "these rows were swept before archiving began"
-	 * through it says "the record was changed after it was written". Those are different findings and
-	 * this code cannot currently tell them apart.
+	 * The first case is about an install's *past*, not its present: nothing deletes an audit row without
+	 * archiving it any more — `sweepAuditNow` goes through `archivePeriod`, and `lib/maintenance/pass.ts`
+	 * is its only caller. But retention did run on the way out of every `recordAudit` until then, so on
+	 * any install upgraded from that arrangement the anchor has already moved past genesis, which makes
+	 * the first case above the *default* state rather than a corner of it. `AuditEpoch` is what records
+	 * where archived history actually begins; reconciling this block with it is Task 7's, and until that
+	 * happens swept-before-archived still wants a `ChainBreak` of its own: `describeVerification` has
+	 * exactly one failure vocabulary and it is an accusation, so reporting "these rows were swept before
+	 * archiving began" through it says "the record was changed after it was written". Those are
+	 * different findings and this code cannot currently tell them apart.
 	 */
 	archiveDirectory?: string;
 }

@@ -24,9 +24,9 @@ import { auditDb } from "@/lib/db";
  * exactly one such boundary, and `AuditAnchor` is what vouches for it — the last swept event's `seq`
  * and `hash`, which `verifyAuditChain` starts its walk from.
  *
- * **This module writes no audit row.** The sweep's own row is written by `audit-log.ts`, which calls
- * this and then appends. Keeping the dependency one-way is what stops the two modules from importing
- * each other, and stops a sweep's row from triggering another sweep.
+ * **This module writes no audit row.** The sweep's own `audit:sweep` row is written by
+ * `lib/maintenance/pass.ts`, which calls this and then appends. Keeping the dependency one-way is
+ * what stops this module and `audit-log.ts` from importing each other.
  */
 
 /** What one sweep did. */

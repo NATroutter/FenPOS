@@ -11,7 +11,7 @@
  * once is a row no filter finds.
  */
 
-/** A retention sweep, recorded by the sweep itself after it has removed and re-anchored. */
+/** A retention sweep, recorded by `lib/maintenance/pass.ts` after it has removed and re-anchored. */
 export const AUDIT_SWEEP_ACTION = "audit:sweep";
 
 /** An authenticated panel page was opened. Written only when `audit.recordPageViews` is on. */

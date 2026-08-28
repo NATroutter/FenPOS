@@ -45,9 +45,10 @@ import { logger } from "@/lib/logger";
  * beside it *is* the archive — that is logged and the file kept. The half-written `.gz` is removed,
  * because archives are found by name and a truncated one is indistinguishable from a good one.
  *
- * **Nothing schedules this.** There is no timer, no write counter, and no settings key behind it; it
- * runs when something calls it, and at this phase nothing does. Reading an archive back is not here
- * either — this module only writes them.
+ * **Nothing here schedules this.** There is no timer and no settings key in this module; it runs when
+ * something calls it, and its callers are `sweepLogsNow` and `sweepAuditNow`, which
+ * `lib/maintenance/pass.ts` drives on an hourly interval. Reading an archive back is not here either
+ * — this module only writes them.
  *
  * A `better-sqlite3` handle rather than a Prisma client for the archive: a generated client per period
  * file would need its own schema and its own migration history for a file that exists to be read

@@ -159,8 +159,8 @@ export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatab
  * Where `lib/archive/rotate.ts` writes audit archives: a sibling `archives` directory next to
  * `audit.db`'s *resolved* URL.
  *
- * One rule, computed once, for every caller running inside the server — `lib/audit/audit-log.ts`
- * today, `lib/maintenance/pass.ts` once it exists — so two callers deriving it separately can never
+ * One rule, computed once, for every caller running inside the server — `lib/maintenance/pass.ts`'s
+ * `archiveDirectory()`, which is the only one — so two callers deriving it separately can never
  * drift onto different directories. `scripts/audit-verify.ts` cannot import this module (it begins
  * with `import "server-only"`, and that script runs outside Next), so it repeats this same one-line
  * derivation from its own resolved audit URL rather than sharing this constant; keeping the *rule* —

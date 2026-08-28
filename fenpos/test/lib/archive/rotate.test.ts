@@ -57,7 +57,8 @@ describe("archivePeriod", () => {
 	 * sixteen fields the hash covers: a raw update to it leaves rows that read as tampered, which is
 	 * indistinguishable from the failure some of these tests are trying to prove does *not* happen.
 	 *
-	 * `appendEvent` rather than `recordAudit`, so building a fixture cannot itself trigger a sweep.
+	 * `appendEvent` rather than `recordAudit` because that is the name a writer outside a request
+	 * says; the two do the same thing now that retention has left the write path.
 	 *
 	 * @param count how many events to append
 	 * @param at the moment they are recorded at

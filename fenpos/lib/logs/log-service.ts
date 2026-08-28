@@ -3,7 +3,6 @@ import { logsDb } from "@/lib/db";
 import { type LogLevel, LogLevel as LogLevelSet } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { logger } from "@/lib/logger";
-import { sweepOccasionally } from "@/lib/logs/ingest";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
 import { globalLogIngestSettings, integerSetting } from "@/lib/settings/settings-service";
 import type { SortDirection } from "@/lib/table/sort";
@@ -138,10 +137,12 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
  * then threw on the way out is the worst of the three.
  *
  * **Swept like any other row.** These lines land in the same table an agent's do, so they age out
- * under `logs.retentionDays` through the same {@link sweepOccasionally} `ingestLog` uses rather
- * than growing behind it. That matters more here than there: the endpoint that writes these
- * is a write, and writes are deliberately not counted against `api.readsPerMinute` (see
- * `requireApiRead`), so nothing upstream bounds how many of these a key can produce.
+ * under `logs.retentionDays` through `lib/maintenance/pass.ts`'s hourly pass rather than growing
+ * behind it — and this path does nothing to bring that about, which is the point: retention is a
+ * property of the table now, not of whoever happened to write the row. That matters more here than
+ * for an agent's lines: the endpoint that writes these is a write, and writes are deliberately not
+ * counted against `api.readsPerMinute` (see `requireApiRead`), so nothing upstream bounds how many
+ * of these a key can produce.
  *
  * **Truncated to `logs.maxMessageChars`, exactly as `ingestLog` truncates an agent's lines.** One
  * table, one bound: an install that lowers the setting to keep its log rows small meant it for every
@@ -165,9 +166,8 @@ export async function recordServerLog(
 		// Read here rather than cached the way `ingestLog` caches them: that path runs per line for
 		// every agent on the install, this one runs on the few server-side events worth showing an
 		// operator, so one settings read is not worth a second cache to avoid. Read before the insert
-		// because `maxMessageChars` bounds the row itself; the sweep below uses the other two of the
-		// three values this same read produces.
-		const { retentionDays, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+		// because `maxMessageChars` bounds the row itself.
+		const { maxMessageChars } = await globalLogIngestSettings();
 
 		const entry = await logsDb.logEntry.create({
 			data: {
@@ -201,8 +201,6 @@ export async function recordServerLog(
 				deviceName: target.deviceName ?? null,
 			});
 		}
-
-		void sweepOccasionally(retentionDays, sweepEvery);
 	} catch (error) {
 		logger.error("Could not record a server log line", error, { message });
 	}

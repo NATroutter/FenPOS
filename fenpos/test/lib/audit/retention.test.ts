@@ -30,8 +30,8 @@ describe("sweepAuditNow", () => {
 	 * Records `count` events through the real writer, so the fixtures are chained exactly as
 	 * production rows are.
 	 *
-	 * `appendEvent` rather than `recordAudit`, so building a fixture cannot itself trigger a sweep.
-	 * `prefix` lets a test tell which period a surviving row came from without relying on a shared
+	 * `appendEvent` rather than `recordAudit` because that is the name a writer outside a request
+	 * says; the two do the same thing now that retention has left the write path. `prefix` lets a test tell which period a surviving row came from without relying on a shared
 	 * counter across calls.
 	 */
 	async function chain(count: number, prefix = "test"): Promise<void> {

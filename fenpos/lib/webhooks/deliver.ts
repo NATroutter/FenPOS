@@ -610,9 +610,10 @@ const globalForDeliverySweep = globalThis as unknown as {
  * Counts one more settled delivery and sweeps once `webhooks.deliverySweepEvery` of them have
  * passed.
  *
- * The same shape `lib/logs/ingest.ts` uses for `logs.retentionDays`/`logs.sweepEvery` — counted in
- * writes rather than scheduled on a timer, so a quiet install sweeps nothing and a busy one sweeps
- * in proportion to what it is actually settling.
+ * Counted in writes rather than scheduled on a timer, so a quiet install sweeps nothing and a busy
+ * one sweeps in proportion to what it is actually settling. `logs.*` and `audit.*` retention was
+ * counted this way too until it began archiving before it deleted; this one still is, because all it
+ * does is delete settled rows and there is no file to write.
  *
  * @param maxRecords settled deliveries kept before the oldest are swept (`webhooks.maxDeliveryRecords`)
  * @param sweepEvery how many settled deliveries pass between sweeps (`webhooks.deliverySweepEvery`)

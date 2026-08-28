@@ -263,7 +263,6 @@ export const SETTING_KEYS = [
 	"logs.archiveEnabled",
 	"logs.archiveRetentionDays",
 	"logs.maxMessageChars",
-	"logs.sweepEvery",
 	"pairing.enabled",
 	"pairing.codeMinutes",
 	"auth.sessionHours",
@@ -282,7 +281,6 @@ export const SETTING_KEYS = [
 	"auth.idleTimeoutMinutes",
 	"auth.maxConcurrentSessions",
 	"audit.retentionDays",
-	"audit.sweepEvery",
 	"audit.recordPageViews",
 	"api.readsPerMinute",
 	"api.defaultPageSize",
@@ -660,17 +658,6 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "characters",
 	},
 	{
-		key: "logs.sweepEvery",
-		label: "Sweep interval",
-		description: "How many stored lines pass between retention sweeps. Lower is tidier, higher is cheaper.",
-		category: "logs",
-		type: "integer",
-		min: 50,
-		max: 10_000,
-		fallback: 500,
-		unit: "records",
-	},
-	{
 		key: "pairing.enabled",
 		label: "Allow pairing",
 		description:
@@ -883,17 +870,6 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: 3_650,
 		fallback: 365,
 		unit: "days",
-	},
-	{
-		key: "audit.sweepEvery",
-		label: "Sweep interval",
-		description: "How many recorded events pass between retention sweeps. Lower is tidier, higher is cheaper.",
-		category: "audit",
-		type: "integer",
-		min: 50,
-		max: 10_000,
-		fallback: 500,
-		unit: "records",
 	},
 	{
 		key: "audit.recordPageViews",
@@ -1401,7 +1377,7 @@ export async function globalAgentSettings(): Promise<GlobalAgentSettings> {
 	};
 }
 
-/** The log ingestion limits as configured, in the shape `lib/logs/ingest.ts` reads. */
+/** The `logs.*` limits as configured, in the shape `lib/logs/ingest.ts` and the maintenance pass read. */
 export interface GlobalLogIngestSettings {
 	linesPerMinutePerAgent: number;
 	/** `logs.retentionDays`: how long a line is kept before it is swept. */
@@ -1411,17 +1387,16 @@ export interface GlobalLogIngestSettings {
 	/** `logs.archiveRetentionDays`: how long a log archive is kept before it is deleted. */
 	archiveRetentionDays: number;
 	maxMessageChars: number;
-	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
-	sweepEvery: number;
 }
 
 /**
  * Reads the log ingestion settings as one object, honouring overrides.
  *
- * Separate from {@link globalLimits} and {@link globalJobSettings} because these three go to a
- * third place: the per-line log ingest path (`lib/logs/ingest.ts`), which caches the result rather
- * than calling this for every line — the same reason `globalLimits`/`globalJobSettings` read once
- * per group instead of once per setting, applied one level up.
+ * Separate from {@link globalLimits} and {@link globalJobSettings} because these go to a third
+ * place: the per-line log ingest path (`lib/logs/ingest.ts`), which caches the result rather than
+ * calling this for every line — the same reason `globalLimits`/`globalJobSettings` read once per
+ * group instead of once per setting, applied one level up. `lib/maintenance/pass.ts` reads the same
+ * object for the retention half of it, hourly, where the cost of a read is nothing.
  *
  * @returns the log ingestion settings in effect install-wide
  */
@@ -1440,7 +1415,6 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 		archiveEnabled: flag("logs.archiveEnabled"),
 		archiveRetentionDays: value("logs.archiveRetentionDays"),
 		maxMessageChars: value("logs.maxMessageChars"),
-		sweepEvery: value("logs.sweepEvery"),
 	};
 }
 
@@ -1560,8 +1534,6 @@ export async function globalSessionPolicy(): Promise<GlobalSessionPolicy> {
 export interface GlobalAuditSettings {
 	/** `audit.retentionDays`: how long an event is kept before it is swept. */
 	retentionDays: number;
-	/** `audit.sweepEvery`: how many recorded events pass between sweeps. */
-	sweepEvery: number;
 	/** `audit.recordPageViews`: whether opening a panel page writes a row. */
 	recordPageViews: boolean;
 }
@@ -1569,9 +1541,10 @@ export interface GlobalAuditSettings {
 /**
  * Reads the audit settings as one object, honouring overrides.
  *
- * One call rather than four, for the same reason {@link globalLogIngestSettings} exists: its caller
- * is on the audit write path, which runs for every recorded event, and four `listSettings()` reads
- * where one would do is three round trips per row.
+ * One call rather than two, for the same reason {@link globalLogIngestSettings} exists: its callers
+ * want a group of settings at once, and two `listSettings()` reads where one would do is a round
+ * trip spent on nothing. `audit.recordPageViews` is read per authenticated page render
+ * (`lib/auth/require-permission.ts`), which is what makes that worth saying at all.
  *
  * @returns the audit settings in effect install-wide
  */
@@ -1583,7 +1556,6 @@ export async function globalAuditSettings(): Promise<GlobalAuditSettings> {
 
 	return {
 		retentionDays: integer("audit.retentionDays"),
-		sweepEvery: integer("audit.sweepEvery"),
 		recordPageViews: narrow(settings, "audit.recordPageViews", "boolean") as boolean,
 	};
 }

@@ -5,7 +5,6 @@ import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
-import { sweepLogsNow } from "@/lib/logs/retention";
 import { globalLogIngestSettings } from "@/lib/settings/settings-service";
 
 /**
@@ -16,8 +15,10 @@ import { globalLogIngestSettings } from "@/lib/settings/settings-service";
  * without a bound it would fill the database with it and push out everything worth reading. The
  * cap is per agent, so one misbehaving site cannot drown out the others.
  *
- * Retention is bounded the same way and for the same reason: this table exists to answer "what
- * happened this shift", not to be an archive.
+ * Retention is bounded for a related reason — this table exists to answer "what happened this
+ * shift" — but it is not enforced here. It runs on `lib/maintenance/pass.ts`'s timer, off the
+ * ingest path entirely, because a sweep now archives a period before it deletes it and nothing that
+ * opens and gzips a database belongs behind a log line.
  */
 
 /**
@@ -45,15 +46,10 @@ interface LogIngestSettings {
 	maxLinesPerWindow: number;
 	/** `logs.maxMessageChars`: longest message stored. Anything beyond is truncated rather than rejected. */
 	maxMessageChars: number;
-	/** `logs.retentionDays`: how long a line is kept before it is swept. */
-	retentionDays: number;
-	/** `logs.sweepEvery`: how many ingested lines pass between retention sweeps. */
-	sweepEvery: number;
 }
 
 const globalForIngest = globalThis as unknown as {
 	fenposLogWindows: Map<string, Window> | undefined;
-	fenposLogWrites: number | undefined;
 	fenposLogIngestSettings: LogIngestSettings | undefined;
 };
 
@@ -64,7 +60,7 @@ if (!globalForIngest.fenposLogWindows) {
 const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
 
 /**
- * Re-reads the three `logs.*` settings from the database and caches them.
+ * Re-reads the two `logs.*` settings from the database and caches them.
  *
  * `ingestLog` runs on the hot path for every line every agent sends, so reading these settings
  * there directly would be a database query per line. Instead this is called only from {@link allow}
@@ -74,20 +70,15 @@ const windows: Map<string, Window> = globalForIngest.fenposLogWindows;
  * mid-window reaching an already-connected agent up to one window late, in exchange for turning a
  * per-line query into roughly one per agent per minute.
  *
- * Reads all three as one {@link globalLogIngestSettings} call rather than one settings lookup
- * each — the same reason that function itself reads `listSettings()` once rather than per key.
+ * Reads both as one {@link globalLogIngestSettings} call rather than one settings lookup each — the
+ * same reason that function itself reads `listSettings()` once rather than per key.
  *
  * @returns the settings just read
  */
 async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
-	const { linesPerMinutePerAgent, retentionDays, maxMessageChars, sweepEvery } = await globalLogIngestSettings();
+	const { linesPerMinutePerAgent, maxMessageChars } = await globalLogIngestSettings();
 
-	const settings: LogIngestSettings = {
-		maxLinesPerWindow: linesPerMinutePerAgent,
-		maxMessageChars,
-		retentionDays,
-		sweepEvery,
-	};
+	const settings: LogIngestSettings = { maxLinesPerWindow: linesPerMinutePerAgent, maxMessageChars };
 	globalForIngest.fenposLogIngestSettings = settings;
 	return settings;
 }
@@ -167,7 +158,6 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 			deviceName,
 		});
 
-		void sweepOccasionally(settings.retentionDays, settings.sweepEvery);
 		return true;
 	} catch (error) {
 		// Swallowed on purpose — see the doc comment above. Logged with the agent id so a line missing
@@ -211,47 +201,6 @@ async function allow(agentId: string): Promise<boolean> {
 		});
 	}
 	return false;
-}
-
-/**
- * Sweeps lines older than the retention window once enough writes have accumulated.
- *
- * Counted in writes rather than scheduled on a timer, so a quiet install does no work at all and
- * a busy one sweeps in proportion to what it is producing. The actual removal is
- * {@link sweepLogsNow} (`lib/logs/retention.ts`); this just decides when to call it and absorbs
- * whatever it throws, since a failed sweep is not worth failing an ingest over — the next one will
- * try again.
- *
- * Exported because agents are no longer the only writers of this table: `recordServerLog`
- * (`lib/logs/log-service.ts`) writes the server's own audit lines to it and calls this for the
- * same reason `ingestLog` does. Both share the one counter above, which is what makes the
- * retention window a property of the table rather than of whoever happened to write the row.
- *
- * **Always sweeps with archiving off**, regardless of `logs.archiveEnabled`. This write-counted
- * trigger is withdrawn once `lib/maintenance/pass.ts`'s hourly pass exists to call `sweepLogsNow`
- * with the operator's real archiving choice and a provisioned directory; wiring that setting through
- * a call site about to be removed would only be more code to delete.
- *
- * @param retentionDays how long a line is kept before it is swept (`logs.retentionDays`)
- * @param sweepEvery how many recorded lines pass between sweeps (`logs.sweepEvery`)
- */
-export async function sweepOccasionally(retentionDays: number, sweepEvery: number): Promise<void> {
-	const writes = (globalForIngest.fenposLogWrites ?? 0) + 1;
-	globalForIngest.fenposLogWrites = writes;
-
-	if (writes % sweepEvery !== 0) {
-		return;
-	}
-
-	try {
-		const { removed } = await sweepLogsNow(retentionDays, { archiveEnabled: false, archiveDirectory: "" });
-		if (removed > 0) {
-			logger.info("Swept old log entries", { removed });
-		}
-	} catch (error) {
-		// A failed sweep is not worth failing an ingest over; the next one will try again.
-		logger.warn("Could not sweep old log entries", { error: String(error) });
-	}
 }
 
 /** Forgets an agent's rate-limit window. Called when it disconnects. */

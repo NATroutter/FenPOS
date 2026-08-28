@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { logsDb, prisma } from "@/lib/db";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
@@ -11,8 +11,13 @@ import { setSetting } from "@/lib/settings/settings-service";
  * open, a job retrying forever — produces the same line thousands of times a minute, and without
  * a bound it would fill the table with it and push out everything worth reading. The limit is per
  * agent, so one misbehaving site cannot drown out the others.
+ *
+ * Retention is not among them any more. It used to be triggered from here, one sweep every
+ * `logs.sweepEvery` writes, and the two tests that pinned that trigger have gone with it: "a sweep
+ * arrives after *n* lines" is not a property anything has now that `lib/maintenance/pass.ts` owns
+ * retention on a timer. That the window itself is honoured is `test/lib/logs/retention.test.ts`;
+ * that the pass reaches it is `test/lib/maintenance/pass.test.ts`.
  */
-const DAY = 24 * 60 * 60 * 1000;
 
 describe("log ingestion", () => {
 	let agentId: string;
@@ -176,9 +181,9 @@ describe("log ingestion", () => {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * The throttle, retention and truncation limits above are all configurable via the `logs.*`
-	 * settings — these tests confirm a stored value actually reaches this path, not merely that it
-	 * is stored (which `settings-service.test.ts` already covers).
+	 * The throttle and truncation limits above are both configurable via the `logs.*` settings —
+	 * these tests confirm a stored value actually reaches this path, not merely that it is stored
+	 * (which `settings-service.test.ts` already covers).
 	 *
 	 * Settings are read once per rate-limit window rather than once per line (`ingest.ts`,
 	 * `refreshLogIngestSettings`), which this file's `beforeEach` cooperates with: it creates a
@@ -209,100 +214,6 @@ describe("log ingestion", () => {
 			await ingestLog(agentId, line({ message: "a".repeat(500) }));
 
 			expect((await listLogs()).lines[0].message).toHaveLength(200);
-		});
-
-		it("sweeps rows past the configured retention window through the real ingest path, rather than the built-in one", async () => {
-			// ingest.ts's own write counter (fenposLogWrites) is shared across every test in this
-			// file and persists between them. Reset it so logs.sweepEvery's gate — left at its
-			// built-in 500 in this test — trips at a known point in this test's own loop below,
-			// rather than at whatever offset earlier tests happened to leave it.
-			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
-
-			// High enough that the throttle — not what this test is exercising — never engages
-			// across the real calls below.
-			await setSetting("logs.linesPerMinutePerAgent", 600);
-			// 1 is logs.retentionDays's declared minimum, so anything older than a day is swept.
-			await setSetting("logs.retentionDays", 1);
-
-			// The backlog is seeded directly, so building it up stays one bulk query, and it is aged
-			// well past the one-day window so a real sweep removes every row of it. If retention
-			// regressed to a row-count cap, only the oldest slice of this backlog would be evicted to
-			// bring the total back under some fixed number — leaving some of it behind rather than
-			// none, which is exactly what "backlog count is 0" below would catch.
-			await logsDb.logEntry.createMany({
-				data: Array.from({ length: 1000 }, (_, index) => ({
-					level: "INFO",
-					severity: 1,
-					message: `backlog ${index}`,
-					agentId,
-					ts: new Date(Date.now() - 40 * DAY + index),
-				})),
-			});
-
-			// Only the writes that need to be real — enough to cross logs.sweepEvery's built-in 500
-			// and trigger sweepOccasionally for real, through ingestLog itself rather than by calling
-			// the sweep entry point directly — go through the throttled, awaited ingestLog path below.
-			// These land inside the retention window, so they must survive the sweep.
-			for (let attempt = 0; attempt < 500; attempt++) {
-				await ingestLog(agentId, line({ message: `message ${attempt}` }));
-			}
-
-			// The counter reset to 0 above and exactly 500 accepted writes below land the counter
-			// on exactly the built-in logs.sweepEvery, so sweepOccasionally's real gate fires once,
-			// on the last of these calls — via ingestLog -> sweepOccasionally(retentionDays, sweepEvery)
-			// -> sweepLogsNow. That call is fire-and-forget (ingestLog does not await it), so the
-			// deletion this proves may still be in flight the instant the loop above returns; wait
-			// for it rather than asserting immediately.
-			await vi.waitFor(
-				async () => {
-					expect(await logsDb.logEntry.count({ where: { message: { startsWith: "backlog" } } })).toBe(0);
-				},
-				{ timeout: 5000 },
-			);
-			// The in-window writes are untouched — a time window, unlike a row cap, does not evict
-			// volume just because it arrived alongside a sweep.
-			expect(await logsDb.logEntry.count({ where: { message: { startsWith: "message" } } })).toBe(500);
-		});
-
-		/**
-		 * The counterpart of the test above: a lower `logs.sweepEvery` makes the sweep trip after
-		 * far fewer writes than the built-in 500, proving the gate itself is configured rather than
-		 * only the retention window it sweeps against.
-		 */
-		it("sweeps at the configured interval rather than the built-in one", async () => {
-			(globalThis as unknown as { fenposLogWrites: number | undefined }).fenposLogWrites = 0;
-
-			// High enough that the throttle never engages across the real calls below.
-			await setSetting("logs.linesPerMinutePerAgent", 600);
-			// 1 is logs.retentionDays's declared minimum.
-			await setSetting("logs.retentionDays", 1);
-			// 50 is logs.sweepEvery's declared minimum — a tenth of the built-in 500, so the sweep
-			// fires after 50 real writes rather than needing ten times as many.
-			await setSetting("logs.sweepEvery", 50);
-
-			await logsDb.logEntry.createMany({
-				data: Array.from({ length: 1000 }, (_, index) => ({
-					level: "INFO",
-					severity: 1,
-					message: `backlog ${index}`,
-					agentId,
-					ts: new Date(Date.now() - 40 * DAY + index),
-				})),
-			});
-
-			for (let attempt = 0; attempt < 50; attempt++) {
-				await ingestLog(agentId, line({ message: `message ${attempt}` }));
-			}
-
-			// The counter reset to 0 above and exactly 50 accepted writes below land it on exactly
-			// the configured sweepEvery, so the real gate fires once, on the last of these calls —
-			// which the built-in 500 would not have reached with only 50 writes.
-			await vi.waitFor(
-				async () => {
-					expect(await logsDb.logEntry.count({ where: { message: { startsWith: "backlog" } } })).toBe(0);
-				},
-				{ timeout: 5000 },
-			);
 		});
 	});
 });

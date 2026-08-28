@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
 import { getHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
+import { runMaintenancePass } from "@/lib/maintenance/pass";
 import { applyPushedSettings } from "@/lib/settings/settings-service";
 import { deliverDue } from "@/lib/webhooks/deliver";
 
@@ -15,6 +16,15 @@ import { deliverDue } from "@/lib/webhooks/deliver";
  * where the first attempt succeeds and there was never anything to retry.
  */
 const DELIVERY_DRAIN_INTERVAL_MS = 5_000;
+
+/**
+ * How often a maintenance pass runs.
+ *
+ * A period is a calendar month, so hourly is already about seven hundred times more often than a
+ * pass can possibly do anything. The cadence is not about being timely — it is so the first pass
+ * after a restart is prompt, and so an install that has stopped writing still sweeps.
+ */
+const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * Startup work for the Node.js runtime.
@@ -33,6 +43,7 @@ export async function registerRuntime(): Promise<void> {
 	await applyPushedSettings();
 	attachLink();
 	startDeliveryDrain();
+	startMaintenance();
 }
 
 /**
@@ -172,6 +183,47 @@ function startDeliveryDrain(): void {
 				running = false;
 			});
 	}, DELIVERY_DRAIN_INTERVAL_MS);
+
+	timer.unref();
+}
+
+/**
+ * Starts the recurring pass that sweeps both record databases back inside their retention windows.
+ *
+ * The log lines an agent forwarded and the audit record, each archived and removed a whole period at
+ * a time by `lib/maintenance/pass.ts`. This is the only thing that triggers either: retention used to
+ * run on the way out of a write, which meant an install that stopped writing stopped sweeping, and
+ * meant a print request paid for whatever a sweep did.
+ *
+ * A pass is skipped, not queued, while the previous one is still running — the same rule the delivery
+ * drain above follows, and it matters more here. Archiving opens a database, copies a period, verifies
+ * it and gzips it, so a pass can genuinely outlast an hour on a large period; a second one started on
+ * top would be two rotations racing over one period's archive file, and the next tick an hour later
+ * picks up whatever the running one has not reached anyway.
+ *
+ * Guarded and `unref()`'d for the reasons {@link startDeliveryDrain} gives. `runMaintenancePass`
+ * already promises never to throw, and as there, that promise is not this function's to rely on.
+ *
+ * Exported so the skip-while-running guard above can be driven directly by a test, in the way
+ * `lib/webhooks/deliver.ts` exports `sweepDeliveriesNow`; {@link registerRuntime} is its only caller
+ * in the running server.
+ */
+export function startMaintenance(): void {
+	let running = false;
+
+	const timer = setInterval(() => {
+		if (running) {
+			return;
+		}
+		running = true;
+		runMaintenancePass()
+			.catch((error) => {
+				logger.error("A maintenance pass could not run", error);
+			})
+			.finally(() => {
+				running = false;
+			});
+	}, MAINTENANCE_INTERVAL_MS);
 
 	timer.unref();
 }

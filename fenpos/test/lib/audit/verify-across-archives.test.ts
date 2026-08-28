@@ -42,7 +42,8 @@ describe("verifyAuditChain across an archive boundary", () => {
 	/**
 	 * Records `count` events through the real writer, as of `at`.
 	 *
-	 * `appendEvent` rather than `recordAudit`, so building a fixture cannot itself trigger a sweep.
+	 * `appendEvent` rather than `recordAudit` because that is the name a writer outside a request
+	 * says; the two do the same thing now that retention has left the write path.
 	 *
 	 * @param count how many events to append
 	 * @param at the moment they are recorded at

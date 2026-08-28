@@ -155,7 +155,6 @@ describe("settings", () => {
 			archiveEnabled: true,
 			archiveRetentionDays: 365,
 			maxMessageChars: 1000,
-			sweepEvery: 500,
 		});
 	});
 });
@@ -298,7 +297,6 @@ describe("setting definitions", () => {
 			"logs.archiveEnabled": "boolean",
 			"logs.archiveRetentionDays": "integer",
 			"logs.maxMessageChars": "integer",
-			"logs.sweepEvery": "integer",
 			"pairing.enabled": "boolean",
 			"pairing.codeMinutes": "integer",
 			"auth.sessionHours": "integer",
@@ -317,7 +315,6 @@ describe("setting definitions", () => {
 			"auth.idleTimeoutMinutes": "integer",
 			"auth.maxConcurrentSessions": "integer",
 			"audit.retentionDays": "integer",
-			"audit.sweepEvery": "integer",
 			"audit.recordPageViews": "boolean",
 			"api.readsPerMinute": "integer",
 			"api.defaultPageSize": "integer",

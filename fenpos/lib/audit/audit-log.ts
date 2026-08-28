@@ -1,20 +1,18 @@
 import "server-only";
 import { appendAuditEvent } from "@/lib/audit/append";
 import type { RequestProvenance } from "@/lib/audit/provenance";
-import { sweepAuditNow } from "@/lib/audit/retention";
-import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
 import { auditDb } from "@/lib/db";
 import type { AuditOutcome } from "@/lib/domain/audit";
-import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { globalAuditSettings } from "@/lib/settings/settings-service";
 
 /**
  * Writing the audit record.
  *
  * This is the only writer. There is no update path and no delete path here — the sole deletion that
  * exists anywhere is `lib/audit/retention.ts`, which runs oldest-first and re-anchors the chain
- * behind it, and which this module triggers by write count.
+ * behind it, and which nothing on this path triggers: retention is `lib/maintenance/pass.ts`'s
+ * hourly pass, because a sweep now archives before it deletes and that does not belong behind a
+ * request.
  *
  * **It never throws.** A line lost is a nuisance; an action refused because its audit row would not
  * store is a fault; and an action that happened and then threw on the way out is the worst of the
@@ -26,10 +24,9 @@ import { globalAuditSettings } from "@/lib/settings/settings-service";
  * catches that refusal and retries against whatever row won.
  *
  * **It writes to `audit.db`, through `auditDb`.** The record has its own file so its retention is
- * decided by its own settings and no other table's growth can shorten it. The sweep's *bounds* are
- * still read from the application database — {@link maybeSweep} calls `globalAuditSettings()` — so
- * an unreadable `fenpos.db` leaves the record unswept and growing, which {@link maybeSweep} logs
- * and swallows. The write itself touches nothing but `audit.db`.
+ * decided by its own settings and no other table's growth can shorten it, and the write itself
+ * touches nothing but `audit.db` — not even to decide whether to sweep, which nothing here does any
+ * more.
  */
 
 /** Who an event is attributed to. A discriminated union, so a `USER` row cannot carry a key's name. */
@@ -108,12 +105,13 @@ export interface AuditEventInput {
 }
 
 /**
- * Appends one event to the chain, without triggering retention.
+ * Appends one event to the chain.
  *
- * The half of {@link recordAudit} that writes. Exported for exactly one caller: the retention sweep,
- * whose own row must not trigger another sweep — which is what going back through `recordAudit`
- * would do, once per sweep, forever. Nothing else should call this; a caller that skips retention is
- * a caller that lets the table grow past its bounds.
+ * The half of {@link recordAudit} that writes, and — now that recording an event triggers nothing
+ * else — the whole of it. Both names survive because both are already spoken: `recordAudit` is what
+ * every caller in `app/` says and what `test/lib/auth/registry-coverage.test.ts` reads the registry
+ * against, while this is what the callers outside a request say, `lib/maintenance/pass.ts`'s own
+ * `audit:sweep` row among them.
  *
  * The write itself — the field list, the hashing, the `prevHash` retry — lives in
  * `lib/audit/append.ts`, so the same chaining logic runs whether the caller is a request or
@@ -134,89 +132,16 @@ export async function appendEvent(input: AuditEventInput): Promise<void> {
 }
 
 /**
- * Records one event, and sweeps if enough have accumulated since the last sweep.
+ * Records one event.
  *
- * The entry point every caller but the sweep itself uses. Retention is counted in writes rather than
- * scheduled on a timer, so a quiet install does no work at all and a busy one sweeps in proportion to
- * what it is producing — the same shape `lib/logs/ingest.ts` uses for `LogEntry`, and for the same
- * reason.
- *
- * The sweep is not awaited. It is bookkeeping behind an event that has already been written, and the
- * caller is usually a request on its way out; making a print wait for the deletion of two hundred
- * thousand rows would be paying for tidiness with latency. {@link maybeSweep} never throws.
+ * The entry point every caller inside a request uses, and the name the panel action registry is
+ * written in terms of. It no longer does anything {@link appendEvent} does not: retention used to be
+ * counted here, one sweep every *n*th recorded event, and now runs on `lib/maintenance/pass.ts`'s
+ * timer instead — so an install that has stopped writing still sweeps, and an install that is writing
+ * hard no longer pays for a rotation on the way out of a request.
  *
  * @param input the event
  */
 export async function recordAudit(input: AuditEventInput): Promise<void> {
 	await appendEvent(input);
-	void maybeSweep();
-}
-
-/**
- * How many events this process has recorded, and how often it currently intends to sweep.
- *
- * Both reset by a restart, which is harmless: the counter decides when to *look*, and the sweep
- * itself decides what to do based on what is actually in the table.
- */
-const globalForAudit = globalThis as unknown as {
-	fenposAuditWrites: number | undefined;
-	fenposAuditSweepEvery: number | undefined;
-};
-
-/**
- * `audit.sweepEvery`'s declared minimum, used until a real value has been read.
- *
- * The floor rather than the fallback, so the very first check of a process can only ever come
- * *sooner* than configured, never later.
- */
-const MINIMUM_SWEEP_EVERY = 50;
-
-/**
- * Sweeps every `audit.sweepEvery` recorded events.
- *
- * The interval is cached rather than read per event, and that is why this reads as awkwardly as it
- * does: it runs on the way out of every recorded action, so reading four settings to decide "not this
- * time" would put a database round trip behind every audit row in the system. The cached value is
- * refreshed each time a sweep is actually due, so a changed interval takes effect at the next sweep
- * rather than at the next restart. `lib/logs/ingest.ts` caches its own settings for the same reason,
- * one layer up.
- *
- * **Never throws**, for the reason the module comment gives: this runs behind an event that has
- * already been written, and a failed sweep is a table that is briefly larger than its bounds, while a
- * thrown one would surface as a failure of whatever action happened to be the five-hundredth.
- *
- * Archives into `AUDIT_ARCHIVE_DIRECTORY` (`lib/env.ts`). There is no install step yet that creates
- * that directory: on an install where it does not exist, `archivePeriod` refuses to create one and
- * this sweep fails closed — logged and swallowed below like any other sweep failure, which is exactly
- * the property this whole plan exists for. Provisioning the directory, and giving the sweep a caller
- * that does not depend on write volume, is `lib/maintenance/pass.ts`'s job.
- */
-async function maybeSweep(): Promise<void> {
-	try {
-		const writes = (globalForAudit.fenposAuditWrites ?? 0) + 1;
-		globalForAudit.fenposAuditWrites = writes;
-
-		if (writes % (globalForAudit.fenposAuditSweepEvery ?? MINIMUM_SWEEP_EVERY) !== 0) {
-			return;
-		}
-
-		const { retentionDays, sweepEvery } = await globalAuditSettings();
-		globalForAudit.fenposAuditSweepEvery = sweepEvery;
-
-		const outcome = await sweepAuditNow({ retentionDays }, { archiveDirectory: AUDIT_ARCHIVE_DIRECTORY });
-		if (outcome === null) {
-			return;
-		}
-
-		// Through `appendEvent`, not `recordAudit`: a sweep row that advanced the counter again would
-		// sweep on every `sweepEvery`-th sweep, forever.
-		await appendEvent({
-			action: AUDIT_SWEEP_ACTION,
-			outcome: "SUCCESS",
-			actor: SYSTEM_ACTOR,
-			detail: { removed: outcome.removed, anchoredAt: outcome.anchoredAt, retentionDays },
-		});
-	} catch (error) {
-		logger.error("Could not sweep the audit record", error);
-	}
 }
