@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { archivePeriod } from "@/lib/archive/rotate";
 import { appendEvent, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
+import { GENESIS_HASH } from "@/lib/audit/chain";
 import { readEpoch } from "@/lib/audit/epoch";
 import { verifyAuditChain } from "@/lib/audit/verify";
 import { auditDb } from "@/lib/db";
@@ -121,6 +122,42 @@ describe("verifyAuditChain across an archive boundary", () => {
 		// `describeVerification` renders it as an accusation of tampering against nobody.
 		expect(result.ok).toBe("incomplete");
 		expect(result).toMatchObject({ verifiedFrom: rows[3].seq, checked: 3, archived: 3, live: 0 });
+	});
+
+	it("does not call a chain incomplete when the archives were never walked", async () => {
+		const rows = await chainOfSix();
+		await chainAt(2, new Date("2026-03-14T00:00:00Z"));
+		await auditDb.auditEvent.deleteMany({ where: { seq: { lte: rows[2].seq } } });
+		await auditDb.auditAnchor.create({ data: { id: 1, seq: rows[2].seq, hash: rows[2].hash } });
+		await archivePeriod({ source: "audit", before: new Date("2026-03-01T00:00:00Z"), directory });
+
+		// The same install as the case above, asked the question the panel asks: an epoch, but no archive
+		// directory, so nothing in front of the anchor is opened at all.
+		const result = await verifyAuditChain(auditDb, { epoch: await readEpoch() });
+
+		// Goes red if `"incomplete"` is returned on the strength of the epoch alone. That answer reads
+		// "The audit chain is intact from seq 4", naming rows this walk never opened — the same false
+		// reassurance the third outcome exists to remove, pointed the other way round.
+		expect(result.ok).toBe(true);
+		expect(result).toMatchObject({ checked: 2, archived: 0, live: 2 });
+	});
+
+	it("reports a freshly archived install as whole rather than as incomplete", async () => {
+		const rows = await chainOfSix();
+		await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		// Nothing was ever swept without being archived here, so the epoch is the chain's own first row
+		// and nothing is missing in front of it. Asserted rather than assumed: it is the premise the case
+		// below rests on, and `chainOfSix` is what would silently change it.
+		expect(await readEpoch()).toEqual({ seq: rows[0].seq, prevHash: GENESIS_HASH });
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory, epoch: await readEpoch() });
+
+		// Goes red if the walk reports `"incomplete"` whenever an epoch exists, rather than only when the
+		// epoch starts later than the chain does: every install that has ever archived would then describe
+		// itself as unverifiable, which is a worse false alarm than the one this task removed.
+		expect(result.ok).toBe(true);
+		expect(result).toMatchObject({ checked: 6, archived: 3, live: 3 });
 	});
 
 	it("reports a missing archive as a break", async () => {

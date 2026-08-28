@@ -38,10 +38,11 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  * still in the database. Their directory is derived from the audit database's own resolved URL, and
  * for the reason `.env.example` gives for the databases themselves: whatever volume the record is on
  * is the volume all of it is on, and a second setting is a second thing that can point somewhere else.
- * `lib/maintenance/pass.ts` is what writes into it, so on an install that has run long enough for a
- * period to age out it holds one file per period — and on one that has not, it does not exist at all,
- * which simply means no period has been archived. The `0 from archives` in the output says so out
- * loud, and the epoch read below is what stops a directory somebody emptied from saying the same thing.
+ * `lib/maintenance/pass.ts` both creates it and writes into it, so on an install that has run a pass it
+ * exists — holding one file per period once periods start ageing out, and nothing at all before that —
+ * while on one that has never run a pass it is absent. Empty and absent both mean no period has been
+ * archived, and the `0 from archives` in the output is what says so out loud; the epoch read below is
+ * what stops a directory somebody emptied from saying the same thing.
  *
  * The reporting lives in `lib/audit/verify.ts` rather than here, so it can be tested without a test
  * importing this file and running `main()` as a side effect of the import.

@@ -136,11 +136,14 @@ export interface ChainVerifyOptions {
 	 * everything that left. Given, the archives in it are walked first and the live rows continue from
 	 * them, so the answer covers the whole record rather than the part of it still in the database.
 	 *
-	 * A directory that is not there is read as "nothing has been archived", not as an error: nothing in
-	 * this codebase creates this directory, so an install that has never archived is the ordinary case
-	 * and must not make `pnpm audit:verify` fail. The count of archived events in the result is what
-	 * distinguishes that from a directory named wrongly — unless an {@link ChainVerifyOptions.epoch} is
-	 * given, which is what turns "no archives here" into a finding when there should have been some.
+	 * **An empty directory and a missing one mean the same thing here, and both are ordinary.**
+	 * `lib/maintenance/pass.ts` creates this directory with `mkdirSync` on every pass, so on any install
+	 * that has run one it exists, and holds nothing at all until a period first ages out; on an install
+	 * that has never run a pass it is simply not there. Neither may make `pnpm audit:verify` fail, so a
+	 * directory that is not there is read as "nothing has been archived" rather than as an error. The
+	 * count of archived events in the result is what distinguishes either of those from a directory named
+	 * wrongly — unless {@link ChainVerifyOptions.epoch} is given, which is what turns "no archives here"
+	 * into a finding when there should have been some.
 	 *
 	 * **One of the two false alarms this walk used to raise is gone, and the other is only reported
 	 * honestly now.** A sweep can no longer re-anchor past the newest archived row: `removeAuditThrough`
@@ -349,10 +352,20 @@ export async function verifyAuditChain(
 		lastSeq: live.position.lastSeq,
 	};
 
+	// Three conditions, and each rules out a different lie.
+	//
 	// An epoch whose `prevHash` is genesis says archiving has covered the record since its first event,
-	// so there is nothing missing in front of it and this is a whole chain. Anything else says the
-	// record begins after the chain does, and the rows in between are gone rather than altered.
-	if (epoch !== null && epoch.prevHash !== GENESIS_HASH) {
+	// so nothing is missing in front of it and this is a whole chain; anything else says the record
+	// begins after the chain does, and the rows in between are gone rather than altered.
+	//
+	// `archived > 0` is what says this walk actually opened the archived segment. Without it,
+	// `verifyAuditChain(db, { epoch })` with no `archiveDirectory` — which is the shape the panel's
+	// `verifyChain` calls in — would answer "intact from seq N" while having read nothing older than the
+	// anchor, claiming verification of rows it never touched. That is this outcome's own false
+	// reassurance pointed the other way, and it is worse than the accusation it replaced. Where a
+	// directory *was* given, {@link missingArchive} has already refused an epoch with no archive behind
+	// it, so reaching here with an epoch means at least one archived row verified against it.
+	if (epoch !== null && epoch.prevHash !== GENESIS_HASH && archived > 0) {
 		return { ok: "incomplete", verifiedFrom: epoch.seq, ...verified };
 	}
 
@@ -443,11 +456,11 @@ async function walkArchives(directory: string, from: ChainPosition, epoch: Chain
 	let position = epoch === null ? from : { ...from, expectedPrevHash: epoch.prevHash };
 
 	for (const archive of archives) {
-		// True on the file the epoch vouches for and nowhere else: a disagreement at *that* row is the
+		// True on the oldest archive and nowhere else: a disagreement at *that* file's first row is the
 		// epoch and the archives naming different events, which an operator investigates differently from
-		// a row missing out of the middle of a file. Derived from `firstSeq` rather than from the loop
-		// index so that an oldest archive holding no rows hands the attribution to the next one along
-		// instead of losing it.
+		// a row missing out of the middle of a file. `firstSeq === null` picks out that file and only that
+		// file — `missingArchive` above has already refused an epoch whose oldest archive holds no rows,
+		// so nothing can carry the null past the first iteration.
 		const anchored = epoch !== null && position.firstSeq === null;
 		const outcome = await readAuditArchive(archive, (handle) =>
 			// The reader the rotation itself verifies through, so an archive is checked in exactly the
