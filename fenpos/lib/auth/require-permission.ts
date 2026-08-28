@@ -75,14 +75,23 @@ export class PermissionDeniedError extends ApiError {
  * because a promise a server component does not await can be cut off when the response finishes —
  * and `recordAudit` never throws, so awaiting cannot fail the page.
  *
- * @param permission the permission this page requires
+ * **A list of permissions means any one of them opens the page**, matching what a `NavItem` carrying a
+ * list means — see `lib/navigation.ts`. It is not a way to require several: a page needing two
+ * permissions at once would be a page whose gate cannot say which one was missing, and no page here
+ * wants that. The list form exists for a section that shows two separately governed things, where
+ * holding either gives the caller something to read and what they may read is decided further in.
+ *
+ * @param permission the permission this page requires, or the permissions any one of which opens it
  * @param route the path being opened, as it appears in `lib/navigation.ts`
- * @returns the signed-in user; never null, and never one who lacks the permission
+ * @returns the signed-in user; never null, and never one who holds none of the permissions
  */
-export async function requirePagePermission(permission: PanelPermission, route: string): Promise<PanelUser> {
+export async function requirePagePermission(
+	permission: PanelPermission | readonly PanelPermission[],
+	route: string,
+): Promise<PanelUser> {
 	const user = await requireSession();
 
-	if (!(await userHolds(user, permission))) {
+	if (!(await holdsAny(user, permission))) {
 		redirect("/no-access");
 	}
 
@@ -128,12 +137,12 @@ export async function permittedNavHrefs(user: PanelUser): Promise<string[]> {
 
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			if (!(await userHolds(user, item.permission))) {
+			if (!(await holdsAny(user, item.permission))) {
 				continue;
 			}
 			hrefs.push(item.href);
 			for (const child of item.children ?? []) {
-				if (await userHolds(user, child.permission)) {
+				if (await holdsAny(user, child.permission)) {
 					hrefs.push(child.href);
 				}
 			}
@@ -141,4 +150,36 @@ export async function permittedNavHrefs(user: PanelUser): Promise<string[]> {
 	}
 
 	return hrefs;
+}
+
+/**
+ * Whether the caller holds a permission, or any one of several.
+ *
+ * The one place either form is resolved, so the sidebar's filter and the page's boundary cannot come
+ * to different conclusions about the same `NavItem` — which is the failure a second reading of that
+ * field would eventually produce, and it would show up as a tab that leads to `/no-access`.
+ *
+ * Sequential rather than `Promise.all` for the reason {@link permittedNavHrefs} gives, and short-
+ * circuiting on the first hit: `userHolds` reads a per-request memo after its first call, so the loop
+ * costs nothing to read as what it is.
+ *
+ * @param user the signed-in account
+ * @param permission one permission, or the permissions any one of which suffices
+ * @returns true when the caller holds at least one of them
+ */
+async function holdsAny(user: PanelUser, permission: PanelPermission | readonly PanelPermission[]): Promise<boolean> {
+	if (!Array.isArray(permission)) {
+		// The cast is TypeScript's limit rather than a claim of its own: `Array.isArray` narrows a
+		// `readonly T[]` to `any[]` and leaves the negative branch un-narrowed, so the only thing left in
+		// the union here — a single `PanelPermission` — has to be said out loud.
+		return userHolds(user, permission as PanelPermission);
+	}
+	for (const candidate of permission) {
+		if (await userHolds(user, candidate)) {
+			return true;
+		}
+	}
+	// An empty list holds for nobody. Unreachable while every entry names at least one permission, and
+	// answered this way rather than permissively because the safe reading of "no rule" is no.
+	return false;
 }

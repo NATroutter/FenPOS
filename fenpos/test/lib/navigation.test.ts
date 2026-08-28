@@ -84,7 +84,14 @@ describe("NAV_ITEMS", () => {
 		// A section added without deciding who may see it would otherwise be one the sidebar shows to
 		// everybody and the page gate has nothing to check.
 		for (const item of everyItem()) {
-			expect(PANEL_PERMISSION_IDS, `${item.href} names an unknown permission`).toContain(item.permission);
+			// A section may name several, meaning any one of them opens it — `/archives` does. Every one
+			// still has to be a permission this install defines, and an empty list would be a section
+			// nobody can open, so both are checked here rather than only the single-permission form.
+			const named = Array.isArray(item.permission) ? item.permission : [item.permission];
+			expect(named.length, `${item.href} names no permission at all`).toBeGreaterThan(0);
+			for (const permission of named) {
+				expect(PANEL_PERMISSION_IDS, `${item.href} names an unknown permission`).toContain(permission);
+			}
 		}
 	});
 });

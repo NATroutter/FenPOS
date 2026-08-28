@@ -6,9 +6,12 @@ import type { ArchiveSource } from "@/lib/archive/rotate";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { userHolds } from "@/lib/auth/effective-permissions";
-import { panelQuery } from "@/lib/auth/panel-action";
+import { panelSelf } from "@/lib/auth/panel-action";
+import type { PanelActionId } from "@/lib/auth/panel-actions";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { currentSessionId, type PanelUser } from "@/lib/auth/require-session";
+import type { PanelPermission } from "@/lib/domain/panel-permissions";
+import { ApiError } from "@/lib/errors";
 import { archiveDirectory } from "@/lib/maintenance/pass";
 
 /**
@@ -24,12 +27,19 @@ import { archiveDirectory } from "@/lib/maintenance/pass";
  * month is the most expensive read the panel can perform — so it runs when somebody asks for a
  * period, and never as a side effect of arriving at the tab.
  *
- * **No new permission.** An archive is the same data through a different file, so a log period is
- * `logs:read` and an audit period is `audit:read`. The registry names one permission per action and
- * `logs:read` is what it names, because that is also what opens the page these run behind; which
- * permission governs a *period* depends on the period's source, which is an argument rather than a
- * property of the action, so the second half of the rule is checked in {@link readArchivePage}'s own
- * body and its refusal is recorded there.
+ * **No new permission, and no gate that could name one.** An archive is the same data through a
+ * different file, so a log period is `logs:read` and an audit period is `audit:read` — and which of
+ * those governs a call is decided by the call's own argument. A registry entry names one permission,
+ * so any string written there would be wrong for one of the two sources and would lock that source's
+ * readers out of the tab. Both are registered `custom` for exactly that reason, which is the kind's
+ * stated purpose, and both check per source here.
+ *
+ * **Registered `custom` means these owe their own audit rows, and they pay it.** A refusal is written
+ * as `DENIED` naming the permission the caller was missing, so permission probing stays visible; a
+ * broken archive directory is written as `FAILURE`. Success is deliberately not recorded: arriving at
+ * the tab lists, and an operator hunting through a period opens it over and over, so a row per success
+ * would bury the rows worth reading. That is the argument `query` makes, kept even though the kind
+ * could not be. {@link record} encodes it — it does not accept `SUCCESS`.
  *
  * **Neither of these two removes anything.** Log archives are pruned by `pruneLogArchives` on the
  * maintenance pass; an audit archive may only be removed alongside the epoch that vouches for it,
@@ -44,6 +54,22 @@ export interface ArchivePeriod {
 	source: ArchiveSource;
 	/** The compressed file's size in bytes, so an operator can see what opening it will cost. */
 	bytes: number;
+}
+
+/**
+ * What the listing hands back.
+ *
+ * A result rather than a bare array, and that is the whole point of the shape: on a directory the
+ * server cannot read, an empty array renders as "nothing has been archived yet" — a positive claim
+ * about the record, made on the one page whose job is telling an operator where the record went. The
+ * periods and the reason the list may be short travel together so the page cannot state one without
+ * the other.
+ */
+export interface ArchiveListing {
+	/** Every readable period found, newest first. */
+	periods: ArchivePeriod[];
+	/** Why {@link periods} is not what is on disk, when it is not. Null when it is. */
+	error: string | null;
 }
 
 /**
@@ -112,20 +138,56 @@ export interface ArchivePage {
 /** The most rows one read carries back. */
 const PAGE_SIZE = 100;
 
-/** The message for a read that broke rather than one that was refused. */
-const FAILURE_MESSAGE = "The archive could not be read. Check the server log.";
+/** What a read that broke rather than one that was refused tells the operator. */
+const READ_FAILURE_MESSAGE = "The archive could not be read. Check the server log.";
 
 /**
- * Which existing permission governs each source.
+ * What a listing that broke tells the operator.
+ *
+ * Says the list is untrustworthy rather than merely that something failed, because the empty table it
+ * accompanies would otherwise read as an answer.
+ */
+const LIST_FAILURE_MESSAGE =
+	"The archive directory could not be read, so this is not what is on disk. Check the server log.";
+
+/**
+ * The two registry ids this module writes rows under.
+ *
+ * `Extract` rather than a hand-written union: if either id is renamed in the registry the type
+ * collapses to `never` and every call below stops compiling, which is a stronger guarantee than
+ * `registry-coverage.test.ts`'s scan for written literals could give — that scan reads string
+ * literals, and these rows are written from a variable.
+ */
+type ArchiveActionId = Extract<PanelActionId, "archives:list" | "archives:read">;
+
+/** A source a caller named, resolved to the source itself and the permission that governs it. */
+interface NamedSource {
+	source: ArchiveSource;
+	permission: PanelPermission;
+}
+
+/**
+ * Every archive source, and the existing permission each is read under.
  *
  * A `Map` rather than a record literal, so a `source` arriving off the wire is *looked up* rather
- * than used as an index — `"__proto__" in someObject` is true, and a lookup that answered for it
- * would be a permission check answering about a key nothing wrote.
+ * than used as an index — `"__proto__" in someObject` is true and `someObject["__proto__"]` answers,
+ * whereas a `Map` returns `undefined` for every key nothing put in it.
  */
-const PERMISSION_FOR = new Map<string, "logs:read" | "audit:read">([
-	["logs", "logs:read"],
-	["audit", "audit:read"],
+const ARCHIVE_SOURCES = new Map<string, NamedSource>([
+	["logs", { source: "logs", permission: "logs:read" }],
+	["audit", { source: "audit", permission: "audit:read" }],
 ]);
+
+/** Every permission that governs any archive, derived rather than spelled a second time. */
+const ARCHIVE_PERMISSIONS: readonly PanelPermission[] = [...ARCHIVE_SOURCES.values()].map((named) => named.permission);
+
+/** The shape `periodKeyFor` writes, and so the only shape a listed archive can ever carry. */
+const PERIOD_KEY = /^\d{4}-\d{2}$/;
+
+/** An archive a caller asked for, once its fields have been checked rather than assumed. */
+interface AskedArchive extends NamedSource {
+	periodKey: string;
+}
 
 /**
  * Lists the periods on disk that this caller may read.
@@ -135,27 +197,36 @@ const PERMISSION_FOR = new Map<string, "logs:read" | "audit:read">([
  * the filesystem gave it, which interleaves the two sources by filename at best — so the ordering is
  * put on here rather than relied on from there.
  *
- * A caller without `audit:read` is shown the log periods and not the audit ones, rather than being
- * refused outright: the tab is opened with `logs:read`, and which months of the audit record exist
- * is itself something `audit:read` governs.
+ * A caller holding one permission and not the other is shown that source's periods and not the
+ * other's, rather than being refused: which months of the audit record exist is itself something
+ * `audit:read` governs, and the same in reverse. Only a caller holding neither is refused.
  *
- * @returns every readable period, newest first; an empty list when refused or when the directory
- *   could not be read, in both of which cases the record says so
+ * @returns the readable periods newest first, and the reason that list is short when there is one
  */
-export async function listArchivePeriods(): Promise<ArchivePeriod[]> {
-	return panelQuery<ArchivePeriod[]>(
-		"archives:list",
-		async (user) => {
-			const readable = await readableSources(user);
-			const found = await listArchives(archiveDirectory());
+export async function listArchivePeriods(): Promise<ArchiveListing> {
+	// Outside any try: an absent session redirects, and `redirect` signals by throwing.
+	const user = await panelSelf("archives:list");
 
-			return found
-				.filter((archive) => readable.includes(archive.source))
-				.map((archive) => ({ periodKey: archive.periodKey, source: archive.source, bytes: archive.bytes }))
-				.sort(newestFirst);
-		},
-		{ refused: () => [], failed: () => [] },
-	);
+	const readable = await readableSources(user);
+	if (readable.length === 0) {
+		await record("archives:list", user, "DENIED", { permission: ARCHIVE_PERMISSIONS });
+		return { periods: [], error: REFUSAL_MESSAGE };
+	}
+
+	try {
+		const found = await listArchives(archiveDirectory());
+		const periods = found
+			.filter((archive) => readable.includes(archive.source))
+			.map((archive) => ({ periodKey: archive.periodKey, source: archive.source, bytes: archive.bytes }))
+			.sort(newestFirst);
+		return { periods, error: null };
+	} catch (error) {
+		// `archiveDirectory()` creates the directory recursively, so "it is not there" heals itself and
+		// what is left is a volume the server cannot read or a path that is not a directory — narrow, and
+		// exactly the case an operator most needs told about rather than shown an empty table for.
+		await record("archives:list", user, "FAILURE", { error: messageOf(error) });
+		return { periods: [], error: LIST_FAILURE_MESSAGE };
+	}
 }
 
 /**
@@ -169,45 +240,91 @@ export async function listArchivePeriods(): Promise<ArchivePeriod[]> {
  * a path the caller supplied — see {@link ArchiveRef}. A period that is not in the listing is
  * reported as missing rather than searched for anywhere else.
  *
+ * **The refusal comes before the directory is read.** A caller who may not read this source learns
+ * nothing about which periods exist, because nothing has looked yet.
+ *
  * @param descriptor which period to open, named rather than pathed
  * @param filters what to search for, and how far in
  * @returns the page, or the reason there is none
  */
 export async function readArchivePage(descriptor: ArchiveRef, filters: ArchivePageFilters): Promise<ArchivePage> {
-	// Given rather than inferred: the body returns four differently shaped literals and the two below
-	// return two more, and pinning the type is what makes them all one answer rather than a union.
-	return panelQuery<ArchivePage>(
-		"archives:read",
-		async (user) => {
-			// Unreachable through the type, and checked anyway: `descriptor` arrives from a browser, and
-			// a `source` TypeScript was promised is one of two is still whatever was actually sent.
-			const permission = PERMISSION_FOR.get(descriptor.source);
-			if (permission === undefined) {
-				return { rows: [], more: false, error: "That is not a kind of archive this install writes." };
-			}
-			if (!(await userHolds(user, permission))) {
-				await recordSourceRefusal(user, descriptor, permission);
-				return { rows: [], more: false, error: REFUSAL_MESSAGE };
-			}
+	// Outside any try, and before anything reads `descriptor`: an absent session redirects by throwing,
+	// and a malformed argument must not be able to fail ahead of the session being resolved — that
+	// would make the one call this module never records the hostile one.
+	const user = await panelSelf("archives:read");
 
-			const found = await listArchives(archiveDirectory());
-			const archive = found.find((candidate) => matches(candidate, descriptor));
-			if (archive === undefined) {
-				// The period is not named back: it came from the caller, and a message that echoes what it
-				// was handed is a message that says nothing the caller did not already know.
-				return { rows: [], more: false, error: "No archive on disk for that period." };
-			}
+	// Held outside the try so the failure row can still name what was asked for, when that much was
+	// legible. Null while it is not.
+	let asked: AskedArchive | null = null;
 
-			return readArchive(archive, (opened) => pageOf(opened, descriptor.source, filters));
-		},
-		{
-			refused: () => ({ rows: [], more: false, error: REFUSAL_MESSAGE }),
-			failed: () => ({ rows: [], more: false, error: FAILURE_MESSAGE }),
-			// The period, not its rows. A copy of what was read inside the record would put the archive
-			// back into the database it was moved out of, one page at a time.
-			target: { kind: "archive", id: `${descriptor.source}-${descriptor.periodKey}` },
-		},
-	);
+	try {
+		// A `const` as well as the outer `let`, and not only for tidiness: the `find` below closes over
+		// it, and TypeScript will not narrow a `let` across a function boundary.
+		const named = askedArchive(descriptor);
+		asked = named;
+
+		if (!(await userHolds(user, named.permission))) {
+			await record("archives:read", user, "DENIED", { permission: named.permission }, targetOf(named));
+			return { rows: [], more: false, error: REFUSAL_MESSAGE };
+		}
+
+		const found = await listArchives(archiveDirectory());
+		const archive = found.find((candidate) => matches(candidate, named));
+		if (archive === undefined) {
+			// The period is not named back: it came from the caller, and a message that echoes what it
+			// was handed is a message that says nothing the caller did not already know.
+			return { rows: [], more: false, error: "No archive on disk for that period." };
+		}
+
+		return await readArchive(archive, (opened) => pageOf(opened, archive.source, filters));
+	} catch (error) {
+		await record(
+			"archives:read",
+			user,
+			"FAILURE",
+			{ error: messageOf(error) },
+			asked === null ? undefined : targetOf(asked),
+		);
+		// An `ApiError` carries a message written to be read — a malformed descriptor's, here. Anything
+		// else is unexpected and reported generically, because an internal message in a panel is at best
+		// noise and at worst a disclosure.
+		return { rows: [], more: false, error: error instanceof ApiError ? error.message : READ_FAILURE_MESSAGE };
+	}
+}
+
+/**
+ * Reads a caller's descriptor, checking every field rather than trusting the type on it.
+ *
+ * A server action's arguments are whatever was posted to it. TypeScript says this is an
+ * {@link ArchiveRef}; the wire says nothing of the kind, and dereferencing `descriptor.source` on a
+ * `null` would throw a raw `TypeError` out of an action that had not yet decided whether to record
+ * anything.
+ *
+ * `periodKey` is held to `yyyy-mm` even though it is only ever compared for equality afterwards. A key
+ * of another shape could never match a listed archive, so refusing it changes no legitimate answer —
+ * and it bounds what a caller can put into the `target` of an audit row at seven characters.
+ *
+ * @param descriptor the argument, as it arrived
+ * @returns the source, the permission governing it, and the period asked for
+ * @throws ApiError when any field is missing, of the wrong type, or names something this install does
+ *   not write
+ */
+function askedArchive(descriptor: ArchiveRef): AskedArchive {
+	const value: unknown = descriptor;
+	if (typeof value !== "object" || value === null) {
+		throw new ApiError("invalid_type", "That is not an archive.");
+	}
+
+	const { source, periodKey } = value as { source?: unknown; periodKey?: unknown };
+	const named = typeof source === "string" ? ARCHIVE_SOURCES.get(source) : undefined;
+	if (named === undefined) {
+		throw new ApiError("invalid_type", "That is not a kind of archive this install writes.");
+	}
+	if (typeof periodKey !== "string" || !PERIOD_KEY.test(periodKey)) {
+		throw new ApiError("invalid_type", "That is not an archive period.");
+	}
+
+	return { ...named, periodKey };
 }
 
 /**
@@ -218,11 +335,10 @@ export async function readArchivePage(descriptor: ArchiveRef, filters: ArchivePa
  */
 async function readableSources(user: PanelUser): Promise<ArchiveSource[]> {
 	const readable: ArchiveSource[] = [];
-	if (await userHolds(user, "logs:read")) {
-		readable.push("logs");
-	}
-	if (await userHolds(user, "audit:read")) {
-		readable.push("audit");
+	for (const named of ARCHIVE_SOURCES.values()) {
+		if (await userHolds(user, named.permission)) {
+			readable.push(named.source);
+		}
 	}
 	return readable;
 }
@@ -246,38 +362,62 @@ function newestFirst(left: ArchivePeriod, right: ArchivePeriod): number {
  * Whether a listed archive is the one a caller named.
  *
  * @param candidate an archive the directory listing found
- * @param descriptor what the caller asked for
+ * @param asked what the caller asked for, already checked
  * @returns true when they are the same period of the same source
  */
-function matches(candidate: ArchiveDescriptor, descriptor: ArchiveRef): boolean {
-	return candidate.source === descriptor.source && candidate.periodKey === descriptor.periodKey;
+function matches(candidate: ArchiveDescriptor, asked: AskedArchive): boolean {
+	return candidate.source === asked.source && candidate.periodKey === asked.periodKey;
 }
 
 /**
- * Records a caller being refused an archive whose source they may not read.
+ * What an audit row names when one of these actions is about a particular period.
  *
- * Written here rather than by the gate, because the gate has already let this call through on
- * `logs:read` — see this module's comment for why the second half of the rule cannot live in the
- * registry. `DENIED` rather than `FAILURE`, deliberately: `/audit` tells those two apart by colour so
- * that a page of refusals reads as somebody probing rather than as an install that is broken, and a
- * refusal filed as a fault would be in the wrong pile on both counts.
- *
- * The action string is the registry id spelled out, which `registry-coverage.test.ts` checks against
- * the registry — this is one of the few rows in `app/` the gate does not write.
- *
- * @param user who was refused
- * @param descriptor the period they asked for
- * @param permission the permission they were missing
+ * @param asked the period the call was about
+ * @returns the row's target
  */
-async function recordSourceRefusal(user: PanelUser, descriptor: ArchiveRef, permission: string): Promise<void> {
+function targetOf(asked: AskedArchive): { kind: string; id: string } {
+	return { kind: "archive", id: `${asked.source}-${asked.periodKey}` };
+}
+
+/**
+ * Writes the audit row one of these actions owes.
+ *
+ * `outcome` deliberately excludes `SUCCESS`, so "these two are silent about working" is a fact the
+ * type carries rather than a habit the next reader has to notice. The module comment above says why.
+ *
+ * The session id is read fresh through {@link currentSessionId} for the reason `panel-action.ts`'s
+ * own `record()` gives; neither of these actions rotates a session, so it reads back what the gate
+ * was already carrying.
+ *
+ * @param id which action, which is also what the row's `action` says
+ * @param user who was acting
+ * @param outcome how it went
+ * @param detail the named fields for the row
+ * @param target what it was about, when it was about one period
+ */
+async function record(
+	id: ArchiveActionId,
+	user: PanelUser,
+	outcome: "DENIED" | "FAILURE",
+	detail: Record<string, unknown>,
+	target?: { kind: string; id: string },
+): Promise<void> {
 	await recordAudit({
-		action: "archives:read",
-		outcome: "DENIED",
+		action: id,
+		outcome,
 		actor: userActor(user),
-		target: { kind: "archive", id: `${descriptor.source}-${descriptor.periodKey}` },
-		detail: { permission },
+		target,
+		detail,
 		provenance: await requestProvenance(await currentSessionId(user.sessionId)),
 	});
+}
+
+/**
+ * @param error whatever was thrown
+ * @returns what to put in the audit row's `error` field
+ */
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -293,7 +433,9 @@ async function recordSourceRefusal(user: PanelUser, descriptor: ArchiveRef, perm
  * @returns the page
  */
 function pageOf(archive: Database.Database, source: ArchiveSource, filters: ArchivePageFilters): ArchivePage {
-	const skip = Math.max(0, Math.trunc(filters.skip ?? 0));
+	// Clamped rather than trusted: `skip` crosses the wire, and a negative or fractional one is a
+	// SQLite `OFFSET` that either errors or silently means something else.
+	const skip = Math.max(0, Math.trunc(Number(filters.skip ?? 0)) || 0);
 	const search = (filters.search ?? "").trim();
 	const take = PAGE_SIZE + 1;
 

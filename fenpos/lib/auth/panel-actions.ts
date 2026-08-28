@@ -19,9 +19,8 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * `self` actions cannot drift. The `unauthenticated` entries and `auth:sign-out` are written by the
  * actions themselves, through `AUTH_AUDIT_ACTIONS` (`lib/audit/auth-events.ts`), and `settings:save`
  * through a literal of its own — so for those the id here and the string written there are two
- * spellings that have to agree. `archives:read` writes one row of its own too: the gate has already
- * let it through on `logs:read` by the time it finds the caller may not read *this* period's source,
- * so the refusal it files is a second, hand-written `DENIED`. They did not agree, once: `signOut` was
+ * spellings that have to agree. The two `archives:*` entries write all of their own rows, for the
+ * reason their block below gives, so they are in that set too. They did not agree, once: `signOut` was
  * registered as `self:sign-out` while recording `auth:sign-out`, which made the sentence above false
  * and offered `/audit` a filter that could only ever return no rows. If you add an entry whose action
  * writes its own row, make the two match, and prefer the `AUTH_AUDIT_ACTIONS` constant to a second
@@ -51,8 +50,13 @@ import type { PanelPermission } from "@/lib/domain/panel-permissions";
  * `command` all the same, because they change something and their success belongs in the record.
  * The two axes are independent, and conflating them would quietly stop auditing key creation.
  *
- * `custom` is `saveSettings` alone: its batch spans setting categories and it checks one permission
- * per staged change, so the gate cannot check for it.
+ * `custom` is for the actions the gate genuinely cannot check, and there are three. `saveSettings`'s
+ * batch spans setting categories and it checks one permission per staged change. `archives:list` and
+ * `archives:read` are governed by `logs:read` or `audit:read` depending on which period the call names,
+ * so the governing permission is a fact about the argument rather than about the action — see their
+ * block below. What the three have in common is that no single `permission` string could be written
+ * here without being wrong for some calls, which is the bar for using this kind: an action that merely
+ * wants to check something extra should still be `command` or `query` and check it in addition.
  *
  * `self` and `unauthenticated` carry no permission and exist so "deliberately ungated" is a
  * decision written down rather than an absence the coverage test has to be told to forgive.
@@ -571,28 +575,33 @@ export const PANEL_ACTIONS = [
 	},
 
 	// --- Archives ---
-	// Both are `query`: a listing is what arriving at the tab does, and an operator hunting through a
-	// period opens it repeatedly, so a row per success would bury the ones worth reading. Refusals are
-	// still recorded, which is the property that matters.
+	// `custom`, for the reason the kind exists: the gate cannot check for these. Reading an archive is
+	// reading the same data through a different file, so this plan adds no permission for it — a log
+	// period is `logs:read` and an audit period is `audit:read`, and **which one governs a call is
+	// decided by the call's own argument.** A single `permission` here could only ever be right for one
+	// of the two sources, and naming either would lock the other's readers out of the tab entirely.
 	//
-	// Both name `logs:read` rather than a permission of their own, because reading an archive is
-	// reading the same data through a different file and this plan adds no permission for it. That is
-	// only half the rule: an *audit* period additionally needs `audit:read`, which the registry cannot
-	// say because it names one permission per action while the governing permission depends on which
-	// period was asked for. `(panel)/archives/actions.ts` checks that half itself and writes its own
-	// `DENIED` row when it refuses — one of the few rows under `app/` the gate does not write.
+	// So both resolve the session through `panelSelf` and check per source, and both write every row
+	// they owe — a `DENIED` naming the permission the caller was missing, a `FAILURE` when the archive
+	// directory could not be read. Neither records success: arriving at the tab lists, and an operator
+	// hunting through a period opens it over and over, so a row per success would bury the rows worth
+	// reading. That is the `query` argument, kept, even though the kind could not be.
+	//
+	// The cost is that `permission-matrix.test.ts` walks only `command` and `query`, so these two are
+	// not covered by it. `test/app/(panel)/archives/actions.test.ts` proves both gates directly instead
+	// — refused holding neither, allowed holding either, and refused per source in both directions.
 	{
 		id: "archives:list",
-		kind: "query",
-		permission: "logs:read",
+		kind: "custom",
+		permission: null,
 		module: "(panel)/archives/actions.ts",
 		exportName: "listArchivePeriods",
 		description: "Listed the archived periods on disk",
 	},
 	{
 		id: "archives:read",
-		kind: "query",
-		permission: "logs:read",
+		kind: "custom",
+		permission: null,
 		module: "(panel)/archives/actions.ts",
 		exportName: "readArchivePage",
 		description: "Opened an archived period and read a page of it",

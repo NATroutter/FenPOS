@@ -87,6 +87,22 @@ describe("permittedNavHrefs", () => {
 		expect(await permittedNavHrefs(user)).toEqual(["/logs", "/archives"]);
 	});
 
+	/**
+	 * The other half of `/archives`' `["logs:read", "audit:read"]`, and the reason a section may name
+	 * more than one permission at all.
+	 *
+	 * A list means **any** of them. Goes red if it is ever read as "all of them", which would hide the
+	 * Archives tab from the auditor who most needs it — and goes red just as surely if the section is
+	 * put back to naming `logs:read` alone, because then this account is sent to `/no-access` by the
+	 * one page whose job is saying where the record went.
+	 */
+	it("offers a section naming several permissions to an account holding just one of them", async () => {
+		const user = await account("p6");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "audit:read" } });
+
+		expect(await permittedNavHrefs(user)).toEqual(["/archives", "/audit"]);
+	});
+
 	it("offers Users to an account that may read it, and not Roles", async () => {
 		const user = await account("p5");
 		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:read" } });

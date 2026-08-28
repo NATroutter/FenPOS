@@ -223,9 +223,15 @@ export async function panelQuery<T>(
  * Resolves the session for an action that does its own checking.
  *
  * For the registry's `custom` and `self` kinds: `saveSettings`, which checks a permission per
- * staged change because its batch spans setting categories, and the actions on the caller's own
- * account, which are deliberately ungated. Those actions write their own rows, because only they
- * know what happened.
+ * staged change because its batch spans setting categories; the two `archives:*` reads, which are
+ * governed by `logs:read` or `audit:read` according to which period the call names; and the actions
+ * on the caller's own account, which are deliberately ungated. Those actions write their own rows,
+ * because only they know what happened.
+ *
+ * **This resolves the session and nothing else.** It is not a gate with the check left out — a caller
+ * reaching it has to perform its own, and the registry's `custom` kind is the written record that it
+ * does. Registering an action `custom` to avoid writing a permission down would turn that record into
+ * a hole shaped exactly like this function.
  *
  * @param id the action's registry id, so calling this on a gated action is a mistake the reader can
  *   see

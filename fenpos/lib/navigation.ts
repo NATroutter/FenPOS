@@ -48,13 +48,23 @@ export interface NavItem {
 	description: string;
 	icon: LucideIcon;
 	/**
-	 * The permission that reveals this section, and that its page requires.
+	 * The permission that reveals this section and that its page requires — or, for a section showing
+	 * two things that are governed separately, the permissions **any one** of which does.
 	 *
 	 * Declared beside the route rather than in a second table, so a section added without deciding
 	 * who may see it is a type error rather than a section everyone can see. The sidebar filters on
 	 * it; the page's own `requirePagePermission` is the boundary.
+	 *
+	 * **A list means "any of", never "all of".** `/archives` is the case it exists for: it lists
+	 * archived log periods and archived audit periods side by side, so an account holding either has
+	 * something to read there, and requiring both would hide the log archives from an auditor and the
+	 * audit archives from an operator. Revealing the section is not deciding what is in it — which
+	 * periods a caller may actually see is still settled one at a time, by the actions behind the page.
+	 *
+	 * One permission stays one permission: the list form is rare enough that writing it should read as
+	 * the deliberate exception it is.
 	 */
-	permission: PanelPermission;
+	permission: PanelPermission | readonly PanelPermission[];
 	/**
 	 * Sections nested under this one in the sidebar.
 	 *
@@ -112,13 +122,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description:
 					"Whole months moved out of the live databases into compressed files. Opened one at a time, on request.",
 				icon: Archive,
-				// `logs:read`, though the tab lists archived audit periods too. A section carries one
-				// permission, and this is the one that has to be it: the log archives are what accumulate
-				// month after month, and `/logs` is where an operator is standing when they discover the
-				// lines they wanted have aged out. An audit period is still governed by `audit:read` —
-				// `listArchivePeriods` will not offer one without it — so what this reveals is the tab, not
-				// the record.
-				permission: "logs:read",
+				// Either permission, because the tab lists both kinds of archived period and an account
+				// holding one of them has something to read here. Naming only `logs:read` would send an
+				// auditor who holds `audit:read` to `/no-access` and then tell them, on the one page whose
+				// job is saying where the record went, that there was nothing to see. What each caller may
+				// actually open is still decided per period by the actions behind this page.
+				permission: ["logs:read", "audit:read"],
 			},
 		],
 	},

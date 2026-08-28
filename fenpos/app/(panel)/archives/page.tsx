@@ -20,16 +20,17 @@ export const dynamic = "force-dynamic";
  * `archive-table.tsx`, and never here. A page that opened every archive to render itself would be the
  * exact cost this split exists to avoid.
  *
- * Opened by `logs:read`, which is also what the sidebar reveals it with. That is not the whole rule:
- * an audit period additionally needs `audit:read`, checked by `listArchivePeriods` before it offers
- * one and by `readArchivePage` before it opens one, so a caller here sees and reads only the sources
- * they hold.
+ * Opened by **either** `logs:read` or `audit:read`, matching the sidebar entry: this tab lists both
+ * kinds of archived period, so an account holding one of them has something to read here. Requiring
+ * one named permission would send the other's holder to `/no-access` — and for an auditor that is the
+ * page telling them the record is gone by refusing to load. What each caller may actually see is
+ * settled per period further in, by the two actions.
  */
 export default async function ArchivesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("logs:read", "/archives");
+	await requirePagePermission(["logs:read", "audit:read"], "/archives");
 
-	const periods = await listArchivePeriods();
+	const listing = await listArchivePeriods();
 
-	return <ArchiveTable periods={periods} />;
+	return <ArchiveTable periods={listing.periods} error={listing.error} />;
 }

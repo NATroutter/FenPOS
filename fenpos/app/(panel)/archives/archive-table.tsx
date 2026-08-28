@@ -32,7 +32,7 @@ const MUTED_CELL = "text-[11.5px] text-muted-foreground";
  * The two sources render different columns, because they are read for different questions — a log
  * line for its message, a recorded event for who did what and whether it worked.
  */
-export function ArchiveTable({ periods }: { periods: ArchivePeriod[] }) {
+export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; error: string | null }) {
 	const [opened, setOpened] = useState<ArchiveRef | null>(null);
 	const [search, setSearch] = useState("");
 	const [skip, setSkip] = useState(0);
@@ -68,6 +68,20 @@ export function ArchiveTable({ periods }: { periods: ArchivePeriod[] }) {
 		setOpened(null);
 		setPage(null);
 	};
+
+	// The failure is shown before the list is judged empty, and it replaces the empty state rather than
+	// sitting above it: "nothing has been archived yet" is a claim about the record, and a directory the
+	// server could not read is precisely the case where nobody knows whether it is true.
+	if (error !== null) {
+		return (
+			<Empty className="border border-dashed border-destructive/40">
+				<EmptyHeader>
+					<EmptyTitle>The archives could not be listed</EmptyTitle>
+					<EmptyDescription>{error}</EmptyDescription>
+				</EmptyHeader>
+			</Empty>
+		);
+	}
 
 	if (periods.length === 0) {
 		return (
