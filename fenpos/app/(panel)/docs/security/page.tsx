@@ -25,6 +25,7 @@ const SECTIONS = [
 	{ id: "sessions", title: "Sessions", note: "Lifetime, inactivity, and how many at once" },
 	{ id: "allowlist", title: "The address allowlist", note: "auth.ipAllowlist, checked on every request" },
 	{ id: "audit", title: "The audit record", note: "Append-only, and how to prove it" },
+	{ id: "archives", title: "Archived history", note: "Where a month goes when it ages out, and who may remove one" },
 	{ id: "recovering", title: "Recovering", note: "pnpm auth:recover, for an install nobody can sign in to" },
 ] as const;
 
@@ -77,6 +78,9 @@ export default async function SecurityDocsPage() {
 		maxConcurrentSessions,
 		require2fa,
 		ipAllowlist,
+		auditRetentionDays,
+		logArchiveEnabled,
+		logArchiveRetentionDays,
 	] = await Promise.all([
 		integerSetting("auth.lockoutAfterFailures"),
 		integerSetting("auth.lockoutMinutes"),
@@ -85,6 +89,9 @@ export default async function SecurityDocsPage() {
 		integerSetting("auth.maxConcurrentSessions"),
 		booleanSetting("auth.require2fa"),
 		stringSetting("auth.ipAllowlist"),
+		integerSetting("audit.retentionDays"),
+		booleanSetting("logs.archiveEnabled"),
+		integerSetting("logs.archiveRetentionDays"),
 	]);
 
 	return (
@@ -281,42 +288,140 @@ export default async function SecurityDocsPage() {
 					<Split>
 						<Col>
 							<P>
-								Every row written to the audit record stays. There is no edit control and no delete control anywhere in
-								the panel — not on the Audit tab, not for a superuser — and each row's hash chains to the one before it,
-								so an edited or deleted row breaks the chain rather than vanishing invisibly.
+								Every row written to the audit record stays. There is no path in this codebase that edits one and none
+								that picks a row out to delete, and each row's hash chains to the one before it, so an edited or removed
+								row breaks the chain rather than vanishing invisibly. The Audit tab carries no edit or delete control at
+								all, not for a superuser either. What can leave the live database is a whole calendar month at a time,
+								into an archive; what can leave the record altogether is one of those archives, deleted on purpose.
+								Archived history, below, is both.
 							</P>
 
 							<P>
 								What writes rows is the panel itself, and <Mono>pnpm auth:recover</Mono> below.{" "}
 								<strong>The v1 API writes none.</strong> A key that prints a job, cancels one, uploads an asset or
 								pauses a device leaves nothing here, and neither does a key refused for a permission it does not hold.
-								Jobs and assets keep their own records on their own tabs, so the effects of API traffic are still
-								traceable — what the Audit tab cannot answer about it is who did it.
+								Those requests are recorded on the Logs tab instead, naming the key: every refusal, everything that
+								changed something, and successful reads too where <Mono>logs.recordApiReads</Mono> is on. So what an API
+								key did is answerable there rather than here.
 							</P>
 
 							<P>
-								The one removal that exists at all is an automatic retention sweep, governed by{" "}
-								<Mono>audit.retentionDays</Mono>, which drops rows older than the window and re-anchors the chain behind
-								whatever it removed — so a routine sweep still leaves a chain that verifies clean.
+								The one removal is retention, governed by <Mono>audit.retentionDays</Mono> (
+								<strong>{auditRetentionDays}</strong> days on this install), and it never deletes an event that has not
+								been archived first. A whole calendar month is copied into an archive file, the copy is checked — its
+								row count against what was read, and its hash chain walked end to end — and only then are those rows
+								removed from the live database and the chain re-anchored behind them. Because an archive is named for a
+								month, only a month that has fully aged out may go, so up to a month more than the window is kept.
 							</P>
 
 							<P>
-								<Mono>pnpm audit:verify</Mono> walks the whole chain from a shell on the server and proves it is whole.
-								A broken chain names the exact <Mono>seq</Mono> where it broke — the row an investigation starts from —
-								and the command cannot repair anything: a tool that offered to fix the chain would be a tool that
-								offered to finish the job for whoever broke it.
+								<Mono>pnpm audit:verify</Mono> walks the whole record from a shell on the server — the archives first,
+								then the rows still live — and answers one of three ways. It cannot repair anything: a tool that offered
+								to fix the chain would be a tool that offered to finish the job for whoever broke it.
+							</P>
+
+							<P>
+								<strong>Intact</strong> means everything it holds verified, and the count says how much of that came out
+								of archives rather than the live database. <strong>Intact from a seq</strong> is Archived history,
+								below. <strong>Broken</strong> names the exact <Mono>seq</Mono> it broke at and which of five ways: a
+								row that no longer matches its own hash, a row whose link no longer matches the row before it, an anchor
+								that disagrees with the oldest row left, archives and the live database disagreeing about where the
+								archived history ends, or an archive that should be on disk and is not. That <Mono>seq</Mono> is where
+								an investigation starts. Only a break is reported as a failure — the other two answers exit 0 — so a
+								monitoring check can run this unattended.
+							</P>
+
+							<P>
+								The <strong>Verify chain</strong> button on the Audit tab runs the same walk over the same files and
+								shows the same sentence, for an account holding <Mono>audit:verify</Mono>.
 							</P>
 						</Col>
 
 						<Col>
-							<CodeBlock label="pnpm audit:verify — chain intact">{`The audit chain is intact: 4218 events verified, seq 1 through 4218.`}</CodeBlock>
+							<CodeBlock label="pnpm audit:verify — chain intact">
+								{`The audit chain is intact: 4218 events verified, seq 1 through 4218 (3800 from archives, 418 live).`}
+							</CodeBlock>
 
-							<CodeBlock label="pnpm audit:verify — chain broken">{`THE AUDIT CHAIN IS BROKEN at seq 2091 (hash-mismatch).`}</CodeBlock>
+							<CodeBlock label="pnpm audit:verify — intact as far back as the record goes">
+								{`The audit chain is intact from seq 1402: 2817 events verified (2399 from archives, 418 live).
+
+Events before seq 1402 were removed by retention before archiving was in use.
+They cannot be verified, and nothing here suggests they were altered — they are simply gone.`}
+							</CodeBlock>
+
+							<CodeBlock label="pnpm audit:verify — chain broken">{`THE AUDIT CHAIN IS BROKEN at seq 2091 (hash-mismatch).
+2090 events before it verified.
+
+This means the record was changed after it was written. Nothing here can repair it, and
+nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>
 
 				<DocSection {...SECTIONS[6]}>
+					<Split>
+						<Col>
+							<P>
+								An archived month is the same rows in a compressed SQLite file — <Mono>audit-2026-01.db.gz</Mono> — in
+								an <Mono>archives</Mono> directory beside the databases themselves, on whatever volume they are on. The{" "}
+								<strong>Archives</strong> tab lists what is there and searches inside one: an audit month needs{" "}
+								<Mono>audit:read</Mono> and a log month <Mono>logs:read</Mono>, and either one on its own opens the tab
+								and shows that source's months. A range on the Logs tab that reaches back before the live window says so
+								and points at the archive covering it, when there is one on disk.
+							</P>
+
+							<P>
+								Verification reaches into those files, so an archived month is proved rather than trusted. What it
+								cannot reach is history that left before archiving existed: an install upgraded from an earlier version
+								swept rows straight out of the database, and those rows are in no file. The record keeps the{" "}
+								<Mono>seq</Mono> archiving is complete from, and a verification that starts there reports{" "}
+								<strong>intact from</strong> that <Mono>seq</Mono> rather than claiming the whole chain.
+							</P>
+
+							<Aside>
+								<strong>That answer is a correctly configured install, not an incident.</strong> Everything from that{" "}
+								<Mono>seq</Mono> on is proved, nothing suggests the rows before it were altered, and they are simply
+								gone. <Mono>pnpm audit:verify</Mono> exits <strong>0</strong> on it and the Audit tab draws it as a note
+								rather than a warning — the alternative is paging somebody hourly, for the life of the install, about a
+								retention setting doing its job.
+							</Aside>
+
+							<P>
+								Log archives are deleted by age, on the same pass that writes them, once a month is older than{" "}
+								<Mono>logs.archiveRetentionDays</Mono> (<strong>{logArchiveRetentionDays}</strong> days here).{" "}
+								<strong>Audit archives are never deleted on a timer.</strong> They are evidence, and a timer that
+								removed evidence is one an attacker could wait for rather than defeat.
+							</P>
+
+							<P>
+								An operator who needs the space deletes one from the Archives tab, which needs{" "}
+								<Mono>audit:archive-delete</Mono> — held apart from <Mono>audit:read</Mono> because this destroys
+								evidence rather than reading it. Only the oldest archived month may go, and never the last one on disk.
+								The record's own note of where archived history begins moves to the month that becomes the oldest in the
+								same operation, so the next verification says the record begins later instead of reporting a file as
+								missing, and the deletion writes its own row into the record it shortens.
+							</P>
+
+							<Aside>
+								A rotation whose compression failed leaves an uncompressed <Mono>audit-&lt;month&gt;.db</Mono> beside
+								the rest. While one is on disk the delete refuses outright, whichever month was asked for: that file is
+								one verification reads and the tab's own listing cannot see, so "the oldest" would mean two different
+								things to the two of them.
+							</Aside>
+						</Col>
+
+						<Facts>
+							<Fact label="audit.retentionDays">{auditRetentionDays} days, and the month that cutoff falls in</Fact>
+							<Fact label="logs.archiveEnabled">
+								{logArchiveEnabled ? "On — aged-out lines are archived first" : "Off — aged-out lines are deleted"}
+							</Fact>
+							<Fact label="logs.archiveRetentionDays">{logArchiveRetentionDays} days, then the file is deleted</Fact>
+							<Fact label="Audit archives">Deleted only by hand, under audit:archive-delete</Fact>
+						</Facts>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[7]}>
 					<Split>
 						<Col>
 							<P>

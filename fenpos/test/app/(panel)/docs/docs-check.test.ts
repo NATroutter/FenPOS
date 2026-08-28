@@ -1,9 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { API_ROUTES } from "@/lib/api/api-routes";
+import { describeVerification } from "@/lib/audit/verify";
 import { prisma } from "@/lib/db";
+import { PANEL_PERMISSION_IDS } from "@/lib/domain/panel-permissions";
 import { PERMISSION_IDS } from "@/lib/domain/permissions";
 import { TAGS } from "@/lib/markup/tags";
+import { SETTING_KEYS } from "@/lib/settings/settings-service";
 
 /**
  * What the docs pages claim, checked against what the code does.
@@ -44,6 +47,7 @@ const { createAsset } = await import("@/lib/assets/asset-service");
 
 const API_PAGE = readFileSync("app/(panel)/docs/api/page.tsx", "utf8");
 const MARKUP_PAGE = readFileSync("app/(panel)/docs/markup/page.tsx", "utf8");
+const SECURITY_PAGE = readFileSync("app/(panel)/docs/security/page.tsx", "utf8");
 
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const LOGO_PNG = readFileSync("test/fixtures/logo.png");
@@ -255,6 +259,123 @@ describe("the markup page's tag table", () => {
 
 	it("lists <fill>", () => {
 		expect(MARKUP_PAGE).toContain('syntax: "<fill>"');
+	});
+});
+
+/**
+ * One code sample from the security page, by the label printed above it.
+ *
+ * The samples hold no backtick of their own, so the template literal that carries one is delimited by
+ * the first two after the label — which is what lets this read a sample written on its own line as
+ * readily as one written inline after the tag.
+ *
+ * @param label the sample's `CodeBlock` label
+ * @returns the sample exactly as the page prints it
+ */
+function securitySample(label: string): string {
+	const at = SECURITY_PAGE.indexOf(`<CodeBlock label="${label}">`);
+	expect(at, `the security page has no code sample labelled "${label}"`).toBeGreaterThan(-1);
+
+	const open = SECURITY_PAGE.indexOf("`", at);
+	const close = SECURITY_PAGE.indexOf("`", open + 1);
+	expect(close, "the sample's template literal is not closed").toBeGreaterThan(open);
+	return SECURITY_PAGE.slice(open + 1, close);
+}
+
+/**
+ * The security page's `pnpm audit:verify` samples, against the function that prints them.
+ *
+ * This is the one claim on that page an operator checks their own terminal against, and it was wrong
+ * before this: the page showed the intact sentence without the `(N from archives, M live)` split
+ * `describeVerification` has printed since archiving landed, and showed no sample of the incomplete
+ * state at all. Prose discipline is what let that happen, so the sentences are pinned to the function
+ * rather than proof-read against it — a wording change in `describeVerification` now fails here.
+ *
+ * The fixtures are internally consistent runs of one install: 4218 events, of which seq 1–3800 have
+ * been archived and 3801–4218 are live, and archiving is complete from seq 1402 in the incomplete
+ * case. The equality is what pins the page; the arithmetic is what makes the numbers a reader sees
+ * add up.
+ */
+describe("the security page's audit:verify samples", () => {
+	it("prints an intact chain exactly as the command does", () => {
+		expect(securitySample("pnpm audit:verify — chain intact")).toBe(
+			describeVerification({ ok: true, checked: 4218, archived: 3800, live: 418, firstSeq: 1, lastSeq: 4218 }),
+		);
+	});
+
+	it("prints an incomplete chain exactly as the command does", () => {
+		expect(securitySample("pnpm audit:verify — intact as far back as the record goes")).toBe(
+			describeVerification({
+				ok: "incomplete",
+				checked: 2817,
+				archived: 2399,
+				live: 418,
+				verifiedFrom: 1402,
+				firstSeq: 1402,
+				lastSeq: 4218,
+			}),
+		);
+	});
+
+	it("prints a broken chain exactly as the command does", () => {
+		expect(securitySample("pnpm audit:verify — chain broken")).toBe(
+			describeVerification({ ok: false, checked: 2090, brokenAt: 2091, reason: "hash-mismatch" }),
+		);
+	});
+});
+
+/**
+ * Every setting a reference page names, as the page writes it.
+ *
+ * Anchored on the whole of a `<Mono>` or a `label=` value rather than searched for loosely, so this
+ * can only be satisfied by a name a reader actually sees — the same anchoring the tag table's check
+ * uses. Anchoring is also what keeps it quiet: `pnpm auth:recover`, `audit-2026-01.db.gz` and
+ * `DATABASE_URL` all sit in a `<Mono>` on these pages and none of them is a setting.
+ *
+ * @param source the page's own text
+ * @returns the setting keys it names, each once
+ */
+function settingsNamed(source: string): string[] {
+	const found = new Set<string>();
+	for (const match of source.matchAll(/<Mono>([a-z]+\.[a-zA-Z0-9]+)<\/Mono>/g)) {
+		found.add(match[1]);
+	}
+	for (const match of source.matchAll(/label="([a-z]+\.[a-zA-Z0-9]+)"/g)) {
+		found.add(match[1]);
+	}
+	return [...found].sort();
+}
+
+/**
+ * The names these pages hand an operator to go and look for.
+ *
+ * A settings key or a permission id that does not exist sends somebody to the Settings or Roles tab
+ * to hunt for a row that was renamed or withdrawn, which is the shape of documentation failure this
+ * branch produced most: `logs.sweepEvery` and `audit.sweepEvery` were both real when these pages were
+ * last edited and are neither of them settings now.
+ */
+describe("what the reference pages name", () => {
+	it("names only settings this build has", () => {
+		const named = [...settingsNamed(API_PAGE), ...settingsNamed(SECURITY_PAGE)];
+		expect(named.length, "no settings were found on either page — has the markup changed shape?").toBeGreaterThan(10);
+
+		for (const key of named) {
+			expect(SETTING_KEYS, `a docs page names "${key}" and no such setting exists`).toContain(key);
+		}
+	});
+
+	it("names only permissions the panel defines", () => {
+		const named = new Set<string>();
+		for (const match of SECURITY_PAGE.matchAll(/<Mono>([a-z]+:[a-z0-9:-]+)<\/Mono>/g)) {
+			named.add(match[1]);
+		}
+
+		expect(named.size, "no permissions were found on the security page").toBeGreaterThan(0);
+		for (const permission of named) {
+			expect(PANEL_PERMISSION_IDS, `the security page names "${permission}" and the panel has no such grant`).toContain(
+				permission,
+			);
+		}
 	});
 });
 

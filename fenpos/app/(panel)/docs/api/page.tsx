@@ -300,6 +300,39 @@ export default async function ApiDocsPage() {
 								decision rather than a default this API makes for them. Previewing one carries only the compile, with no
 								round trip of its own to provide that friction, so it is throttled instead.
 							</P>
+
+							<P>
+								Every request to a keyed endpoint here leaves one line on the panel's <strong>Logs</strong> tab —
+								returned, refused and failed alike, with the one exception the setting below carves out. The level is
+								the outcome: <Mono>INFO</Mono> for a request that returned, <Mono>WARN</Mono> for one something said no
+								to — a missing or unusable key, a permission it does not hold, <ErrorRef code="rate_limited" />,{" "}
+								<ErrorRef code="unknown_device" /> or <ErrorRef code="unknown_job" /> — and <Mono>ERROR</Mono> for
+								everything else. The line is attributed to the key that made the request — a request refused before its
+								key was identified has none to name — and carries that key's <em>name</em> in its own text, so it still
+								says who once the key is deleted; the Logs tab filters by key.
+							</P>
+
+							<Aside>
+								<Mono>ERROR</Mono> there means "this request did not return", not "something is broken at this end". A
+								malformed body lands in it, and so does a printer nobody switched on: <ErrorRef code="agent_offline" />,{" "}
+								<ErrorRef code="device_unavailable" />, <ErrorRef code="device_paused" /> and{" "}
+								<ErrorRef code="queue_full" /> are ordinary operating conditions, and they are recorded at that level
+								because the request did not return, not because anything needs repairing.
+							</Aside>
+
+							<P>
+								<Mono>logs.recordApiReads</Mono>, on the Settings tab, ships <strong>off</strong> and governs exactly
+								one thing: whether a <strong>successful</strong> read is kept. A till polling status once a second
+								writes 86,400 lines a day that say nothing. A read that was <strong>refused</strong> is recorded
+								whatever it is set to, and anything that changes something — a print, a cancel, a device action, an
+								asset write, a raw write — is recorded either way. What counts as a read is what the endpoint does
+								rather than which method it takes: previewing a receipt is a <Mono>POST</Mono> and is a read.
+							</P>
+
+							<P>
+								<Mono>/api/health</Mono> and <Mono>{`${API_BASE}/openapi.json`}</Mono> take no key, and leave no line
+								here either.
+							</P>
 						</Col>
 
 						<div className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border">
@@ -1152,9 +1185,11 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							<P>
 								<Mono>message</Mono> is the agent's own, or <Mono>null</Mono>. Nothing here can tell you what was
 								printed: the bytes are never read, and the printer does not report back. A write that times out says so
-								plainly — the bytes may or may not have been written, and only the paper settles it. Every write, and
-								every refusal after a key is identified, is recorded on the Logs tab, which is the only record that one
-								happened.
+								plainly — the bytes may or may not have been written, and only the paper settles it. The Logs tab is the
+								only record that any of it happened, and this endpoint writes there itself rather than leaving it to the
+								line every endpoint leaves: once <em>before</em> the bytes are handed off, so a send interrupted halfway
+								still leaves a trace, and again if the write does not complete — saying whether anything left this
+								server at all, which is the one thing the other line cannot know.
 							</P>
 						</Col>
 
