@@ -498,7 +498,11 @@ async function drainAudit(before: Date, path: string): Promise<number> {
 		// see `archiveChainReader`. An archive that does not verify is not one the live rows may be
 		// deleted in favour of, whether the chain was already broken or the copy went wrong.
 		const verified = await verifyAuditChain(archiveChainReader(archive, anchor));
-		if (!verified.ok) {
+		// `=== false` rather than `!verified.ok`: `ChainVerification.ok` also has an `"incomplete"`
+		// member, which is a truthy string, so the negation would read an unverifiable prefix as a
+		// verified archive and let the live delete proceed. Only an epoch produces that member and none
+		// is passed here, so it cannot arise — the check is written so that stays true if one ever is.
+		if (verified.ok === false) {
 			throw new Error(
 				`The archived audit chain does not verify: ${verified.reason} at seq ${verified.brokenAt}; refusing to delete.`,
 			);

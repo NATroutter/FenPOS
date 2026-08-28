@@ -144,6 +144,48 @@ describe("describeVerification", () => {
 		).toContain("no audit events");
 	});
 
+	it("reports an unverifiable prefix as a fact rather than as an accusation", () => {
+		const text = describeVerification({
+			ok: "incomplete",
+			checked: 40,
+			archived: 30,
+			live: 10,
+			verifiedFrom: 61,
+			firstSeq: 61,
+			lastSeq: 100,
+		});
+
+		// "from seq 61", not "seq 61": the whole-chain branch also names a first seq, so an assertion on
+		// the bare number stays green when this shape falls through to it — `"incomplete"` is truthy.
+		expect(text).toContain("intact from seq 61");
+		expect(text).toContain("30 from archives");
+		expect(text).toContain("they are simply gone");
+		// The whole reason the third state exists. This text is read by an operator whose retention
+		// setting did exactly what it was configured to do, and the failure vocabulary would tell them
+		// somebody had altered their record.
+		expect(text).not.toContain("BROKEN");
+		expect(text).not.toContain("changed after it was written");
+	});
+
+	it("does not read an incomplete chain that verified nothing as an empty record", () => {
+		const text = describeVerification({
+			ok: "incomplete",
+			checked: 0,
+			archived: 0,
+			live: 0,
+			verifiedFrom: 61,
+			firstSeq: null,
+			lastSeq: null,
+		});
+
+		// The empty-record branch is tested first and `"incomplete"` is a truthy value of `ok`, so a
+		// `result.ok && result.checked === 0` guard swallows this shape and answers "there are no audit
+		// events to verify" about a record that has an unverifiable prefix in front of it. Goes red the
+		// moment that guard loses its `=== true`.
+		expect(text).not.toContain("no audit events");
+		expect(text).toContain("seq 61");
+	});
+
 	it("names the exact sequence number where the chain breaks", () => {
 		const text = describeVerification({ ok: false, checked: 88, brokenAt: 89, reason: "hash-mismatch" });
 

@@ -20,7 +20,14 @@ import { ApiError } from "@/lib/errors";
 
 /** What verification found, in the shape the banner renders. */
 export interface ChainStatus {
-	/** True when whole, false when broken, null when it has not been run this session. */
+	/**
+	 * True when nothing is wrong, false when the chain is broken, null when it has not been run this
+	 * session.
+	 *
+	 * Two states rather than `ChainVerification`'s three: this drives a colour and an icon, and an
+	 * unverifiable prefix is not a red banner — the message carries what is different about it. See
+	 * {@link verifyChain} for why that state cannot currently reach here at all.
+	 */
 	ok: boolean | null;
 	/** The operator-facing sentence, from `describeVerification`. */
 	message: string;
@@ -51,6 +58,11 @@ const EXPORT_LIMIT = 10_000;
  * Run on demand rather than on every render of the tab: the walk recomputes a SHA-256 per row across
  * the whole table, and a page that shows fifty rows should not cost what two hundred thousand cost.
  *
+ * **The retained chain, not the archives.** No archive directory is passed and no epoch with it, which
+ * is the same reason: walking the archives means decompressing every period the install has ever
+ * written, and this runs behind a button on a page. `pnpm audit:verify` is the command that covers the
+ * whole record, and it is the one an operator reaches for when they have stopped trusting this page.
+ *
  * @returns whether the chain is whole, and the sentence to show
  */
 export async function verifyChain(): Promise<ChainStatus> {
@@ -60,7 +72,12 @@ export async function verifyChain(): Promise<ChainStatus> {
 		"audit:verify",
 		async () => {
 			const result = await verifyAuditChain(auditDb);
-			return { ok: result.ok, message: describeVerification(result) };
+			// `!== false` rather than `result.ok`, which no longer fits: `ChainVerification.ok` has an
+			// `"incomplete"` member, and it is a truthy string. That member needs an epoch to arise and
+			// none is passed above, so it cannot reach here today — this is written for the day one is,
+			// and it resolves the right way round. An unverifiable prefix is not a broken chain, and the
+			// banner turning red over a retention setting is the false alarm the third state exists to end.
+			return { ok: result.ok !== false, message: describeVerification(result) };
 		},
 		{
 			refused: () => ({ ok: null, message: "You do not have permission to verify the audit chain." }),

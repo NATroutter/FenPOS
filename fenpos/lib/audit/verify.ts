@@ -34,8 +34,8 @@ import { GENESIS_HASH, hashEvent } from "@/lib/audit/chain";
  * **What this detects:** an edited row (its own hash no longer matches its contents), a removed row
  * (its successor's link no longer matches the row now preceding it), a forged insert, a swept
  * range whose anchor does not match what survived it, and — when an archive directory is given — the
- * same three edits made inside an archive, plus an archive whose newest row is not the one the live
- * anchor names.
+ * same three edits made inside an archive, an archive whose newest row is not the one the live anchor
+ * names, and — when an epoch is given as well — an archive that should be on disk and is not.
  *
  * **What this cannot detect: truncation at the tail.** Deleting the newest rows leaves a shorter
  * chain that verifies perfectly, because nothing inside the table records how long it should be.
@@ -56,7 +56,9 @@ export type ChainBreak =
 	/** The oldest retained row's `prevHash` does not match what `AuditAnchor` says was swept. */
 	| "anchor-mismatch"
 	/** The newest archived row is not the row `AuditAnchor` says was the last one archived. */
-	| "archive-join-mismatch";
+	| "archive-join-mismatch"
+	/** An archive the epoch says should exist was not found, or starts later than it says. */
+	| "archive-missing";
 
 /** The outcome of a walk. */
 export type ChainVerification =
@@ -72,6 +74,29 @@ export type ChainVerification =
 			lastSeq: number | null;
 	  }
 	| {
+			/**
+			 * Verified, but not all the way back.
+			 *
+			 * Distinct from `true` because the answer is genuinely different: everything from `verifiedFrom`
+			 * onwards is intact, and what came before it left the record before archiving existed to catch
+			 * it. Distinct from `false` because nothing here says the record was altered — reporting it
+			 * through the failure vocabulary would accuse an operator of tampering on the strength of a
+			 * retention sweep they configured.
+			 *
+			 * **Truthy, which every reader of `ok` has to allow for.** `if (result.ok)` and `!result.ok`
+			 * both take this for a whole chain, and no compiler will say so; a reader that means "whole"
+			 * has to write `=== true`, and one that means "broken" has to write `=== false`.
+			 */
+			ok: "incomplete";
+			checked: number;
+			archived: number;
+			live: number;
+			/** The oldest `seq` that could be verified: the epoch's own. */
+			verifiedFrom: number;
+			firstSeq: number | null;
+			lastSeq: number | null;
+	  }
+	| {
 			ok: false;
 			checked: number;
 			brokenAt: number;
@@ -79,12 +104,28 @@ export type ChainVerification =
 			/**
 			 * What `seq` alone cannot say, when the break is a disagreement rather than a bad row.
 			 *
-			 * Set for `archive-join-mismatch`, where the failure is two records naming different events
-			 * and an operator needs both of them to work out which side moved. Absent otherwise, because
-			 * for the other three the row named by `brokenAt` is the whole of the finding.
+			 * Set for `archive-join-mismatch` and `archive-missing`, where the failure is two records
+			 * naming different events and an operator needs both of them to work out which side moved.
+			 * Absent otherwise, because for the other three the row named by `brokenAt` is the whole of
+			 * the finding.
 			 */
 			detail?: string;
 	  };
+
+/**
+ * Where archived history begins, as a walk needs to know it.
+ *
+ * The same two fields as `AuditEpochRecord` in `lib/audit/epoch.ts`, declared again here rather than
+ * imported from it. That module opens with `import "server-only"`, and this one has to stay loadable
+ * in a plain node process — `pnpm audit:verify` is one. Two restated fields is the cheaper of the two
+ * costs; the other is a verifier the CLI cannot load, and the CLI is the caller that most needs it.
+ */
+export interface ChainEpoch {
+	/** `seq` of the oldest event archiving is complete from. */
+	seq: number;
+	/** That event's `prevHash`, which is what the oldest archived row must carry. */
+	prevHash: string;
+}
 
 /** What a walk should cover beyond the live database. */
 export interface ChainVerifyOptions {
@@ -96,35 +137,38 @@ export interface ChainVerifyOptions {
 	 * them, so the answer covers the whole record rather than the part of it still in the database.
 	 *
 	 * A directory that is not there is read as "nothing has been archived", not as an error: nothing in
-	 * this codebase schedules rotation or creates this directory, so an install that has never archived
-	 * is the ordinary case and must not make `pnpm audit:verify` fail. The count of archived events in
-	 * the result is what distinguishes that from a directory named wrongly.
+	 * this codebase creates this directory, so an install that has never archived is the ordinary case
+	 * and must not make `pnpm audit:verify` fail. The count of archived events in the result is what
+	 * distinguishes that from a directory named wrongly — unless an {@link ChainVerifyOptions.epoch} is
+	 * given, which is what turns "no archives here" into a finding when there should have been some.
 	 *
-	 * **Walking archives assumes no audit row was ever deleted without being archived first, and nothing
-	 * enforces that assumption.** Two ordinary arrangements break it, and this code reports both as a
-	 * break in the record rather than as a history it cannot verify:
+	 * **One of the two false alarms this walk used to raise is gone, and the other is only reported
+	 * honestly now.** A sweep can no longer re-anchor past the newest archived row: `removeAuditThrough`
+	 * is the record's one deleter and `archivePeriod` its one caller, so the anchor cannot name a row no
+	 * archive holds, and the `archive-join-mismatch` that arrangement produced cannot arise from it.
 	 *
-	 * - **A sweep that ran before archiving began.** The oldest archive's first row then links to a row
-	 *   `sweepAuditNow` deleted, and the anchor that recorded that boundary has since been overwritten by
-	 *   rotation's own. Nothing on disk says where the oldest archive should start, so {@link
-	 *   walkArchives} starts it at genesis and its first row reports `link-mismatch`.
-	 * - **A sweep that ran after a rotation** and re-anchored to a live row newer than the last archived
-	 *   one — which needs nothing more exotic than retention's cutoff being newer than rotation's
-	 *   boundary. The anchor then names a row no archive holds, and {@link joinToAnchor} reports
-	 *   `archive-join-mismatch`.
-	 *
-	 * The first case is about an install's *past*, not its present: nothing deletes an audit row without
-	 * archiving it any more — `sweepAuditNow` goes through `archivePeriod`, and `lib/maintenance/pass.ts`
-	 * is its only caller. But retention did run on the way out of every `recordAudit` until then, so on
-	 * any install upgraded from that arrangement the anchor has already moved past genesis, which makes
-	 * the first case above the *default* state rather than a corner of it. `AuditEpoch` is what records
-	 * where archived history actually begins; reconciling this block with it is Task 7's, and until that
-	 * happens swept-before-archived still wants a `ChainBreak` of its own: `describeVerification` has
-	 * exactly one failure vocabulary and it is an accusation, so reporting "these rows were swept before
-	 * archiving began" through it says "the record was changed after it was written". Those are
-	 * different findings and this code cannot currently tell them apart.
+	 * What has not gone away, and will not, is history that left *before* archiving existed. Every
+	 * install upgraded from the storage foundation swept rows on the way out of `recordAudit`, and those
+	 * rows are in no file: that prefix is unverifiable permanently, and this walk still cannot check it.
+	 * What changed is only how it is described. With an epoch, it is `ok: "incomplete"` and a statement
+	 * of where verification starts, instead of `link-mismatch` at the oldest archived row — which said,
+	 * in the only failure vocabulary `describeVerification` had, that somebody altered the record.
 	 */
 	archiveDirectory?: string;
+	/**
+	 * Where archived history begins, from `AuditEpoch` — null on an install that has never archived.
+	 *
+	 * Passed in rather than read here, for the same reason the client is: `lib/audit/epoch.ts` opens
+	 * with `import "server-only"`, and importing it would put this module behind a guard that throws in
+	 * the plain node process `pnpm audit:verify` runs in.
+	 *
+	 * Omitted, the oldest archive is walked from genesis, which is right only on an install where no row
+	 * ever left without being archived. Given, it is what tells the two apart: the oldest archive is
+	 * walked from `prevHash` instead, an oldest archived `seq` later than `seq` means a file that should
+	 * be on disk is not, and a `prevHash` that is not genesis means the record starts later than the
+	 * chain does.
+	 */
+	epoch?: ChainEpoch | null;
 }
 
 /**
@@ -169,10 +213,10 @@ interface ChainPosition {
 	lastSeq: number | null;
 }
 
-/** What one segment's walk found. */
+/** What one segment's walk found. `detail` carries what `brokenAt` cannot — see {@link ChainVerification}. */
 type SegmentOutcome =
 	| { ok: true; position: ChainPosition }
-	| { ok: false; checked: number; brokenAt: number; reason: ChainBreak };
+	| { ok: false; checked: number; brokenAt: number; reason: ChainBreak; detail?: string };
 
 /**
  * Walks one segment of the chain: every row a reader has, from a position, in `seq` order.
@@ -235,9 +279,11 @@ async function walkSegment(
  * Verifies the record: the archives first when asked for, then the rows still live.
  *
  * @param db a client for the database to read; the panel passes the shared one, the CLI its own
- * @param options where the archives are, when the walk should cover them too
- * @returns confirmation with the range checked and where its rows came from, or the exact `seq` at
- *   which it breaks and how
+ * @param options where the archives are and where archived history begins, when the walk should cover
+ *   them too
+ * @returns confirmation with the range checked and where its rows came from, the same with the oldest
+ *   `seq` it could reach when the record starts later than the chain does, or the exact `seq` at which
+ *   it breaks and how
  */
 export async function verifyAuditChain(
 	db: AuditChainReader,
@@ -246,6 +292,9 @@ export async function verifyAuditChain(
 	// Absent on an install that has never swept or archived, which is not a fault: it means the chain
 	// still starts where it started, at genesis.
 	const anchor = await db.auditAnchor.findUnique({ where: { id: 1 } });
+	// Normalised once, because "not asked for" and "asked for, never archived" are the same answer here:
+	// neither one gives the walk anywhere earlier than genesis to start from.
+	const epoch = options.epoch ?? null;
 
 	let position: ChainPosition = {
 		expectedPrevHash: GENESIS_HASH,
@@ -256,9 +305,15 @@ export async function verifyAuditChain(
 	};
 
 	if (options.archiveDirectory !== undefined) {
-		const walked = await walkArchives(options.archiveDirectory, position);
+		const walked = await walkArchives(options.archiveDirectory, position, epoch);
 		if (!walked.ok) {
-			return { ok: false, checked: walked.checked, brokenAt: walked.brokenAt, reason: walked.reason };
+			return {
+				ok: false,
+				checked: walked.checked,
+				brokenAt: walked.brokenAt,
+				reason: walked.reason,
+				detail: walked.detail,
+			};
 		}
 		position = walked.position;
 	}
@@ -286,14 +341,22 @@ export async function verifyAuditChain(
 		return { ok: false, checked: live.checked, brokenAt: live.brokenAt, reason: live.reason };
 	}
 
-	return {
-		ok: true,
+	const verified = {
 		checked: live.position.checked,
 		archived,
 		live: live.position.checked - archived,
 		firstSeq: live.position.firstSeq,
 		lastSeq: live.position.lastSeq,
 	};
+
+	// An epoch whose `prevHash` is genesis says archiving has covered the record since its first event,
+	// so there is nothing missing in front of it and this is a whole chain. Anything else says the
+	// record begins after the chain does, and the rows in between are gone rather than altered.
+	if (epoch !== null && epoch.prevHash !== GENESIS_HASH) {
+		return { ok: "incomplete", verifiedFrom: epoch.seq, ...verified };
+	}
+
+	return { ok: true, ...verified };
 }
 
 /**
@@ -354,26 +417,43 @@ function joinToAnchor(
  * Each file's walk starts at `seq > 0` rather than at the position's cursor, so every row an archive
  * holds is checked rather than skipped over by a cursor left behind by the file before it.
  *
- * **The oldest archive is walked from genesis, and that is a precondition rather than something checked
- * here.** It holds only while no audit row has ever been deleted without being archived first. An
- * install that swept before it archived reports `link-mismatch` at the oldest archived row, and one that
- * sweeps rows rotation has not archived reports `archive-join-mismatch` — in both cases an accusation
- * where the truthful answer is that the history cannot be verified. {@link ChainVerifyOptions} sets out
- * both modes and what the person who gives `archivePeriod` a production caller has to reconcile first.
+ * **Where the oldest archive starts is the epoch's answer when there is one, and genesis otherwise.**
+ * Genesis is right only on an install where no audit row was ever deleted without being archived first,
+ * which is not the install every upgrade from the storage foundation produced — see
+ * {@link ChainVerifyOptions}. With an epoch, the oldest archive is walked from its `prevHash` and
+ * checked against its `seq` first, so a swept prefix and a deleted archive are told apart rather than
+ * both landing on `link-mismatch` at the oldest archived row.
  *
  * @param directory where the archives are
- * @param from where the walk stands before the first archive: genesis, on the oldest one
+ * @param from where the walk stands before the first archive; its `expectedPrevHash` is replaced by
+ *   the epoch's when there is one, and is genesis otherwise
+ * @param epoch where archived history begins, or null when nothing records it
  * @returns the position the live rows resume from, or where an archive broke
  */
-async function walkArchives(directory: string, from: ChainPosition): Promise<SegmentOutcome> {
-	let position = from;
+async function walkArchives(directory: string, from: ChainPosition, epoch: ChainEpoch | null): Promise<SegmentOutcome> {
+	const archives = auditArchives(directory);
 
-	for (const archive of auditArchives(directory)) {
+	if (epoch !== null) {
+		const missing = await missingArchive(archives, epoch, directory, from.checked);
+		if (missing !== null) {
+			return missing;
+		}
+	}
+
+	let position = epoch === null ? from : { ...from, expectedPrevHash: epoch.prevHash };
+
+	for (const archive of archives) {
+		// True on the file the epoch vouches for and nowhere else: a disagreement at *that* row is the
+		// epoch and the archives naming different events, which an operator investigates differently from
+		// a row missing out of the middle of a file. Derived from `firstSeq` rather than from the loop
+		// index so that an oldest archive holding no rows hands the attribution to the next one along
+		// instead of losing it.
+		const anchored = epoch !== null && position.firstSeq === null;
 		const outcome = await readAuditArchive(archive, (handle) =>
 			// The reader the rotation itself verifies through, so an archive is checked in exactly the
 			// shape it was checked in before the live rows were deleted in its favour. Its anchor argument
 			// is unused here: what precedes this file is the position carried in from the file before it.
-			walkSegment(archiveChainReader(handle, null).auditEvent, { ...position, cursor: 0 }, false),
+			walkSegment(archiveChainReader(handle, null).auditEvent, { ...position, cursor: 0 }, anchored),
 		);
 
 		if (!outcome.ok) {
@@ -383,6 +463,66 @@ async function walkArchives(directory: string, from: ChainPosition): Promise<Seg
 	}
 
 	return { ok: true, position };
+}
+
+/**
+ * Checks that the archives still reach back as far as the epoch says they do.
+ *
+ * The epoch is the only record of how far back they *should* reach. Without it, deleting every archive
+ * on disk reads as an install that has never archived, and the walk reports the surviving live rows as
+ * though they were the whole record — an intact fraction presented as the thing itself, which is the
+ * worst shape a verification answer can take.
+ *
+ * Reported as its own {@link ChainBreak} rather than left to the walk to trip over. The walk would
+ * report `anchor-mismatch` at the oldest archived row that *is* there — true as far as it goes, and
+ * useless: the row it names is intact, and the file that actually went does not appear in the output at
+ * all. The `detail` names both sides for the same reason {@link joinToAnchor}'s does.
+ *
+ * This costs one extra open of the oldest archive, decompressed a second time when it is a `.gz`. That
+ * is one file per run of a command an operator runs by hand, against the alternative of threading a
+ * "have we checked the epoch yet" flag through the walk itself.
+ *
+ * @param archives the archives found, oldest period first
+ * @param epoch where archived history begins
+ * @param directory where they were looked for, for the message
+ * @param checked how many rows had verified before this — none, since archives are walked first
+ * @returns the failure to report, or null when the archives start no later than the epoch says
+ */
+async function missingArchive(
+	archives: AuditArchive[],
+	epoch: ChainEpoch,
+	directory: string,
+	checked: number,
+): Promise<SegmentOutcome | null> {
+	const oldest = archives.length === 0 ? null : await oldestArchivedSeq(archives[0]);
+	if (oldest !== null && oldest <= epoch.seq) {
+		return null;
+	}
+
+	const found =
+		oldest === null
+			? `no archived audit event was found in ${directory}`
+			: `the oldest archived event in ${directory} is seq ${oldest}`;
+	return {
+		ok: false,
+		checked,
+		brokenAt: epoch.seq,
+		reason: "archive-missing",
+		detail: `Archived history begins at seq ${epoch.seq}, but ${found}, so an archive is no longer on disk.`,
+	};
+}
+
+/**
+ * Reads the oldest `seq` an archive holds, without walking it.
+ *
+ * @param archive the archive to look in
+ * @returns its oldest `seq`, or null when it holds no events
+ */
+async function oldestArchivedSeq(archive: AuditArchive): Promise<number | null> {
+	return await readAuditArchive(archive, async (handle) => {
+		const row = handle.prepare("SELECT MIN(seq) AS seq FROM audit_events").get() as { seq: number | null };
+		return row.seq;
+	});
 }
 
 /** One audit archive on disk, as the walk needs to know it. */
@@ -626,14 +766,28 @@ function fromStored(row: StoredAuditRow): ChainedFields & { seq: number; prevHas
  * archive directory that was named wrongly, or one rotation has never written to, reads as a perfectly
  * intact chain otherwise, and nothing else in the output would say which was checked.
  *
+ * **`ok` is tested against `true` and `"incomplete"` by value, never for truthiness.** The three
+ * outcomes get three different texts, and one of them is a truthy string: a `result.ok` guard would
+ * hand an incomplete chain the whole-chain sentence, which claims a record was verified further back
+ * than it was.
+ *
  * @param result what the walk found
  * @returns the lines to print
  */
 export function describeVerification(result: ChainVerification): string {
-	if (result.ok && result.checked === 0) {
+	if (result.ok === true && result.checked === 0) {
 		return "There are no audit events to verify.";
 	}
-	if (result.ok) {
+	if (result.ok === "incomplete") {
+		return [
+			`The audit chain is intact from seq ${result.verifiedFrom}: ${result.checked} events verified ` +
+				`(${result.archived} from archives, ${result.live} live).`,
+			"",
+			`Events before seq ${result.verifiedFrom} were removed by retention before archiving was in use.`,
+			"They cannot be verified, and nothing here suggests they were altered — they are simply gone.",
+		].join("\n");
+	}
+	if (result.ok === true) {
 		return (
 			`The audit chain is intact: ${result.checked} events verified, seq ${result.firstSeq} through ` +
 			`${result.lastSeq} (${result.archived} from archives, ${result.live} live).`

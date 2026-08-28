@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { archivePeriod } from "@/lib/archive/rotate";
 import { appendEvent, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
+import { readEpoch } from "@/lib/audit/epoch";
 import { verifyAuditChain } from "@/lib/audit/verify";
 import { auditDb } from "@/lib/db";
 
@@ -85,6 +86,81 @@ describe("verifyAuditChain across an archive boundary", () => {
 		rmSync(plain, { force: true });
 	}
 
+	/**
+	 * Six events, three in January and three in February, as the chain actually stored them.
+	 *
+	 * Aged by appending under a moved clock rather than by editing `at` afterwards, for the reason this
+	 * file's own comment gives: `at` is hashed, so a backdated row reads as tampered — which is the one
+	 * finding the tests below exist to tell a legitimate sweep apart from.
+	 *
+	 * @returns the six rows in `seq` order, read back before anything is archived or removed
+	 */
+	async function chainOfSix() {
+		await chainAt(3, new Date("2026-01-15T00:00:00Z"));
+		await chainAt(3, new Date("2026-02-14T00:00:00Z"));
+		return await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+	}
+
+	it("reports history swept before archiving as incomplete, not as tampering", async () => {
+		const rows = await chainOfSix();
+
+		// The storage foundation's retention, reproduced exactly: a raw delete of the oldest rows and an
+		// anchor on the newest one removed, with no archive written and no epoch claimed — because
+		// neither existed then. This is the state of every install upgraded from that arrangement.
+		await auditDb.auditEvent.deleteMany({ where: { seq: { lte: rows[2].seq } } });
+		await auditDb.auditAnchor.create({ data: { id: 1, seq: rows[2].seq, hash: rows[2].hash } });
+
+		// Archiving arrives. The first sweep under it claims the epoch on the oldest row it covers, which
+		// is where the record stops being an accusation and starts being a boundary.
+		await archivePeriod({ source: "audit", before: new Date("2026-03-01T00:00:00Z"), directory });
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory, epoch: await readEpoch() });
+
+		// Goes red if the walk still starts the oldest archive at genesis: that archive's oldest row names
+		// a predecessor the old sweep took away, so the walk reports `link-mismatch` and
+		// `describeVerification` renders it as an accusation of tampering against nobody.
+		expect(result.ok).toBe("incomplete");
+		expect(result).toMatchObject({ verifiedFrom: rows[3].seq, checked: 3, archived: 3, live: 0 });
+	});
+
+	it("reports a missing archive as a break", async () => {
+		const rows = await chainOfSix();
+		await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		// The epoch says archived history begins at the chain's first row; the file that held it is gone.
+		rmSync(join(directory, "audit-2026-01.db.gz"));
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory, epoch: await readEpoch() });
+
+		// Goes red on the pre-epoch behaviour, which reported `ok: true` with `0 from archives` — nothing
+		// recorded how far back the archives should reach, so deleting all of them was undetectable.
+		expect(result.ok).toBe(false);
+		expect(result).toMatchObject({ reason: "archive-missing" });
+		expect(result.ok === false && result.detail).toContain(`seq ${rows[0].seq}`);
+	});
+
+	it("reports a break when the oldest archive starts later than the epoch says", async () => {
+		await chainAt(2, new Date("2025-12-15T00:00:00Z"));
+		await chainAt(2, new Date("2026-01-15T00:00:00Z"));
+		await chainAt(2, new Date("2026-02-14T00:00:00Z"));
+		const rows = await auditDb.auditEvent.findMany({ orderBy: { seq: "asc" } });
+		await archivePeriod({ source: "audit", before: new Date("2026-01-01T00:00:00Z"), directory });
+		await archivePeriod({ source: "audit", before: new Date("2026-02-01T00:00:00Z"), directory });
+
+		// One archive of two removed, so the archives still walk as a chain among themselves — January's
+		// file is intact and joins the live rows through the anchor. Only the epoch knows December was
+		// ever there.
+		rmSync(join(directory, "audit-2025-12.db.gz"));
+
+		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory, epoch: await readEpoch() });
+
+		// `archive-missing`, not `anchor-mismatch`: without the check against the epoch the walk starts
+		// January's file from December's last hash and blames January's oldest row, which is intact and
+		// is not the thing that went.
+		expect(result).toMatchObject({ ok: false, reason: "archive-missing", brokenAt: rows[0].seq });
+		expect(result.ok === false && result.detail).toContain(`seq ${rows[2].seq}`);
+	});
+
 	it("verifies the archive and its join to the live chain", async () => {
 		await chainAt(3, new Date("2026-01-15T00:00:00Z"));
 		await chainAt(3, new Date("2026-02-14T00:00:00Z"));
@@ -131,9 +207,10 @@ describe("verifyAuditChain across an archive boundary", () => {
 		const result = await verifyAuditChain(auditDb, { archiveDirectory: directory });
 
 		expect(result).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "archive-join-mismatch" });
-		// Both values, because neither one alone tells the operator which side moved.
+		// Both values, because neither one alone tells the operator which side moved. `=== false` rather
+		// than `!result.ok`, here and below: `ok` has an `"incomplete"` member too, and it is truthy.
 		expect(result.ok).toBe(false);
-		if (!result.ok) {
+		if (result.ok === false) {
 			expect(result.detail).toContain(rows[1].hash);
 			expect(result.detail).toContain(rows[2].hash);
 		}
@@ -156,7 +233,7 @@ describe("verifyAuditChain across an archive boundary", () => {
 
 		expect(result).toMatchObject({ ok: false, brokenAt: rows[2].seq, reason: "archive-join-mismatch" });
 		expect(result.ok).toBe(false);
-		if (!result.ok) {
+		if (result.ok === false) {
 			expect(result.detail).toContain("no anchor");
 		}
 	});

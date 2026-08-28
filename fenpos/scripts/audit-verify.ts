@@ -11,7 +11,10 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  *   pnpm audit:verify
  *
  * Exits 0 when the chain is whole and 1 when it is not, so it can be run from a cron entry or a
- * monitoring check without anyone reading the output.
+ * monitoring check without anyone reading the output. **A chain that is intact but does not reach all
+ * the way back exits 0 as well.** That is what an install upgraded from the storage foundation looks
+ * like — history left it before archiving existed — and it is a retention setting doing its job, not a
+ * finding. Exiting 1 on it would page somebody, every hour, for the life of the install.
  *
  * **It cannot repair anything, and there is no flag that would.** A broken chain is evidence: the
  * `seq` it names is where somebody changed the record, and the rows on either side of it are what
@@ -35,9 +38,10 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  * still in the database. Their directory is derived from the audit database's own resolved URL, and
  * for the reason `.env.example` gives for the databases themselves: whatever volume the record is on
  * is the volume all of it is on, and a second setting is a second thing that can point somewhere else.
- * Nothing writes to that directory yet — nothing in this codebase schedules rotation — so on an
- * ordinary install it does not exist, and a directory that is not there simply means no period has
- * been archived. The `0 from archives` in the output is what says so out loud.
+ * `lib/maintenance/pass.ts` is what writes into it, so on an install that has run long enough for a
+ * period to age out it holds one file per period — and on one that has not, it does not exist at all,
+ * which simply means no period has been archived. The `0 from archives` in the output says so out
+ * loud, and the epoch read below is what stops a directory somebody emptied from saying the same thing.
  *
  * The reporting lives in `lib/audit/verify.ts` rather than here, so it can be tested without a test
  * importing this file and running `main()` as a side effect of the import.
@@ -54,9 +58,16 @@ async function main(): Promise<void> {
 	const archiveDirectory = siblingDatabaseUrl(auditDatabaseUrl, "archives").replace(/^file:/, "");
 
 	try {
-		const result = await verifyAuditChain(auditDb, { archiveDirectory });
+		// Read through this client rather than through `readEpoch` in `lib/audit/epoch.ts`, which opens
+		// with `import "server-only"` and binds the shared `auditDb` — both fatal out here, and for the
+		// same reason this file builds its own client at all. Two columns of one row is a small enough
+		// query to restate; a verifier the CLI could not load would not be.
+		const epoch = await auditDb.auditEpoch.findUnique({ where: { id: 1 }, select: { seq: true, prevHash: true } });
+		const result = await verifyAuditChain(auditDb, { archiveDirectory, epoch });
 		process.stdout.write(`${describeVerification(result)}\n`);
-		process.exitCode = result.ok ? 0 : 1;
+		// `=== false`, not `!result.ok`: `ok` is `true`, `false`, or the truthy string `"incomplete"`, and
+		// only the middle one is a failure.
+		process.exitCode = result.ok === false ? 1 : 0;
 	} finally {
 		await auditDb.$disconnect();
 	}
