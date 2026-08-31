@@ -149,11 +149,13 @@ function toPublicAsset(asset: AssetSummary): Omit<AssetSummary, "id"> {
  * Decodes an inline upload and stores it.
  *
  * The size cap is enforced by `createAsset` alone rather than restated here. `asset-service.ts`'s
- * `requireWithinByteCap` still runs before `decodeImage`, so "refused before it is decoded" holds
- * exactly as before — but the refusal's message is `describeBytes`'s, the one form every caller of
- * that module is required to use on both halves of the sentence (see that function's own doc
- * comment), rather than a second, raw-byte-count wording that a route-level pre-check would have
- * needed to keep in step with it by hand.
+ * `measured` still refuses an oversized file before anything decodes it — through
+ * `requireWithinBytes`, the shared guard's own check, which is what the module's former
+ * `requireWithinByteCap` became when the decode defences moved to `lib/images/guard.ts` — so
+ * "refused before it is decoded" holds exactly as before. The refusal's message is `describeBytes`'s,
+ * the one form every caller of that module is required to use on both halves of the sentence (see
+ * that function's own doc comment), rather than a second, raw-byte-count wording that a route-level
+ * pre-check would have needed to keep in step with it by hand.
  *
  * @param name what markup will refer to it by
  * @param data the file, base64 encoded
@@ -167,8 +169,8 @@ async function storeUpload(name: string, data: string): Promise<Awaited<ReturnTy
 /**
  * How large a create-asset body may be before it is parsed.
  *
- * `requireWithinByteCap` inside `createAsset` still enforces the real, decoded limit — this exists
- * only to refuse a body too large to be a legitimate request before `JSON.parse` (and, on the
+ * `measured` inside `createAsset` still enforces the real limit, through `requireWithinBytes` — this
+ * exists only to refuse a body too large to be a legitimate request before `JSON.parse` (and, on the
  * upload branch, a base64 decode) does the work of parsing it, so it is deliberately generous
  * rather than exact.
  *
