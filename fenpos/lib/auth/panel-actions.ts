@@ -668,6 +668,22 @@ export const PANEL_ACTIONS = [
 		description: "Changed their own name or email",
 	},
 	{
+		id: "self:set-avatar",
+		kind: "self",
+		permission: null,
+		module: "(panel)/settings/actions.ts",
+		exportName: "setOwnAvatar",
+		description: "Set their own avatar",
+	},
+	{
+		id: "self:remove-avatar",
+		kind: "self",
+		permission: null,
+		module: "(panel)/settings/actions.ts",
+		exportName: "removeOwnAvatar",
+		description: "Removed their own avatar",
+	},
+	{
 		// `auth:sign-out`, not `self:sign-out`, though this sits among the `self` entries and its `kind`
 		// stays `self`: the id has to be the string the row actually carries, and `layout.tsx`'s
 		// `signOut` records `AUTH_AUDIT_ACTIONS.SIGN_OUT`. The stored value is the authority here, since

@@ -7,6 +7,9 @@ import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
+import { readAvatarForm } from "@/lib/auth/avatar-form";
+import type { CropRect } from "@/lib/auth/avatar-image";
+import { removeAvatar, setAvatar } from "@/lib/auth/avatar-service";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { panelAction, panelQuery, panelSelf } from "@/lib/auth/panel-action";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
@@ -259,6 +262,65 @@ export async function updateProfile(displayName: string, email: string | null): 
 			// compromised-account investigation opens with.
 			detail: { name, email: address },
 		},
+	);
+}
+
+/**
+ * Stores the signed-in user's avatar.
+ *
+ * Ungated, like every other action on your own account: an operator who cannot change their own
+ * picture without an administrator is an operator filing a ticket for a face. Still audited.
+ *
+ * The form is parsed *inside* the gated body rather than before `panelAction` is called: parsing can
+ * throw (`readAvatarForm` refuses a missing file, a non-integer coordinate, or too many bytes), and a
+ * throw from outside `panelAction`'s own `try` would escape as an unhandled rejection instead of
+ * becoming the `ActionState` a refused form is supposed to render — the same reason `updateProfile`,
+ * just above, validates inside its own body rather than before it.
+ *
+ * @param formData the file, and the crop rectangle as three integers
+ * @returns the state to render
+ */
+export async function setOwnAvatar(formData: FormData): Promise<ActionState> {
+	// Populated from inside the body, once the crop is actually known, and passed to `panelAction` by
+	// reference. `panel-action.ts`'s `record()` spreads `options.detail` only after `work()` has
+	// returned or thrown, so a mutation made partway through the body still reaches the row it writes
+	// — this object is empty at the point `panelAction` is called and holds the crop by the point
+	// `record()` reads it. Subtle enough to call out: this is *not* the crop computed up front and
+	// handed in, because up front it does not exist yet.
+	const detail: { crop?: CropRect } = {};
+
+	return panelAction(
+		"self:set-avatar",
+		async (user) => {
+			const { bytes, crop } = await readAvatarForm(formData);
+			await setAvatar(user.id, bytes, crop);
+			// Set only once the store has actually accepted it: `detail` describes what changed, and
+			// on a refused crop or an unacceptable image nothing did.
+			detail.crop = crop;
+		},
+		{
+			// The sidebar footer is in the layout, so without this the old picture stays on screen
+			// until a hard reload — the same reason `updateProfile` revalidates the layout.
+			revalidate: () => revalidatePath("/", "layout"),
+			// The bytes are emphatically not recorded: an audit row is a permanent, hash-chained
+			// record and an avatar is megabytes of it. The crop is small and says what changed.
+			detail,
+		},
+	);
+}
+
+/**
+ * Removes the signed-in user's avatar, falling the panel back to their initial.
+ *
+ * @returns the state to render
+ */
+export async function removeOwnAvatar(): Promise<ActionState> {
+	return panelAction(
+		"self:remove-avatar",
+		async (user) => {
+			await removeAvatar(user.id);
+		},
+		{ revalidate: () => revalidatePath("/", "layout") },
 	);
 }
 

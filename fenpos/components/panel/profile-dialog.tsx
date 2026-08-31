@@ -2,7 +2,8 @@
 
 import { type ReactNode, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { changePassword, updateProfile } from "@/app/(panel)/settings/actions";
+import { changePassword, removeOwnAvatar, setOwnAvatar, updateProfile } from "@/app/(panel)/settings/actions";
+import { AvatarDialog } from "@/app/(panel)/settings/avatar-dialog";
 import { TwoFactorPanel } from "@/components/panel/two-factor-panel";
 import { PasswordInput } from "@/components/password-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -159,16 +160,28 @@ export function ProfileDialog({
 
 					<Field>
 						{/*
-						 * A plain span, not `FieldLabel`: the avatar it names is decoration (`alt=""`,
-						 * `aria-hidden` on the initial) with nothing else in the field for a `<label>`
-						 * to point at, and a `for`-less label reaches assistive tech as pointing at
-						 * nothing.
+						 * A plain span, not `FieldLabel`: the trigger it names is a picture with nothing
+						 * else in the field for a `<label>` to point at, and a `for`-less label reaches
+						 * assistive tech as pointing at nothing.
 						 */}
 						<span className="flex items-center gap-2 text-sm leading-none font-medium select-none">Avatar</span>
 						<div className="flex items-center gap-3">
-							<Avatar src={avatarUrl} initial={initial} className="size-12" />
+							<AvatarDialog
+								trigger={
+									<button
+										type="button"
+										className="cursor-pointer rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+										aria-label="Change avatar"
+									>
+										<Avatar src={avatarUrl} initial={initial} className="size-12" />
+									</button>
+								}
+								onSave={setOwnAvatar}
+								onRemove={removeOwnAvatar}
+							/>
 							<FieldDescription className="mt-0">
-								The saved avatar. Save in the footer below updates it.
+								Click the picture to choose one, crop it, or remove it — this saves on its own, separately from the name
+								and email below.
 							</FieldDescription>
 						</div>
 					</Field>
