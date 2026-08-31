@@ -61,7 +61,7 @@ export function ProfileDialog({
 	displayName: string;
 	/** The signed-in user's email. Better Auth requires every account to carry one. */
 	email: string;
-	/** Resolved on the server, so no address and no hashing reach the browser. */
+	/** The stored picture's URL, or null when there is none. Resolved on the server. */
 	avatarUrl: string | null;
 	initial: string;
 	/**
@@ -152,10 +152,7 @@ export function ProfileDialog({
 							disabled={accountPending}
 							onChange={(event) => setAddress(event.target.value)}
 						/>
-						<FieldDescription>
-							Used to fetch a picture from Gravatar — the address is hashed on the server before it is sent, never in
-							the browser. No picture registered there yet? The initial is shown instead.
-						</FieldDescription>
+						<FieldDescription>Used for sign-in and notifications.</FieldDescription>
 					</Field>
 
 					<Field>

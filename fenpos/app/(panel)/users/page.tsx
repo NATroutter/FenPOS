@@ -34,8 +34,8 @@ export default async function UsersPage() {
 
 	// Ids only, not the bytes: this page draws one row per account and needs to know whether to point
 	// an avatar control at "set" or "replace" copy, not to read every stored picture into memory to
-	// render a list that shows none of them at full size. `avatarUrl` — the prop that actually renders
-	// one — is Task 10's job; this is only the plumbing it will consume.
+	// render a list that shows none of them at full size. Each row's `avatarUrl` below points at the
+	// authenticated route that re-reads the stored bytes itself, per request.
 	const withAvatars = await usersWithAvatars(accounts.map((account) => account.id));
 
 	// A superuser holds everything grantable without a row saying so, which is exactly what
@@ -62,25 +62,28 @@ export default async function UsersPage() {
 		setSuperuser: user.isSuperuser,
 	};
 
-	const rows: UserRowData[] = accounts.map((account) => ({
-		id: account.id,
-		name: account.name,
-		email: account.email,
-		// Derived here rather than in the row: `avatar.ts` imports `node:crypto` for its other
-		// export, and a client component importing it would pull that into the browser bundle.
-		initial: avatarInitial(account.name),
-		hasAvatar: withAvatars.has(account.id),
-		isSuperuser: account.isSuperuser,
-		mustChangePassword: account.mustChangePassword,
-		banned: account.banned,
-		banReason: account.banReason,
-		banExpires: account.banExpires?.toISOString() ?? null,
-		twoFactorEnabled: account.twoFactorEnabled,
-		createdAt: account.createdAt.toISOString(),
-		roles: account.roles,
-		permissions: account.permissions,
-		sessionCount: account.sessionCount,
-	}));
+	const rows: UserRowData[] = accounts.map((account) => {
+		const hasAvatar = withAvatars.has(account.id);
+
+		return {
+			id: account.id,
+			name: account.name,
+			email: account.email,
+			initial: avatarInitial(account.name),
+			hasAvatar,
+			avatarUrl: hasAvatar ? `/api/avatar/${account.id}` : null,
+			isSuperuser: account.isSuperuser,
+			mustChangePassword: account.mustChangePassword,
+			banned: account.banned,
+			banReason: account.banReason,
+			banExpires: account.banExpires?.toISOString() ?? null,
+			twoFactorEnabled: account.twoFactorEnabled,
+			createdAt: account.createdAt.toISOString(),
+			roles: account.roles,
+			permissions: account.permissions,
+			sessionCount: account.sessionCount,
+		};
+	});
 
 	const grantableRoles = roles.map((role) => ({
 		id: role.id,

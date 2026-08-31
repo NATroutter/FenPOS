@@ -40,6 +40,7 @@ import {
 	AlertDialogTitle,
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
@@ -50,22 +51,24 @@ export interface UserRowData {
 	id: string;
 	name: string;
 	email: string;
-	/**
-	 * The letter shown in place of an avatar.
-	 *
-	 * Derived on the server rather than here, because `lib/auth/avatar.ts` imports `node:crypto` for
-	 * its other export and importing it from a client component would pull that into the browser
-	 * bundle. Phase 7 replaces this with real image bytes.
-	 */
+	/** The letter drawn when there is no picture, or the picture failed to load. */
 	initial: string;
 	/**
 	 * Whether the account already has a stored avatar.
 	 *
 	 * Ids-only plumbing from `usersWithAvatars`, not the picture itself — drawing the picture is
-	 * `avatarUrl`'s job, which a later task adds. This much is enough to word the avatar control's
+	 * `avatarUrl`'s job below. This much is also enough on its own to word the avatar control's
 	 * own copy ("Set" versus "Change").
 	 */
 	hasAvatar: boolean;
+	/**
+	 * The stored picture's URL, or null when there is none.
+	 *
+	 * Points at the authenticated `/api/avatar/[userId]` route rather than embedding bytes here, so
+	 * a list of many rows costs one small request per row instead of loading every stored image into
+	 * this server render.
+	 */
+	avatarUrl: string | null;
 	isSuperuser: boolean;
 	mustChangePassword: boolean;
 	banned: boolean;
@@ -134,9 +137,7 @@ export function UserRow({
 	return (
 		<Card className={account.banned ? "opacity-60" : undefined}>
 			<CardHeader className="flex flex-row flex-wrap items-center gap-3 border-b border-border pb-3">
-				<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-medium">
-					{account.initial}
-				</span>
+				<Avatar src={account.avatarUrl} initial={account.initial} />
 				<div className="min-w-0 flex-1">
 					<div className="truncate text-[13.5px] font-medium">
 						{account.name}

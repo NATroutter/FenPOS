@@ -10,7 +10,8 @@ import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { authHeaders } from "@/lib/auth/auth-headers";
-import { avatarInitial, gravatarUrl } from "@/lib/auth/avatar";
+import { avatarInitial } from "@/lib/auth/avatar";
+import { usersWithAvatars } from "@/lib/auth/avatar-service";
 import { permittedNavHrefs } from "@/lib/auth/require-permission";
 import { requireSession } from "@/lib/auth/require-session";
 import { APP_VERSION, SERVER_STARTED_AT } from "@/lib/runtime";
@@ -87,6 +88,11 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 	// convenience either way; each page's own gate is the boundary, because anyone can type a URL.
 	const permittedHrefs = await permittedNavHrefs(user);
 
+	// A one-element set rather than a dedicated "does this one account have an avatar" query: the
+	// service already exists for the users list's many-rows case, and a single id is just the
+	// smallest input it accepts.
+	const hasAvatar = (await usersWithAvatars([user.id])).has(user.id);
+
 	return (
 		// Outermost, so every descendant — including the sidebar, not just the pages below the
 		// header — renders after FormatProvider has pushed the current locale/clock/timezone into
@@ -102,7 +108,7 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 					minimumPasswordLength={minimumPasswordLength}
 					displayName={user.name}
 					email={user.email}
-					avatarUrl={gravatarUrl(user.email)}
+					avatarUrl={hasAvatar ? `/api/avatar/${user.id}` : null}
 					initial={avatarInitial(user.name)}
 					twoFactorEnabled={user.twoFactorEnabled}
 				/>

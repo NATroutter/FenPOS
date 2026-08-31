@@ -6,10 +6,11 @@ import { cn } from "@/lib/utils";
 /**
  * A round portrait that always renders something.
  *
- * The fallback is the point rather than a nicety. Every way this can go wrong — an install with no
- * internet, an address Gravatar has never seen, a blocked third-party request — arrives as the
- * same load failure, and without a fallback each of them is a broken image in the corner of every
- * page. `src` being null is the fourth case: no address is set, so nothing is requested at all.
+ * The fallback is the point rather than a nicety. Every way this can go wrong — the stored render
+ * having been deleted since the page that named it was rendered, a network hiccup, a stale URL —
+ * arrives as the same load failure, and without a fallback each of them is a broken image in the
+ * corner of every page. `src` being null is the other case: no avatar is stored, so nothing is
+ * requested at all.
  *
  * A client component because it holds one piece of state: whether the image failed.
  */
@@ -57,8 +58,8 @@ export function Avatar({
 			{showImage ? (
 				// A plain <img>, not next/image. The optimiser fetches through the server, which would
 				// move the request off the operator's browser and defeat the failure this component
-				// exists to catch — a server that can reach Gravatar would report success for an
-				// install that cannot.
+				// exists to catch — the server always has the stored bytes, so it would report success
+				// even for a browser that could not actually reach the route.
 				// biome-ignore lint/performance/noImgElement: the load must happen in the browser
 				<img
 					ref={imageRef}
