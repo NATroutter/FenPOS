@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { API_ROUTES } from "@/lib/api/api-routes";
 import { describeVerification } from "@/lib/audit/verify";
+import { PANEL_ACTIONS } from "@/lib/auth/panel-actions";
 import { prisma } from "@/lib/db";
 import { PANEL_PERMISSION_IDS } from "@/lib/domain/panel-permissions";
 import { PERMISSION_IDS } from "@/lib/domain/permissions";
@@ -321,6 +322,33 @@ describe("the security page's audit:verify samples", () => {
 		expect(securitySample("pnpm audit:verify — chain broken")).toBe(
 			describeVerification({ ok: false, checked: 2090, brokenAt: 2091, reason: "hash-mismatch" }),
 		);
+	});
+});
+
+/**
+ * The security page's "Profile images" section, against the registry that actually gates the
+ * action it describes.
+ *
+ * Anchored on the Fact row naming who may change another account's avatar, the same reasoning
+ * `securitySample` gives above: this can only be satisfied by that row still being on the page,
+ * so deleting the section — or just this row of it — fails the first assertion rather than the
+ * scan quietly finding "users:update" somewhere else on the page. The second assertion is what
+ * keeps the claim honest against the code: `users:update` has to be a permission some entry in
+ * `PANEL_ACTIONS` actually requires, not merely a string that looks like one.
+ */
+describe("the security page's profile images section", () => {
+	it("says changing another account's avatar takes users:update, and that permission is real", () => {
+		const at = SECURITY_PAGE.indexOf('label="Another account\'s avatar"');
+		expect(
+			at,
+			"the security page's profile images section no longer says who may change another account's avatar",
+		).toBeGreaterThan(-1);
+		expect(SECURITY_PAGE.slice(at, at + 200)).toContain("users:update");
+
+		expect(
+			PANEL_ACTIONS.some((entry) => entry.permission === "users:update"),
+			"users:update names no permission any entry in PANEL_ACTIONS actually requires",
+		).toBe(true);
 	});
 });
 

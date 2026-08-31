@@ -26,6 +26,11 @@ const SECTIONS = [
 	{ id: "allowlist", title: "The address allowlist", note: "auth.ipAllowlist, checked on every request" },
 	{ id: "audit", title: "The audit record", note: "Append-only, and how to prove it" },
 	{ id: "archives", title: "Archived history", note: "Where a month goes when it ages out, and who may remove one" },
+	{
+		id: "profile-images",
+		title: "Profile images",
+		note: "Where an avatar lives, who may see one, and who may change another's",
+	},
 	{ id: "recovering", title: "Recovering", note: "pnpm auth:recover, for an install nobody can sign in to" },
 ] as const;
 
@@ -426,6 +431,57 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 				</DocSection>
 
 				<DocSection {...SECTIONS[7]}>
+					<Split>
+						<Col>
+							<P>
+								An avatar lives in this install's own database — the upload as received, the crop rectangle chosen
+								against it, and a <strong>512px square</strong> render baked from the two — and nothing about a picture
+								is ever fetched from anywhere else. There is no Gravatar lookup left in this codebase: an account's
+								email address is never hashed and sent to a third party to find a picture for it, which also means a
+								picture can be set on an install with no outbound internet access at all. An account with nothing set
+								draws its initial instead, from its display name.
+							</P>
+
+							<P>
+								The render is served from <Mono>GET /api/avatar/&lt;userId&gt;</Mono>, which requires a session and
+								nothing more — any signed-in account may fetch any other account's avatar, because the Users tab already
+								shows every operator's name and address to anyone who can open it, and gating the image separately would
+								just draw broken pictures beside names the viewer is already allowed to read. An unauthenticated request
+								is refused outright.
+							</P>
+
+							<P>
+								Setting or removing your <strong>own</strong> avatar, from Profile settings in the account menu, is
+								ungated the way changing your own name or password is — every signed-in account may do it. Changing{" "}
+								<strong>another</strong> account's avatar is different: it needs <Mono>users:update</Mono>, the same
+								permission that governs that account's name and email, and it is reachable only from the Users tab. The
+								original is kept rather than discarded once a render is baked, so re-cropping — your own or, for an
+								administrator, someone else's — starts from the picture as uploaded rather than from an already-cropped
+								square.
+							</P>
+
+							<Aside>
+								Setting and removing an avatar are each audited separately, on success and on refusal alike, and there
+								is a distinct entry for the ungated pair on your own account and the <Mono>users:update</Mono>-gated
+								pair on someone else's — so a row says both what happened and whether it was done to the acting account
+								or another one. The row never carries the image bytes themselves: an avatar is megabytes and an audit
+								row is a permanent, hash-chained record, so what it keeps is the crop and, for the administrator pair,
+								which account was changed.
+							</Aside>
+						</Col>
+
+						<Facts>
+							<Fact label="Storage">This install's own database — original, crop, and 512px render</Fact>
+							<Fact label="Third-party lookups">None — Gravatar is gone</Fact>
+							<Fact label={"GET /api/avatar/<userId>"}>Session required; not permission-gated</Fact>
+							<Fact label="Your own avatar">Ungated, like your own name and password</Fact>
+							<Fact label="Another account's avatar">users:update, from the Users tab</Fact>
+							<Fact label="Audited">Every set and remove, on both accounts — success and refusal alike</Fact>
+						</Facts>
+					</Split>
+				</DocSection>
+
+				<DocSection {...SECTIONS[8]}>
 					<Split>
 						<Col>
 							<P>

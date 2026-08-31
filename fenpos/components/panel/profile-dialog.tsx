@@ -152,7 +152,7 @@ export function ProfileDialog({
 							disabled={accountPending}
 							onChange={(event) => setAddress(event.target.value)}
 						/>
-						<FieldDescription>Used for sign-in and notifications.</FieldDescription>
+						<FieldDescription>Used to sign in, and to identify the account.</FieldDescription>
 					</Field>
 
 					<Field>
