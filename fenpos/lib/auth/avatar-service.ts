@@ -46,13 +46,16 @@ export async function setAvatar(userId: string, original: Buffer, crop: CropRect
 	// image or an impossible crop, so a refusal here leaves the previous avatar untouched rather
 	// than half-replaced.
 	const baked = await bakeAvatar(original, crop);
-	const decoded = await measureImage(original, AVATAR_BOUNDS);
 
 	const row = {
 		// Copied into a plain `Uint8Array` for the reason `asset-service.ts` gives: Prisma's `Bytes`
 		// will not take a `Buffer`, whose backing store is typed as possibly shared.
 		original: new Uint8Array(original),
-		originalMimeType: decoded.mimeType,
+		// From the bake, not from a second `measureImage` of the same bytes. This used to call the
+		// guard again purely to read one string, which decoded the upload a third time — on
+		// `self:set-avatar`, which is deliberately ungated and so is a loop any authenticated account
+		// can drive. `bakeAvatar` had already measured it; it now says what it found.
+		originalMimeType: baked.originalMimeType,
 		cropX: crop.x,
 		cropY: crop.y,
 		cropSize: crop.size,

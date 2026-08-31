@@ -43,6 +43,23 @@ describe("setAvatar", () => {
 		expect((await readAvatar(user.id))?.mimeType).toBe("image/png");
 	});
 
+	/**
+	 * The render is always PNG and the original is whatever arrived, so the two mime types are
+	 * different columns holding different things — and a JPEG upload is the only case where they
+	 * disagree. `setAvatar` reads the original's type off `bakeAvatar`'s result rather than measuring
+	 * the bytes a second time, so a bake that handed back the render's type under the wrong name
+	 * would store "image/png" here and nothing else in the suite would notice.
+	 */
+	it("records the original's own type, not the render's, for a JPEG upload", async () => {
+		const user = await makeUser();
+		const jpeg = Buffer.from(await new Jimp({ width: 80, height: 80, color: 0xff0000ff }).getBuffer(JimpMime.jpeg));
+
+		await setAvatar(user.id, jpeg, { x: 0, y: 0, size: 80 });
+
+		expect((await readAvatarOriginal(user.id))?.mimeType).toBe("image/jpeg");
+		expect((await readAvatar(user.id))?.mimeType).toBe("image/png");
+	});
+
 	it("replaces an existing avatar rather than failing on the key", async () => {
 		const user = await makeUser();
 		await setAvatar(user.id, await pngOf(100, 100), { x: 0, y: 0, size: 50 });

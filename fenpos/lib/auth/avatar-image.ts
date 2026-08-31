@@ -1,5 +1,6 @@
 import "server-only";
 import { Jimp, JimpMime } from "jimp";
+import { DECODE_LIMITS } from "@/lib/assets/dither";
 import { ApiError } from "@/lib/errors";
 import { type ImageBounds, measureImage } from "@/lib/images/guard";
 
@@ -43,8 +44,20 @@ export interface CropRect {
 /** The render, and what it turned out to be. */
 export interface BakedAvatar {
 	bytes: Buffer;
+	/** The **render's** type, which is always PNG — see {@link bakeAvatar}. */
 	mimeType: string;
 	size: number;
+	/**
+	 * The **original's** type, as the decoder found it rather than as the upload claimed.
+	 *
+	 * A second field rather than a reinterpretation of `mimeType`: the two differ for every JPEG
+	 * upload, and a caller storing this one under `Avatar.originalMimeType` would silently record PNG
+	 * for the whole of it if the render's type were reused here. It rides along because
+	 * {@link measureImage} has already established it inside this function, and the alternative — the
+	 * caller measuring the same bytes again purely to read this one string — was a third full decode
+	 * of an upload on a path any authenticated account can drive in a loop.
+	 */
+	originalMimeType: string;
 }
 
 /**
@@ -86,12 +99,21 @@ export async function bakeAvatar(original: Buffer, crop: CropRect): Promise<Bake
 	const decoded = await measureImage(original, AVATAR_BOUNDS);
 	requireValidCrop(crop, decoded);
 
-	const image = await Jimp.fromBuffer(original);
+	// The same limits `decodeImage` decodes under. Nothing that exceeds the budget can reach this
+	// line — `measureImage` above is the gate and it decodes first — so this is the bound holding by
+	// construction rather than by that ordering remaining true.
+	const image = await Jimp.fromBuffer(original, DECODE_LIMITS);
 	image.crop({ x: crop.x, y: crop.y, w: crop.size, h: crop.size });
 	image.resize({ w: AVATAR_RENDER_PX, h: AVATAR_RENDER_PX });
 
 	// PNG regardless of what arrived. The render is small and square, the size difference against
 	// JPEG at these dimensions is not worth a second stored mime type to reason about, and PNG is
 	// lossless so a re-crop of an already-cropped upload does not compound artefacts.
-	return { bytes: await image.getBuffer(JimpMime.png), mimeType: JimpMime.png, size: AVATAR_RENDER_PX };
+	return {
+		bytes: await image.getBuffer(JimpMime.png),
+		mimeType: JimpMime.png,
+		size: AVATAR_RENDER_PX,
+		// Carried out of here rather than measured again by the caller: see {@link BakedAvatar}.
+		originalMimeType: decoded.mimeType,
+	};
 }

@@ -131,8 +131,13 @@ export const MAX_JPEG_DECODE_MB = 384;
  * bound reaches `jpeg-js` at all. PNG has no equivalent entry because `pngjs` takes no options;
  * it is bounded instead by refusing interlacing, which keeps every PNG on the branch that sizes its
  * inflate from the declared dimensions. See `requireDecodableSize` in `lib/images/guard.ts`.
+ *
+ * Exported so the one other module that hands bytes to `Jimp.fromBuffer` — `avatar-image.ts`, which
+ * decodes a second time to actually crop what `measureImage` already measured — applies the same
+ * bound rather than calling the decoder bare. Nothing about that decode is reachable past the guard
+ * unbounded, but the bound should hold by construction rather than by the ordering staying true.
  */
-const DECODE_LIMITS = {
+export const DECODE_LIMITS = {
 	[JimpMime.jpeg]: {
 		maxMemoryUsageInMB: MAX_JPEG_DECODE_MB,
 		maxResolutionInMP: MAX_JPEG_MEGAPIXELS,
