@@ -90,6 +90,31 @@ describe("GET /api/avatar/[userId]", () => {
 		expect(body.equals(stored.bytes)).toBe(true);
 	});
 
+	/**
+	 * The deliberate design decision, and the only case that pins it: every other test here fetches
+	 * the viewer's *own* avatar, so a future `userId !== viewer.id → 403` would pass the whole suite
+	 * while breaking `/users` for everyone allowed to open it. Any signed-in account may fetch any
+	 * other's — see the route's own doc for why gating this on `users:read` would draw broken pictures
+	 * beside names the viewer is already allowed to read.
+	 */
+	it("lets a signed-in caller fetch another account's picture", async () => {
+		const viewer = await makeUser();
+		const other = await makeUser();
+		await setAvatar(other.id, await pngOf(90, 90), { x: 0, y: 0, size: 90 });
+		currentUser.mockResolvedValue(viewer);
+
+		const response = await GET(request, { params: Promise.resolve({ userId: other.id }) });
+		const stored = await readAvatar(other.id);
+		if (stored === null) {
+			throw new Error("expected setAvatar to have stored a row");
+		}
+
+		expect(response.status).toBe(200);
+		// Byte-for-byte against the other account's row: a route that quietly served the viewer's own
+		// picture instead would still answer 200 with a plausible body.
+		expect(Buffer.from(await response.arrayBuffer()).equals(stored.bytes)).toBe(true);
+	});
+
 	it("answers 404 for an account with no avatar, so the fallback initial draws", async () => {
 		const user = await makeUser();
 		currentUser.mockResolvedValue(user);

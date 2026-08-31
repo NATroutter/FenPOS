@@ -19,7 +19,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `requireSession` is stubbed with a `vi.fn()`, the same convention `permission-matrix.test.ts` uses,
  * because each case needs a different acting account: a granted holder, an ungranted one, and (via
  * `panelAction`'s own bypass, already proven by that suite) implicitly a superuser. `revalidatePath`
- * is stubbed too, since it needs a request scope these tests do not have.
+ * is stubbed too, since it needs a request scope these tests do not have — as a spy rather than a
+ * bare no-op, because *which* paths these two refresh is itself worth pinning: the sidebar footer
+ * lives in the layout, and an administrator may change their own picture from this tab.
  */
 const currentSessionUser = vi.fn();
 vi.mock("@/lib/auth/require-session", () => ({
@@ -29,10 +31,12 @@ vi.mock("@/lib/auth/require-session", () => ({
 	// doc in `panel-action.ts`.
 	currentSessionId: async (fallback: string) => fallback,
 }));
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath: (path: string, type?: string) => revalidatePath(path, type) }));
 
 const { removeUserAvatar, setUserAvatar } = await import("@/app/(panel)/users/actions");
 const { readAvatar } = await import("@/lib/auth/avatar-service");
+const { REFUSAL_MESSAGE } = await import("@/lib/auth/require-permission");
 const { auditDb, prisma } = await import("@/lib/db");
 const { makeUser, makeUserWith } = await import("@/test/helpers/accounts");
 const { latestAuditAction, latestAuditOutcome } = await import("@/test/helpers/audit");
@@ -59,6 +63,7 @@ beforeEach(async () => {
 	await prisma.avatar.deleteMany({});
 	await prisma.user.deleteMany({});
 	currentSessionUser.mockReset();
+	revalidatePath.mockClear();
 });
 
 describe("setUserAvatar", () => {
@@ -74,6 +79,24 @@ describe("setUserAvatar", () => {
 		expect(await latestAuditAction()).toBe("users:set-avatar");
 	});
 
+	/**
+	 * The layout, not just `/users`. The sidebar footer draws the signed-in operator's own picture and
+	 * lives in the layout, and `setUserAvatar`'s own doc deliberately permits an administrator to
+	 * change their *own* avatar from this tab — exactly the case layout revalidation exists for. With
+	 * only `/users` refreshed, that administrator's sidebar kept the old picture until a hard reload,
+	 * while the self-service pair in `(panel)/settings/actions.ts` got it right.
+	 */
+	it("refreshes the layout as well as the tab, so the sidebar picture changes", async () => {
+		const admin = await makeUserWith(["users:update"]);
+		const target = await makeUser();
+		currentSessionUser.mockResolvedValue(admin);
+
+		await setUserAvatar(target.id, form(await pngOf(60, 60)));
+
+		expect(revalidatePath).toHaveBeenCalledWith("/users", undefined);
+		expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+	});
+
 	it("refuses without the grant, and writes a DENIED row", async () => {
 		const nobody = await makeUserWith([]);
 		const target = await makeUser();
@@ -81,7 +104,10 @@ describe("setUserAvatar", () => {
 
 		const state = await setUserAvatar(target.id, form(await pngOf(60, 60)));
 
-		expect(state.error).toBeDefined();
+		// The refusal's own sentence, not merely "some error": success is `{ error: null }`, and
+		// `expect(null).toBeDefined()` passes — so an assertion phrased that way could never fail and
+		// would have gone on passing had the gate been removed entirely.
+		expect(state.error).toBe(REFUSAL_MESSAGE);
 		expect(await readAvatar(target.id)).toBeNull();
 		expect(await latestAuditOutcome()).toBe("DENIED");
 	});
@@ -127,6 +153,9 @@ describe("removeUserAvatar", () => {
 		expect(state.error).toBeNull();
 		expect(await readAvatar(target.id)).toBeNull();
 		expect(await latestAuditAction()).toBe("users:remove-avatar");
+		// Removal is the same case as setting: an administrator who cleared their own picture here
+		// would otherwise keep seeing it in the sidebar.
+		expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
 	});
 
 	it("refuses without the grant, and writes a DENIED row", async () => {
@@ -140,7 +169,8 @@ describe("removeUserAvatar", () => {
 
 		const state = await removeUserAvatar(target.id);
 
-		expect(state.error).toBeDefined();
+		// The refusal's own sentence — see the matching case under `setUserAvatar`.
+		expect(state.error).toBe(REFUSAL_MESSAGE);
 		expect(await readAvatar(target.id)).not.toBeNull();
 		expect(await latestAuditOutcome()).toBe("DENIED");
 	});

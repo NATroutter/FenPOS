@@ -39,6 +39,22 @@ import type { ActionState } from "@/lib/panel/action-state";
 /** What every action here refreshes on success. */
 const revalidate = () => revalidatePath("/users");
 
+/**
+ * What the two avatar actions refresh: this tab, and the layout under it.
+ *
+ * The sidebar footer draws the signed-in operator's own picture and lives in the layout, which is
+ * exactly why `setOwnAvatar` and `removeOwnAvatar` in `(panel)/settings/actions.ts` revalidate the
+ * layout rather than a page. This pair needs it for the same reason: {@link setUserAvatar}'s own doc
+ * says an administrator changing their *own* avatar through the Users tab is deliberately permitted,
+ * and refreshing `/users` alone would leave that administrator's sidebar showing the previous
+ * picture until a hard reload. {@link setSuperuser} makes the same two calls inline, for the same
+ * reason on a different field.
+ */
+const revalidateAvatar = () => {
+	revalidatePath("/users");
+	revalidatePath("/", "layout");
+};
+
 /** The creation form's contents, as they cross the wire. Their rules live in `account-service.ts`. */
 export interface NewUserInput {
 	name: string;
@@ -161,7 +177,7 @@ export async function setUserAvatar(userId: string, formData: FormData): Promise
 			detail.crop = crop;
 		},
 		{
-			revalidate,
+			revalidate: revalidateAvatar,
 			target: await accountTarget(userId),
 			// The bytes are emphatically not recorded, same as `setOwnAvatar`: an audit row is a
 			// permanent, hash-chained record and an avatar is megabytes of it. The target account and
@@ -184,7 +200,7 @@ export async function removeUserAvatar(userId: string): Promise<ActionState> {
 			await removeAvatar(userId);
 		},
 		{
-			revalidate,
+			revalidate: revalidateAvatar,
 			target: await accountTarget(userId),
 			detail: { userId },
 		},
