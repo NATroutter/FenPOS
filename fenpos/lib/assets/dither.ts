@@ -130,7 +130,7 @@ export const MAX_JPEG_DECODE_MB = 384;
  * `@jimp/core` passes `options[format.mime]` straight into the format's decoder, so this is how a
  * bound reaches `jpeg-js` at all. PNG has no equivalent entry because `pngjs` takes no options;
  * it is bounded instead by refusing interlacing, which keeps every PNG on the branch that sizes its
- * inflate from the declared dimensions. See `requireDecodableSize` in `asset-service.ts`.
+ * inflate from the declared dimensions. See `requireDecodableSize` in `lib/images/guard.ts`.
  */
 const DECODE_LIMITS = {
 	[JimpMime.jpeg]: {
