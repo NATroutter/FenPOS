@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CropperValue, clampCrop } from "@/components/panel/avatar-cropper";
+import { type CropperValue, clampCrop, containedRect, cropToBoxRect } from "@/components/panel/avatar-cropper";
 
 /**
  * `clampCrop` is where every geometry decision the cropper makes actually lives — see
@@ -86,5 +86,80 @@ describe("clampCrop", () => {
 			expect(clamped.x + clamped.size).toBeLessThanOrEqual(natural.width);
 			expect(clamped.y + clamped.size).toBeLessThanOrEqual(natural.height);
 		}
+	});
+});
+
+/**
+ * `containedRect` and `cropToBoxRect` exist because the drag and the mask used to each compute this
+ * mapping themselves, disagreeing with each other and with what `object-fit: cover` actually drew —
+ * see `avatar-cropper.tsx`'s doc comment on `containedRect` for the reasoning behind `object-contain`
+ * and why `cover` let `clampCrop` allow crops the interface could not reach or show. Both are pure
+ * functions of plain objects, same as `clampCrop`, for the same reason: the geometry is what's worth
+ * testing, and neither needs a DOM to be exercised.
+ */
+describe("containedRect", () => {
+	it("computes the letterbox for a landscape image in a square box", () => {
+		expect(containedRect({ width: 200, height: 100 }, { width: 100, height: 100 })).toEqual({
+			offsetX: 0,
+			offsetY: 25,
+			scale: 0.5,
+		});
+	});
+
+	it("computes the letterbox for a portrait image in a square box", () => {
+		expect(containedRect({ width: 100, height: 200 }, { width: 100, height: 100 })).toEqual({
+			offsetX: 25,
+			offsetY: 0,
+			scale: 0.5,
+		});
+	});
+
+	it("has zero offset and the simple ratio for a square image — the case that passed by accident before", () => {
+		expect(containedRect({ width: 100, height: 100 }, { width: 50, height: 50 })).toEqual({
+			offsetX: 0,
+			offsetY: 0,
+			scale: 0.5,
+		});
+	});
+
+	/**
+	 * The defect the controller reproduced directly against the source: with the box always square
+	 * (an `aspect-square` wrapper) but the image drawn with `object-cover`, the old `scaleFactor`
+	 * used `natural.width / rect.width` for every drag, regardless of orientation or letterboxing.
+	 * For a 200×100 image in a 100×100 box, `object-cover`'s own scale is 1 — the constraining
+	 * dimension, height, maps 1:1, so one screen pixel should move the crop one natural pixel — but
+	 * the old formula computed `200 / 100 = 2`: dragging at double speed. `scale` here is what a
+	 * screen-pixel drag delta should be *divided by* to get the natural-pixel delta it represents
+	 * (see `AvatarCropper`'s `handlePointerMove`), under the `object-contain` this component now
+	 * draws with rather than `cover` — which is a different, letterbox-aware number for each
+	 * orientation, not the single `natural.width`-based ratio the old code applied to both.
+	 */
+	it("gives the scale a screen-pixel drag delta should be divided by, for both orientations", () => {
+		const landscape = containedRect({ width: 200, height: 100 }, { width: 100, height: 100 });
+		expect(10 / landscape.scale).toBe(20);
+
+		const portrait = containedRect({ width: 100, height: 200 }, { width: 100, height: 100 });
+		expect(6 / portrait.scale).toBe(12);
+	});
+});
+
+describe("cropToBoxRect", () => {
+	it("maps a crop at the image's origin, and one at the far corner, to rectangles wholly inside the box", () => {
+		const natural = { width: 200, height: 100 };
+		const box = { width: 100, height: 100 };
+		const size = 40;
+
+		const nearOrigin = cropToBoxRect({ x: 0, y: 0, size }, natural, box);
+		const farCorner = cropToBoxRect({ x: natural.width - size, y: natural.height - size, size }, natural, box);
+
+		for (const rect of [nearOrigin, farCorner]) {
+			expect(rect.left).toBeGreaterThanOrEqual(0);
+			expect(rect.top).toBeGreaterThanOrEqual(0);
+			expect(rect.left + rect.width).toBeLessThanOrEqual(box.width);
+			expect(rect.top + rect.height).toBeLessThanOrEqual(box.height);
+		}
+
+		expect(nearOrigin).toEqual({ left: 0, top: 25, width: 20, height: 20 });
+		expect(farCorner).toEqual({ left: 80, top: 55, width: 20, height: 20 });
 	});
 });

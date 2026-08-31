@@ -1,6 +1,6 @@
 "use client";
 
-import { type PointerEvent as ReactPointerEvent, useRef } from "react";
+import { type ChangeEvent, type PointerEvent as ReactPointerEvent, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -59,12 +59,74 @@ export function clampCrop(value: CropperValue, natural: { width: number; height:
 	return { x, y, size };
 }
 
-/** How many image pixels one screen pixel of dragging moves the crop, at the current zoom. */
-function scaleFactor(imageBox: HTMLDivElement, natural: { width: number; height: number }): number {
-	const rect = imageBox.getBoundingClientRect();
-	// The box is always square (an `aspect-square` wrapper below), so either side gives the same
-	// answer; `width` is picked arbitrarily.
-	return rect.width === 0 ? 1 : natural.width / rect.width;
+/** Where, and at what scale, a `natural`-sized image is drawn inside `box` under `object-fit: contain`. */
+export interface ContainedRect {
+	/** Horizontal letterbox: how far the drawn image sits from the box's left edge, in box units. */
+	offsetX: number;
+	/** Vertical letterbox: how far the drawn image sits from the box's top edge, in box units. */
+	offsetY: number;
+	/** Box units per natural pixel — how large the image is actually drawn, not its natural size. */
+	scale: number;
+}
+
+/**
+ * Works out the letterboxing `object-fit: contain` produces, so the pointer math and the mask can
+ * agree on where the image actually is instead of each assuming it fills its box.
+ *
+ * `contain` scales the image by `min(box.width/natural.width, box.height/natural.height)` — the
+ * *smaller* of the two ratios, so the longer natural side is the one that ends up flush with the
+ * box, and the other is centred inside it with bars on either side. `object-fit: cover` — what this
+ * component used before — scales by the *larger* ratio instead, filling the box completely and
+ * cropping whatever doesn't fit; for a non-square image in a square box, that hides a third of a
+ * landscape photo (or a portrait one) that a square crop can never be dragged onto, while
+ * {@link clampCrop} happily allows a crop there. `contain` is what makes the crop this function
+ * bounds — "any square inside the whole picture" — the same set of squares the interface can
+ * actually show and reach.
+ *
+ * `box` need not be real pixels: because `offsetX`, `offsetY`, and `scale` are all linear in `box`'s
+ * dimensions for a fixed aspect ratio, passing a unit box (`{ width: 1, height: 1 }`) returns them
+ * as *fractions* of whatever box they end up drawn in — which is what lets {@link cropToBoxRect}
+ * answer in CSS percentages without ever measuring the DOM.
+ *
+ * @param natural the image's own decoded dimensions
+ * @param box the space it is being fit into — real pixels for pointer math, a unit box for CSS percentages
+ */
+export function containedRect(
+	natural: { width: number; height: number },
+	box: { width: number; height: number },
+): ContainedRect {
+	if (natural.width <= 0 || natural.height <= 0 || box.width <= 0 || box.height <= 0) {
+		return { offsetX: 0, offsetY: 0, scale: 1 };
+	}
+	const scale = Math.min(box.width / natural.width, box.height / natural.height);
+	return {
+		offsetX: (box.width - natural.width * scale) / 2,
+		offsetY: (box.height - natural.height * scale) / 2,
+		scale,
+	};
+}
+
+/**
+ * Where a crop, given in natural pixels, lands inside `box` once {@link containedRect} has placed
+ * the image in it — the rectangle the mask is drawn at.
+ *
+ * Built from {@link containedRect} rather than repeating its arithmetic, so the mask and the pointer
+ * conversion in `AvatarCropper` cannot drift apart: both go through the exact same letterboxing.
+ *
+ * @returns the crop's rectangle in `box`'s own units (see {@link containedRect}'s `box` note)
+ */
+export function cropToBoxRect(
+	value: CropperValue,
+	natural: { width: number; height: number },
+	box: { width: number; height: number },
+): { left: number; top: number; width: number; height: number } {
+	const { offsetX, offsetY, scale } = containedRect(natural, box);
+	return {
+		left: offsetX + value.x * scale,
+		top: offsetY + value.y * scale,
+		width: value.size * scale,
+		height: value.size * scale,
+	};
 }
 
 /**
@@ -74,10 +136,11 @@ function scaleFactor(imageBox: HTMLDivElement, natural: { width: number; height:
  * (a square, for a round avatar) and one gesture (drag to move, a slider to zoom), which is little
  * enough surface that a dependency would cost more to configure than it saves.
  *
- * The mask is drawn, not cut: a dimmed surround sits over the whole image and a `rounded-full` ring
- * the size of the current crop sits on top of it, so what shows through the ring is exactly the
- * square `value` describes. Nothing about the mask feeds back into the geometry — it is a picture
- * of `value`, not a second source of truth for it.
+ * The image is shown with `object-contain`, not `object-cover` — see {@link containedRect}'s doc
+ * comment for why cover was the wrong fit here. The mask is drawn, not cut: a dimmed surround sits
+ * over the whole box and a `rounded-full` ring at {@link cropToBoxRect}'s rectangle sits on top of
+ * it, so what shows through the ring is exactly the square `value` describes. Nothing about the mask
+ * feeds back into the geometry — it is a picture of `value`, not a second source of truth for it.
  *
  * Every path that changes `value` — a drag, or the zoom slider — computes the next rectangle and
  * passes it through {@link clampCrop} before calling `onChange`, so this component cannot hand the
@@ -118,13 +181,19 @@ export function AvatarCropper({
 		if (!drag || !box || drag.pointerId !== event.pointerId) {
 			return;
 		}
-		const scale = scaleFactor(box, natural);
+		const rect = box.getBoundingClientRect();
+		const { scale } = containedRect(natural, { width: rect.width, height: rect.height });
+		// `scale` is box pixels per natural pixel — how large `object-contain` is actually drawing
+		// the image, not the box's own size — so dividing a screen-pixel delta by it, rather than by
+		// the box's width, is what makes one screen pixel of dragging move the crop by the natural
+		// pixel that pixel actually covers on screen, whichever side is letterboxed.
+		//
 		// Dragging the image right moves the *visible window* left, hence the negated delta: the
 		// crop's `x`/`y` describe where the square sits on the original picture, not where the
 		// picture sits under the square.
 		const next: CropperValue = {
-			x: drag.origin.x - (event.clientX - drag.startX) * scale,
-			y: drag.origin.y - (event.clientY - drag.startY) * scale,
+			x: drag.origin.x - (event.clientX - drag.startX) / scale,
+			y: drag.origin.y - (event.clientY - drag.startY) / scale,
 			size: drag.origin.size,
 		};
 		onChange(clampCrop(next, natural));
@@ -136,7 +205,7 @@ export function AvatarCropper({
 		}
 	};
 
-	const handleZoom = (event: React.ChangeEvent<HTMLInputElement>): void => {
+	const handleZoom = (event: ChangeEvent<HTMLInputElement>): void => {
 		const nextSize = Number(event.target.value);
 		// Zooming keeps the square centred on itself rather than anchored at its top-left corner —
 		// the corner a smaller `size` would otherwise leave the crop drifting away from.
@@ -146,6 +215,14 @@ export function AvatarCropper({
 	};
 
 	const shorterSide = Math.min(natural.width, natural.height);
+	// Derived from `shorterSide` rather than a second `Math.min(natural.width, natural.height)` at
+	// the range input below, so there is exactly one place in this component that reads the image's
+	// own dimensions to decide how far the slider can zoom.
+	const zoomMin = Math.min(64, shorterSide);
+	// A unit box: `containedRect` (and this) return offsets and a scale that are fractions of
+	// whatever box they're given for a fixed aspect ratio, so this needs no measurement of the box's
+	// actual rendered size — the same reason the CSS below can express it as plain percentages.
+	const maskRect = cropToBoxRect(value, natural, { width: 1, height: 1 });
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -166,7 +243,7 @@ export function AvatarCropper({
 				<img
 					src={src}
 					alt=""
-					className="pointer-events-none absolute inset-0 size-full object-cover"
+					className="pointer-events-none absolute inset-0 size-full object-contain"
 					draggable={false}
 				/>
 
@@ -177,17 +254,17 @@ export function AvatarCropper({
 					aria-hidden
 					className="pointer-events-none absolute rounded-full shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
 					style={{
-						left: `${(value.x / natural.width) * 100}%`,
-						top: `${(value.y / natural.height) * 100}%`,
-						width: `${(value.size / natural.width) * 100}%`,
-						height: `${(value.size / natural.height) * 100}%`,
+						left: `${maskRect.left * 100}%`,
+						top: `${maskRect.top * 100}%`,
+						width: `${maskRect.width * 100}%`,
+						height: `${maskRect.height * 100}%`,
 					}}
 				/>
 			</div>
 
 			<input
 				type="range"
-				min={Math.min(64, shorterSide)}
+				min={zoomMin}
 				max={shorterSide}
 				value={value.size}
 				disabled={disabled}
