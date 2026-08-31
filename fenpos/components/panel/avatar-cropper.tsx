@@ -24,30 +24,39 @@ export interface CropperValue {
  * Every geometry decision the cropper makes lives here rather than in the component below, so it
  * can be tested as a plain function of two objects — see `test/components/panel/avatar-cropper.test.ts`.
  *
- * The three bounds are applied in a specific order, and that order is load-bearing:
+ * `size` is rounded — and floored to a minimum of 1 — *before* it bounds anything else, and `x`/`y`
+ * are rounded before they are clamped against it. That is the opposite of what an earlier version
+ * of this function did (bound everything in real numbers, then round all three independently at the
+ * end), which reads as the safer order but is not: a real-valued rectangle that fits exactly, such
+ * as `size` bounding to `50.5` and `x` bounding to `49.5` in a 100-pixel-wide image, rounds *both*
+ * of those values up independently — `x: 50, size: 51` — and 101 pixels no longer fits in 100. That
+ * is not a hypothetical; the server's `requireValidCrop` refuses exactly this on a real drag (see
+ * `lib/auth/avatar-image.ts`), which is what sends a legal crop back as an error. Rounding first
+ * closes it: once `size` is a whole number, `width - size` and `height - size` are whole numbers
+ * too, and clamping an already-whole `x`/`y` against a whole bound can only land inside it — there
+ * is no independent rounding step left afterward to push the sum back out.
  *
- * 1. `size` is bounded to the shorter side of the image *first*. A square wider than the image is
- *    not a request the image can satisfy no matter where it sits, so nothing about `x` or `y` can
- *    be decided before this is settled.
- * 2. `x` and `y` are then bounded to `[0, width - size]` and `[0, height - size]` — using this
- *    already-shrunk `size`, not the caller's raw one. Bounding position against a square that is
- *    still too large is how a square gets pushed to a *negative* coordinate instead of pulled
- *    inside the image: `width - size` is negative whenever `size` still exceeds `width`.
- * 3. Only once all three are inside real-valued bounds are they rounded, together, with
- *    `Math.round`. Rounding any of them earlier — before the value it would feed into (`size`
- *    feeding `x`'s and `y`'s bound) has itself been bounded — can round a value that was correctly
- *    pulled inside the image back out past the edge it was just pulled inside.
+ * The steps, in order:
+ *
+ * 1. `size` is rounded, then bounded to `[1, shorterSide]`. The floor of 1 exists because a `size`
+ *    under 0.5 would otherwise round to 0, and the server refuses a crop with no size at all — the
+ *    same document, same reason.
+ * 2. `x` and `y` are rounded, then bounded to `[0, width - size]` and `[0, height - size]` — against
+ *    this already-integer `size`, not the caller's raw one, for the same reason a wrong-ordered
+ *    version of this function once bound them against an unshrunk `size` and produced a negative
+ *    coordinate: bounding position against a square that is still too large pushes it past an edge
+ *    instead of inside one.
  *
  * @param value the requested crop, in whatever units a drag or a zoom slider produced
  * @param natural the original image's decoded dimensions
- * @returns a crop that fits inside `natural`, in whole pixels
+ * @returns a crop that fits inside `natural`, in whole pixels, with `size` at least 1
  */
 export function clampCrop(value: CropperValue, natural: { width: number; height: number }): CropperValue {
 	const shorterSide = Math.min(natural.width, natural.height);
-	const size = Math.min(value.size, shorterSide);
-	const x = Math.min(Math.max(value.x, 0), natural.width - size);
-	const y = Math.min(Math.max(value.y, 0), natural.height - size);
-	return { x: Math.round(x), y: Math.round(y), size: Math.round(size) };
+	const size = Math.min(Math.max(Math.round(value.size), 1), shorterSide);
+	const x = Math.min(Math.max(Math.round(value.x), 0), natural.width - size);
+	const y = Math.min(Math.max(Math.round(value.y), 0), natural.height - size);
+	return { x, y, size };
 }
 
 /** How many image pixels one screen pixel of dragging moves the crop, at the current zoom. */

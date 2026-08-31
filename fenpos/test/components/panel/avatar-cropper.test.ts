@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampCrop } from "@/components/panel/avatar-cropper";
+import { type CropperValue, clampCrop } from "@/components/panel/avatar-cropper";
 
 /**
  * `clampCrop` is where every geometry decision the cropper makes actually lives — see
@@ -47,5 +47,44 @@ describe("clampCrop", () => {
 			y: 0,
 			size: 60,
 		});
+	});
+
+	/**
+	 * The contract `clampCrop` exists to guarantee — every field is a whole pixel, `size` is at
+	 * least 1, and the rectangle fits inside `natural` — stated once as an invariant instead of
+	 * pinned to one arithmetic path per case. That is deliberate: bounding real-valued `x`/`y`
+	 * against a real-valued `size` and rounding all three independently at the end (the order the
+	 * task brief itself specified) can round `x` and `size` *up* past a shared edge even though the
+	 * unrounded rectangle fit — an exact `.5` tie is enough. `{ x: 49.5, y: 0, size: 50.5 }` in a
+	 * 100×100 image is such a tie: `size` bounds to 50.5, `x` bounds to 49.5, and independently
+	 * rounding each gives `x: 50, size: 51` — 101 pixels across a 100-pixel image, a rectangle the
+	 * server's `requireValidCrop` refuses outright. Every row below is a case that arithmetic like
+	 * that can get wrong: the reported tie, a tie on the *shorter* axis of a non-square image (where
+	 * the size-to-shorter-side shrink is also live), a size small enough to round to zero (which the
+	 * server also refuses — "a crop must have a size"), and a negative, fractional origin.
+	 */
+	it("keeps the fit-inside-the-image invariant on inputs that land on rounding boundaries", () => {
+		const cases: Array<{ value: CropperValue; natural: { width: number; height: number } }> = [
+			// The exact tie the controller reproduced against the server.
+			{ value: { x: 49.5, y: 0, size: 50.5 }, natural: { width: 100, height: 100 } },
+			// The same tie, but on the shorter axis of a non-square image, with the size-shrink live too.
+			{ value: { x: 0, y: 0.5, size: 79.5 }, natural: { width: 200, height: 80 } },
+			// A size that rounds to zero, which the server refuses as having no size at all.
+			{ value: { x: 5, y: 5, size: 0.4 }, natural: { width: 100, height: 100 } },
+			// A negative origin with a fractional size.
+			{ value: { x: -5.5, y: -3.2, size: 40.7 }, natural: { width: 100, height: 100 } },
+		];
+
+		for (const { value, natural } of cases) {
+			const clamped = clampCrop(value, natural);
+			expect(Number.isInteger(clamped.x)).toBe(true);
+			expect(Number.isInteger(clamped.y)).toBe(true);
+			expect(Number.isInteger(clamped.size)).toBe(true);
+			expect(clamped.size).toBeGreaterThanOrEqual(1);
+			expect(clamped.x).toBeGreaterThanOrEqual(0);
+			expect(clamped.y).toBeGreaterThanOrEqual(0);
+			expect(clamped.x + clamped.size).toBeLessThanOrEqual(natural.width);
+			expect(clamped.y + clamped.size).toBeLessThanOrEqual(natural.height);
+		}
 	});
 });
