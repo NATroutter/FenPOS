@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelUser } from "@/lib/auth/require-session";
 
 /**
@@ -6,9 +6,12 @@ import type { PanelUser } from "@/lib/auth/require-session";
  * the real module via `importActual` and overrides only `currentUser`, referenced through a wrapper
  * closure rather than captured directly, so the outer `const` below is not read before its own
  * initialiser runs. Nothing else this route touches — `readAvatar`, `setAvatar` — comes from
- * `@/lib/auth/require-session`, so nothing else needed the real exports; the spread is kept anyway,
- * both to match the established pattern and as a guard against a future caller of this route pulling
- * in another export of the module unnoticed.
+ * `@/lib/auth/require-session`, so nothing else needed the real exports.
+ *
+ * **The spread is now load-bearing rather than merely conventional.** `sessionVerdict` comes from
+ * this same module and the route calls it, so it is the *real* one here — running the real gates
+ * against the real database, the way the events suite runs them. A gate this route stops applying is
+ * a failure in this file rather than a hole nobody notices.
  */
 const currentUser = vi.fn<() => Promise<PanelUser | null>>();
 vi.mock("@/lib/auth/require-session", async (importActual) => ({
@@ -16,17 +19,54 @@ vi.mock("@/lib/auth/require-session", async (importActual) => ({
 	currentUser: () => currentUser(),
 }));
 
+// `sessionVerdict`'s allowlist gate reads the caller's address, and `next/headers` raises outside a
+// live request. A fixed address stands in, so the allowlist test below turns on what is configured
+// rather than on what the runtime could see. Same stand-in as `test/app/api/events/route.test.ts`.
+vi.mock("@/lib/request-context", () => ({
+	getClientAddress: async () => "203.0.113.30",
+	getUserAgent: async () => "vitest",
+}));
+
 import { GET } from "@/app/api/avatar/[userId]/route";
 import { readAvatar, setAvatar } from "@/lib/auth/avatar-service";
+import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 import { makeUser } from "@/test/helpers/accounts";
 import { pngOf } from "@/test/helpers/images";
 
 const request = new Request("http://localhost/api/avatar/x");
 
+// Settings are per-file state here, and only one test sets any: cleared afterwards so an allowlist
+// left behind cannot decide the outcome of whichever test happens to run next.
+afterEach(async () => {
+	await prisma.setting.deleteMany();
+});
+
 describe("GET /api/avatar/[userId]", () => {
 	it("refuses anyone not signed in", async () => {
 		currentUser.mockResolvedValue(null);
 		const user = await makeUser();
+
+		expect((await GET(request, { params: Promise.resolve({ userId: user.id }) })).status).toBe(401);
+	});
+
+	/**
+	 * The gap this route had: `currentUser` resolves the session cookie and applies none of the
+	 * gates — the IP allowlist, the inactivity timeout, the forced password change, the two-factor
+	 * enrolment gate. A session from an address since removed from `auth.ipAllowlist` still holds a
+	 * cookie that resolves, and before `sessionVerdict` was called here it could enumerate every
+	 * operator's picture while being refused every page that lists them.
+	 *
+	 * The allowlist stands in for all of them: the point is that the verdict is consulted at all, and
+	 * `sessionVerdict` is where a gate added later reaches this caller without anything being
+	 * repeated here by hand.
+	 */
+	it("refuses a signed-in session whose verdict is not 'allowed'", async () => {
+		const user = await makeUser();
+		await setAvatar(user.id, await pngOf(90, 90), { x: 0, y: 0, size: 90 });
+		currentUser.mockResolvedValue(user);
+		// The mocked address is 203.0.113.30, which this range does not contain.
+		await setSetting("auth.ipAllowlist", "10.0.0.0/8");
 
 		expect((await GET(request, { params: Promise.resolve({ userId: user.id }) })).status).toBe(401);
 	});
