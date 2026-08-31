@@ -76,6 +76,8 @@ export const API_ERROR_STATUS = {
 	unknown_job: 404,
 	/** An `<image>` tag, or the Assets tab, naming a stored image that is not there. */
 	unknown_asset: 404,
+	/** A re-crop or a removal aimed at an account that has no avatar row to act on. */
+	unknown_avatar: 404,
 	/**
 	 * No endpoint at that path — most often a version this build does not serve.
 	 *
