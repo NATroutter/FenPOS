@@ -44,7 +44,12 @@ function Button({
 	size = "default",
 	...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
-	return <ButtonPrimitive data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />;
+	// Button deliberately sets no data-slot of its own. Base-ui triggers that compose a Button through
+	// their render prop pass their own data-slot down, and when both sides supply one, which value
+	// reaches the DOM differs between the server render and hydration — a mismatch React will not
+	// patch up. Leaving the attribute to the composing trigger keeps the two renders identical.
+	// Nothing selects on [data-slot=button]; callers that want a slot pass one and it forwards.
+	return <ButtonPrimitive className={cn(buttonVariants({ variant, size, className }))} {...props} />;
 }
 
 export { Button, buttonVariants };
