@@ -47,8 +47,8 @@ model User {
   name             String
   email            String
   emailVerified    Boolean     @default(false)
-  /// Better Auth's own avatar field. Unused: FenPOS serves avatars from its own table so the bytes
-  /// live in the same file as everything else that is backed up.
+  /// Better Auth's own avatar field. Unused: FenPOS serves avatars from the Avatar table so the
+  /// bytes live in the same file as everything else that is backed up.
   image            String?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -93,9 +93,44 @@ model User {
   /// Hashes of passwords this account may not return to. Cascades, unlike the audit trail: a
   /// deleted account's old hashes protect nobody and are only a liability to keep.
   passwordHistory PasswordHistory[]
+  avatar           Avatar?
 
   @@unique([email])
   @@map("user")
+}
+
+/// One per account, or none. Three representations of the same picture, kept together because
+/// re-cropping needs the original and serving needs the render, and a row that held only one of
+/// them would force the other to be recomputed on a path that cannot afford it.
+model Avatar {
+  /// The primary key as well as the foreign key: one avatar per account, enforced by the schema
+  /// rather than by whoever writes the next upload path.
+  userId           String   @id @map("user_id")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Exactly what was uploaded. Re-cropping starts here, never from a previous render, so a crop
+  /// widened after being narrowed recovers the pixels rather than upscaling what survived.
+  original         Bytes
+  originalMimeType String   @map("original_mime_type")
+
+  /// The crop, in pixels of the original. Square by construction, so one side is enough.
+  cropX            Int      @map("crop_x")
+  cropY            Int      @map("crop_y")
+  cropSize         Int      @map("crop_size")
+
+  /// The square render actually served. Stored rather than derived per request: the serving route
+  /// is hit once per page render per signed-in user, and baking there would put a jimp decode on
+  /// every one of them.
+  baked            Bytes
+  bakedMimeType    String   @map("baked_mime_type")
+  /// The render's side length in pixels. Recorded so a later change to AVATAR_RENDER_PX can find
+  /// the rows baked at the old size instead of guessing from the bytes.
+  bakedSize        Int      @map("baked_size")
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("avatars")
 }
 
 /// Previous passwords an account may not return to, for `auth.passwordReuseCount`.
