@@ -58,6 +58,11 @@ describe("panel action registry", () => {
 		// Roles and individual grants are both `users:grant`.
 		"users:set-roles": "users:grant",
 		"users:set-permissions": "users:grant",
+		// Setting or removing another account's picture is `users:update` too: the same permission that
+		// governs its name and email, not a permission of its own — see the registry's own note on
+		// `users:set-avatar`.
+		"users:set-avatar": "users:update",
+		"users:remove-avatar": "users:update",
 		// Reading an account's sessions is part of reading the account.
 		"users:list-sessions": "users:read",
 		// Being pointed at the archived month a filtered range reaches into is part of reading the

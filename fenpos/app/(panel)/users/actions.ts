@@ -12,6 +12,9 @@ import {
 	unbanAccount,
 } from "@/lib/auth/account-security";
 import { createAccount, deleteAccount, setAccountSuperuser, updateAccount } from "@/lib/auth/account-service";
+import { readAvatarForm } from "@/lib/auth/avatar-form";
+import type { CropRect } from "@/lib/auth/avatar-image";
+import { removeAvatar, setAvatar } from "@/lib/auth/avatar-service";
 import { setAccountPermissions, setAccountRoles } from "@/lib/auth/grant-service";
 import { panelAction, panelQuery } from "@/lib/auth/panel-action";
 import { prisma } from "@/lib/db";
@@ -116,6 +119,76 @@ export async function updateUser(userId: string, name: string, email: string): P
 		// first thing anyone investigating one asks.
 		detail: { name, email },
 	});
+}
+
+/**
+ * Sets another account's avatar.
+ *
+ * Gated on `users:update`, deliberately, unlike `setOwnAvatar` in `(panel)/settings/actions.ts`. The
+ * spec's "not gated" list covers only actions on your *own* account, and setting somebody else's
+ * picture is not on it — this is the plan's one deliberate widening beyond the spec, and it gets the
+ * same care as every other `users:*` action beside it: a real permission, and a `DENIED` row when
+ * refused.
+ *
+ * The form is parsed *inside* the gated body, not before it, for the reason `setOwnAvatar` gives:
+ * `readAvatarForm` can throw (a missing file, a non-integer coordinate, too many bytes), and a throw
+ * from outside `panelAction`'s own `try` would escape as an unhandled rejection instead of the
+ * `ActionState` a refused form is supposed to render.
+ *
+ * The avatar is written against `userId` — the argument — never against the acting administrator's
+ * own id. Nothing here special-cases the acting account the way `banUser`/`deleteUser` refuse to act
+ * on it, matching `updateUser` just above: an administrator changing their own avatar through this
+ * path is no different from changing their own name here, and either is also reachable through the
+ * ungated `self:*` pair regardless.
+ *
+ * @param userId the account whose avatar is being set
+ * @param formData the file, and the crop rectangle as three integers
+ * @returns the state to render
+ */
+export async function setUserAvatar(userId: string, formData: FormData): Promise<ActionState> {
+	// Populated from inside the body, once the crop is actually known — see `setOwnAvatar`'s own doc
+	// for why this is safe: `panel-action.ts`'s `record()` spreads `options.detail` only after
+	// `work()` has returned or thrown, so a mutation made partway through the body still reaches the
+	// row it writes. `userId` is set up front since it is known before the body runs; `crop` joins it
+	// only once the store has actually accepted the image.
+	const detail: { userId: string; crop?: CropRect } = { userId };
+
+	return panelAction(
+		"users:set-avatar",
+		async () => {
+			const { bytes, crop } = await readAvatarForm(formData);
+			await setAvatar(userId, bytes, crop);
+			detail.crop = crop;
+		},
+		{
+			revalidate,
+			target: await accountTarget(userId),
+			// The bytes are emphatically not recorded, same as `setOwnAvatar`: an audit row is a
+			// permanent, hash-chained record and an avatar is megabytes of it. The target account and
+			// the crop are small and say what changed.
+			detail,
+		},
+	);
+}
+
+/**
+ * Removes another account's avatar, falling its row back to the initial.
+ *
+ * @param userId the account whose avatar is being removed
+ * @returns the state to render
+ */
+export async function removeUserAvatar(userId: string): Promise<ActionState> {
+	return panelAction(
+		"users:remove-avatar",
+		async () => {
+			await removeAvatar(userId);
+		},
+		{
+			revalidate,
+			target: await accountTarget(userId),
+			detail: { userId },
+		},
+	);
 }
 
 /**

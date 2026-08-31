@@ -13,3 +13,17 @@ export async function latestAuditAction(): Promise<string | undefined> {
 	const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
 	return row?.action;
 }
+
+/**
+ * The `outcome` of the most recently written audit row.
+ *
+ * Beside {@link latestAuditAction} for the same reason: a refusal is not fully proven by asserting
+ * `state.error` is truthy, since that is also true of a thrown `FAILURE`. Reading the row's own
+ * `outcome` back is what tells the two apart.
+ *
+ * @returns the latest row's outcome, or undefined when nothing has been recorded yet
+ */
+export async function latestAuditOutcome(): Promise<string | undefined> {
+	const row = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" } });
+	return row?.outcome;
+}

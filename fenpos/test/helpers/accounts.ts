@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PanelUser } from "@/lib/auth/require-session";
 import { prisma } from "@/lib/db";
+import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { panelUser } from "@/test/helpers/panel-user";
 
 /**
@@ -26,6 +27,38 @@ export async function makeUser(): Promise<PanelUser> {
 	const email = `${id}@example.com`;
 
 	await prisma.user.create({ data: { id, name, email, isSuperuser: false } });
+
+	return panelUser({ id, name, email, isSuperuser: false });
+}
+
+/**
+ * Creates a real, **non-superuser** account holding exactly the given grants, and hands back a
+ * {@link PanelUser} naming it.
+ *
+ * The non-superuser part is load-bearing, not incidental. `panel-action.ts`'s `gate()` lets a
+ * superuser through without ever calling {@link userHolds} — see its own doc — and `panelUser`'s
+ * default is `isSuperuser: true`. A fixture that returned a superuser here would make a test written
+ * against a granted permission pass for the wrong reason: it would prove the superuser bypass works,
+ * not that the grant does. Explicitly `isSuperuser: false`, so `userHolds` has no shortcut and the
+ * rows below are what decide the answer.
+ *
+ * The rows are real `userPermission` grants — the same table {@link userHolds} reads through
+ * `effectivePermissions` — rather than anything that only *looks* like a grant, for the same reason
+ * `permission-matrix.test.ts` seeds its own accounts this way: a permission checked against a row
+ * the resolver never reads would pass a test that a stale or misspelled column name would not catch.
+ *
+ * @param permissions the complete set of permissions to grant, individually (no roles)
+ * @returns a `PanelUser` naming a real, freshly created, non-superuser `user` row
+ */
+export async function makeUserWith(permissions: readonly PanelPermission[]): Promise<PanelUser> {
+	const id = randomUUID();
+	const name = "Test User";
+	const email = `${id}@example.com`;
+
+	await prisma.user.create({ data: { id, name, email, isSuperuser: false } });
+	if (permissions.length > 0) {
+		await prisma.userPermission.createMany({ data: permissions.map((permission) => ({ userId: id, permission })) });
+	}
 
 	return panelUser({ id, name, email, isSuperuser: false });
 }

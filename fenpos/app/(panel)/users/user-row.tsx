@@ -1,10 +1,29 @@
 "use client";
 
-import { KeyRound, MonitorSmartphone, ShieldCheck, ShieldOff, TimerReset, Trash2, UserCog, UserX } from "lucide-react";
+import {
+	Camera,
+	KeyRound,
+	MonitorSmartphone,
+	ShieldCheck,
+	ShieldOff,
+	TimerReset,
+	Trash2,
+	UserCog,
+	UserX,
+} from "lucide-react";
 import type { ComponentProps, ReactElement } from "react";
 import { useTransition } from "react";
 import { toast } from "sonner";
-import { deleteUser, disableTwoFactor, forcePasswordReset, setSuperuser, unbanUser } from "@/app/(panel)/users/actions";
+import { AvatarDialog } from "@/app/(panel)/settings/avatar-dialog";
+import {
+	deleteUser,
+	disableTwoFactor,
+	forcePasswordReset,
+	removeUserAvatar,
+	setSuperuser,
+	setUserAvatar,
+	unbanUser,
+} from "@/app/(panel)/users/actions";
 import { BanDialog } from "@/app/(panel)/users/ban-dialog";
 import { type GrantableRole, GrantDialog } from "@/app/(panel)/users/grant-dialog";
 import { PasswordDialog } from "@/app/(panel)/users/password-dialog";
@@ -39,6 +58,14 @@ export interface UserRowData {
 	 * bundle. Phase 7 replaces this with real image bytes.
 	 */
 	initial: string;
+	/**
+	 * Whether the account already has a stored avatar.
+	 *
+	 * Ids-only plumbing from `usersWithAvatars`, not the picture itself — drawing the picture is
+	 * `avatarUrl`'s job, which a later task adds. This much is enough to word the avatar control's
+	 * own copy ("Set" versus "Change").
+	 */
+	hasAvatar: boolean;
 	isSuperuser: boolean;
 	mustChangePassword: boolean;
 	banned: boolean;
@@ -168,6 +195,24 @@ export function UserRow({
 							initialName={account.name}
 							initialEmail={account.email}
 							trigger={<IconButton title="Edit account" icon={<UserCog className="size-3.5" />} />}
+						/>
+					) : null}
+
+					{/*
+					 * Gated on the same permission as the edit button above, deliberately: setting somebody
+					 * else's avatar is `users:update` too, not a free pass like the caller's own picture on
+					 * Settings — see the registry's own note on `users:set-avatar`.
+					 */}
+					{permits.update ? (
+						<AvatarDialog
+							onSave={(formData) => setUserAvatar(account.id, formData)}
+							onRemove={() => removeUserAvatar(account.id)}
+							trigger={
+								<IconButton
+									title={account.hasAvatar ? "Change avatar" : "Set avatar"}
+									icon={<Camera className="size-3.5" />}
+								/>
+							}
 						/>
 					) : null}
 

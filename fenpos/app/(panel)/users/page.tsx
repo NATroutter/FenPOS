@@ -4,6 +4,7 @@ import { UserRow, type UserRowData } from "@/app/(panel)/users/user-row";
 import { Button } from "@/components/ui/button";
 import { listAccounts } from "@/lib/auth/account-service";
 import { avatarInitial } from "@/lib/auth/avatar";
+import { usersWithAvatars } from "@/lib/auth/avatar-service";
 import { effectivePermissions } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { listRoles } from "@/lib/auth/role-service";
@@ -30,6 +31,12 @@ export default async function UsersPage() {
 	const user = await requirePagePermission("users:read", "/users");
 
 	const [accounts, roles] = await Promise.all([listAccounts(), listRoles()]);
+
+	// Ids only, not the bytes: this page draws one row per account and needs to know whether to point
+	// an avatar control at "set" or "replace" copy, not to read every stored picture into memory to
+	// render a list that shows none of them at full size. `avatarUrl` — the prop that actually renders
+	// one — is Task 10's job; this is only the plumbing it will consume.
+	const withAvatars = await usersWithAvatars(accounts.map((account) => account.id));
 
 	// A superuser holds everything grantable without a row saying so, which is exactly what
 	// `effectivePermissions` cannot tell you — it reads rows. Resolved here rather than inside the
@@ -62,6 +69,7 @@ export default async function UsersPage() {
 		// Derived here rather than in the row: `avatar.ts` imports `node:crypto` for its other
 		// export, and a client component importing it would pull that into the browser bundle.
 		initial: avatarInitial(account.name),
+		hasAvatar: withAvatars.has(account.id),
 		isSuperuser: account.isSuperuser,
 		mustChangePassword: account.mustChangePassword,
 		banned: account.banned,
