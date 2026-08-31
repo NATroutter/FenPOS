@@ -113,4 +113,47 @@ describe("GET /api/avatar/[userId]", () => {
 		// arbitrary max-age, so it must be pinned to the exact value the route derives it from.
 		expect(response.headers.get("etag")).toBe(`"${stored.updatedAt.getTime()}"`);
 	});
+
+	/**
+	 * The other half of that ETag, and the half that was missing: `no-cache, must-revalidate` has the
+	 * browser ask again on every render, so without this the route answered every one of those asks
+	 * with the whole picture — `/users` on a fifty-operator install re-downloading fifty renders per
+	 * page load to be told nothing had changed.
+	 *
+	 * The headers are asserted on the 304 too. A revalidation that answered bare would leave the
+	 * browser's stored copy with no freshness information for the next render, and the round trip
+	 * would repeat as a 200.
+	 */
+	it("answers 304 to a caller that already holds this render", async () => {
+		const user = await makeUser();
+		await setAvatar(user.id, await pngOf(90, 90), { x: 0, y: 0, size: 90 });
+		currentUser.mockResolvedValue(user);
+
+		const first = await GET(request, { params: Promise.resolve({ userId: user.id }) });
+		const etag = first.headers.get("etag");
+		expect(etag).not.toBeNull();
+
+		const conditional = new Request("http://localhost/api/avatar/x", {
+			headers: { "If-None-Match": etag as string },
+		});
+		const second = await GET(conditional, { params: Promise.resolve({ userId: user.id }) });
+
+		expect(second.status).toBe(304);
+		expect(second.headers.get("etag")).toBe(etag);
+		expect(second.headers.get("cache-control")).toContain("private");
+		expect((await second.arrayBuffer()).byteLength).toBe(0);
+	});
+
+	it("still serves the bytes when the caller holds a different render", async () => {
+		const user = await makeUser();
+		await setAvatar(user.id, await pngOf(90, 90), { x: 0, y: 0, size: 90 });
+		currentUser.mockResolvedValue(user);
+
+		// The tag a caller would hold from before a re-crop: same shape, different stamp.
+		const stale = new Request("http://localhost/api/avatar/x", { headers: { "If-None-Match": '"1"' } });
+		const response = await GET(stale, { params: Promise.resolve({ userId: user.id }) });
+
+		expect(response.status).toBe(200);
+		expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
+	});
 });

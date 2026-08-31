@@ -23,7 +23,16 @@ import { measureImage } from "@/lib/images/guard";
 
 /** The render, as served. */
 export interface StoredAvatar {
-	bytes: Buffer;
+	/**
+	 * The bytes, over a backing store known to be a plain `ArrayBuffer`.
+	 *
+	 * The type parameter is the whole point: bare `Buffer` is `Buffer<ArrayBufferLike>`, which may be
+	 * backed by a `SharedArrayBuffer` and so is not assignable to `BodyInit`. `Buffer.from` below
+	 * produces exactly this narrower type, and saying so is what lets the serving route hand these
+	 * bytes straight to a `Response` instead of copying every one of them into a fresh `Uint8Array`
+	 * to satisfy the compiler.
+	 */
+	bytes: Buffer<ArrayBuffer>;
 	mimeType: string;
 	/** The row's own `updatedAt`, which the serving route turns into an ETag. */
 	updatedAt: Date;
