@@ -443,11 +443,13 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 							</P>
 
 							<P>
-								The render is served from <Mono>GET /api/avatar/&lt;userId&gt;</Mono>, which requires a session and
-								nothing more — any signed-in account may fetch any other account's avatar, because the Users tab already
-								shows every operator's name and address to anyone who can open it, and gating the image separately would
-								just draw broken pictures beside names the viewer is already allowed to read. An unauthenticated request
-								is refused outright.
+								The render is served from <Mono>GET /api/avatar/&lt;userId&gt;</Mono>, which requires a session and no
+								permission beyond it — any signed-in account may fetch any other account's avatar, because the Users tab
+								already shows every operator's name and address to anyone who can open it, and gating the image
+								separately would just draw broken pictures beside names the viewer is already allowed to read. "A
+								session" means one that passes every gate a panel page applies, the address allowlist and the inactivity
+								timeout included, not merely a cookie that still resolves. An unauthenticated request is refused
+								outright.
 							</P>
 
 							<P>
@@ -455,9 +457,10 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 								ungated the way changing your own name or password is — every signed-in account may do it. Changing{" "}
 								<strong>another</strong> account's avatar is different: it needs <Mono>users:update</Mono>, the same
 								permission that governs that account's name and email, and it is reachable only from the Users tab. The
-								original is kept rather than discarded once a render is baked, so re-cropping — your own or, for an
-								administrator, someone else's — starts from the picture as uploaded rather than from an already-cropped
-								square.
+								original is kept rather than discarded once a render is baked, so that a later re-crop can start from
+								the picture as uploaded rather than from an already-cropped square. Changing a crop today means choosing
+								the picture again: the dialog works from the file you pick, and re-cropping what is already stored is
+								not built yet.
 							</P>
 
 							<Aside>
@@ -473,7 +476,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 						<Facts>
 							<Fact label="Storage">This install's own database — original, crop, and 512px render</Fact>
 							<Fact label="Third-party lookups">None — Gravatar is gone</Fact>
-							<Fact label={"GET /api/avatar/<userId>"}>Session required; not permission-gated</Fact>
+							<Fact label={"GET /api/avatar/<userId>"}>Every session gate applies; no permission gate</Fact>
 							<Fact label="Your own avatar">Ungated, like your own name and password</Fact>
 							<Fact label="Another account's avatar">users:update, from the Users tab</Fact>
 							<Fact label="Audited">Every set and remove, on both accounts — success and refusal alike</Fact>

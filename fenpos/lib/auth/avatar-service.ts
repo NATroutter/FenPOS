@@ -8,9 +8,17 @@ import { measureImage } from "@/lib/images/guard";
  * Reading and writing one account's avatar.
  *
  * The bytes never leave this module except through {@link readAvatar}, which the serving route
- * uses, and {@link readAvatarOriginal}, which the re-crop dialog uses. Nothing else needs them, and
- * a list of accounts that returned image bytes per row would be a page that reads megabytes to draw
- * thumbnails — see {@link usersWithAvatars}.
+ * uses, and {@link readAvatarOriginal}. Nothing else needs them, and a list of accounts that
+ * returned image bytes per row would be a page that reads megabytes to draw thumbnails — see
+ * {@link usersWithAvatars}.
+ *
+ * **{@link readAvatarOriginal} and {@link recropAvatar} have no production caller yet.** The
+ * `original` column and both functions exist because the schema is deliberately forward-looking: the
+ * upload is *kept for* re-cropping, so widening a crop later can recover pixels the 512px render no
+ * longer holds. What is not built is the dialog that would use them — `AvatarDialog` never fetches a
+ * stored original, and its Save is disabled without a freshly picked file, so today every crop change
+ * starts from picking the file again. Both are covered by `test/lib/auth/avatar-service.test.ts` and
+ * are the working half of a feature whose UI is a follow-up.
  */
 
 /** The render, as served. */
@@ -129,7 +137,8 @@ export async function readAvatar(userId: string): Promise<StoredAvatar | null> {
 }
 
 /**
- * The original and its crop, for a dialog that is about to re-crop it.
+ * The original and its crop, for a dialog that would re-crop it — none does yet; see this module's
+ * own doc.
  *
  * The dimensions are decoded here rather than stored, because they are needed only on this path and
  * a stored pair is a pair that can disagree with the bytes.

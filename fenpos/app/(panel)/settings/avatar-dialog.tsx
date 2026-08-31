@@ -21,8 +21,13 @@ import { Spinner } from "@/components/ui/spinner";
 import type { ActionState } from "@/lib/panel/action-state";
 
 /**
- * Setting or removing one account's avatar: open on the current picture, pick a new one, drag or
- * zoom the crop, Save.
+ * Setting or removing one account's avatar: pick a picture, drag or zoom the crop, Save.
+ *
+ * **It always starts from a freshly picked file.** The dialog never fetches the account's stored
+ * original, and `save()` returns early without a `File`, so changing a crop means choosing the same
+ * picture again. Re-cropping what is already stored is a follow-up — `readAvatarOriginal` and
+ * `recropAvatar` in `lib/auth/avatar-service.ts` are the half of it that exists, and nothing here
+ * calls them.
  *
  * **Shared between Settings and Users, parameterised by which action it submits to.** The signed-in
  * operator's own avatar (`setOwnAvatar`/`removeOwnAvatar`) and an administrator setting somebody
