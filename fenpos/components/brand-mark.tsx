@@ -14,9 +14,16 @@ const VARIANTS = {
  * cannot drift apart. It replaced a plain brand-coloured square, which was a placeholder that
  * outlived the point at which a real mark existed.
  *
- * The PNG rather than the SVG: `next/image` refuses to optimise SVG unless the app opts into
- * serving arbitrary SVG through the optimiser, and a global switch loosening what the image
- * pipeline will render is not worth paying for one logo that is never displayed above 34px.
+ * **The SVG, served unoptimised.** The PNG went through `next/image`'s optimiser, which rasterised
+ * an 800px source down to the 30px box and re-encoded it at the default quality — enough to visibly
+ * pixelate the mark's thin strokes, and worse again on a display finer than the 2x srcset covers.
+ * There is nothing to optimise here: the artwork is a few hundred bytes of vector either way, and
+ * `unoptimized` renders it at whatever the screen can draw.
+ *
+ * This needs no `dangerouslyAllowSVG`. That switch governs SVG passed *through* the optimiser
+ * endpoint, which is the one that must not be pointed at arbitrary uploads; `unoptimized` serves
+ * this file straight from `public/` like any other static asset, and an `<img>` renders SVG in an
+ * image context where nothing inside it can execute.
  */
 export function BrandMark({
 	className,
@@ -46,7 +53,7 @@ export function BrandMark({
 			<div className={cn("grid shrink-0 place-items-center", variant.tile)}>
 				{/* Empty alt: the name is right beside it, so a screen reader announcing the mark as
 				    well would read the product name twice. */}
-				<Image src="/fenpos-logo.png" alt="" width={variant.mark} height={variant.mark} priority />
+				<Image src="/fenpos-logo.svg" alt="" width={variant.mark} height={variant.mark} priority unoptimized />
 			</div>
 			{/* Tagged so a caller can hide the type without hiding the mark. The sidebar does exactly
 			    that when it collapses to icons: 48px of rail has no room for a wordmark, and left in
