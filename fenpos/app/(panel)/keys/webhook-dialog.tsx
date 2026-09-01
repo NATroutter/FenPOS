@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactElement, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { setWebhook } from "@/app/(panel)/keys/actions";
 import { SecretPane } from "@/app/(panel)/keys/secret-pane";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,7 +13,6 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -28,24 +27,28 @@ import { Spinner } from "@/components/ui/spinner";
  * itself — the same reasoning that keeps every action in `actions.ts` behind `requireSession`.
  *
  * There is deliberately no "keep the old secret, just change the URL" path: saving always issues a
- * fresh one, for the same reason `key-dialog.tsx`'s creation flow shows a key's secret only once —
- * the database holds this secret in plaintext (it has to, to sign with it) but shows it here
- * exactly once, so an operator who navigates away mid-copy has to register again rather than being
- * handed it back.
+ * fresh one, for the same reason a key's own secret is shown only once — the database holds this
+ * secret in plaintext (it has to, to sign with it) but shows it here exactly once, so an operator
+ * who navigates away mid-copy has to register again rather than being handed it back.
+ *
+ * **Controlled, with no trigger of its own.** It is opened by `manage-key-dialog.tsx` stepping
+ * aside for it: a URL field and a one-time secret are not something the staging model can hold, so
+ * this is one of that screen's two exceptions and takes the whole dialog while it is up.
  */
 export function WebhookDialog({
 	apiKeyId,
 	keyName,
 	initialUrl,
-	trigger,
+	open,
+	onOpenChange,
 }: {
 	apiKeyId: string;
 	keyName: string;
 	/** The currently registered target, or null when this key has no subscription yet. */
 	initialUrl: string | null;
-	trigger: ReactElement;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
 }) {
-	const [open, setOpen] = useState(false);
 	const [url, setUrl] = useState(initialUrl ?? "");
 	const [error, setError] = useState<string | null>(null);
 	const [secret, setSecret] = useState<string | null>(null);
@@ -63,10 +66,12 @@ export function WebhookDialog({
 		});
 	};
 
-	// Dismissing only closes — see key-dialog.tsx's `close` for why `secret` is left alone rather
-	// than cleared here.
+	// Dismissing only closes. It deliberately does not touch `secret`, which chooses between the two
+	// panes below: clearing it here would swap the secret pane for the form and then play the closing
+	// animation on *that*, so dismissing a freshly registered webhook flashed the form it came from
+	// on the way out.
 	const close = (): void => {
-		setOpen(false);
+		onOpenChange(false);
 	};
 
 	/** Returns the dialog to its opening state. Safe to call more than once. */
@@ -80,8 +85,9 @@ export function WebhookDialog({
 		<Dialog
 			open={open}
 			onOpenChange={(next) => {
-				setOpen(next);
-				// Also on the way in — see key-dialog.tsx's identical guard for why.
+				onOpenChange(next);
+				// Also on the way in, because reopening within the closing animation's 100ms never reaches
+				// the handler below and would otherwise reveal the last secret again.
 				if (next) {
 					reset();
 				}
@@ -92,7 +98,6 @@ export function WebhookDialog({
 				}
 			}}
 		>
-			<DialogTrigger render={trigger} />
 			<DialogContent className="sm:max-w-[520px]">
 				{secret ? (
 					<>

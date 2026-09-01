@@ -1,9 +1,9 @@
-import { KeyRound, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
+import type { KeyPermits, KeyRowData } from "@/app/(panel)/keys/key-data";
 import { KeyDialog } from "@/app/(panel)/keys/key-dialog";
-import { KeyRow, type KeyRowData } from "@/app/(panel)/keys/key-row";
+import { KeysTable } from "@/app/(panel)/keys/keys-table";
 import { Button } from "@/components/ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { API_BASE } from "@/lib/api-version";
+import { userHolds } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { listApiKeys } from "@/lib/keys/key-service";
@@ -19,18 +19,24 @@ export const dynamic = "force-dynamic";
  * Keys are how machines print. Each carries a set of permissions and a set of printers, and both
  * must be granted before it can do anything — a key with an empty list is inert, which is the
  * only safe default for a credential created before anyone has decided what it is for.
+ *
+ * What this page hands the client is more than the keys: it also hands down which of the tab's
+ * actions the acting account may take, because a client component cannot read the database and "may
+ * I offer this button" is a database question. That filtering is convenience. `panel-action.ts`
+ * refuses each action again on the way in, and that is the boundary.
  */
 export default async function KeysPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("keys:read", "/keys");
+	const user = await requirePagePermission("keys:read", "/keys");
 
-	const [keys, devices, webhooks] = await Promise.all([
+	const [keys, devices, webhooks, permits] = await Promise.all([
 		listApiKeys(),
 		prisma.device.findMany({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
 		prisma.webhook.findMany({ select: { apiKeyId: true, url: true } }),
+		resolvePermits(user),
 	]);
 
 	const grantable = devices.map((device) => ({
@@ -59,37 +65,44 @@ export default async function KeysPage() {
 			{/* The section's own description is in the top bar; what is left here is the one action
 			    this page offers, kept on its own row so it stays put as the list below changes. */}
 			<div className="flex justify-end">
-				<KeyDialog
-					devices={grantable}
-					trigger={
-						<Button>
-							<Plus className="size-3.5" />
-							New key
-						</Button>
-					}
-				/>
+				{permits.create ? (
+					<KeyDialog
+						devices={grantable}
+						trigger={
+							<Button>
+								<Plus className="size-3.5" />
+								New key
+							</Button>
+						}
+					/>
+				) : null}
 			</div>
 
-			{rows.length === 0 ? (
-				<Empty className="border border-dashed border-border">
-					<EmptyHeader>
-						<EmptyMedia variant="icon">
-							<KeyRound />
-						</EmptyMedia>
-						<EmptyTitle>No keys yet</EmptyTitle>
-						<EmptyDescription>
-							Create one to let a till or an ordering system submit jobs to{" "}
-							<span className="font-mono">POST {API_BASE}/print/&#123;agent&#125;/&#123;device&#125;</span>.
-						</EmptyDescription>
-					</EmptyHeader>
-				</Empty>
-			) : (
-				<div className="flex flex-col gap-4">
-					{rows.map((key) => (
-						<KeyRow key={key.id} apiKey={key} devices={grantable} />
-					))}
-				</div>
-			)}
+			<KeysTable keys={rows} devices={grantable} permits={permits} />
 		</div>
 	);
+}
+
+/**
+ * Which of this tab's actions the acting account may take.
+ *
+ * Every one is a permission of its own, which is exactly why they used to be eight separate icon
+ * buttons on every card. They gate sections of one screen now, which is a thing an operator can
+ * read.
+ *
+ * @param user the acting account
+ * @returns what to render
+ */
+async function resolvePermits(user: { id: string; isSuperuser: boolean }): Promise<KeyPermits> {
+	const [create, update, rename, reroll, revoke, remove, setWebhook, removeWebhook] = await Promise.all([
+		userHolds(user, "keys:create"),
+		userHolds(user, "keys:update"),
+		userHolds(user, "keys:rename"),
+		userHolds(user, "keys:reroll"),
+		userHolds(user, "keys:revoke"),
+		userHolds(user, "keys:delete"),
+		userHolds(user, "keys:webhook-set"),
+		userHolds(user, "keys:webhook-remove"),
+	]);
+	return { create, update, rename, reroll, revoke, remove, setWebhook, removeWebhook };
 }

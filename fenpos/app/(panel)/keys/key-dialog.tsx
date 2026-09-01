@@ -1,8 +1,8 @@
 "use client";
 
 import { type ReactElement, useState, useTransition } from "react";
-import { toast } from "sonner";
-import { createKey, updateKey } from "@/app/(panel)/keys/actions";
+import { createKey } from "@/app/(panel)/keys/actions";
+import type { GrantableDevice } from "@/app/(panel)/keys/key-data";
 import { SecretPane } from "@/app/(panel)/keys/secret-pane";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,40 +22,22 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { PERMISSIONS } from "@/lib/domain/permissions";
 
-/** A printer a key can be granted, as the dialog lists it. */
-export interface GrantableDevice {
-	id: string;
-	name: string;
-	agentName: string;
-}
-
 /**
- * Creates a key, or edits an existing key's grants.
+ * Mints a key.
  *
  * **A new key's secret is shown once, here, and never again.** The database holds only a hash, so
  * there is no route back to it — not as a precaution but by construction. The dialog therefore
- * refuses to close on its own after minting: an operator who navigated away mid-copy would have
- * to revoke the key and start over, so the dismissal has to be deliberate.
+ * refuses to close on its own after minting: an operator who navigated away mid-copy would have to
+ * revoke the key and start over, so the dismissal has to be deliberate.
+ *
+ * Creating only. Everything about a key that already exists — its name, its grants, its secret, its
+ * webhook — is on one screen in `ManageKeyDialog`, reached from its row.
  */
-export function KeyDialog({
-	devices,
-	keyId,
-	initialName,
-	initialPermissions,
-	initialDeviceIds,
-	trigger,
-}: {
-	devices: GrantableDevice[];
-	keyId?: string;
-	initialName?: string;
-	initialPermissions?: string[];
-	initialDeviceIds?: string[];
-	trigger: ReactElement;
-}) {
+export function KeyDialog({ devices, trigger }: { devices: GrantableDevice[]; trigger: ReactElement }) {
 	const [open, setOpen] = useState(false);
-	const [name, setName] = useState(initialName ?? "");
-	const [permissions, setPermissions] = useState<string[]>(initialPermissions ?? []);
-	const [deviceIds, setDeviceIds] = useState<string[]>(initialDeviceIds ?? []);
+	const [name, setName] = useState("");
+	const [permissions, setPermissions] = useState<string[]>([]);
+	const [deviceIds, setDeviceIds] = useState<string[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [secret, setSecret] = useState<string | null>(null);
 	const [saving, startSave] = useTransition();
@@ -66,17 +48,6 @@ export function KeyDialog({
 	const save = (): void => {
 		setError(null);
 		startSave(async () => {
-			if (keyId) {
-				const result = await updateKey(keyId, permissions, deviceIds);
-				if (result.error) {
-					setError(result.error);
-					return;
-				}
-				toast.success("Key updated.");
-				setOpen(false);
-				return;
-			}
-
 			const result = await createKey(name, permissions, deviceIds);
 			if (result.error || !result.secret) {
 				setError(result.error ?? "Could not create the key.");
@@ -98,11 +69,9 @@ export function KeyDialog({
 	const reset = (): void => {
 		setError(null);
 		setSecret(null);
-		if (!keyId) {
-			setName("");
-			setPermissions([]);
-			setDeviceIds([]);
-		}
+		setName("");
+		setPermissions([]);
+		setDeviceIds([]);
 	};
 
 	return (
@@ -131,7 +100,7 @@ export function KeyDialog({
 						<DialogHeader>
 							<DialogTitle>Copy this key now</DialogTitle>
 							<DialogDescription>
-								It is stored as a hash and cannot be shown again. If you lose it, revoke this key and create another.
+								It is stored as a hash and cannot be shown again. If you lose it, reroll this key from its row.
 							</DialogDescription>
 						</DialogHeader>
 						<DialogBody>
@@ -146,7 +115,7 @@ export function KeyDialog({
 				) : (
 					<>
 						<DialogHeader>
-							<DialogTitle>{keyId ? "Edit key" : "New API key"}</DialogTitle>
+							<DialogTitle>New API key</DialogTitle>
 							<DialogDescription>
 								A key can do nothing until it is granted both a permission and a printer. Both lists start empty on
 								purpose.
@@ -154,19 +123,17 @@ export function KeyDialog({
 						</DialogHeader>
 						<DialogBody>
 							<div className="flex flex-col gap-4">
-								{keyId ? null : (
-									<Field>
-										<FieldLabel htmlFor="key-name">Name</FieldLabel>
-										<Input
-											id="key-name"
-											value={name}
-											disabled={saving}
-											placeholder="Till software"
-											onChange={(event) => setName(event.target.value)}
-										/>
-										<FieldDescription>Shown in the panel and in job history. Free text.</FieldDescription>
-									</Field>
-								)}
+								<Field>
+									<FieldLabel htmlFor="key-name">Name</FieldLabel>
+									<Input
+										id="key-name"
+										value={name}
+										disabled={saving}
+										placeholder="Till software"
+										onChange={(event) => setName(event.target.value)}
+									/>
+									<FieldDescription>Shown in the panel and in job history. Free text.</FieldDescription>
+								</Field>
 
 								<div className="flex flex-col gap-2.5">
 									<span className="text-[12.5px] font-medium">Permissions</span>
@@ -233,9 +200,9 @@ export function KeyDialog({
 							<Button type="button" variant="outline" disabled={saving} onClick={close}>
 								Cancel
 							</Button>
-							<Button type="button" disabled={saving || (!keyId && name.trim() === "")} onClick={save}>
+							<Button type="button" disabled={saving || name.trim() === ""} onClick={save}>
 								{saving ? <Spinner className="size-3.5" /> : null}
-								{keyId ? "Save" : "Create key"}
+								Create key
 							</Button>
 						</DialogFooter>
 					</>
