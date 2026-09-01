@@ -386,6 +386,56 @@ export function ManageKeyDialog({
 										) : null}
 									</div>
 								) : null}
+
+								{/*
+								 * The Danger zone is on this side, under the facts, rather than beneath the printers.
+								 * Two reasons, and they agree. It belongs to the key rather than to its grants —
+								 * rerolling, revoking and deleting are things done to the credential itself, which is
+								 * what this column is about, while the other one is only ever about what the key may
+								 * reach. And it is what makes the two columns roughly the same height: with it on the
+								 * right, the permission list plus the printers plus three action rows ran to twice the
+								 * left, and the difference was a block of nothing beside the facts.
+								 */}
+								{showDanger ? (
+									<div className="flex flex-col gap-2 border-t border-border pt-3">
+										<SectionLabel destructive>Danger zone</SectionLabel>
+
+										{permits.reroll && !revoked ? (
+											<StagedAction
+												destructive
+												icon={<RefreshCw className="size-3.5" />}
+												label="Reroll the secret"
+												hint="A new secret is issued and shown once. Anything still using the old one is refused."
+												staged={reroll}
+												disabled={saving}
+												onToggle={() => setReroll((current) => !current)}
+											/>
+										) : null}
+
+										{permits.revoke && !revoked ? (
+											<StagedAction
+												destructive
+												icon={<Ban className="size-3.5" />}
+												label="Revoke the key"
+												hint="It stops working and cannot be restored. Its job history is kept."
+												staged={revoke}
+												disabled={saving}
+												onToggle={() => setRevoke((current) => !current)}
+											/>
+										) : null}
+
+										{/* Not staged, for the reason it is not on the account screen: it destroys the
+										    thing being edited, so there is nothing left for Save to apply the rest to. */}
+										{permits.remove ? (
+											<DeleteAction
+												keyId={apiKey.id}
+												keyName={apiKey.name}
+												disabled={saving}
+												onDeleted={() => setOpen(false)}
+											/>
+										) : null}
+									</div>
+								) : null}
 							</div>
 
 							<div className="flex min-w-0 flex-col gap-4">
@@ -463,47 +513,6 @@ export function ManageKeyDialog({
 												? "This key can do nothing: it has no permission."
 												: "This key can reach no printer."}
 									</p>
-								) : null}
-
-								{showDanger ? (
-									<div className="flex flex-col gap-2 border-t border-border pt-3">
-										<SectionLabel destructive>Danger zone</SectionLabel>
-
-										{permits.reroll && !revoked ? (
-											<StagedAction
-												destructive
-												icon={<RefreshCw className="size-3.5" />}
-												label="Reroll the secret"
-												hint="A new secret is issued and shown once. Anything still using the old one is refused."
-												staged={reroll}
-												disabled={saving}
-												onToggle={() => setReroll((current) => !current)}
-											/>
-										) : null}
-
-										{permits.revoke && !revoked ? (
-											<StagedAction
-												destructive
-												icon={<Ban className="size-3.5" />}
-												label="Revoke the key"
-												hint="It stops working and cannot be restored. Its job history is kept."
-												staged={revoke}
-												disabled={saving}
-												onToggle={() => setRevoke((current) => !current)}
-											/>
-										) : null}
-
-										{/* Not staged, for the reason it is not on the account screen: it destroys the
-										    thing being edited, so there is nothing left for Save to apply the rest to. */}
-										{permits.remove ? (
-											<DeleteAction
-												keyId={apiKey.id}
-												keyName={apiKey.name}
-												disabled={saving}
-												onDeleted={() => setOpen(false)}
-											/>
-										) : null}
-									</div>
 								) : null}
 							</div>
 						</div>

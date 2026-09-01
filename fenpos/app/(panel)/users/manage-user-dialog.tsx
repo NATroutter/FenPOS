@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { Camera, ImageOff, KeyRound, LogOut, ShieldOff, SlidersHorizontal, TimerReset } from "lucide-react";
 import { type ReactElement, useEffect, useRef, useState, useTransition } from "react";
@@ -75,13 +75,13 @@ function sameSet(left: string[], right: string[]): boolean {
  * *sections of one screen* now, which is a thing you can read.
  *
  * **Nothing here fires when it is clicked.** Requiring a password reset, clearing an enrolment,
- * signing every session out, promoting to superuser â€” each of those used to be a button behind an
+ * signing every session out, promoting to superuser — each of those used to be a button behind an
  * "are you sure", which is a confirmation an operator learns to click through. They are staged
  * instead: clicking one arms it, the row says so, and Save changes is the single moment anything
  * happens. That makes Cancel mean what it says and turns four confirmations into one.
  *
  * **Everything on this screen goes through Save, the picture included.** A crop is held as a file
- * and a rectangle until then, exactly as the profile dialog holds its own â€” a control that wrote at
+ * and a rectangle until then, exactly as the profile dialog holds its own — a control that wrote at
  * once was a control whose Cancel did nothing and whose Save had nothing to do, and a form where
  * some fields commit differently from the rest is a form nobody can predict.
  *
@@ -116,7 +116,7 @@ export function ManageUserDialog({
 	 * The picture, staged like everything else on this screen.
 	 *
 	 * It used to write the moment a crop was confirmed, which made this the one control whose Cancel
-	 * did nothing and whose Save had nothing to do â€” an operator had no way to tell which half of the
+	 * did nothing and whose Save had nothing to do — an operator had no way to tell which half of the
 	 * form they were in. The bytes stay in the browser until Save changes, so the state below is a
 	 * file, a crop and a preview rather than a URL: nothing has been written, so there is nothing on
 	 * the server to point at.
@@ -130,7 +130,7 @@ export function ManageUserDialog({
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 
 	// The staged security actions. Each is "what this account should be after Save", not "do this
-	// now" â€” which is why the superuser one is a value rather than a verb.
+	// now" — which is why the superuser one is a value rather than a verb.
 	const [newPassword, setNewPassword] = useState("");
 	const [forceReset, setForceReset] = useState(false);
 	const [clearTwoFactor, setClearTwoFactor] = useState(false);
@@ -182,7 +182,7 @@ export function ManageUserDialog({
 	 */
 	const returningFromPermissions = useRef(false);
 
-	/** Set while the crop dialog is taking this one's place â€” same reason as the flag above. */
+	/** Set while the crop dialog is taking this one's place — same reason as the flag above. */
 	const returningFromCrop = useRef(false);
 
 	// The picked file's object URL, released on every replacement and on unmount. The preview beside
@@ -195,7 +195,7 @@ export function ManageUserDialog({
 		};
 	}, [pickedUrl]);
 
-	/** Picking a file goes straight to the crop dialog â€” there is nothing to decide in between. */
+	/** Picking a file goes straight to the crop dialog — there is nothing to decide in between. */
 	const choosePicture = (chosen: File | null): void => {
 		if (!chosen) {
 			return;
@@ -287,14 +287,14 @@ export function ManageUserDialog({
 
 	/** How much this account can do, in three words, from what the server holds rather than the form. */
 	const accessSummary = account.isSuperuser
-		? "Superuser â€” bypasses every check"
+		? "Superuser — bypasses every check"
 		: account.roles.length === 0 && account.permissions.length === 0
-			? "None â€” this account cannot do anything"
+			? "None — this account cannot do anything"
 			: "Granted";
 
 	// Two reasons a checkbox is locked, and they say different things. A role's own permission is not
 	// this account's grant to remove; a permission the editor does not hold is not theirs to touch at
-	// all. Both are shown rather than hidden â€” an account's authority is not answerable from a form
+	// all. Both are shown rather than hidden — an account's authority is not answerable from a form
 	// that omits half of it.
 	const locked: LockedPermission[] = [];
 	for (const role of roles.filter((candidate) => roleIds.includes(candidate.id))) {
@@ -321,11 +321,11 @@ export function ManageUserDialog({
 	 *
 	 * Identity and grants first, because a refusal there should not follow a password that has
 	 * already been replaced. Signing out last, because setting a password and forcing a reset each end
-	 * every session on their own â€” running the revocation first would leave the sessions those two
+	 * every session on their own — running the revocation first would leave the sessions those two
 	 * create behind it.
 	 *
 	 * **Every step names the permit that renders its control**, and names the same flag rather than a
-	 * second spelling of it. Not a security check â€” `panel-action.ts` refuses each of these again and
+	 * second spelling of it. Not a security check — `panel-action.ts` refuses each of these again and
 	 * writes a `DENIED` row, and that is the boundary. It is so the two cannot drift: a control shown
 	 * under one condition and sent under another produces a save that aborts partway on a refusal the
 	 * operator was never offered a way to avoid.
@@ -335,8 +335,8 @@ export function ManageUserDialog({
 		startSave(async () => {
 			const steps: { when: boolean; run: () => Promise<{ error: string | null }> }[] = [
 				{
-					// The picture goes first because it is the change most likely to be refused â€” the server
-					// re-decodes the bytes and re-checks the crop â€” and a refusal there should leave the rest
+					// The picture goes first because it is the change most likely to be refused — the server
+					// re-decodes the bytes and re-checks the crop — and a refusal there should leave the rest
 					// of the form unapplied rather than half-written.
 					when: permits.update && pickedFile !== null && stagedCrop !== null,
 					run: () => {
@@ -409,7 +409,7 @@ export function ManageUserDialog({
 			 * A sibling of the dialog below, never a child, and the two are never open together. The
 			 * permission list is fifty checkboxes; opening it on top of this form would bury the form it
 			 * belongs to. Rendering it outside `DialogContent` is what makes stepping aside possible at
-			 * all â€” anything nested in the content unmounts the moment this dialog closes, and the
+			 * all — anything nested in the content unmounts the moment this dialog closes, and the
 			 * staging held here would go with it.
 			 */}
 			<PermissionsDialog
@@ -473,7 +473,7 @@ export function ManageUserDialog({
 								{isSelf ? <span className="text-[11.5px] font-normal text-subtle-foreground">you</span> : null}
 							</DialogTitle>
 							<div className="truncate text-[11.5px] text-subtle-foreground">
-								{account.email} Â· <span className="font-mono">{account.id}</span>
+								{account.email} · <span className="font-mono">{account.id}</span>
 							</div>
 						</div>
 					</DialogHeader>
@@ -514,7 +514,7 @@ export function ManageUserDialog({
 								 * The same full-width rows the security actions use, for the same reason: these two
 								 * stage a change and wait for Save exactly as those do, so a pair of small outline
 								 * buttons here said they were a different kind of control. No preview of its own
-								 * either â€” the header is already showing the picture, staged crop included, and a
+								 * either — the header is already showing the picture, staged crop included, and a
 								 * second copy of the same face would be a duplicate rather than a field.
 								 */}
 								{permits.update ? (
@@ -561,12 +561,12 @@ export function ManageUserDialog({
 
 								{/*
 								 * The facts, not the fields. Read-only on purpose: none of these is something an
-								 * editor sets â€” they are what the account has done or had done to it, which is
+								 * editor sets — they are what the account has done or had done to it, which is
 								 * the half of "who is this" that no input on this screen can answer.
 								 *
 								 * Status and Last seen are here because they are the two an operator opens this
 								 * dialog to check. Last seen comes from the sessions fetched below rather than
-								 * from the row, so it reads "â€”" until they arrive; the row carries a count, not
+								 * from the row, so it reads "—" until they arrive; the row carries a count, not
 								 * a clock.
 								 */}
 								<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 border-t border-border pt-3 text-[12px]">
@@ -594,7 +594,7 @@ export function ManageUserDialog({
 									<Fact label="Two-factor">{account.twoFactorEnabled ? "Enrolled" : "Not enrolled"}</Fact>
 									<Fact label="Password">{account.mustChangePassword ? "Reset due" : "Set"}</Fact>
 									<Fact label="Sessions">{account.sessionCount === 1 ? "1 open" : `${account.sessionCount} open`}</Fact>
-									<Fact label="Last seen">{lastSeen === null ? "â€”" : formatDateTime(lastSeen)}</Fact>
+									<Fact label="Last seen">{lastSeen === null ? "—" : formatDateTime(lastSeen)}</Fact>
 									<Fact label="Created">{formatDateTime(account.createdAt)}</Fact>
 								</dl>
 							</div>
@@ -721,7 +721,7 @@ export function ManageUserDialog({
 												label="Sign out everywhere"
 												staged={signOutAll}
 												disabled={saving || sessions === null || sessions.length === 0}
-												state={sessions === null ? "â€¦" : `${sessions.length} active`}
+												state={sessions === null ? "…" : `${sessions.length} active`}
 												onToggle={() => setSignOutAll((current) => !current)}
 											/>
 										) : null}
@@ -733,7 +733,7 @@ export function ManageUserDialog({
 										<SectionLabel destructive>Danger zone</SectionLabel>
 
 										{/* The label names the action, not the state. It read "Superuser" on an account
-										    that already was one â€” a heading where a verb belongs, which left no way to
+										    that already was one — a heading where a verb belongs, which left no way to
 										    demote anybody. What the account *is* goes in `state` on the right, where
 										    every other row puts its own. */}
 										{canPromote ? (
@@ -762,7 +762,7 @@ export function ManageUserDialog({
 											/>
 										) : null}
 
-										{/* Ban and Delete are the two that are not staged, for two different reasons â€”
+										{/* Ban and Delete are the two that are not staged, for two different reasons —
 										    see this component's own note. */}
 										{canBan ? <BanAction accountName={account.name} disabled={saving} userId={account.id} /> : null}
 
@@ -812,7 +812,7 @@ export function ManageUserDialog({
 											<TableBody>
 												{sessions.map((session) => {
 													// A staged sign-out covers every session, so each row reads as going with
-													// it â€” otherwise the list would invite staging the same thing twice.
+													// it — otherwise the list would invite staging the same thing twice.
 													const staged = signOutAll || revokedSessionIds.includes(session.id);
 													return (
 														<TableRow key={session.id} className={cn(staged && "opacity-50")}>
@@ -960,7 +960,7 @@ function BanAction({ userId, accountName, disabled }: { userId: string; accountN
 							disabled={saving}
 							id={`ban-until-${userId}`}
 							label="Ban lifts on"
-							placeholder="Never â€” until lifted by hand"
+							placeholder="Never — until lifted by hand"
 							value={until}
 							onChange={setUntil}
 						/>
