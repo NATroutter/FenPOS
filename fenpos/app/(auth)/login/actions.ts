@@ -24,10 +24,40 @@ import { globalSignInPolicy } from "@/lib/settings/settings-service";
  * action.
  */
 
+/**
+ * A ban, in the pieces the form lays out separately.
+ *
+ * The two facts arrive apart rather than pre-joined into one sentence because they are read
+ * differently: the expiry is a timestamp somebody checks against a calendar, the reason is prose
+ * somebody reads. Run together in one paragraph the timestamp wrapped across a line break mid-value
+ * — "9/4/2026," on one line and "3:00:00 AM" on the next — and the reason ran on from it as though
+ * it were part of the same clause.
+ */
+export interface BanNotice {
+	/**
+	 * When the ban lifts, already formatted, or null for one that does not lift on its own.
+	 *
+	 * Formatted on the server rather than sent as an ISO string for the form to render: the sign-in
+	 * page is outside the panel's `FormatProvider`, so `formatDateTime` on that side would fall back
+	 * to this module's built-in locale and disagree with every timestamp in the panel behind it.
+	 */
+	until: string | null;
+	/** Why, in the operator's own words from the ban form. Null when none was recorded. */
+	reason: string | null;
+}
+
 /** What the form renders after a submission. */
 export interface SignInState {
 	/** Message to display, or null before the first attempt. */
 	error: string | null;
+	/**
+	 * Set alongside {@link error} when the refusal was a ban, so the form can lay the facts out on
+	 * separate lines instead of rendering one run-on sentence.
+	 *
+	 * Optional rather than a nulled field on every other return: a ban is one branch out of eight,
+	 * and `ban: null` repeated seven times says nothing the absence does not.
+	 */
+	ban?: BanNotice;
 	/**
 	 * True once the password has been accepted and a second factor is owed.
 	 *
@@ -70,13 +100,25 @@ function isBanRefusal(error: unknown): boolean {
  * to act on: whether to wait, or who to go and talk to. The reason is the operator's own words from
  * the ban form, and the ban screen in the panel shows the same two facts.
  *
+ * Returns the pieces *and* a flat sentence. The form renders the pieces; `error` carries the
+ * sentence because it is what every other refusal on this screen sets, and a state where the only
+ * message lives in a field older code does not read is a state that renders as nothing at all.
+ *
  * @param ban the stored ban, as read after the password was accepted
- * @returns the message to render
+ * @returns the state to render
  */
-function bannedMessage(ban: { banReason: string | null; banExpires: Date | null }): string {
-	const until = ban.banExpires ? ` until ${formatDateTime(ban.banExpires)}` : "";
-	const reason = ban.banReason ? ` Reason: ${ban.banReason}` : "";
-	return `This account is banned${until}.${reason}`;
+function bannedState(ban: { banReason: string | null; banExpires: Date | null }): SignInState {
+	const notice: BanNotice = {
+		until: ban.banExpires ? formatDateTime(ban.banExpires) : null,
+		reason: ban.banReason,
+	};
+	const until = notice.until ? ` until ${notice.until}` : "";
+	const reason = notice.reason ? ` Reason: ${notice.reason}` : "";
+	return {
+		error: `This account is banned${until}.${reason}`,
+		ban: notice,
+		twoFactorRequired: false,
+	};
 }
 
 /**
@@ -223,10 +265,7 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			});
 			// The row can be missing only if the account was deleted between the hook reading it and
 			// this query; the generic ban wording still beats claiming the password was wrong.
-			return {
-				error: bannedMessage(account ?? { banReason: null, banExpires: null }),
-				twoFactorRequired: false,
-			};
+			return bannedState(account ?? { banReason: null, banExpires: null });
 		}
 
 		// Counted against the account rather than the address. A wrong password and an unknown address

@@ -178,7 +178,29 @@ export function LoginForm() {
 						/>
 					</Field>
 
-					{signInState.error ? (
+					{signInState.ban ? (
+						<Alert variant="destructive">
+							{/*
+							 * Two lines, not one sentence. Run together, the expiry broke across a line break
+							 * mid-value — "9/4/2026," above "3:00:00 AM" — and the reason ran on from it as
+							 * though it were part of the same clause. The timestamp is `whitespace-nowrap` so
+							 * it moves as one thing whatever the card's width turns out to be.
+							 */}
+							<AlertDescription className="flex flex-col gap-1">
+								<span>
+									This account is banned
+									{signInState.ban.until ? (
+										<>
+											{" until "}
+											<span className="whitespace-nowrap">{signInState.ban.until}</span>
+										</>
+									) : null}
+									.
+								</span>
+								{signInState.ban.reason ? <span>Reason: {signInState.ban.reason}</span> : null}
+							</AlertDescription>
+						</Alert>
+					) : signInState.error ? (
 						<Alert variant="destructive">
 							<AlertDescription>{signInState.error}</AlertDescription>
 						</Alert>

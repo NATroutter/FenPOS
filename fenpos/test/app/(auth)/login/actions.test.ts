@@ -375,7 +375,7 @@ describe("a banned account", () => {
 	}
 
 	/** Submits the account's correct password. */
-	function withCorrectPassword(): Promise<{ error: string | null; twoFactorRequired: boolean }> {
+	function withCorrectPassword(): ReturnType<typeof signIn> {
 		return signIn(
 			{ error: null, twoFactorRequired: false },
 			form({ email: "banned@example.test", password: "correct horse battery staple" }),
@@ -394,6 +394,26 @@ describe("a banned account", () => {
 		expect(await prisma.session.count()).toBe(0);
 	});
 
+	it("hands the form the two facts apart, so it can lay them out on their own lines", async () => {
+		const lifts = new Date("2099-03-04T00:00:00.000Z");
+		await banned("Left the company", lifts);
+
+		const result = await withCorrectPassword();
+
+		// Pre-joined into one sentence, the expiry wrapped mid-value and the reason ran on from it as
+		// though it were part of the same clause.
+		expect(result.ban).toEqual({ until: formatDateTime(lifts), reason: "Left the company" });
+	});
+
+	it("leaves the expiry unset for a ban that does not lift on its own", async () => {
+		await banned("Left the company", null);
+
+		const result = await withCorrectPassword();
+
+		expect(result.ban?.until).toBeNull();
+		expect(result.error).not.toContain("until");
+	});
+
 	it("names when the ban lifts, when it lifts at all", async () => {
 		const lifts = new Date("2099-03-04T00:00:00.000Z");
 		await banned("Left the company", lifts);
@@ -401,7 +421,8 @@ describe("a banned account", () => {
 		const result = await withCorrectPassword();
 
 		// The formatted date, not the ISO string: it is read by a person, and the panel's own
-		// formatter is what every other timestamp on screen goes through.
+		// formatter is what every other timestamp on screen goes through. Formatted on the server
+		// because the sign-in page sits outside the panel's `FormatProvider`.
 		expect(result.error).toContain(formatDateTime(lifts));
 	});
 
@@ -417,6 +438,9 @@ describe("a banned account", () => {
 		// anyone who guessed an address that it holds an account.
 		expect(result.error).toBe("That email address and password do not match an account.");
 		expect(result.error).not.toContain("banned");
+		// The structured field too: the form renders it in preference to `error`, so leaking it here
+		// would leak on screen whatever the flat message says.
+		expect(result.ban).toBeUndefined();
 		expect(await prisma.session.count()).toBe(0);
 	});
 
