@@ -4,7 +4,7 @@ import { auditArchiveCovering } from "@/app/(panel)/audit/actions";
 import { AuditTable } from "@/app/(panel)/audit/audit-table";
 import { ChainBanner } from "@/app/(panel)/audit/chain-banner";
 import { Filters } from "@/app/(panel)/jobs/filters";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { auditFilterOptions, listAuditEvents } from "@/lib/audit/audit-query";
 import { isAuditSortColumn } from "@/lib/audit/audit-sort";
 import { userHolds } from "@/lib/auth/effective-permissions";
@@ -163,9 +163,12 @@ export default async function AuditPage({
 						This range reaches back before the live window. The events from {covering} left this table when that period
 						aged out, and are in the archive for it.
 					</p>
-					<Button variant="outline" size="sm" render={<Link href="/archives" />}>
+					{/* A link wearing a button's clothes, not a Base UI Button rendering an anchor: that
+					    component announces itself as a button, and this navigates. `buttonVariants` is
+					    exported for exactly this. */}
+					<Link href="/archives" className={buttonVariants({ variant: "outline", size: "sm" })}>
 						Open the archives
-					</Button>
+					</Link>
 				</div>
 			)}
 
@@ -174,18 +177,20 @@ export default async function AuditPage({
 			{skip > 0 || page.more ? (
 				<div className="flex items-center gap-2">
 					{skip > 0 ? (
-						<Button
-							variant="outline"
-							size="sm"
-							render={<Link href={query({ skip: String(Math.max(0, skip - PAGE_SIZE)) })} />}
+						<Link
+							href={query({ skip: String(Math.max(0, skip - PAGE_SIZE)) })}
+							className={buttonVariants({ variant: "outline", size: "sm" })}
 						>
 							Newer
-						</Button>
+						</Link>
 					) : null}
 					{page.more ? (
-						<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + PAGE_SIZE) })} />}>
+						<Link
+							href={query({ skip: String(skip + PAGE_SIZE) })}
+							className={buttonVariants({ variant: "outline", size: "sm" })}
+						>
 							Older
-						</Button>
+						</Link>
 					) : null}
 				</div>
 			) : null}

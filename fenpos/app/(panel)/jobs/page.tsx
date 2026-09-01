@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { JobTable } from "@/app/(panel)/jobs/job-table";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
@@ -96,21 +96,24 @@ export default async function JobsPage({
 
 			<JobTable jobs={page.jobs} live />
 
+			{/* Links, not Base UI Buttons rendering anchors — see the note on the Audit page. */}
 			{skip > 0 || page.more ? (
 				<div className="flex items-center gap-2">
 					{skip > 0 ? (
-						<Button
-							variant="outline"
-							size="sm"
-							render={<Link href={query({ skip: String(Math.max(0, skip - pageSize)) })} />}
+						<Link
+							href={query({ skip: String(Math.max(0, skip - pageSize)) })}
+							className={buttonVariants({ variant: "outline", size: "sm" })}
 						>
 							Newer
-						</Button>
+						</Link>
 					) : null}
 					{page.more ? (
-						<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + pageSize) })} />}>
+						<Link
+							href={query({ skip: String(skip + pageSize) })}
+							className={buttonVariants({ variant: "outline", size: "sm" })}
+						>
 							Older
-						</Button>
+						</Link>
 					) : null}
 				</div>
 			) : null}

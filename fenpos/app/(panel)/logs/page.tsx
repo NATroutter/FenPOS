@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { FollowProvider, FollowToggle } from "@/app/(panel)/logs/follow";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { dayBound } from "@/lib/format/datetime";
@@ -154,9 +154,10 @@ export default async function LogsPage({
 							This range reaches back before the live window. The lines from {covering} left this list when that period
 							aged out, and are in the archive for it.
 						</p>
-						<Button variant="outline" size="sm" render={<Link href="/archives" />}>
+						{/* A link wearing a button's clothes — see the same pair on the Audit page. */}
+						<Link href="/archives" className={buttonVariants({ variant: "outline", size: "sm" })}>
 							Open the archives
-						</Button>
+						</Link>
 					</div>
 				)}
 
@@ -165,18 +166,20 @@ export default async function LogsPage({
 				{skip > 0 || page.more ? (
 					<div className="flex items-center gap-2">
 						{skip > 0 ? (
-							<Button
-								variant="outline"
-								size="sm"
-								render={<Link href={query({ skip: String(Math.max(0, skip - pageSize)) })} />}
+							<Link
+								href={query({ skip: String(Math.max(0, skip - pageSize)) })}
+								className={buttonVariants({ variant: "outline", size: "sm" })}
 							>
 								Newer
-							</Button>
+							</Link>
 						) : null}
 						{page.more ? (
-							<Button variant="outline" size="sm" render={<Link href={query({ skip: String(skip + pageSize) })} />}>
+							<Link
+								href={query({ skip: String(skip + pageSize) })}
+								className={buttonVariants({ variant: "outline", size: "sm" })}
+							>
 								Older
-							</Button>
+							</Link>
 						) : null}
 					</div>
 				) : null}
