@@ -11,6 +11,7 @@ import { auditDb } from "@/lib/db";
 import { AuditOutcome } from "@/lib/domain/audit";
 import { ApiError } from "@/lib/errors";
 import { archiveDirectory } from "@/lib/maintenance/pass";
+import { parseValues } from "@/lib/table/multi-filter";
 
 /**
  * Server actions behind the Audit tab.
@@ -244,16 +245,27 @@ export async function auditArchiveCovering(range: AuditRange): Promise<string | 
  * range under a heading that says otherwise, which on this table is a much worse answer than an
  * error.
  *
+ * **The four dimensions arrive as the tab's own multi-value parameters** — the dropdowns are
+ * multi-select, so `outcome` can be `DENIED,FAILURE`. Every one of them is parsed with the same
+ * {@link parseValues} the page uses, which is the point of that function being shared: an export
+ * that read the parameters differently from the table above it would quietly hand back a different
+ * set of rows than the one on screen. Each outcome is still checked individually, so a value that
+ * is not one this system uses refuses the export rather than narrowing it to nothing.
+ *
  * @param request the filter as it crossed the wire
  * @returns the filter to query with
- * @throws ApiError when a bound is not a date, or the outcome is not one this system uses
+ * @throws ApiError when a bound is not a date, or an outcome is not one this system uses
  */
 function parseExportFilter(request: ExportRequest): AuditFilter {
+	const actorUserId = parseValues(request.actorUserId);
+	const action = parseValues(request.action);
+	const outcome = parseValues(request.outcome).map(parseOutcome);
+	const targetId = parseValues(request.targetId);
 	return {
-		...(request.actorUserId ? { actorUserId: request.actorUserId } : {}),
-		...(request.action ? { action: request.action } : {}),
-		...(request.outcome ? { outcome: parseOutcome(request.outcome) } : {}),
-		...(request.targetId ? { targetId: request.targetId } : {}),
+		...(actorUserId.length > 0 ? { actorUserId } : {}),
+		...(action.length > 0 ? { action } : {}),
+		...(outcome.length > 0 ? { outcome } : {}),
+		...(targetId.length > 0 ? { targetId } : {}),
 		...(request.from ? { from: parseBound(request.from, "from") } : {}),
 		...(request.to ? { to: parseBound(request.to, "to") } : {}),
 	};

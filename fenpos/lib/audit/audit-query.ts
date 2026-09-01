@@ -6,6 +6,7 @@ import { PANEL_ACTIONS } from "@/lib/auth/panel-actions";
 import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
 import { auditDb } from "@/lib/db";
 import { type AuditOutcome, AuditOutcome as AuditOutcomeSet } from "@/lib/domain/audit";
+import { anyOf } from "@/lib/table/multi-filter";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -75,14 +76,20 @@ const AUDIT_ORDER = {
 	outcome: (dir: SortDirection) => ({ outcome: dir }),
 } as const satisfies Record<AuditSortColumn, (dir: SortDirection) => unknown>;
 
-/** What the list is narrowed to. */
+/**
+ * What the list is narrowed to.
+ *
+ * Each of the first four takes one value or several: the tab's dropdowns are multi-select, so
+ * "denied or failed" is one question rather than two page loads. See `anyOf`
+ * (`lib/table/multi-filter.ts`).
+ */
 export interface AuditFilter {
-	/** One account, by id. Rows with no `actorUserId` are excluded by it. */
-	actorUserId?: string;
-	action?: string;
-	outcome?: AuditOutcome;
-	/** One thing that was acted on, by its denormalised id. */
-	targetId?: string;
+	/** Accounts, by id. Rows with no `actorUserId` are excluded by it. */
+	actorUserId?: string | string[];
+	action?: string | string[];
+	outcome?: AuditOutcome | AuditOutcome[];
+	/** Things that were acted on, by their denormalised ids. */
+	targetId?: string | string[];
 	/** Inclusive lower bound on `at`. */
 	from?: Date;
 	/** Inclusive upper bound on `at`. */
@@ -115,11 +122,15 @@ const DEFAULT_PAGE_SIZE = 50;
 export async function listAuditEvents(
 	filter: AuditFilter = {},
 ): Promise<{ events: AuditEventSummary[]; more: boolean }> {
+	const actorUserId = anyOf(filter.actorUserId);
+	const action = anyOf(filter.action);
+	const outcome = anyOf(filter.outcome);
+	const targetId = anyOf(filter.targetId);
 	const where = {
-		...(filter.actorUserId ? { actorUserId: filter.actorUserId } : {}),
-		...(filter.action ? { action: filter.action } : {}),
-		...(filter.outcome ? { outcome: filter.outcome } : {}),
-		...(filter.targetId ? { targetId: filter.targetId } : {}),
+		...(actorUserId ? { actorUserId } : {}),
+		...(action ? { action } : {}),
+		...(outcome ? { outcome } : {}),
+		...(targetId ? { targetId } : {}),
 		...(filter.from || filter.to
 			? { at: { ...(filter.from ? { gte: filter.from } : {}), ...(filter.to ? { lte: filter.to } : {}) } }
 			: {}),

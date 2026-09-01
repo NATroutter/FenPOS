@@ -6,6 +6,7 @@ import { JOB_DEFAULT_SORT, type JobSortColumn } from "@/lib/jobs/job-sort";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
 import { integerSetting } from "@/lib/settings/settings-service";
+import { anyOf } from "@/lib/table/multi-filter";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -47,11 +48,16 @@ const JOB_ORDER = {
 	printer: (dir: SortDirection) => [{ agent: { name: dir } }, { device: { name: dir } }],
 } as const satisfies Record<JobSortColumn, (dir: SortDirection) => unknown>;
 
-/** What the list is narrowed to. */
+/**
+ * What the list is narrowed to.
+ *
+ * Each takes one value or several: the tab's dropdowns are multi-select, so "failed or cancelled"
+ * is one question rather than two page loads. See `anyOf` (`lib/table/multi-filter.ts`).
+ */
 export interface JobFilter {
-	agentId?: string;
-	deviceId?: string;
-	status?: JobStatus;
+	agentId?: string | string[];
+	deviceId?: string | string[];
+	status?: JobStatus | JobStatus[];
 	/** How many to skip, for paging. */
 	skip?: number;
 	/** Which column to order by. Defaults to {@link JOB_DEFAULT_SORT}. */
@@ -69,10 +75,13 @@ export interface JobFilter {
  * @returns the page of jobs and whether more follow
  */
 export async function listJobs(filter: JobFilter = {}): Promise<{ jobs: JobSummary[]; more: boolean }> {
+	const agentId = anyOf(filter.agentId);
+	const deviceId = anyOf(filter.deviceId);
+	const status = anyOf(filter.status);
 	const where = {
-		...(filter.agentId ? { agentId: filter.agentId } : {}),
-		...(filter.deviceId ? { deviceId: filter.deviceId } : {}),
-		...(filter.status ? { status: filter.status } : {}),
+		...(agentId ? { agentId } : {}),
+		...(deviceId ? { deviceId } : {}),
+		...(status ? { status } : {}),
 	};
 
 	const direction: SortDirection = (filter.desc ?? JOB_DEFAULT_SORT.desc) ? "desc" : "asc";

@@ -8,6 +8,7 @@ import { JobStatus } from "@/lib/domain/enums";
 import { listJobs } from "@/lib/jobs/job-service";
 import { isJobSortColumn } from "@/lib/jobs/job-sort";
 import { integerSetting } from "@/lib/settings/settings-service";
+import { parseKnownValues, parseValues } from "@/lib/table/multi-filter";
 
 export const metadata = { title: "Print jobs" };
 
@@ -38,7 +39,11 @@ export default async function JobsPage({
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	const status = params.status && JobStatus.is(params.status) ? params.status : undefined;
+	// Each filter holds as many values as were ticked. An unknown status is dropped rather than
+	// erroring, the same reading the sort column below takes.
+	const agentIds = parseValues(params.agent);
+	const deviceIds = parseValues(params.device);
+	const statuses = parseKnownValues(params.status, JobStatus.is);
 	// An unknown column falls back to the default rather than erroring: a link someone saved before
 	// a column was renamed should still list jobs.
 	const sort = params.sort && isJobSortColumn(params.sort) ? params.sort : undefined;
@@ -52,7 +57,7 @@ export default async function JobsPage({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
-		listJobs({ agentId: params.agent, deviceId: params.device, status, skip, sort, desc, take: pageSize }),
+		listJobs({ agentId: agentIds, deviceId: deviceIds, status: statuses, skip, sort, desc, take: pageSize }),
 	]);
 
 	const query = (next: Record<string, string | undefined>): string => {
@@ -73,13 +78,13 @@ export default async function JobsPage({
 					{
 						name: "agent",
 						label: "Agent",
-						value: params.agent ?? null,
+						values: agentIds,
 						options: agents.map((agent) => ({ value: agent.id, label: agent.name })),
 					},
 					{
 						name: "device",
 						label: "Printer",
-						value: params.device ?? null,
+						values: deviceIds,
 						options: devices.map((device) => ({
 							value: device.id,
 							label: `${device.agent.name}/${device.name}`,
@@ -88,7 +93,7 @@ export default async function JobsPage({
 					{
 						name: "status",
 						label: "State",
-						value: status ?? null,
+						values: statuses,
 						options: JobStatus.values.map((value) => ({ value, label: value.toLowerCase() })),
 					},
 				]}

@@ -10,6 +10,7 @@ import { dayBound } from "@/lib/format/datetime";
 import { archiveCovering, FILTERABLE_LEVELS, isFilterableLevel, listLogs } from "@/lib/logs/log-service";
 import { isLogSortColumn } from "@/lib/logs/log-sort";
 import { integerSetting } from "@/lib/settings/settings-service";
+import { parseKnownValues, parseValues } from "@/lib/table/multi-filter";
 
 export const metadata = { title: "Logs" };
 
@@ -57,10 +58,12 @@ export default async function LogsPage({
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	// Anything else in the URL — including `DEBUG`, which the dropdown used to offer — falls back to
-	// no filter. That is the same set of rows `DEBUG` would have selected, and it keeps a stale
-	// bookmark from putting a value in the trigger that the dropdown has no label for.
-	const level = params.level && isFilterableLevel(params.level) ? params.level : undefined;
+	// Each filter holds as many values as were ticked. Anything else in the URL — including `DEBUG`,
+	// which the dropdown has never offered — is dropped, so a stale bookmark cannot put a value in a
+	// trigger the dropdown has no label for.
+	const agentIds = parseValues(params.agent);
+	const keyIds = parseValues(params.key);
+	const levels = parseKnownValues(params.level, isFilterableLevel);
 	const sort = params.sort && isLogSortColumn(params.sort) ? params.sort : undefined;
 	const desc = params.dir ? params.dir !== "asc" : undefined;
 	const from = dayBound(params.from, "start");
@@ -76,7 +79,7 @@ export default async function LogsPage({
 		// Revoked keys included: a key stops working the moment it is revoked, and the lines it wrote
 		// before that are exactly the ones somebody comes here to read afterwards.
 		prisma.apiKey.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-		listLogs({ agentId: params.agent, apiKeyId: params.key, level, from, to, skip, sort, desc, take: pageSize }),
+		listLogs({ agentId: agentIds, apiKeyId: keyIds, level: levels, from, to, skip, sort, desc, take: pageSize }),
 		// Only when a range has actually been asked for. An unfiltered tab is not asking about a stretch
 		// of history, so the oldest archive on disk would appear under every default page load — a
 		// signpost that is always there is scenery, and stops being read long before it matters.
@@ -87,7 +90,7 @@ export default async function LogsPage({
 	// would be shown lines it excludes; a sort would have them pushed onto the top of an ordering
 	// that does not put them there. In every case the arriving line contradicts what the view says
 	// it is, so the honest move is to stop and let the operator reload.
-	const live = !params.agent && !params.key && !level && !ranged && skip === 0 && !sort;
+	const live = agentIds.length === 0 && keyIds.length === 0 && levels.length === 0 && !ranged && skip === 0 && !sort;
 
 	const query = (next: Record<string, string | undefined>): string => {
 		const search = new URLSearchParams();
@@ -103,32 +106,30 @@ export default async function LogsPage({
 	return (
 		<FollowProvider streamable={live}>
 			<div className="flex flex-col gap-5">
-				{/* Bottom-aligned, not centred: the date fields carry a label above them and so stand
-				    taller than the selects, and the row reads as one line of controls only when their
-				    bottoms agree. */}
+				{/* Bottom-aligned, not centred: every control carries a label above it, and a label that
+				    wraps would otherwise push its own control out of line with the rest of the row. */}
 				<div className="flex flex-wrap items-end gap-3">
 					<Filters
 						filters={[
 							{
 								name: "agent",
 								label: "Agent",
-								value: params.agent ?? null,
+								values: agentIds,
 								options: agents.map((agent) => ({ value: agent.id, label: agent.name })),
 							},
 							{
 								name: "key",
 								label: "Key",
-								value: params.key ?? null,
+								values: keyIds,
 								options: keys.map((key) => ({ value: key.id, label: key.name })),
 							},
 							{
+								// Plain level names, not "warn and worse": the dropdown holds as many as are
+								// ticked, so the set is the filter — see `FILTERABLE_LEVELS`.
 								name: "level",
 								label: "Level",
-								value: level ?? null,
-								options: FILTERABLE_LEVELS.map((value) => ({
-									value,
-									label: `${value.toLowerCase()} and worse`,
-								})),
+								values: levels,
+								options: FILTERABLE_LEVELS.map((value) => ({ value, label: value.toLowerCase() })),
 							},
 						]}
 						range={{ from: params.from ?? "", to: params.to ?? "" }}

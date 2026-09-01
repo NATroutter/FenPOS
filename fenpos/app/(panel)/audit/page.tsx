@@ -11,6 +11,7 @@ import { userHolds } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { AuditOutcome } from "@/lib/domain/audit";
 import { dayBound } from "@/lib/format/datetime";
+import { parseKnownValues, parseValues } from "@/lib/table/multi-filter";
 
 export const metadata = { title: "Audit record" };
 
@@ -70,9 +71,12 @@ export default async function AuditPage({
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	// An unknown value falls back rather than erroring: a bookmark saved before a column was renamed
-	// should still list events.
-	const outcome = params.outcome && AuditOutcome.is(params.outcome) ? params.outcome : undefined;
+	// Each filter holds as many values as were ticked. An unknown one is dropped rather than erroring:
+	// a bookmark saved before a column was renamed should still list events.
+	const actorIds = parseValues(params.actor);
+	const actions = parseValues(params.action);
+	const outcomes = parseKnownValues(params.outcome, AuditOutcome.is);
+	const targetIds = parseValues(params.target);
 	const sort = params.sort && isAuditSortColumn(params.sort) ? params.sort : undefined;
 	const desc = params.dir ? params.dir !== "asc" : undefined;
 	const from = dayBound(params.from, "start");
@@ -84,10 +88,10 @@ export default async function AuditPage({
 	const [options, page, canVerify, canExport, covering] = await Promise.all([
 		auditFilterOptions(),
 		listAuditEvents({
-			actorUserId: params.actor,
-			action: params.action,
-			outcome,
-			targetId: params.target,
+			actorUserId: actorIds,
+			action: actions,
+			outcome: outcomes,
+			targetId: targetIds,
 			from,
 			to,
 			skip,
@@ -134,19 +138,19 @@ export default async function AuditPage({
 					{
 						name: "actor",
 						label: "Actor",
-						value: params.actor ?? null,
+						values: actorIds,
 						options: options.actors.map((actor) => ({ value: actor.id, label: actor.label })),
 					},
 					{
 						name: "action",
 						label: "Action",
-						value: params.action ?? null,
+						values: actions,
 						options: options.actions.map((action) => ({ value: action, label: action })),
 					},
 					{
 						name: "outcome",
 						label: "Outcome",
-						value: outcome ?? null,
+						values: outcomes,
 						options: AuditOutcome.values.map((value) => ({ value, label: value.toLowerCase() })),
 					},
 				]}

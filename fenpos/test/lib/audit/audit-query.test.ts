@@ -84,6 +84,21 @@ describe("listAuditEvents", () => {
 		expect(page.events[0].targetLabel).toBe("Kitchen");
 	});
 
+	it("narrows to several outcomes at once", async () => {
+		// The tab's dropdowns are multi-select, so "denied or failed" is one question rather than two
+		// page loads.
+		const page = await listAuditEvents({ outcome: ["DENIED", "FAILURE"] });
+
+		expect(page.events.map((event) => event.action).sort()).toEqual(["jobs:read", "keys:create"]);
+	});
+
+	it("treats an empty list as no filter", async () => {
+		// Unticking the last option puts the table back rather than emptying it.
+		const page = await listAuditEvents({ outcome: [], action: [], actorUserId: [] });
+
+		expect(page.events).toHaveLength(4);
+	});
+
 	it("narrows to a date range", async () => {
 		const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
 

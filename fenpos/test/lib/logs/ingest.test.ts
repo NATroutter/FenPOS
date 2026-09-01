@@ -148,16 +148,45 @@ describe("log ingestion", () => {
 		expect((await listLogs()).lines.map((entry) => entry.message)).toEqual(["second", "first"]);
 	});
 
-	it("filters by severity and everything worse", async () => {
+	it("filters by exactly the level asked for", async () => {
 		await ingestLog(agentId, line({ level: "DEBUG", message: "noise" }));
 		await ingestLog(agentId, line({ level: "WARN", message: "concerning" }));
 		await ingestLog(agentId, line({ level: "ERROR", message: "broken" }));
 
 		const { lines } = await listLogs({ level: "WARN" });
 
-		// Someone looking for errors still wants the warning that preceded it, and nobody wants
-		// to tick four boxes to see everything that went wrong.
+		// The set, not a floor. This used to mean "WARN and worse" and return the error too, which
+		// the dropdown being single-choice was the whole reason for — see `FILTERABLE_LEVELS`.
+		expect(lines.map((entry) => entry.message)).toEqual(["concerning"]);
+	});
+
+	it("filters by several levels at once", async () => {
+		await ingestLog(agentId, line({ level: "INFO", message: "fine" }));
+		await ingestLog(agentId, line({ level: "WARN", message: "concerning" }));
+		await ingestLog(agentId, line({ level: "ERROR", message: "broken" }));
+
+		const { lines } = await listLogs({ level: ["WARN", "ERROR"] });
+
 		expect(lines.map((entry) => entry.message).sort()).toEqual(["broken", "concerning"]);
+	});
+
+	it("treats an empty list of levels as no filter", async () => {
+		await ingestLog(agentId, line({ level: "INFO", message: "fine" }));
+		await ingestLog(agentId, line({ level: "ERROR", message: "broken" }));
+
+		// Unticking the last option puts the table back rather than emptying it.
+		const { lines } = await listLogs({ level: [] });
+
+		expect(lines.map((entry) => entry.message).sort()).toEqual(["broken", "fine"]);
+	});
+
+	it("filters by several agents at once", async () => {
+		await ingestLog(agentId, line({ message: "from a" }));
+		await ingestLog(otherAgentId, line({ message: "from b" }));
+
+		const { lines } = await listLogs({ agentId: [agentId, otherAgentId] });
+
+		expect(lines.map((entry) => entry.message).sort()).toEqual(["from a", "from b"]);
 	});
 
 	it("filters by agent", async () => {

@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { LOG_DEFAULT_SORT, LOG_SEVERITY, type LogSortColumn } from "@/lib/logs/log-sort";
 import { archiveDirectory } from "@/lib/maintenance/pass";
 import { globalLogIngestSettings, integerSetting } from "@/lib/settings/settings-service";
+import { anyOf } from "@/lib/table/multi-filter";
 import type { SortDirection } from "@/lib/table/sort";
 
 /**
@@ -35,17 +36,23 @@ export interface LogLine {
 	apiKeyId: string | null;
 }
 
-/** What the list is narrowed to. */
+/**
+ * What the list is narrowed to.
+ *
+ * Each of the first three takes one value or several: the tab's dropdowns are multi-select, so
+ * "either of these two agents" is one question rather than two page loads. One value still becomes
+ * an `equals` rather than a one-element `in` — see `anyOf` (`lib/table/multi-filter.ts`).
+ */
 export interface LogFilter {
-	agentId?: string;
+	agentId?: string | string[];
 	/**
 	 * The API key that produced the line. Matched on the id alone — a key that has since been
 	 * deleted still narrows to its own lines, because nothing nulls the column out. See
 	 * {@link LogLine.apiKeyId}.
 	 */
-	apiKeyId?: string;
-	/** Minimum severity: this level and anything above it. */
-	level?: LogLevel;
+	apiKeyId?: string | string[];
+	/** The severities to list. Exactly these levels, not a floor — see the note on {@link FILTERABLE_LEVELS}. */
+	level?: LogLevel | LogLevel[];
 	/** The earliest moment to list, inclusive. */
 	from?: Date;
 	/** The latest moment to list, inclusive. */
@@ -78,21 +85,17 @@ const LOG_ORDER = {
 } as const satisfies Record<LogSortColumn, (dir: SortDirection) => unknown>;
 
 /**
- * The severity filter is "this level and worse". Matching one level exactly would be nearly
- * useless: someone looking for errors still wants the warning that preceded it, and nobody wants
- * to tick four boxes to see everything that went wrong.
+ * The levels the list will narrow to, which is not every level that can be stored.
  *
- * Expressed as a comparison against the stored severity rather than as a set of level strings.
- * That is simpler, and it is what the severity index exists for.
- */
-/**
- * The levels worth offering as a floor, which is not every level that can be stored.
+ * **These are the levels themselves, not a floor.** The filter used to mean "this level and worse",
+ * expressed as `severity >= n`, on the reasoning that nobody wants to tick four boxes to see
+ * everything that went wrong. The dropdown is multi-select now, so ticking two is one gesture and
+ * the floor has become the strictly less expressive reading: "warn and worse" is still one click,
+ * and "warn and error but not fatal" — which the floor could not ask at all — is two.
  *
- * `DEBUG` is missing for two reasons, either of which would be enough. An agent cannot forward one
- * — `AgentLog` exposes `info`, `warn` and `error` and nothing else — so on a real install the
- * option matches rows that do not exist. And because the filter means "this level and worse", the
- * lowest severity selects everything, which is what no filter already does; offering it puts a
- * choice in front of an operator that cannot change what they see.
+ * `DEBUG` is still missing. Only one of its two original reasons survives the change, and it is
+ * enough on its own: an agent cannot forward one, since `AgentLog` exposes `info`, `warn` and
+ * `error` and nothing else, so on a real install the option matches rows that do not exist.
  *
  * `DEBUG` stays in {@link LogLevel} and in {@link LOG_SEVERITY}: the panel's own process logger uses it, the
  * agent's enum carries it, and rows holding it still read and display normally.
@@ -119,11 +122,18 @@ export async function listLogs(filter: LogFilter = {}): Promise<{ lines: LogLine
 	// swap places between one page view and the next, which would show one twice and hide another.
 	const orderBy = [...(Array.isArray(chosen) ? chosen : [chosen]), { ts: "desc" as const }];
 
+	const agentId = anyOf(filter.agentId);
+	const apiKeyId = anyOf(filter.apiKeyId);
+	// Matched on the stored severity rather than the level string, which is what the severity index
+	// exists for — the levels are mapped to their numbers here and the set is compared against those.
+	const levels = filter.level === undefined ? [] : Array.isArray(filter.level) ? filter.level : [filter.level];
+	const severity = anyOf(levels.map((level) => LOG_SEVERITY[level]));
+
 	const rows = await logsDb.logEntry.findMany({
 		where: {
-			...(filter.agentId ? { agentId: filter.agentId } : {}),
-			...(filter.apiKeyId ? { apiKeyId: filter.apiKeyId } : {}),
-			...(filter.level ? { severity: { gte: LOG_SEVERITY[filter.level] } } : {}),
+			...(agentId ? { agentId } : {}),
+			...(apiKeyId ? { apiKeyId } : {}),
+			...(severity ? { severity } : {}),
 			// One `ts` key or none: two spread objects would have the second overwrite the first, so a
 			// range with both ends would silently lose its lower bound.
 			...(filter.from || filter.to

@@ -65,4 +65,29 @@ describe("listJobs paging", () => {
 
 		expect(page.jobs).toHaveLength(3);
 	});
+
+	it("narrows to several statuses at once", async () => {
+		await prisma.job.createMany({
+			data: [
+				{ agentId, deviceId, status: "COMPLETED" },
+				{ agentId, deviceId, status: "FAILED" },
+				{ agentId, deviceId, status: "CANCELLED" },
+			],
+		});
+
+		// The tab's dropdowns are multi-select, so "failed or cancelled" is one question rather than
+		// two page loads.
+		const page = await listJobs({ status: ["FAILED", "CANCELLED"] });
+
+		expect(page.jobs.map((job) => job.status).sort()).toEqual(["CANCELLED", "FAILED"]);
+	});
+
+	it("treats an empty list of statuses as no filter", async () => {
+		await seedJobs(3);
+
+		// Unticking the last option puts the table back rather than emptying it.
+		const page = await listJobs({ status: [] });
+
+		expect(page.jobs).toHaveLength(3);
+	});
 });

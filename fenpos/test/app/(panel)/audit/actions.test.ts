@@ -250,6 +250,32 @@ describe("exportAuditCsv", () => {
 		expect(result.csv).toBeNull();
 		expect(result.error).toContain("outcome");
 	});
+
+	it("exports the same rows a multi-select filter shows", async () => {
+		await superuser();
+		await appendEvent({ action: "devices:delete", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		await appendEvent({ action: "keys:create", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		await appendEvent({ action: "jobs:read", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		// The tab's dropdowns are multi-select and put several values in one parameter. An export that
+		// read that parameter differently from the table above it would hand back a different set of
+		// rows than the one on screen, which is why both go through `parseValues`.
+		const result = await exportAuditCsv({ action: "devices:delete,keys:create" });
+
+		expect(result.error).toBeNull();
+		expect(result.csv).toContain("devices:delete");
+		expect(result.csv).toContain("keys:create");
+		expect(result.csv).not.toContain("jobs:read");
+	});
+
+	it("refuses when any one of several outcomes is not one this system uses", async () => {
+		await superuser();
+
+		const result = await exportAuditCsv({ outcome: "SUCCESS,MAYBE" });
+
+		expect(result.csv).toBeNull();
+		expect(result.error).toContain("outcome");
+	});
 });
 
 /**
