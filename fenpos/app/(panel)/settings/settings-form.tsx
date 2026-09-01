@@ -6,6 +6,7 @@ import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import type { SettingChange } from "@/app/(panel)/settings/actions";
 import { saveSettings } from "@/app/(panel)/settings/actions";
+import { DirtyDot } from "@/components/panel/dirty-dot";
 import {
 	NumberField,
 	NumberFieldDecrement,
@@ -255,16 +256,6 @@ export function SettingsForm({
 			<SaveBar count={pendingKeys.length} saving={saving} onDiscard={discard} onSave={save} />
 		</div>
 	);
-}
-
-/**
- * The marker on a setting whose value has been changed but not saved.
- *
- * A dot rather than a word: it appears beside forty-three labels and has to be readable at a glance
- * without being read. `aria-label` because colour and shape carry the whole meaning otherwise.
- */
-function DirtyDot() {
-	return <span role="img" aria-label="unsaved" className="size-1.5 shrink-0 rounded-full bg-brand" />;
 }
 
 /**

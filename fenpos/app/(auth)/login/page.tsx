@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { LoginForm } from "@/app/(auth)/login/login-form";
 import { BrandMark } from "@/components/brand-mark";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { signInThrottlePhrase } from "@/lib/auth/rate-limit";
 import { currentUser } from "@/lib/auth/require-session";
 import { isInstallClaimed } from "@/lib/auth/setup-key";
@@ -39,15 +39,10 @@ export default async function LoginPage() {
 			<div className="w-full max-w-[392px]">
 				<BrandMark className="mb-5" />
 
+				{/* The header is the form's, not the page's: which step is on screen is client state, and
+				    the title and description change with it. */}
 				<Card>
-					<CardHeader>
-						<CardTitle>Sign in</CardTitle>
-						<CardDescription>Enter your email and password.</CardDescription>
-					</CardHeader>
-
-					<CardContent>
-						<LoginForm />
-					</CardContent>
+					<LoginForm />
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">

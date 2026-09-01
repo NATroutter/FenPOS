@@ -98,7 +98,7 @@ describe("permission matrix", () => {
 
 				// `users:set-superuser` is the deliberate exception, and it is the reason this assertion
 				// reads the way it does rather than expecting `null` outright: it is in NEVER_GRANTABLE,
-				// so the row written above confers nothing and the caller is still refused. Anything
+				// so the row written above gives nothing and the caller is still refused. Anything
 				// else being refused here means an entry's permission is not the one the gate checks.
 				const grantable = entry.permission !== "users:set-superuser";
 				expect(result.error).toBe(grantable ? null : REFUSAL_MESSAGE);

@@ -327,7 +327,7 @@ model UserRole {
 /// One permission granted to one account directly, on top of whatever its roles carry.
 ///
 /// Individual grants exist so an operator can hand somebody one extra capability without inventing
-/// a role for it. They are additive only: there is no way to subtract a permission a role confers,
+/// a role for it. They are additive only: there is no way to subtract a permission a role gives,
 /// because a subtraction is a rule two people have to hold in their heads at once and a union is
 /// not.
 model UserPermission {

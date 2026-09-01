@@ -48,12 +48,11 @@ export default async function EnrolTwoFactorPage() {
 
 	// **An enrolled account is deliberately not redirected away.** Confirming an enrolment writes a
 	// new session cookie, and Next re-renders the current route before replying — this route, now
-	// seeing `twoFactorEnabled` true. A redirect here would fire on that render and unmount
-	// `TwoFactorPanel` along with the only display of the recovery codes there will ever be, on the
-	// one flow `auth.require2fa` compels. Rendering the panel with the new flag instead leaves the
-	// component in place, so its "last chance" screen survives and the operator dismisses it. The way
-	// on is inside the panel — see its `gate` prop — because only it knows whether the codes are still
-	// on the screen.
+	// seeing `twoFactorEnabled` true, while the setup dialog is still mounted and mid-confirmation. A
+	// redirect here would fire on that render and tear the flow down under the operator on the one
+	// path `auth.require2fa` compels. Rendering the panel with the new flag instead leaves the
+	// component in place, so the dialog finishes and hands the operator on itself — the way on is
+	// inside the panel, because only it knows the enrolment is done.
 	const enrolled = user.twoFactorEnabled;
 
 	return (
@@ -70,7 +69,7 @@ export default async function EnrolTwoFactorPage() {
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<TwoFactorPanel enabled={enrolled} gate />
+						<TwoFactorPanel enabled={enrolled} />
 					</CardContent>
 				</Card>
 			</div>

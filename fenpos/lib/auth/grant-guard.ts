@@ -64,14 +64,14 @@ export function parseGrantedPermissions(values: readonly string[]): PanelPermiss
 }
 
 /**
- * Refuses a set of permissions the actor could not confer.
+ * Refuses a set of permissions the actor could not hand out.
  *
  * The whole set is refused when any member is out of reach, rather than the reachable part being
  * applied: a granter who asked for two things and silently got one cannot tell which, and a form
  * that drops half a submission without saying so is worse than one that says no.
  *
  * @param actor who is granting
- * @param permissions what they are trying to confer
+ * @param permissions what they are trying to hand out
  * @throws ApiError when a permission is ungrantable, or is one the actor does not hold
  */
 export async function assertMayGrant(actor: Granter, permissions: readonly PanelPermission[]): Promise<void> {
@@ -102,7 +102,7 @@ export async function assertMayGrant(actor: Granter, permissions: readonly Panel
  * Refuses roles the actor could not have handed out permission by permission.
  *
  * Assigning a role grants everything in it, so one member out of reach puts the whole role out of
- * reach. Unknown stored identifiers are dropped first: a grant nobody can name confers nothing, so
+ * reach. Unknown stored identifiers are dropped first: a grant nobody can name gives nothing, so
  * it must not be the reason a role is refused.
  *
  * @param actor who is assigning

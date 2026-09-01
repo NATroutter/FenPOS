@@ -67,11 +67,11 @@ describe("grant-guard", () => {
 			await expect(assertMayGrant(actor, ["settings:write:security"])).resolves.toBeUndefined();
 		});
 
-		it("refuses a permission no grant can confer, superuser included", async () => {
+		it("refuses a permission no grant can hand out, superuser included", async () => {
 			const actor = await granter("g5", [], true);
 
 			// Not an authority question. `users:set-superuser` is outside the grant system rather than
-			// at the top of it, so there is nobody it can be conferred by.
+			// at the top of it, so there is nobody it can be handed out by.
 			await expect(assertMayGrant(actor, ["users:set-superuser"])).rejects.toThrow(/never be granted/i);
 		});
 
@@ -123,7 +123,7 @@ describe("grant-guard", () => {
 			const role = await prisma.role.create({ data: { name: "Stale" } });
 			await prisma.rolePermission.create({ data: { roleId: role.id, permission: "devices:teleport" } });
 
-			// A grant nobody can name confers nothing, so it cannot be the reason a role is out of
+			// A grant nobody can name gives nothing, so it cannot be the reason a role is out of
 			// reach — the same rule `parseStoredPanelPermissions` applies everywhere else.
 			await expect(assertMayAssignRoles(actor, [role.id])).resolves.toBeUndefined();
 		});

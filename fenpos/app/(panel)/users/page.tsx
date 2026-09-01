@@ -1,6 +1,7 @@
 import { UserPlus } from "lucide-react";
+import type { UserRowData } from "@/app/(panel)/users/user-data";
 import { UserDialog } from "@/app/(panel)/users/user-dialog";
-import { UserRow, type UserRowData } from "@/app/(panel)/users/user-row";
+import { UsersTable } from "@/app/(panel)/users/users-table";
 import { Button } from "@/components/ui/button";
 import { listAccounts } from "@/lib/auth/account-service";
 import { avatarInitial } from "@/lib/auth/avatar";
@@ -63,15 +64,19 @@ export default async function UsersPage() {
 	};
 
 	const rows: UserRowData[] = accounts.map((account) => {
-		const hasAvatar = withAvatars.has(account.id);
+		const avatarUpdatedAt = withAvatars.get(account.id);
 
 		return {
 			id: account.id,
 			name: account.name,
 			email: account.email,
 			initial: avatarInitial(account.name),
-			hasAvatar,
-			avatarUrl: hasAvatar ? `/api/avatar/${account.id}` : null,
+			hasAvatar: avatarUpdatedAt !== undefined,
+			// `?v=` is the row's own `updatedAt`, and it is what makes a replaced picture appear. Without
+			// it every `<img>` points at a string that never changes, so React keeps the same element and
+			// the browser never revalidates — an administrator who re-cropped somebody's avatar saw the
+			// old face until they reloaded the page by hand.
+			avatarUrl: avatarUpdatedAt ? `/api/avatar/${account.id}?v=${avatarUpdatedAt.getTime()}` : null,
 			isSuperuser: account.isSuperuser,
 			mustChangePassword: account.mustChangePassword,
 			banned: account.banned,
@@ -108,18 +113,7 @@ export default async function UsersPage() {
 				) : null}
 			</div>
 
-			<div className="flex flex-col gap-4">
-				{rows.map((account) => (
-					<UserRow
-						key={account.id}
-						account={account}
-						roles={grantableRoles}
-						editorHolds={held}
-						actingUserId={user.id}
-						permits={permits}
-					/>
-				))}
-			</div>
+			<UsersTable accounts={rows} roles={grantableRoles} editorHolds={held} actingUserId={user.id} permits={permits} />
 		</div>
 	);
 }

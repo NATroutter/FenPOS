@@ -236,7 +236,7 @@ export async function deleteAccount(actor: Granter, userId: string): Promise<voi
  * Promotes an account to superuser, or demotes one.
  *
  * The gate has already established that the caller is a superuser: `users:set-superuser` is in
- * `NEVER_GRANTABLE`, so no row confers it and `userHolds` answers true for a superuser and false for
+ * `NEVER_GRANTABLE`, so no row gives it and `userHolds` answers true for a superuser and false for
  * everybody else. There is nothing extra to check here about the caller, only about the target.
  *
  * Better Auth's own `role` string is written alongside, so an install where the admin plugin's

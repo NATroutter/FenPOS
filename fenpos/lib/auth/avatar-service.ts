@@ -177,19 +177,30 @@ export async function readAvatarOriginal(userId: string): Promise<AvatarOriginal
 }
 
 /**
- * Which of these accounts have an avatar at all.
+ * Which of these accounts have an avatar at all, and when each was last written.
  *
- * Ids only. The users page draws a row per account and needs to know whether to point an `<img>` at
- * the serving route or draw the initial; selecting `baked` to answer that would read every stored
- * picture to render a list that shows none of them at full size.
+ * Ids and stamps only. The users page draws a row per account and needs to know whether to point an
+ * `<img>` at the serving route or draw the initial; selecting `baked` to answer that would read
+ * every stored picture to render a list that shows none of them at full size.
+ *
+ * **The stamp is what makes a re-crop visible.** The serving route's URL is `/api/avatar/<id>` and
+ * nothing else, so replacing a picture leaves every `<img>` on the page pointing at a string that
+ * did not change — React keeps the same element, the browser never revalidates it, and the old face
+ * stays on screen until a hard reload. A caller that puts this stamp in the query string gets a new
+ * URL when and only when the bytes change; the route's own ETag still makes the repeat cheap.
+ *
+ * A `Map` rather than a `Set` so `has` and `size` read the same at every existing call site.
  *
  * @param userIds the accounts on the page
- * @returns the subset that have one
+ * @returns those that have one, against the row's `updatedAt`
  */
-export async function usersWithAvatars(userIds: readonly string[]): Promise<ReadonlySet<string>> {
+export async function usersWithAvatars(userIds: readonly string[]): Promise<ReadonlyMap<string, Date>> {
 	if (userIds.length === 0) {
-		return new Set();
+		return new Map();
 	}
-	const rows = await prisma.avatar.findMany({ where: { userId: { in: [...userIds] } }, select: { userId: true } });
-	return new Set(rows.map((row) => row.userId));
+	const rows = await prisma.avatar.findMany({
+		where: { userId: { in: [...userIds] } },
+		select: { userId: true, updatedAt: true },
+	});
+	return new Map(rows.map((row) => [row.userId, row.updatedAt]));
 }

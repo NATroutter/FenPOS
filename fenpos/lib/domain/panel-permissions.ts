@@ -140,7 +140,7 @@ export type PanelPermission = (typeof PANEL_PERMISSION_IDS)[number];
 export const panelPermissionSchema = z.enum(PANEL_PERMISSION_IDS);
 
 /**
- * Permissions that exist but can never be conferred by a grant.
+ * Permissions that exist but can never be handed out by a grant.
  *
  * `users:set-superuser` is outside the permission system rather than the top of it: only a
  * superuser may promote or demote one, and no role and no individual grant can hand it over. It is
@@ -339,7 +339,7 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 ];
 
 /**
- * Whether a permission can be conferred by any grant at all.
+ * Whether a permission can be handed out by any grant at all.
  *
  * @param permission the identifier to test
  * @returns false for anything in {@link NEVER_GRANTABLE}
@@ -352,7 +352,7 @@ export function isGrantable(permission: PanelPermission): boolean {
  * The checkbox list the account and role screens render.
  *
  * Derived from {@link PANEL_PERMISSION_GROUPS} rather than written out a second time, which is what
- * makes "no checkbox for a permission no grant can confer" a property of the data instead of a rule
+ * makes "no checkbox for a permission no grant can hand out" a property of the data instead of a rule
  * a form has to remember. A group left with nothing in it is dropped: a heading over an empty list
  * is worse than no heading.
  *

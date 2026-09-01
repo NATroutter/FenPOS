@@ -45,7 +45,7 @@ export const effectivePermissions = cache(async (userId: string): Promise<Readon
 	const stored = [...direct, ...viaRoles].map((row) => row.permission);
 	// Two filters, and the second is not redundant. `parseStoredPanelPermissions` drops identifiers
 	// this version no longer defines; `isGrantable` drops the ones it defines but that no grant may
-	// ever confer. `grant-guard.ts` refuses to *write* such a row and the account screen renders no
+	// ever hand out. `grant-guard.ts` refuses to *write* such a row and the account screen renders no
 	// checkbox for one, but neither of those reaches a row put there by hand, by a restored backup,
 	// or by a version that policed it less carefully — and a row nobody was allowed to create must
 	// not be honoured just because it exists. Same reasoning as dropping an unknown identifier:

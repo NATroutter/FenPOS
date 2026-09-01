@@ -61,7 +61,7 @@ describe("panel permissions", () => {
 		expect(parseStoredPanelPermissions(["devices:read", "devices:teleport"])).toEqual(["devices:read"]);
 	});
 
-	it("marks promoting a superuser as something no grant can confer", () => {
+	it("marks promoting a superuser as something no grant can hand out", () => {
 		expect(NEVER_GRANTABLE).toContain("users:set-superuser");
 	});
 
@@ -78,7 +78,7 @@ describe("panel permissions", () => {
 });
 
 describe("grantablePermissionGroups", () => {
-	it("offers no checkbox for a permission no grant can confer", () => {
+	it("offers no checkbox for a permission no grant can hand out", () => {
 		const offered = grantablePermissionGroups().flatMap((group) => group.permissions.map((entry) => entry.id));
 
 		for (const permission of NEVER_GRANTABLE) {

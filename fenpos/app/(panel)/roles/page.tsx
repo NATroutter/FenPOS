@@ -1,9 +1,9 @@
 import { Plus, Shield } from "lucide-react";
+import type { RoleRowData } from "@/app/(panel)/roles/role-data";
 import { RoleDialog } from "@/app/(panel)/roles/role-dialog";
-import { RoleRow, type RoleRowData } from "@/app/(panel)/roles/role-row";
+import { RolesTable } from "@/app/(panel)/roles/roles-table";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { listAccounts } from "@/lib/auth/account-service";
 import { effectivePermissions } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { listRoles } from "@/lib/auth/role-service";
@@ -26,7 +26,7 @@ export default async function RolesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
 	const user = await requirePagePermission("roles:read", "/roles");
 
-	const [roles, accounts] = await Promise.all([listRoles(), listAccounts()]);
+	const roles = await listRoles();
 
 	const held: PanelPermission[] = user.isSuperuser
 		? PANEL_PERMISSION_IDS.filter(isGrantable)
@@ -48,14 +48,11 @@ export default async function RolesPage() {
 		members: role.members,
 	}));
 
-	const candidates = accounts.map((account) => ({ id: account.id, name: account.name, email: account.email }));
-
 	return (
 		<div className="flex flex-col gap-5">
 			<div className="flex justify-end">
 				{permits.create ? (
 					<RoleDialog
-						candidates={candidates}
 						editorHolds={held}
 						trigger={
 							<Button>
@@ -81,11 +78,7 @@ export default async function RolesPage() {
 					</EmptyHeader>
 				</Empty>
 			) : (
-				<div className="flex flex-col gap-4">
-					{rows.map((role) => (
-						<RoleRow key={role.id} role={role} candidates={candidates} editorHolds={held} permits={permits} />
-					))}
-				</div>
+				<RolesTable roles={rows} editorHolds={held} permits={permits} />
 			)}
 		</div>
 	);

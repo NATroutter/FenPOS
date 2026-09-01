@@ -2,8 +2,8 @@
 
 import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createUser, updateUser } from "@/app/(panel)/users/actions";
-import type { GrantableRole } from "@/app/(panel)/users/grant-dialog";
+import { createUser } from "@/app/(panel)/users/actions";
+import type { GrantableRole } from "@/app/(panel)/users/user-data";
 import { PermissionChecklist } from "@/components/panel/permission-checklist";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -21,38 +21,30 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import type { PanelPermission } from "@/lib/domain/panel-permissions";
 
 /**
- * Creates an account, or renames an existing one.
+ * Creates an account.
  *
  * **Nothing is emailed, ever.** Whoever creates the account delivers the credentials themselves, by
  * whatever means they judge appropriate — which is why the password is typed here rather than
  * generated and sent, and why "Require password reset" is offered right beside it: it is the one
  * thing that stops a password typed into a chat window remaining the account's password.
  *
- * Editing is deliberately narrower than creating. A password is set from its own dialog and grants
- * from theirs, because each of those is a different permission and mixing them into one form would
- * mean an editor holding only `users:update` seeing controls they cannot use.
+ * Creating only. Everything about an account that already exists — its name, its grants, its
+ * password, its sessions — is on one screen in `ManageUserDialog`, reached from its row.
  */
 export function UserDialog({
 	roles,
 	editorHolds,
-	userId,
-	initialName,
-	initialEmail,
 	trigger,
 }: {
 	roles: GrantableRole[];
 	editorHolds: string[];
-	userId?: string;
-	initialName?: string;
-	initialEmail?: string;
 	trigger: ReactElement;
 }) {
 	const [open, setOpen] = useState(false);
-	const [name, setName] = useState(initialName ?? "");
-	const [email, setEmail] = useState(initialEmail ?? "");
+	const [name, setName] = useState("");
+	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [requireReset, setRequireReset] = useState(true);
 	const [roleIds, setRoleIds] = useState<string[]>([]);
@@ -70,28 +62,30 @@ export function UserDialog({
 
 	const reset = (): void => {
 		setError(null);
-		if (!userId) {
-			setName("");
-			setEmail("");
-			setPassword("");
-			setRequireReset(true);
-			setRoleIds([]);
-			setPermissions([]);
-		}
+		setName("");
+		setEmail("");
+		setPassword("");
+		setRequireReset(true);
+		setRoleIds([]);
+		setPermissions([]);
 	};
 
 	const save = (): void => {
 		setError(null);
 		startSave(async () => {
-			const result = userId
-				? await updateUser(userId, name, email)
-				: await createUser({ name, email, password, requirePasswordReset: requireReset, roleIds, permissions });
-
+			const result = await createUser({
+				name,
+				email,
+				password,
+				requirePasswordReset: requireReset,
+				roleIds,
+				permissions,
+			});
 			if (result.error) {
 				setError(result.error);
 				return;
 			}
-			toast.success(userId ? "Account updated." : "Account created.");
+			toast.success("Account created.");
 			setOpen(false);
 		});
 	};
@@ -114,11 +108,10 @@ export function UserDialog({
 			<DialogTrigger render={trigger} />
 			<DialogContent className="sm:max-w-[560px]">
 				<DialogHeader>
-					<DialogTitle>{userId ? "Edit account" : "New account"}</DialogTitle>
+					<DialogTitle>New account</DialogTitle>
 					<DialogDescription>
-						{userId
-							? "The name and address this account is known by. Its password and its grants are changed from their own dialogs."
-							: "Nothing is emailed. Give this person their password yourself, and require a reset so it stops being the one you typed."}
+						Nothing is emailed. Give this person their password yourself, and require a reset so it stops being the one
+						you typed.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
@@ -147,71 +140,62 @@ export function UserDialog({
 							<FieldDescription>What they sign in with. Nothing is sent to it.</FieldDescription>
 						</Field>
 
-						{userId ? null : (
-							<>
-								<Field>
-									<FieldLabel htmlFor="user-password">Password</FieldLabel>
-									<Input
-										id="user-password"
-										type="password"
-										value={password}
-										disabled={saving}
-										onChange={(event) => setPassword(event.target.value)}
-									/>
-								</Field>
+						<Field>
+							<FieldLabel htmlFor="user-password">Password</FieldLabel>
+							<Input
+								id="user-password"
+								type="password"
+								value={password}
+								disabled={saving}
+								onChange={(event) => setPassword(event.target.value)}
+							/>
+						</Field>
 
-								<div className="flex items-start gap-2.5">
-									<Checkbox
-										id="user-require-reset"
-										className="mt-0.5"
-										checked={requireReset}
-										disabled={saving}
-										onCheckedChange={() => setRequireReset((current) => !current)}
-									/>
-									<FieldLabel
-										htmlFor="user-require-reset"
-										className="w-full cursor-pointer flex-col items-start gap-0.5 font-normal"
-									>
-										<span className="text-[12.5px]">Require password reset</span>
-										<span className="text-[11.5px] text-subtle-foreground">
-											They reach nothing but the page that takes a new password until they set one.
-										</span>
-									</FieldLabel>
-								</div>
+						<div className="flex items-start gap-2.5">
+							<Checkbox
+								id="user-require-reset"
+								className="mt-0.5"
+								checked={requireReset}
+								disabled={saving}
+								onCheckedChange={() => setRequireReset((current) => !current)}
+							/>
+							<FieldLabel
+								htmlFor="user-require-reset"
+								className="w-full cursor-pointer flex-col items-start gap-0.5 font-normal"
+							>
+								<span className="text-[12.5px]">Require password reset</span>
+								<span className="text-[11.5px] text-subtle-foreground">
+									They reach nothing but the page that takes a new password until they set one.
+								</span>
+							</FieldLabel>
+						</div>
 
-								<div className="flex flex-col gap-2.5 border-t border-border pt-3">
-									<span className="text-[12.5px] font-medium">Roles</span>
-									{assignable.length === 0 ? (
-										<p className="text-[11.5px] text-subtle-foreground">
-											No roles you can assign. Create one on the Roles tab, or grant permissions individually below.
-										</p>
-									) : (
-										assignable.map((role) => (
-											<div key={role.id} className="flex items-center gap-2.5">
-												<Checkbox
-													id={`role-${role.id}`}
-													checked={roleIds.includes(role.id)}
-													disabled={saving}
-													onCheckedChange={() => setRoleIds((current) => toggle(current, role.id))}
-												/>
-												<FieldLabel htmlFor={`role-${role.id}`} className="cursor-pointer font-normal">
-													{role.name}
-												</FieldLabel>
-											</div>
-										))
-									)}
-								</div>
+						<div className="flex flex-col gap-2.5 border-t border-border pt-3">
+							<span className="text-[12.5px] font-medium">Roles</span>
+							{assignable.length === 0 ? (
+								<p className="text-[11.5px] text-subtle-foreground">
+									No roles you can assign. Create one on the Roles tab, or grant permissions individually below.
+								</p>
+							) : (
+								assignable.map((role) => (
+									<div key={role.id} className="flex items-center gap-2.5">
+										<Checkbox
+											id={`role-${role.id}`}
+											checked={roleIds.includes(role.id)}
+											disabled={saving}
+											onCheckedChange={() => setRoleIds((current) => toggle(current, role.id))}
+										/>
+										<FieldLabel htmlFor={`role-${role.id}`} className="cursor-pointer font-normal">
+											{role.name}
+										</FieldLabel>
+									</div>
+								))
+							)}
+						</div>
 
-								<div className="border-t border-border pt-3">
-									<PermissionChecklist
-										selected={permissions}
-										locked={[]}
-										disabled={saving}
-										onToggle={(permission: PanelPermission) => setPermissions((current) => toggle(current, permission))}
-									/>
-								</div>
-							</>
-						)}
+						<div className="border-t border-border pt-3">
+							<PermissionChecklist selected={permissions} locked={[]} disabled={saving} onChange={setPermissions} />
+						</div>
 
 						{error ? (
 							<Alert variant="destructive">
@@ -226,11 +210,11 @@ export function UserDialog({
 					</Button>
 					<Button
 						type="button"
-						disabled={saving || name.trim() === "" || email.trim() === "" || (!userId && password === "")}
+						disabled={saving || name.trim() === "" || email.trim() === "" || password === ""}
 						onClick={save}
 					>
 						{saving ? <Spinner className="size-3.5" /> : null}
-						{userId ? "Save" : "Create account"}
+						Create account
 					</Button>
 				</DialogFooter>
 			</DialogContent>

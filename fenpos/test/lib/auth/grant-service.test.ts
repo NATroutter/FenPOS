@@ -80,7 +80,7 @@ describe("grant-service", () => {
 			expect(await granted("q8")).toEqual([]);
 		});
 
-		it("refuses a permission no grant can confer", async () => {
+		it("refuses a permission no grant can hand out", async () => {
 			const actor = await account("q9", [], true);
 			await account("q10", []);
 

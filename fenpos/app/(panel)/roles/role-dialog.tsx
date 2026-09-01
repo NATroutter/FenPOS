@@ -2,11 +2,10 @@
 
 import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createRole, updateRole } from "@/app/(panel)/roles/actions";
+import { createRole } from "@/app/(panel)/roles/actions";
 import { PermissionChecklist } from "@/components/panel/permission-checklist";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Dialog,
 	DialogBody,
@@ -20,76 +19,44 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import type { PanelPermission } from "@/lib/domain/panel-permissions";
-
-/** An account this dialog can put in a role. */
-export interface RoleCandidate {
-	id: string;
-	name: string;
-	email: string;
-}
 
 /**
- * Creates a role, or edits one.
+ * Creates a role.
  *
- * Everything is replaced wholesale rather than merged, so the form is the whole truth about the
- * role — a merge would make removing a permission impossible from the screen that added it.
+ * Creating only. Everything about a role that already exists — its name, what it gives, who is in
+ * it — is on one screen in `ManageRoleDialog`, reached from its row.
  *
  * The permission list is not filtered to what the editor holds. It is the same list for everybody,
  * and a submission naming something beyond the editor's own authority comes back refused with a
  * message that says which — a checklist whose contents differ per viewer is one nobody can compare
  * against a colleague's screen.
  */
-export function RoleDialog({
-	candidates,
-	editorHolds,
-	roleId,
-	initialName,
-	initialDescription,
-	initialPermissions,
-	initialMemberIds,
-	trigger,
-}: {
-	candidates: RoleCandidate[];
-	editorHolds: string[];
-	roleId?: string;
-	initialName?: string;
-	initialDescription?: string;
-	initialPermissions?: string[];
-	initialMemberIds?: string[];
-	trigger: ReactElement;
-}) {
+export function RoleDialog({ editorHolds, trigger }: { editorHolds: string[]; trigger: ReactElement }) {
 	const [open, setOpen] = useState(false);
-	const [name, setName] = useState(initialName ?? "");
-	const [description, setDescription] = useState(initialDescription ?? "");
-	const [permissions, setPermissions] = useState<string[]>(initialPermissions ?? []);
-	const [memberIds, setMemberIds] = useState<string[]>(initialMemberIds ?? []);
+	const [name, setName] = useState("");
+	const [description, setDescription] = useState("");
+	const [permissions, setPermissions] = useState<string[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [saving, startSave] = useTransition();
-
-	const toggle = (list: string[], value: string): string[] =>
-		list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
 
 	const beyond = permissions.filter((permission) => !editorHolds.includes(permission));
 
 	const restore = (): void => {
 		setError(null);
-		setName(initialName ?? "");
-		setDescription(initialDescription ?? "");
-		setPermissions(initialPermissions ?? []);
-		setMemberIds(initialMemberIds ?? []);
+		setName("");
+		setDescription("");
+		setPermissions([]);
 	};
 
 	const save = (): void => {
 		setError(null);
 		startSave(async () => {
-			const input = { name, description, permissions, memberIds };
-			const result = roleId ? await updateRole(roleId, input) : await createRole(input);
+			const result = await createRole({ name, description, permissions, memberIds: [] });
 			if (result.error) {
 				setError(result.error);
 				return;
 			}
-			toast.success(roleId ? "Role updated." : "Role created.");
+			toast.success("Role created.");
 			setOpen(false);
 		});
 	};
@@ -107,7 +74,7 @@ export function RoleDialog({
 			<DialogTrigger render={trigger} />
 			<DialogContent className="sm:max-w-[560px]">
 				<DialogHeader>
-					<DialogTitle>{roleId ? "Edit role" : "New role"}</DialogTitle>
+					<DialogTitle>New role</DialogTitle>
 					<DialogDescription>
 						Saving changes what every member can do, immediately. That is what a role is for.
 					</DialogDescription>
@@ -137,35 +104,10 @@ export function RoleDialog({
 							<FieldDescription>Optional. One line on who this role is for.</FieldDescription>
 						</Field>
 
-						<div className="flex flex-col gap-2.5 border-t border-border pt-3">
-							<span className="text-[12.5px] font-medium">Members</span>
-							{candidates.length === 0 ? (
-								<p className="text-[11.5px] text-subtle-foreground">No accounts yet.</p>
-							) : (
-								candidates.map((candidate) => (
-									<div key={candidate.id} className="flex items-center gap-2.5">
-										<Checkbox
-											id={`member-${candidate.id}`}
-											checked={memberIds.includes(candidate.id)}
-											disabled={saving}
-											onCheckedChange={() => setMemberIds((current) => toggle(current, candidate.id))}
-										/>
-										<FieldLabel htmlFor={`member-${candidate.id}`} className="cursor-pointer font-normal">
-											{candidate.name}
-											<span className="ml-2 text-[11px] text-subtle-foreground">{candidate.email}</span>
-										</FieldLabel>
-									</div>
-								))
-							)}
-						</div>
-
+						{/* No member list. Who is in a role is set from the Users tab, on the screen that asks
+						    "what does this person hold" — a new role starts empty and is filled from there. */}
 						<div className="border-t border-border pt-3">
-							<PermissionChecklist
-								selected={permissions}
-								locked={[]}
-								disabled={saving}
-								onToggle={(permission: PanelPermission) => setPermissions((current) => toggle(current, permission))}
-							/>
+							<PermissionChecklist selected={permissions} locked={[]} disabled={saving} onChange={setPermissions} />
 						</div>
 
 						{beyond.length > 0 ? (
@@ -191,7 +133,7 @@ export function RoleDialog({
 					</Button>
 					<Button type="button" disabled={saving || name.trim() === ""} onClick={save}>
 						{saving ? <Spinner className="size-3.5" /> : null}
-						{roleId ? "Save" : "Create role"}
+						Create role
 					</Button>
 				</DialogFooter>
 			</DialogContent>

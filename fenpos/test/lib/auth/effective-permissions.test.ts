@@ -80,7 +80,7 @@ describe("effectivePermissions", () => {
 		expect(await userHolds({ id: account.id, isSuperuser: false }, "settings:write:security")).toBe(false);
 	});
 
-	it("ignores a grant row for something no grant may confer", async () => {
+	it("ignores a grant row for something no grant may hand out", async () => {
 		const account = await user("u8");
 		await prisma.userPermission.create({ data: { userId: account.id, permission: "users:set-superuser" } });
 		await prisma.userPermission.create({ data: { userId: account.id, permission: "devices:read" } });
@@ -96,7 +96,7 @@ describe("effectivePermissions", () => {
 	it("says a superuser holds one that is never grantable", async () => {
 		const account = await user("u7");
 		// `users:set-superuser` is outside the grant system rather than the top of it: no row can
-		// confer it, and a superuser holds it by being one.
+		// hand it out, and a superuser holds it by being one.
 		await prisma.userPermission.create({ data: { userId: account.id, permission: "users:set-superuser" } });
 
 		expect(await userHolds({ id: account.id, isSuperuser: true }, "users:set-superuser")).toBe(true);

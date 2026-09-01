@@ -18,7 +18,7 @@ import { logger } from "@/lib/logger";
  * against what the role already holds, because editing is how a role is emptied and refilled, and
  * once against what is being submitted. Deleting checks the first of those and not the second: it
  * takes everything away from every member at once, which is authority over the role's contents even
- * though it confers nothing.
+ * though it gives nothing.
  */
 
 /** A role as the Roles page displays it. */
