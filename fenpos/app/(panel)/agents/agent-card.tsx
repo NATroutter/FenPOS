@@ -38,6 +38,24 @@ export interface AgentCardData {
 	pairing: { code: string; expiresAt: string } | null;
 }
 
+/**
+ * The permissions this tab's controls are gated on.
+ *
+ * Declared here beside the controls rather than in the page, so adding an action and forgetting to
+ * ask about it is one edit rather than two files apart. The page passes the answers back down.
+ */
+export const AGENT_PERMISSIONS = [
+	"agents:create",
+	"agents:rename",
+	"agents:pairing-code",
+	"agents:unpair",
+	"agents:delete",
+	"agents:test-print",
+] as const;
+
+/** What the acting account may do on this tab. Convenience only — see `permitsFor`. */
+export type AgentPermits = Record<(typeof AGENT_PERMISSIONS)[number], boolean>;
+
 /** Chip styling per connection state. */
 const STATUS_STYLE: Record<AgentStatus, { label: string; className: string }> = {
 	ONLINE: { label: "Online", className: "border-emerald-900 bg-emerald-950 text-emerald-400" },
@@ -56,12 +74,14 @@ export function AgentCard({
 	serverAddress,
 	addressIsInferred,
 	pairingEnabled,
+	permits,
 }: {
 	agent: AgentCardData;
 	serverAddress: string;
 	addressIsInferred: boolean;
 	/** Whether `/api/pair` currently accepts codes at all. Passed through to {@link PairingPanel}. */
 	pairingEnabled: boolean;
+	permits: AgentPermits;
 }) {
 	const [pending, startTransition] = useTransition();
 	const status = STATUS_STYLE[agent.status];
@@ -70,7 +90,7 @@ export function AgentCard({
 		<Card className="flex flex-col">
 			<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
 				<Server className="size-4.5 shrink-0 text-subtle-foreground" />
-				<AgentName agentId={agent.id} name={agent.name} />
+				<AgentName agentId={agent.id} name={agent.name} editable={permits["agents:rename"]} />
 				<Badge variant="outline" className={`shrink-0 ${status.className}`}>
 					{status.label}
 				</Badge>
@@ -86,6 +106,7 @@ export function AgentCard({
 						serverAddress={serverAddress}
 						addressIsInferred={addressIsInferred}
 						pairingEnabled={pairingEnabled}
+						canRefresh={permits["agents:pairing-code"]}
 					/>
 				) : (
 					<Details agent={agent} />
@@ -98,7 +119,7 @@ export function AgentCard({
 
 					<div className="flex-1" />
 
-					{agent.status === "ONLINE" && agent.deviceCount > 0 ? (
+					{permits["agents:test-print"] && agent.status === "ONLINE" && agent.deviceCount > 0 ? (
 						<Button
 							variant="outline"
 							size="icon"
@@ -121,7 +142,7 @@ export function AgentCard({
 						</Button>
 					) : null}
 
-					{agent.status === "PENDING" ? null : (
+					{agent.status === "PENDING" || !permits["agents:unpair"] ? null : (
 						<Confirm
 							title={`Unpair ?`}
 							description="The agent loses its credential and is disconnected immediately. Its printers are kept, so pairing a replacement machine restores the site without reconfiguring them."
@@ -145,40 +166,42 @@ export function AgentCard({
 						/>
 					)}
 
-					<Confirm
-						title={`Delete ${agent.name}?`}
-						description={
-							agent.deviceCount > 0
-								? `This also deletes ${agent.deviceCount} configured ${
-										agent.deviceCount === 1 ? "printer" : "printers"
-									} and their job history. This cannot be undone.`
-								: "This cannot be undone."
-						}
-						confirmLabel="Delete"
-						destructive
-						disabled={pending}
-						onConfirm={() =>
-							startTransition(async () => {
-								const result = await deleteAgent(agent.id);
-								if (result.error) {
-									toast.error(result.error);
-								} else {
-									toast.success(`${agent.name} deleted.`);
-								}
-							})
-						}
-						trigger={
-							<Button
-								variant="outline"
-								size="icon"
-								className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-								title="Delete"
-								aria-label="Delete agent"
-							>
-								<Trash2 className="size-3.5" />
-							</Button>
-						}
-					/>
+					{!permits["agents:delete"] ? null : (
+						<Confirm
+							title={`Delete ${agent.name}?`}
+							description={
+								agent.deviceCount > 0
+									? `This also deletes ${agent.deviceCount} configured ${
+											agent.deviceCount === 1 ? "printer" : "printers"
+										} and their job history. This cannot be undone.`
+									: "This cannot be undone."
+							}
+							confirmLabel="Delete"
+							destructive
+							disabled={pending}
+							onConfirm={() =>
+								startTransition(async () => {
+									const result = await deleteAgent(agent.id);
+									if (result.error) {
+										toast.error(result.error);
+									} else {
+										toast.success(`${agent.name} deleted.`);
+									}
+								})
+							}
+							trigger={
+								<Button
+									variant="outline"
+									size="icon"
+									className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+									title="Delete"
+									aria-label="Delete agent"
+								>
+									<Trash2 className="size-3.5" />
+								</Button>
+							}
+						/>
+					)}
 				</CardActions>
 			</CardContent>
 		</Card>
@@ -214,9 +237,16 @@ function Detail({ label, value }: { label: string; value: string | null }) {
  * so a rename changes the URL clients use — the confirmation for that is the toast, not a
  * dialog, because the change is trivially reversible by renaming back.
  */
-function AgentName({ agentId, name }: { agentId: string; name: string }) {
+function AgentName({ agentId, name, editable }: { agentId: string; name: string; editable: boolean }) {
 	const [value, setValue] = useState(name);
 	const [pending, startTransition] = useTransition();
+
+	// Plain text rather than a disabled input, for the reason the rest of this tab hides what it
+	// cannot offer: an input somebody can focus, type into and watch revert on blur is a worse
+	// answer than a name that was never a field.
+	if (!editable) {
+		return <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{name}</span>;
+	}
 
 	const commit = (): void => {
 		const trimmed = value.trim();

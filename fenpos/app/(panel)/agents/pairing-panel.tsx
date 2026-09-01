@@ -34,6 +34,7 @@ export function PairingPanel({
 	serverAddress,
 	addressIsInferred,
 	pairingEnabled,
+	canRefresh,
 }: {
 	agentId: string;
 	agentName: string;
@@ -44,6 +45,9 @@ export function PairingPanel({
 	addressIsInferred: boolean;
 	/** Whether `/api/pair` currently accepts codes at all. */
 	pairingEnabled: boolean;
+	/** Whether the operator holds `agents:pairing-code`. The code itself still shows: reading it is
+	    what `agents:read` is for, and an operator who cannot reissue one can still relay it. */
+	canRefresh: boolean;
 }) {
 	const [pending, startTransition] = useTransition();
 
@@ -75,25 +79,27 @@ export function PairingPanel({
 						</code>
 					</div>
 
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						disabled={pending}
-						onClick={() =>
-							startTransition(async () => {
-								const result = await refreshPairingCode(agentId);
-								if (result.error) {
-									toast.error(result.error);
-								} else {
-									toast.success(`New pairing code issued for ${agentName}.`);
-								}
-							})
-						}
-					>
-						{pending ? <Spinner /> : <RefreshCw className="size-3.5" />}
-						New code
-					</Button>
+					{!canRefresh ? null : (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={pending}
+							onClick={() =>
+								startTransition(async () => {
+									const result = await refreshPairingCode(agentId);
+									if (result.error) {
+										toast.error(result.error);
+									} else {
+										toast.success(`New pairing code issued for ${agentName}.`);
+									}
+								})
+							}
+						>
+							{pending ? <Spinner /> : <RefreshCw className="size-3.5" />}
+							New code
+						</Button>
+					)}
 				</>
 			) : (
 				<p className="text-[11px] leading-relaxed text-subtle-foreground">

@@ -1,9 +1,10 @@
 import { Server } from "lucide-react";
 import { AddAgentDialog } from "@/app/(panel)/agents/add-agent-dialog";
-import { AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
+import { AGENT_PERMISSIONS, AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAgents } from "@/lib/agents/agent-service";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { isConnected } from "@/lib/link/registry";
 import { getPublicAddress } from "@/lib/public-url";
@@ -27,12 +28,15 @@ export const dynamic = "force-dynamic";
  */
 export default async function AgentsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("agents:read", "/agents");
+	const user = await requirePagePermission("agents:read", "/agents");
 
-	const [agents, address, pairingEnabled] = await Promise.all([
+	const [agents, address, pairingEnabled, permits] = await Promise.all([
 		listAgents(),
 		getPublicAddress(),
 		booleanSetting("pairing.enabled"),
+		// Resolved here because a client component cannot read the database. Convenience only — every
+		// action is refused again by its own gate; see `permitsFor`.
+		permitsFor(user, AGENT_PERMISSIONS),
 	]);
 
 	const cards: AgentCardData[] = agents.map((agent) => ({
@@ -53,9 +57,7 @@ export default async function AgentsPage() {
 			<LiveRefresh kinds={["agent"]} />
 			{/* The section's own description is in the top bar; what is left here is the one action
 			    this page offers, kept on its own row so it stays put as the grid below changes. */}
-			<div className="flex justify-end">
-				<AddAgentDialog />
-			</div>
+			<div className="flex justify-end">{permits["agents:create"] ? <AddAgentDialog /> : null}</div>
 
 			{cards.length === 0 ? (
 				<Empty className="border border-dashed border-border">
@@ -78,6 +80,7 @@ export default async function AgentsPage() {
 							serverAddress={address.url}
 							addressIsInferred={address.source === "request"}
 							pairingEnabled={pairingEnabled}
+							permits={permits}
 						/>
 					))}
 				</div>
