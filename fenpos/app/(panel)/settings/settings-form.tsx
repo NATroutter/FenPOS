@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type { SettingChange } from "@/app/(panel)/settings/actions";
 import { saveSettings } from "@/app/(panel)/settings/actions";
 import { DirtyDot } from "@/components/panel/dirty-dot";
+import { GroupedCombobox } from "@/components/panel/grouped-combobox";
 import {
 	NumberField,
 	NumberFieldDecrement,
@@ -375,6 +376,18 @@ function Control({ field, value, saving, onStage }: ControlProps<SettingFieldDat
 const ENUM_BOUNDS_LIST_LIMIT = 8;
 
 /**
+ * Past this many values, an enum is picked by typing rather than by scrolling.
+ *
+ * The same outlier {@link ENUM_BOUNDS_LIST_LIMIT} exists for, answered in the control rather than in
+ * the prose beneath it: `panel.timezone` and `variables.timezone` offer every IANA zone this runtime
+ * knows, and a plain dropdown of four hundred near-identical strings is taller than the screen and
+ * ordered by a rule that only helps somebody who already knows the answer's continent. Everything
+ * else this project ships has four values or fewer, so nothing else crosses this — the threshold
+ * sits between the two rather than being tuned to either.
+ */
+const ENUM_SEARCH_THRESHOLD = 12;
+
+/**
  * The bounds line under a setting's description: what a value must satisfy, phrased for reading
  * rather than for validation. `null` for a boolean, which has no bounds beyond on/off.
  *
@@ -550,6 +563,20 @@ function BooleanControl({ value, saving, onStage }: Omit<ControlProps<BooleanFie
 
 /** A setting chosen from a fixed set. Stages on change, for the same reason. */
 function EnumControl({ field, value, saving, onStage }: ControlProps<EnumField>) {
+	// Past the threshold a dropdown stops being something you read and becomes something you scroll
+	// through — see ENUM_SEARCH_THRESHOLD. The two timezone settings are the only ones over it.
+	if (field.definition.values.length > ENUM_SEARCH_THRESHOLD) {
+		return (
+			<GroupedCombobox
+				values={field.definition.values}
+				value={value as string}
+				disabled={saving}
+				placeholder="Search…"
+				onValueChange={(next) => onStage({ kind: "set", value: next })}
+			/>
+		);
+	}
+
 	return (
 		<Select
 			value={value as string}
