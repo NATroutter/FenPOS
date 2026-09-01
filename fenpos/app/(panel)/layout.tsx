@@ -1,13 +1,12 @@
-import { redirect } from "next/navigation";
+// Shared with the two gate pages under `(auth)`, which sit outside this layout and so cannot reach
+// a sign-out defined inside it — see the action's own note.
+import { signOut } from "@/app/sign-out";
 import { AppSidebar } from "@/components/panel/app-sidebar";
 import { EventStreamProvider } from "@/components/panel/event-stream";
 import { FormatProvider } from "@/components/panel/format-provider";
 import { PanelHeader } from "@/components/panel/panel-header";
 import { SessionExpiry } from "@/components/panel/session-expiry";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { recordAudit, userActor } from "@/lib/audit/audit-log";
-import { AUTH_AUDIT_ACTIONS } from "@/lib/audit/auth-events";
-import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { authHeaders } from "@/lib/auth/auth-headers";
 import { avatarInitial } from "@/lib/auth/avatar";
@@ -21,34 +20,6 @@ import { panelLayoutSettings } from "@/lib/settings/settings-service";
  * Never prerendered: every render depends on the request's session cookie.
  */
 export const dynamic = "force-dynamic";
-
-/**
- * Revokes the current session and returns to sign-in.
- *
- * Better Auth deletes the session row as part of `signOut`, so the token cannot be replayed by
- * anyone who captured it.
- */
-async function signOut(): Promise<void> {
-	"use server";
-
-	const requestHeaders = await authHeaders();
-	// Read before the session is destroyed: afterwards there is no id to record and no user to
-	// attribute the row to.
-	const session = await auth.api.getSession({ headers: requestHeaders });
-
-	await auth.api.signOut({ headers: requestHeaders });
-
-	if (session?.user) {
-		await recordAudit({
-			action: AUTH_AUDIT_ACTIONS.SIGN_OUT,
-			outcome: "SUCCESS",
-			actor: userActor(session.user),
-			provenance: await requestProvenance(session.session.id),
-		});
-	}
-
-	redirect("/login");
-}
 
 /**
  * Shell for every authenticated page.

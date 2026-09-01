@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { signOut } from "@/app/sign-out";
 import { BrandMark } from "@/components/brand-mark";
 import { TwoFactorPanel } from "@/components/panel/two-factor-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -72,6 +73,27 @@ export default async function EnrolTwoFactorPage() {
 						<TwoFactorPanel enabled={enrolled} />
 					</CardContent>
 				</Card>
+
+				{/*
+				 * The way out, and the only one on this page.
+				 *
+				 * This is a gate: it sits outside the panel shell, so there is no sidebar and no account
+				 * menu, and `requireSession` sends an un-enrolled operator straight back here from
+				 * anywhere else they try to go. Without this an operator who reached it on the wrong
+				 * account — or who simply has no authenticator to hand right now — had a session, a
+				 * screen they could not finish, and nothing else to click.
+				 *
+				 * A form posting to the shared action rather than a link to `/login`: they hold a live
+				 * session here, and a link would leave it alive to be walked straight back into.
+				 */}
+				<form action={signOut} className="mt-3.5 flex justify-end">
+					<button
+						type="submit"
+						className="text-xs text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline"
+					>
+						Log out
+					</button>
+				</form>
 			</div>
 		</main>
 	);

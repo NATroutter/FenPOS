@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { SetPasswordForm } from "@/app/(auth)/set-password/set-password-form";
+import { signOut } from "@/app/sign-out";
 import { BrandMark } from "@/components/brand-mark";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { minimumLengthPhrase } from "@/lib/auth/password-policy";
@@ -54,9 +55,26 @@ export default async function SetPasswordPage() {
 					</CardContent>
 				</Card>
 
-				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
-					At least {minimumLengthPhrase(minimumPasswordLength)}
-				</p>
+				{/*
+				 * The policy on the left, the way out on the right. This page is a gate like
+				 * `/enrol-2fa` — outside the panel shell, and `requireSession` sends an account that owes
+				 * a password change back here from anywhere else — so without the second half an
+				 * operator who reached it on the wrong account had a session and nothing to click but
+				 * the thing they could not finish. See `signOut`'s own note.
+				 */}
+				<div className="mt-3.5 flex items-start justify-between gap-4">
+					<p className="text-xs leading-relaxed text-subtle-foreground">
+						At least {minimumLengthPhrase(minimumPasswordLength)}
+					</p>
+					<form action={signOut}>
+						<button
+							type="submit"
+							className="text-xs whitespace-nowrap text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline"
+						>
+							Log out
+						</button>
+					</form>
+				</div>
 			</div>
 		</main>
 	);

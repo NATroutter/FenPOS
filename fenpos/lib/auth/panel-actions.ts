@@ -705,15 +705,19 @@ export const PANEL_ACTIONS = [
 	},
 	{
 		// `auth:sign-out`, not `self:sign-out`, though this sits among the `self` entries and its `kind`
-		// stays `self`: the id has to be the string the row actually carries, and `layout.tsx`'s
-		// `signOut` records `AUTH_AUDIT_ACTIONS.SIGN_OUT`. The stored value is the authority here, since
+		// stays `self`: the id has to be the string the row actually carries, and `signOut` records
+		// `AUTH_AUDIT_ACTIONS.SIGN_OUT`. The stored value is the authority here, since
 		// `AuditEvent` has no edit path by design and every row any install has ever written says
 		// `auth:sign-out` — renaming the other way would leave those rows unfindable. It reads correctly
 		// too: signing out is an auth lifecycle event beside `auth:sign-in` and `auth:set-password`.
+		//
+		// `sign-out.ts`, not `(panel)/layout.tsx` where it began as an inline action: the two gate
+		// pages under `(auth)` sit outside that layout and need the same way out, so it moved to a
+		// module all three can import.
 		id: "auth:sign-out",
 		kind: "self",
 		permission: null,
-		module: "(panel)/layout.tsx",
+		module: "sign-out.ts",
 		exportName: "signOut",
 		description: "Signed out of the panel",
 	},
