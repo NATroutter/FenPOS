@@ -3,8 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** The value used for "no filter", since a select cannot hold an empty string as a choice. */
@@ -58,8 +57,10 @@ interface FilterRange {
  * than beside this component so the Audit tab and the Logs tab read a range the same way — the two
  * pages that filter by one, and two spellings of one control is how they come to differ.
  *
- * Native `type="date"` inputs rather than a picker component: two fields do not justify a
- * dependency, and the native control is the one an operator's browser already localises for them.
+ * The two ends are {@link DatePicker}s, not `<input type="date">`. The native control is drawn by
+ * the browser, so it arrived in whatever shape the operator's browser felt like and matched nothing
+ * else in the row beside it. They still carry the same `yyyy-MM-dd` strings, because that is what
+ * the URL holds.
  */
 export function Filters({ filters, range }: { filters: Filter[]; range?: FilterRange }) {
 	const router = useRouter();
@@ -95,27 +96,32 @@ export function Filters({ filters, range }: { filters: Filter[]; range?: FilterR
 
 			{range === undefined ? null : (
 				<div className="flex items-end gap-2">
+					{/*
+					 * Plain spans rather than `<Label htmlFor>`: the picker's trigger is a button, not a
+					 * form control a `for` can point at. What names it for a screen reader is the
+					 * picker's own `label`, which is why both are given one that says which end it is.
+					 */}
 					<div className="flex flex-col gap-1">
-						<Label htmlFor={`${field}-from`} className="text-[11px] text-subtle-foreground">
-							From
-						</Label>
-						<Input
+						<span className="text-[11px] text-subtle-foreground">From</span>
+						<DatePicker
+							clearable
 							id={`${field}-from`}
-							type="date"
+							label="From date"
+							placeholder="Any"
 							value={range.from}
-							onChange={(changed) => set("from", changed.target.value || null)}
+							onChange={(next) => set("from", next || null)}
 							className="h-8 w-[150px] text-[12px]"
 						/>
 					</div>
 					<div className="flex flex-col gap-1">
-						<Label htmlFor={`${field}-to`} className="text-[11px] text-subtle-foreground">
-							To
-						</Label>
-						<Input
+						<span className="text-[11px] text-subtle-foreground">To</span>
+						<DatePicker
+							clearable
 							id={`${field}-to`}
-							type="date"
+							label="To date"
+							placeholder="Any"
 							value={range.to}
-							onChange={(changed) => set("to", changed.target.value || null)}
+							onChange={(next) => set("to", next || null)}
 							className="h-8 w-[150px] text-[12px]"
 						/>
 					</div>

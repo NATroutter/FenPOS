@@ -42,6 +42,7 @@ import {
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
 import {
 	Dialog,
 	DialogBody,
@@ -1002,7 +1003,7 @@ function BanAction({ userId, accountName, disabled }: { userId: string; accountN
 	const save = (): void => {
 		setError(null);
 		startSave(async () => {
-			// A date input gives a bare `YYYY-MM-DD`, which parses as midnight UTC. The ban lifts at the
+			// The picker gives a bare `YYYY-MM-DD`, which parses as midnight UTC. The ban lifts at the
 			// start of that day rather than the end of the previous one, which is what an operator
 			// picking a date means.
 			const expiresAt = until === "" ? null : new Date(`${until}T00:00:00Z`).toISOString();
@@ -1055,13 +1056,17 @@ function BanAction({ userId, accountName, disabled }: { userId: string; accountN
 						/>
 					</Field>
 					<Field>
-						<FieldLabel htmlFor={`ban-until-${userId}`}>Lifts on</FieldLabel>
-						<Input
-							id={`ban-until-${userId}`}
-							type="date"
-							value={until}
+						{/* A span rather than `FieldLabel htmlFor`: the picker's trigger is a button, and a
+						    `for` pointing at one names nothing. Its own `label` is what a screen reader reads. */}
+						<span className="text-sm leading-none font-medium select-none">Lifts on</span>
+						<DatePicker
+							clearable
 							disabled={saving}
-							onChange={(event) => setUntil(event.target.value)}
+							id={`ban-until-${userId}`}
+							label="Ban lifts on"
+							placeholder="Never — until lifted by hand"
+							value={until}
+							onChange={setUntil}
 						/>
 					</Field>
 					{error ? (
