@@ -1,8 +1,9 @@
 import { Jimp, JimpMime } from "jimp";
 import { describe, expect, it } from "vitest";
-import { AVATAR_RENDER_PX, bakeAvatar, requireValidCrop } from "@/lib/auth/avatar-image";
+import { AVATAR_BOUNDS, AVATAR_RENDER_PX, bakeAvatar, requireValidCrop } from "@/lib/auth/avatar-image";
 import { ApiError } from "@/lib/errors";
-import { pngOf } from "@/test/helpers/images";
+import { measureImage } from "@/lib/images/guard";
+import { jpegOrientedAt, pngOf } from "@/test/helpers/images";
 
 describe("requireValidCrop", () => {
 	it("accepts a square wholly inside the original", () => {
@@ -55,5 +56,42 @@ describe("bakeAvatar", () => {
 
 	it("refuses a crop the original cannot satisfy", async () => {
 		await expect(bakeAvatar(await pngOf(50, 50), { x: 0, y: 0, size: 80 })).rejects.toBeInstanceOf(ApiError);
+	});
+});
+
+/**
+ * EXIF orientation, which the crop contract silently depends on two parties agreeing about.
+ *
+ * The cropper takes its dimensions from a browser `<img>`'s `naturalWidth`/`naturalHeight`
+ * (`avatar-dialog.tsx`), and browsers apply EXIF orientation by default. The rectangle those numbers
+ * produce is then checked server-side by `requireValidCrop` against what `measureImage` reports. So
+ * the two must describe the same picture: if the server saw an un-oriented bitmap, an orientation-6
+ * portrait phone photo — stored 4000x3000, displayed 3000x4000, the commonest avatar source there is
+ * — would have its perfectly ordinary crop refused with "That crop runs past the edge of the image."
+ *
+ * Measured, not assumed: jimp 1.6.1's Node build **does** honour the tag (`@jimp/core`'s
+ * `image-bitmap.js` reads `_exif.tags.Orientation` on load, transforms the pixels, and swaps the
+ * dimensions for orientations above 4), so there is no bug to fix here. What there is, is a
+ * third-party behaviour the whole crop path leans on with nothing holding it in place. These pin the
+ * *agreement* — that this codebase's decode reports what a browser would show — rather than jimp's
+ * implementation of it, so a future upgrade that dropped auto-orientation fails here instead of
+ * failing in front of an operator uploading a photograph.
+ */
+describe("EXIF-oriented originals", () => {
+	it("measures the dimensions a browser would show, not the ones stored", async () => {
+		// Stored 40x20 and tagged "rotate 90° clockwise", so anything honouring the tag sees 20x40.
+		const decoded = await measureImage(await jpegOrientedAt(40, 20, 6), AVATAR_BOUNDS);
+
+		expect(decoded.width).toBe(20);
+		expect(decoded.height).toBe(40);
+	});
+
+	it("accepts the crop those dimensions make legal", async () => {
+		// A square at y = 20 is inside a 20x40 picture and off the bottom of a 40x20 one: this is the
+		// refusal an operator would meet, expressed as a bake.
+		const baked = await bakeAvatar(await jpegOrientedAt(40, 20, 6), { x: 0, y: 20, size: 20 });
+
+		expect(baked.size).toBe(AVATAR_RENDER_PX);
+		expect(baked.originalMimeType).toBe("image/jpeg");
 	});
 });
