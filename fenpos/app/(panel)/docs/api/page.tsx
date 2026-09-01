@@ -128,7 +128,7 @@ const SECTIONS = [
  * requires"; the test beside this page reads the routes and fails if this list stops matching them.
  */
 const ENFORCED: readonly Permission[] = [
-	"print",
+	"jobs:submit",
 	"jobs:read",
 	"jobs:cancel",
 	"devices:read",

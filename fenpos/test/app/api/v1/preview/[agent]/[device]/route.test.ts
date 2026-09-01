@@ -55,7 +55,7 @@ beforeEach(async () => {
 			name: "till",
 			keyHash: hashSecret(token),
 			maskedHint: "abcd",
-			permissions: { create: [{ permission: "print" }] },
+			permissions: { create: [{ permission: "jobs:submit" }] },
 			devices: { create: [{ deviceId: kitchen.id }] },
 		},
 	});
@@ -127,7 +127,7 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 		expect((await response.json()).error).toBe("body_too_large");
 	});
 
-	it("refuses a key without 'print'", async () => {
+	it("refuses a key without 'jobs:submit'", async () => {
 		await prisma.apiKeyPermission.deleteMany({ where: { apiKeyId: keyId } });
 
 		expect((await POST(...call({ data: ["hi"] }))).status).toBe(403);

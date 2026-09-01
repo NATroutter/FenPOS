@@ -26,7 +26,10 @@ describe("permission set", () => {
 	});
 
 	it("drops stored values it no longer recognises, rather than widening authority", () => {
-		expect(parseStoredPermissions(["print", "assets:read", "from-an-older-build"])).toEqual(["print", "assets:read"]);
+		expect(parseStoredPermissions(["jobs:submit", "assets:read", "from-an-older-build"])).toEqual([
+			"jobs:submit",
+			"assets:read",
+		]);
 	});
 });
 

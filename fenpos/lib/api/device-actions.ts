@@ -10,7 +10,7 @@ import type { DeviceCommand } from "@/lib/link/protocol";
  * public surface may stay smaller than the wire's — which it does.
  *
  * `device.test` is deliberately absent. It prints a diagnostic page, and a print is a print: it
- * belongs behind the `print` permission, not behind `devices:control`. A key granted control of a
+ * belongs behind the `jobs:submit` permission, not behind `devices:control`. A key granted control of a
  * printer it may not print to must not be able to make it print by another name.
  */
 

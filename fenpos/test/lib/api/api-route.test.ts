@@ -59,7 +59,7 @@ beforeEach(async () => {
 			name: "Till 4",
 			keyHash: hashSecret(token),
 			maskedHint: "ab12",
-			permissions: { create: [{ permission: "print" }, { permission: "jobs:read" }] },
+			permissions: { create: [{ permission: "jobs:submit" }, { permission: "jobs:read" }] },
 			devices: { create: [{ deviceId: device.id }] },
 		},
 	});

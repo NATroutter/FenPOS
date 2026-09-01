@@ -351,7 +351,7 @@ export function openApiDocument(publicUrl: string): object {
 					summary: "Submit a receipt to one printer.",
 					operationId: "submitPrintJob",
 					description:
-						"Requires the `print` permission. Compiles the body against the named device and hands it to the agent. An optional `Idempotency-Key` header makes a retry safe: a repeated key addressed to the same device with a byte-identical body replays the original `202` and prints nothing a second time. It is replayable for as long as the job row exists — in practice indefinitely, since nothing sweeps this server's jobs table.",
+						"Requires the `jobs:submit` permission. Compiles the body against the named device and hands it to the agent. An optional `Idempotency-Key` header makes a retry safe: a repeated key addressed to the same device with a byte-identical body replays the original `202` and prints nothing a second time. It is replayable for as long as the job row exists — in practice indefinitely, since nothing sweeps this server's jobs table.",
 					security: BEARER_AUTH,
 					parameters: [pathParam("agent"), pathParam("device"), idempotencyKeyHeader()],
 					requestBody: { required: true, content: { "application/json": { schema: PRINT_REQUEST_SCHEMA } } },
@@ -379,7 +379,7 @@ export function openApiDocument(publicUrl: string): object {
 					summary: "Compile a receipt without printing it.",
 					operationId: "previewPrintJob",
 					description:
-						"Requires the `print` permission, the same one submitting a job needs — preview is strictly less powerful and reveals nothing a key holding `print` could not already learn by printing. Always answers `200`, including when the markup does not compile: the request succeeded, and 'it would not print' is a complete answer to what was asked.",
+						"Requires the `jobs:submit` permission, the same one submitting a job needs — preview is strictly less powerful and reveals nothing a key holding `jobs:submit` could not already learn by printing. Always answers `200`, including when the markup does not compile: the request succeeded, and 'it would not print' is a complete answer to what was asked.",
 					security: BEARER_AUTH,
 					parameters: [pathParam("agent"), pathParam("device")],
 					requestBody: { required: true, content: { "application/json": { schema: PRINT_REQUEST_SCHEMA } } },
@@ -495,7 +495,7 @@ export function openApiDocument(publicUrl: string): object {
 					summary: "Ask an agent to act on one printer.",
 					operationId: "actOnDevice",
 					description:
-						"Requires the `devices:control` permission. `pause` and `resume` also write this server's stored desired state, so it survives an agent restart; the rest are sends only. There is no `test` action — printing a diagnostic page is a print, and is gated by `print` instead.",
+						"Requires the `devices:control` permission. `pause` and `resume` also write this server's stored desired state, so it survives an agent restart; the rest are sends only. There is no `test` action — printing a diagnostic page is a print, and is gated by `jobs:submit` instead.",
 					security: BEARER_AUTH,
 					parameters: [pathParam("agent"), pathParam("device")],
 					requestBody: {

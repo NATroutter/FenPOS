@@ -82,7 +82,7 @@ beforeEach(async () => {
 			name: "till",
 			keyHash: hashSecret(token),
 			maskedHint: "abcd",
-			permissions: { create: [{ permission: "print" }] },
+			permissions: { create: [{ permission: "jobs:submit" }] },
 			devices: { create: [{ deviceId: device.id }] },
 		},
 	});
@@ -184,7 +184,7 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 				name: "other till",
 				keyHash: hashSecret(otherToken),
 				maskedHint: "wxyz",
-				permissions: { create: [{ permission: "print" }] },
+				permissions: { create: [{ permission: "jobs:submit" }] },
 				devices: { create: [{ deviceId }] },
 			},
 		});

@@ -7,6 +7,14 @@ import { z } from "zod";
  * can do nothing. That default matters: a key created but not yet configured must be inert,
  * never permissive.
  *
+ * **Every identifier is `resource:verb`.** Submitting a job was `print` alone for as long as it was
+ * the only thing a key could do, and it stayed that way past the point where eight others had joined
+ * it — so the list an operator reads began with the one entry that did not look like the rest. It is
+ * `jobs:submit` now, beside `jobs:read` and `jobs:cancel`, which is what it always was: the grant
+ * that creates a job. `20260902001500_rename_print_permission` rewrites the stored rows, because an
+ * unrecognised grant is dropped by {@link parseStoredPermissions} and every existing key would
+ * otherwise have quietly stopped printing.
+ *
  * Raw ESC/POS writes are in this set, and are the one grant here that is not sufficient on its own.
  * They hand arbitrary bytes to hardware, bypassing every content limit, codepage check and width
  * calculation the compiler applies — so `devices:raw` is gated a second time by the install-level
@@ -33,7 +41,7 @@ export interface PermissionDefinition {
  * from one declaration and cannot fall out of step.
  */
 export const PERMISSION_IDS = [
-	"print",
+	"jobs:submit",
 	"jobs:read",
 	"jobs:cancel",
 	"devices:read",
@@ -54,7 +62,7 @@ export const permissionSchema = z.enum(PERMISSION_IDS);
  */
 export const PERMISSIONS: readonly PermissionDefinition[] = [
 	{
-		id: "print",
+		id: "jobs:submit",
 		description: "Submit print jobs to the devices this key grants.",
 	},
 	{

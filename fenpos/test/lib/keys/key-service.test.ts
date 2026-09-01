@@ -24,7 +24,7 @@ describe("createApiKey", () => {
 	it("records the account that minted the key, by id and by name", async () => {
 		const user = await minter("k1");
 
-		await createApiKey("till", ["print"], [], { id: user.id, name: user.name });
+		await createApiKey("till", ["jobs:submit"], [], { id: user.id, name: user.name });
 
 		const [key] = await listApiKeys();
 		expect(key.createdByUserId).toBe(user.id);
@@ -33,7 +33,7 @@ describe("createApiKey", () => {
 
 	it("keeps the key, and the name, after the account is deleted", async () => {
 		const user = await minter("k2");
-		await createApiKey("till", ["print"], [], { id: user.id, name: user.name });
+		await createApiKey("till", ["jobs:submit"], [], { id: user.id, name: user.name });
 
 		await prisma.user.delete({ where: { id: user.id } });
 

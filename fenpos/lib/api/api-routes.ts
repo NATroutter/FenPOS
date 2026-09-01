@@ -75,8 +75,8 @@ export const API_ROUTES: readonly ApiRouteEntry[] = [
 	{ id: "api:DELETE /v1/assets/{name}", kind: "command", permission: "assets:write" },
 
 	// --- Tools ---
-	{ id: "api:POST /v1/preview/{agent}/{device}", kind: "query", permission: "print" },
-	{ id: "api:POST /v1/print/{agent}/{device}", kind: "command", permission: "print" },
+	{ id: "api:POST /v1/preview/{agent}/{device}", kind: "query", permission: "jobs:submit" },
+	{ id: "api:POST /v1/print/{agent}/{device}", kind: "command", permission: "jobs:submit" },
 ] as const satisfies readonly ApiRouteEntry[];
 
 /**

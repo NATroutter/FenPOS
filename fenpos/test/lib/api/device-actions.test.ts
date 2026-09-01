@@ -17,7 +17,7 @@ describe("device action mapping", () => {
 		}
 	});
 
-	it("does not expose the test print, which is a print and belongs behind 'print'", () => {
+	it("does not expose the test print, which is a print and belongs behind 'jobs:submit'", () => {
 		expect(API_DEVICE_ACTIONS).not.toContain("test");
 		expect(apiActionSchema.safeParse("test").success).toBe(false);
 	});

@@ -7,8 +7,8 @@ import { requireGrantedDevice } from "@/lib/keys/authenticate";
 /**
  * `POST /api/v1/preview/{agent}/{device}` — what this body would print, without printing it.
  *
- * Behind `print` rather than a permission of its own. Preview is strictly less powerful than
- * printing and reveals nothing a key holding `print` could not learn by printing; a separate
+ * Behind `jobs:submit` rather than a permission of its own. Preview is strictly less powerful than
+ * printing and reveals nothing a key holding `jobs:submit` could not learn by printing; a separate
  * permission would be a checkbox that grants no new authority and one more thing to get wrong.
  *
  * **Markup that does not compile is a 200 carrying the fault.** The request succeeded — the caller

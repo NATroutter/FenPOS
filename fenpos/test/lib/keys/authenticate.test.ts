@@ -102,7 +102,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("refuses a revoked key with the same answer as an unknown one", async () => {
-		const key = await mint(["print"], [kitchenId]);
+		const key = await mint(["jobs:submit"], [kitchenId]);
 		await revokeApiKey(key.id);
 
 		// One response for both, so the endpoint cannot be used to test whether a key was ever
@@ -111,25 +111,25 @@ describe("API key authorisation", () => {
 	});
 
 	it("accepts a valid key and reports what it may do", async () => {
-		const key = await mint(["print", "jobs:read"], [kitchenId]);
+		const key = await mint(["jobs:submit", "jobs:read"], [kitchenId]);
 
 		const authenticated = await authenticate(key.secret);
 
 		expect(authenticated.id).toBe(key.id);
 		// Compared as a set: the grants come back in whatever order the database returns rows,
 		// and nothing depends on that order.
-		expect([...authenticated.permissions].sort()).toEqual(["jobs:read", "print"]);
+		expect([...authenticated.permissions].sort()).toEqual(["jobs:read", "jobs:submit"]);
 	});
 
 	it("issues a distinct secret per key", async () => {
-		const first = await mint(["print"], []);
-		const second = await createApiKey("other", ["print"], [], minter);
+		const first = await mint(["jobs:submit"], []);
+		const second = await createApiKey("other", ["jobs:submit"], [], minter);
 
 		expect(first.secret).not.toBe(second.secret);
 	});
 
 	it("never stores the secret itself", async () => {
-		const key = await mint(["print"], []);
+		const key = await mint(["jobs:submit"], []);
 
 		const row = await prisma.apiKey.findUnique({ where: { id: key.id } });
 		expect(row?.keyHash).not.toBe(key.secret);
@@ -141,7 +141,7 @@ describe("API key authorisation", () => {
 	// -----------------------------------------------------------------------
 
 	it("refuses the old secret after a reroll", async () => {
-		const key = await mint(["print"], [kitchenId]);
+		const key = await mint(["jobs:submit"], [kitchenId]);
 		await rerollApiKey(key.id);
 
 		// Indistinguishable from a key that never existed, for the same reason a revoked one is.
@@ -149,19 +149,19 @@ describe("API key authorisation", () => {
 	});
 
 	it("accepts the new secret after a reroll, with the grants intact", async () => {
-		const key = await mint(["print", "jobs:read"], [kitchenId]);
+		const key = await mint(["jobs:submit", "jobs:read"], [kitchenId]);
 
 		const reissued = await rerollApiKey(key.id);
 		const authenticated = await authenticate(reissued.secret);
 
 		// The same key, which is the point: rerolling rotates the credential and nothing else.
 		expect(authenticated.id).toBe(key.id);
-		expect([...authenticated.permissions].sort()).toEqual(["jobs:read", "print"]);
+		expect([...authenticated.permissions].sort()).toEqual(["jobs:read", "jobs:submit"]);
 		await expect(requireGrantedDevice(authenticated, "site-a", "kitchen")).resolves.toBeDefined();
 	});
 
 	it("issues a different secret than the one it replaces", async () => {
-		const key = await mint(["print"], []);
+		const key = await mint(["jobs:submit"], []);
 
 		const reissued = await rerollApiKey(key.id);
 
@@ -170,7 +170,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("never stores the rerolled secret either", async () => {
-		const key = await mint(["print"], []);
+		const key = await mint(["jobs:submit"], []);
 
 		const reissued = await rerollApiKey(key.id);
 
@@ -180,7 +180,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("clears the last-used time, which described the secret that is gone", async () => {
-		const key = await mint(["print"], [kitchenId]);
+		const key = await mint(["jobs:submit"], [kitchenId]);
 		await prisma.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } });
 
 		await rerollApiKey(key.id);
@@ -189,7 +189,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("refuses to reroll a revoked key rather than bringing it back", async () => {
-		const key = await mint(["print"], []);
+		const key = await mint(["jobs:submit"], []);
 		await revokeApiKey(key.id);
 
 		// Revoking is documented as irreversible; rerolling must not be the way around it.
@@ -201,16 +201,16 @@ describe("API key authorisation", () => {
 	// -----------------------------------------------------------------------
 
 	it("allows an action the key holds the permission for", async () => {
-		const authenticated = await authenticate((await mint(["print"], [])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [])).secret);
 
-		expect(() => requirePermission(authenticated, "print")).not.toThrow();
+		expect(() => requirePermission(authenticated, "jobs:submit")).not.toThrow();
 	});
 
 	it("refuses an action the key lacks the permission for", async () => {
 		const authenticated = await authenticate((await mint(["jobs:read"], [])).secret);
 
 		try {
-			requirePermission(authenticated, "print");
+			requirePermission(authenticated, "jobs:submit");
 			throw new Error("expected a refusal");
 		} catch (error) {
 			expect(error).toBeInstanceOf(ApiError);
@@ -230,7 +230,7 @@ describe("API key authorisation", () => {
 	// -----------------------------------------------------------------------
 
 	it("resolves a device the key is granted", async () => {
-		const authenticated = await authenticate((await mint(["print"], [kitchenId])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [kitchenId])).secret);
 
 		const device = await requireGrantedDevice(authenticated, "site-a", "kitchen");
 
@@ -239,7 +239,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("reports a device the key is not granted as unknown", async () => {
-		const authenticated = await authenticate((await mint(["print"], [kitchenId])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [kitchenId])).secret);
 
 		const thrown = await refusal(() => requireGrantedDevice(authenticated, "site-a", "bar"));
 
@@ -249,7 +249,7 @@ describe("API key authorisation", () => {
 	});
 
 	it("reports a device that does not exist the same way", async () => {
-		const authenticated = await authenticate((await mint(["print"], [kitchenId])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [kitchenId])).secret);
 
 		const missing = await refusal(() => requireGrantedDevice(authenticated, "site-a", "nowhere"));
 		const forbidden = await refusal(() => requireGrantedDevice(authenticated, "site-a", "bar"));
@@ -259,20 +259,20 @@ describe("API key authorisation", () => {
 	});
 
 	it("refuses a device on an agent the path names wrongly", async () => {
-		const authenticated = await authenticate((await mint(["print"], [kitchenId])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [kitchenId])).secret);
 
 		expect((await refusal(() => requireGrantedDevice(authenticated, "site-b", "kitchen"))).code).toBe("unknown_device");
 	});
 
 	it("grants no devices to a key with no grants", async () => {
-		const authenticated = await authenticate((await mint(["print"], [])).secret);
+		const authenticated = await authenticate((await mint(["jobs:submit"], [])).secret);
 
 		expect((await refusal(() => requireGrantedDevice(authenticated, "site-a", "kitchen"))).code).toBe("unknown_device");
 	});
 
 	it("keeps two keys' grants apart", async () => {
-		const kitchenKey = await authenticate((await mint(["print"], [kitchenId])).secret);
-		const barKey = await authenticate((await createApiKey("bar-till", ["print"], [barId], minter)).secret);
+		const kitchenKey = await authenticate((await mint(["jobs:submit"], [kitchenId])).secret);
+		const barKey = await authenticate((await createApiKey("bar-till", ["jobs:submit"], [barId], minter)).secret);
 
 		await expect(requireGrantedDevice(kitchenKey, "site-a", "kitchen")).resolves.toBeDefined();
 		await expect(requireGrantedDevice(barKey, "site-a", "bar")).resolves.toBeDefined();

@@ -140,7 +140,7 @@ describe("POST /api/v1/devices/{agent}/{device}/actions", () => {
 		expect(vi.mocked(sendDeviceCommand)).not.toHaveBeenCalled();
 	});
 
-	it("refuses the test print, which belongs behind 'print'", async () => {
+	it("refuses the test print, which belongs behind 'jobs:submit'", async () => {
 		const response = await POST(...call("test"));
 
 		expect(response.status).toBe(400);

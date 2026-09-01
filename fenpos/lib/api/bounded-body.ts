@@ -9,7 +9,7 @@ import { ApiError } from "@/lib/errors";
  * size costs one `Buffer.byteLength` call; nothing here reads it twice.
  *
  * Every route on this API that reads a JSON body from an untrusted caller goes through
- * {@link readBoundedJson} rather than restating the check: `print`, `preview`, asset creation, and
+ * {@link readBoundedJson} rather than restating the check: print, preview, asset creation, and
  * the raw write. One place for the bound and its wording means none of them can drift out of step
  * with the others.
  */
@@ -43,7 +43,7 @@ export async function readBoundedJson(request: Request, maxBytes: number): Promi
 }
 
 /**
- * The body-size ceiling `print` and `preview` share.
+ * The body-size ceiling print and preview share.
  *
  * One constant rather than two copies of the literal. It had drifted into exactly that: preview
  * restated `64 * 1024` with a comment asserting it matched the print endpoint, and nothing but

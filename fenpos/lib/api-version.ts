@@ -1,7 +1,7 @@
 /**
  * The version of the public API this server serves.
  *
- * Only the endpoints an integrator calls with an API key are versioned — `print` and `jobs`. Three
+ * Only the endpoints an integrator calls with an API key are versioned — print and jobs. Three
  * others under `/api` deliberately are not, and each for its own reason:
  *
  * - `/api/health` is called by a container runtime from a healthcheck line in a compose file, which

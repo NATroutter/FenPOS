@@ -259,7 +259,7 @@ async function main(): Promise<void> {
 
 		const till = await mint(
 			`${PREFIX}front-till`,
-			["print", "jobs:read", "status:read"],
+			["jobs:submit", "jobs:read", "status:read"],
 			[kitchenMain.id, barMain.id],
 			{ createdAt: at(28 * DAY), lastUsedAt: at(11 * 60 * 1000) },
 		);
@@ -267,7 +267,7 @@ async function main(): Promise<void> {
 		const display = await mint(`${PREFIX}kitchen-display`, ["jobs:read", "devices:read"], [kitchenMain.id], {
 			createdAt: at(6 * DAY),
 		});
-		await mint(`${PREFIX}old-terminal`, ["print"], [barCustomer.id], {
+		await mint(`${PREFIX}old-terminal`, ["jobs:submit"], [barCustomer.id], {
 			createdAt: at(60 * DAY),
 			revokedAt: at(5 * DAY),
 		});
