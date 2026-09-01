@@ -4,6 +4,7 @@ import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { GrantableDevice, KeyPermits, KeyRowData } from "@/app/(panel)/keys/key-data";
 import { ManageKeyDialog } from "@/app/(panel)/keys/manage-key-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -125,10 +126,26 @@ export function KeysTable({
 						</TableRow>
 					) : (
 						shown.map((key) => (
-							<TableRow key={key.id} className={cn(key.revokedAt !== null && "opacity-60")}>
+							<TableRow key={key.id}>
 								<TableCell>
 									<div className="flex min-w-0 flex-col">
-										<span className="truncate font-medium">{key.name}</span>
+										<div className="flex min-w-0 items-center gap-2">
+											<span className="truncate font-medium">{key.name}</span>
+											{/*
+											 * A badge rather than the faded row this replaces — the same change the Users
+											 * tab made for banned accounts, for the same reason. Dimming a row said
+											 * "revoked" only to somebody who already knew that was the convention, and
+											 * said it by making the name and the hint harder to read.
+											 */}
+											{key.revokedAt !== null ? (
+												<Badge
+													variant="outline"
+													className="border-destructive/40 bg-destructive/10 text-[10.5px] text-destructive"
+												>
+													Revoked
+												</Badge>
+											) : null}
+										</div>
 										<span className="font-mono text-[11px] text-subtle-foreground">…{key.maskedHint}</span>
 									</div>
 								</TableCell>
@@ -171,17 +188,18 @@ export function KeysTable({
  * looks like. Only a person can tell which, which is why the gap is named in amber rather than
  * shown as a `0` the reader has to notice.
  *
- * Revoked keys say so instead. What a dead key was granted is not what anyone is reading the row
- * for, and an amber warning on one would be a problem being reported about a key that has none.
+ * **A revoked key still shows its counts, but never the amber.** The badge beside its name is what
+ * says it is dead, so this cell does not have to repeat it — but an amber warning here would be a
+ * problem being reported about a key that has none, since a key nobody can use cannot be
+ * misconfigured.
  */
 function GrantsCell({ apiKey }: { apiKey: KeyRowData }) {
-	if (apiKey.revokedAt !== null) {
-		return <span className="text-destructive">Revoked</span>;
-	}
-	if (apiKey.permissions.length === 0) {
+	const revoked = apiKey.revokedAt !== null;
+
+	if (!revoked && apiKey.permissions.length === 0) {
 		return <span className="text-amber-400">No permissions</span>;
 	}
-	if (apiKey.devices.length === 0) {
+	if (!revoked && apiKey.devices.length === 0) {
 		return <span className="text-amber-400">No printers</span>;
 	}
 	const permissions = apiKey.permissions.length === 1 ? "1 permission" : `${apiKey.permissions.length} permissions`;

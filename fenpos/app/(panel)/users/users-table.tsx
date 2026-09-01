@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { ManageUserDialog } from "@/app/(panel)/users/manage-user-dialog";
 import type { GrantableRole, UserPermits, UserRowData } from "@/app/(panel)/users/user-data";
 import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -130,13 +131,28 @@ export function UsersTable({
 						</TableRow>
 					) : (
 						shown.map((account) => (
-							<TableRow key={account.id} className={account.banned ? "opacity-60" : undefined}>
+							<TableRow key={account.id}>
 								<TableCell>
 									<div className="flex items-center gap-2.5">
 										<Avatar src={account.avatarUrl} initial={account.initial} className="size-7 flex-none" />
 										<span className="truncate font-medium">{account.name}</span>
 										{account.id === actingUserId ? (
 											<span className="text-[11px] text-subtle-foreground">you</span>
+										) : null}
+										{/*
+										 * A badge rather than the faded row this replaces. Dimming the whole row said
+										 * "banned" only to somebody who already knew that was the convention — to
+										 * everybody else it read as disabled, or as still loading — and it did so by
+										 * making the name, the address and the access harder to read, which is the
+										 * opposite of what you want on the row you have just gone looking for.
+										 */}
+										{account.banned ? (
+											<Badge
+												variant="outline"
+												className="border-destructive/40 bg-destructive/10 text-[10.5px] text-destructive"
+											>
+												Banned
+											</Badge>
 										) : null}
 									</div>
 								</TableCell>
