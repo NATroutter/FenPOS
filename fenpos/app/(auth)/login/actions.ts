@@ -11,6 +11,7 @@ import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { enforceSessionCap } from "@/lib/auth/session-policy";
 import { prisma } from "@/lib/db";
+import { formatDateTime } from "@/lib/format/datetime";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
 import { globalSignInPolicy } from "@/lib/settings/settings-service";
@@ -37,8 +38,46 @@ export interface SignInState {
 	twoFactorRequired: boolean;
 }
 
-/** Shown for every failure, whatever its cause. */
+/** Shown for every failure that is not a ban, whatever its cause. */
 const REJECTION_MESSAGE = "That email address and password do not match an account.";
+
+/** The code better-auth's admin plugin puts on the refusal it throws for a banned account. */
+const BANNED_CODE = "BANNED_USER";
+
+/**
+ * Whether a thrown sign-in failure is the admin plugin's ban refusal.
+ *
+ * Read off `body.code` rather than with `instanceof APIError`. The class is exported from both
+ * `better-auth` and `@better-auth/core`, and an `instanceof` that happens to hold the other copy
+ * fails silently — which here would mean quietly falling back to "credentials do not match" for a
+ * ban, the exact bug this function exists to fix.
+ *
+ * @param error whatever `signInEmail` threw
+ * @returns whether it refused because the account is banned
+ */
+function isBanRefusal(error: unknown): boolean {
+	if (typeof error !== "object" || error === null || !("body" in error)) {
+		return false;
+	}
+	const body = (error as { body: unknown }).body;
+	return typeof body === "object" && body !== null && "code" in body && body.code === BANNED_CODE;
+}
+
+/**
+ * What a banned operator is told.
+ *
+ * The reason and the expiry both, because "you are banned" on its own leaves somebody with nothing
+ * to act on: whether to wait, or who to go and talk to. The reason is the operator's own words from
+ * the ban form, and the ban screen in the panel shows the same two facts.
+ *
+ * @param ban the stored ban, as read after the password was accepted
+ * @returns the message to render
+ */
+function bannedMessage(ban: { banReason: string | null; banExpires: Date | null }): string {
+	const until = ban.banExpires ? ` until ${formatDateTime(ban.banExpires)}` : "";
+	const reason = ban.banReason ? ` Reason: ${ban.banReason}` : "";
+	return `This account is banned${until}.${reason}`;
+}
 
 /**
  * Reads the submitted address for the audit row.
@@ -59,9 +98,22 @@ function readEmail(formData: FormData): string {
  * Verifies credentials and starts a session.
  *
  * Failures are deliberately indistinguishable: a wrong password, an address with no account, a
- * banned account, and a malformed submission all produce the same message. Telling them apart
+ * locked account, and a malformed submission all produce the same message. Telling them apart
  * would disclose which addresses hold accounts on this install, which is useful only to someone
  * who should not be here. The server log records the difference.
+ *
+ * **A ban is the one exception, and it is one because the password was right.** Telling somebody
+ * with the wrong password that an account is banned would be the enumeration oracle the paragraph
+ * above exists to prevent; telling somebody who has just proved they hold the credential discloses
+ * nothing they could not already establish. What made this safe to do is *where* the admin plugin
+ * checks: `banned` is read in a `session.create.before` database hook, which runs only once a
+ * session is about to be issued — that is, after the password has been verified. A future version
+ * that moved the check earlier would turn this branch into a leak, which is why the reasoning is
+ * written down here rather than left to be re-derived.
+ *
+ * The ban message names the reason and the expiry, because "you are banned" alone leaves an
+ * operator with nothing to act on. Before this, a banned account was told its own password was
+ * wrong, which sent people to reset a credential that was never the problem.
  *
  * A banned account is refused by Better Auth itself, so the ban is enforced at the credential
  * layer rather than by a check the panel could forget to make.
@@ -147,12 +199,42 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			headers: await headers(),
 		});
 	} catch (error) {
-		// Counted against the account rather than the address. A ban, a wrong password and an unknown
-		// address all land here, and `recordFailedSignIn` is silent about the last of those.
+		const normalised = email.trim().toLowerCase();
+
+		// A ban leaves before the counting below. The password was right, so counting it as a failed
+		// attempt would lock an account for a credential nobody got wrong — and would then hold the
+		// lock past the ban being lifted.
+		if (isBanRefusal(error)) {
+			const account = await prisma.user.findFirst({
+				where: { email: normalised },
+				select: { id: true, name: true, email: true, banReason: true, banExpires: true },
+			});
+			logger.warn("Sign-in refused: account banned", { address, email: normalised });
+			await recordAudit({
+				action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+				outcome: "DENIED",
+				// Named, not anonymous, for the reason the two-factor deferral below is: the password was
+				// accepted, so the account is not in doubt and the enumeration argument that
+				// `unknownUserActor` exists for — which is about refusals to *unidentified* callers — does
+				// not apply.
+				actor: account ? userActor(account) : unknownUserActor(readEmail(formData)),
+				detail: { reason: "banned" },
+				provenance: await requestProvenance(),
+			});
+			// The row can be missing only if the account was deleted between the hook reading it and
+			// this query; the generic ban wording still beats claiming the password was wrong.
+			return {
+				error: bannedMessage(account ?? { banReason: null, banExpires: null }),
+				twoFactorRequired: false,
+			};
+		}
+
+		// Counted against the account rather than the address. A wrong password and an unknown address
+		// both land here, and `recordFailedSignIn` is silent about the second of those.
 		await recordFailedSignIn(email);
 		logger.warn("Failed sign-in attempt", {
 			address,
-			email: email.trim().toLowerCase(),
+			email: normalised,
 			remainingAttempts: limit.remaining,
 			reason: error instanceof Error ? error.message : String(error),
 		});

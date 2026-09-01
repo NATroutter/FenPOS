@@ -6,9 +6,13 @@ import { totp } from "@/test/helpers/totp";
  * Sign-in.
  *
  * The property under test is that failures are indistinguishable: a wrong password, an unknown
- * address, a banned account and a malformed submission must all produce one message. Telling them
+ * address, a locked account and a malformed submission must all produce one message. Telling them
  * apart discloses which addresses hold accounts, which is useful only to someone who should not
  * be here.
+ *
+ * A ban is the one refusal allowed to say what it is, and only because it is reached after the
+ * password has been verified — see the "a banned account" block near the foot of this file, which
+ * pins both halves of that.
  */
 vi.mock("next/navigation", () => ({
 	redirect: (destination: string) => {
@@ -57,6 +61,7 @@ const { signIn, verifyTwoFactor } = await import("@/app/(auth)/login/actions");
 const { signInLimiter } = await import("@/lib/auth/rate-limit");
 const { auditDb, prisma } = await import("@/lib/db");
 const { setSetting } = await import("@/lib/settings/settings-service");
+const { formatDateTime } = await import("@/lib/format/datetime");
 const { beginEnrolment, confirmEnrolment } = await import("@/lib/auth/two-factor");
 const actualAuth = await vi.importActual<typeof import("@/lib/auth/auth")>("@/lib/auth/auth");
 
@@ -318,22 +323,24 @@ describe("the gates before the credential", () => {
  * A banned account, refused by the library rather than by the panel.
  *
  * `signIn`'s own doc comment claims the ban is "enforced at the credential layer rather than by a
- * check the panel could forget to make", and this file's header names a banned account among the
- * refusals that must be indistinguishable — but every test above mocks `signInEmail`, which refuses
- * identically whatever the reason and so could never tell either claim from its opposite. This one
- * drives the real endpoint with the account's *correct* password, leaving the ban as the only thing
- * that can turn it away.
+ * check the panel could forget to make" — but every test above mocks `signInEmail`, which refuses
+ * identically whatever the reason and so could never tell that claim from its opposite. These drive
+ * the real endpoint with the account's *correct* password, leaving the ban as the only thing that
+ * can turn it away.
  *
- * **Which assertion is load-bearing, so nobody simplifies the wrong half away.** It is not
- * `expect(banned.error).toBe(wrongPassword.error)` — on its own that is close to a tautology, since
- * both values come from the single `return` in `signIn`'s one `catch` (`login/actions.ts:166`). What
- * proves the ban is enforced is that the correct-password submission reached that catch at all: had
- * it not been refused it would have redirected, and the `next/navigation` mock at the top of this
- * file turns that into a thrown `REDIRECT:/dashboard` that fails the test before any assertion runs.
- * `expect(await prisma.session.count()).toBe(0)` is the second half of the same statement — a ban
- * that merely returned a message while minting a session would be no ban. Both depend on
- * `signInEmail` being the *real* endpoint here: point it back at a mock and this test keeps passing
- * while proving nothing.
+ * **What is load-bearing here, so nobody simplifies the wrong half away.** It is not the wording of
+ * the message. What proves the ban is enforced is that the correct-password submission was refused
+ * at all: had it not been, it would have redirected, and the `next/navigation` mock at the top of
+ * this file turns that into a thrown `REDIRECT:/dashboard` that fails the test before any assertion
+ * runs. `expect(await prisma.session.count()).toBe(0)` is the second half of the same statement — a
+ * ban that returned a message while minting a session would be no ban. Both depend on `signInEmail`
+ * being the *real* endpoint here: point it back at a mock and these keep passing while proving
+ * nothing.
+ *
+ * **The message is the one refusal on this screen that is allowed to be specific**, and the third
+ * test is what pins the reason that is safe: it is only reached once the password has been verified.
+ * A wrong password against a banned account must still get the generic message, because anything
+ * else is the account-enumeration oracle every other refusal here is worded to avoid.
  */
 describe("a banned account", () => {
 	beforeEach(async () => {
@@ -354,27 +361,74 @@ describe("a banned account", () => {
 		await auditDb.auditEpoch.deleteMany({});
 	});
 
-	it("is refused with the message a wrong password gets, and is left with no session", async () => {
+	/** Bans the account `signedInUser` just made, and clears the session that sign-in left behind. */
+	async function banned(reason: string | null, expiresAt: Date | null): Promise<void> {
 		const { user } = await signedInUser("banned@example.test", "correct horse battery staple");
-		await prisma.user.update({ where: { id: user.id }, data: { banned: true, banReason: "testing" } });
-		// The sign-in `signedInUser` performed left a live session behind; the count below is about the
-		// session this test's own refused attempt did or did not create.
+		await prisma.user.update({
+			where: { id: user.id },
+			data: { banned: true, banReason: reason, banExpires: expiresAt },
+		});
+		// The sign-in `signedInUser` performed left a live session behind; the counts below are about
+		// the session a refused attempt did or did not create.
 		await prisma.session.deleteMany({});
 		headersMock.mockResolvedValue(new Headers());
+	}
 
-		const banned = await signIn(
+	/** Submits the account's correct password. */
+	function withCorrectPassword(): Promise<{ error: string | null; twoFactorRequired: boolean }> {
+		return signIn(
 			{ error: null, twoFactorRequired: false },
 			form({ email: "banned@example.test", password: "correct horse battery staple" }),
 		);
+	}
 
-		signInLimiter.reset("203.0.113.30");
-		const wrongPassword = await signIn(
+	it("says it is banned, and why, rather than blaming the password", async () => {
+		await banned("Left the company", null);
+
+		const result = await withCorrectPassword();
+
+		// Being told the password was wrong sent people to reset a credential that was never the
+		// problem, which is the whole reason this refusal is worded separately from the rest.
+		expect(result.error).toContain("banned");
+		expect(result.error).toContain("Left the company");
+		expect(await prisma.session.count()).toBe(0);
+	});
+
+	it("names when the ban lifts, when it lifts at all", async () => {
+		const lifts = new Date("2099-03-04T00:00:00.000Z");
+		await banned("Left the company", lifts);
+
+		const result = await withCorrectPassword();
+
+		// The formatted date, not the ISO string: it is read by a person, and the panel's own
+		// formatter is what every other timestamp on screen goes through.
+		expect(result.error).toContain(formatDateTime(lifts));
+	});
+
+	it("says nothing about a ban to somebody who does not hold the password", async () => {
+		await banned("Left the company", null);
+
+		const result = await signIn(
 			{ error: null, twoFactorRequired: false },
 			form({ email: "banned@example.test", password: "not the password at all" }),
 		);
 
-		expect(banned.error).toBe(wrongPassword.error);
+		// The enumeration oracle this whole screen is worded to avoid. Naming the ban here would tell
+		// anyone who guessed an address that it holds an account.
+		expect(result.error).toBe("That email address and password do not match an account.");
+		expect(result.error).not.toContain("banned");
 		expect(await prisma.session.count()).toBe(0);
+	});
+
+	it("does not count the refusal as a failed sign-in", async () => {
+		await banned(null, null);
+
+		await withCorrectPassword();
+
+		// The password was right. Counting it would lock the account for a credential nobody got
+		// wrong, and hold the lock past the ban being lifted.
+		const account = await prisma.user.findFirstOrThrow({ where: { email: "banned@example.test" } });
+		expect(account.failedSignInCount).toBe(0);
 	});
 });
 
