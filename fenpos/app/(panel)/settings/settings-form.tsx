@@ -21,7 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 // Type-only: `settings-service` starts with `import "server-only"`, so a value import here would
 // pull that guard into this client component's bundle. The category list itself is computed in
 // the (server) page and passed down as a prop instead.
@@ -490,7 +490,9 @@ function Control({ field, value, locked, staged, onStage }: ControlProps<Setting
 				<IntegerControl field={field as IntegerField} value={value} locked={locked} staged={staged} onStage={onStage} />
 			);
 		case "boolean":
-			return <BooleanControl value={value} locked={locked} staged={staged} onStage={onStage} />;
+			return (
+				<BooleanControl field={field as BooleanField} value={value} locked={locked} staged={staged} onStage={onStage} />
+			);
 		case "enum":
 			return <EnumControl field={field as EnumField} value={value} locked={locked} staged={staged} onStage={onStage} />;
 		case "string":
@@ -732,18 +734,58 @@ function IntegerControl({ field, value, locked, onStage }: ControlProps<IntegerF
 }
 
 /**
- * A setting that is on or off. Stages on change: a switch has no settled moment to wait for.
+ * A setting that is on or off. Stages on change: there is no settled moment to wait for.
  *
- * Takes no `field`, unlike its siblings — a switch renders from the value alone, with nothing to
- * read off the definition.
+ * **A segmented control rather than a switch, and the reason is the grid.** Every other control on
+ * this page is a full-width bordered field of the same height, and a bare switch is a 32px pill
+ * with no container — so a boolean cell read as an empty column beside a filled one, and the rows
+ * stopped lining up. This is the same box as the number field next to it, divided in two.
+ *
+ * It also states both options rather than one position of a pill. "Off" is a word; a switch to the
+ * left is a convention, and the settings it governs here — raw API writes, plain-http images,
+ * pairing — are ones where reading the state wrong matters.
  */
-function BooleanControl({ value, locked, onStage }: Omit<ControlProps<BooleanField>, "field">) {
+function BooleanControl({ field, value, locked, onStage }: ControlProps<BooleanField>) {
+	const on = value === true;
+
 	return (
-		<Switch
-			checked={value as boolean}
+		<ToggleGroup
+			// `lg` is the h-9 variant, which is the height `Input` and `SelectTrigger` use. `spacing={0}`
+			// joins the halves into one control instead of two buttons that happen to be adjacent.
+			size="lg"
+			variant="outline"
+			spacing={0}
 			disabled={locked}
-			onCheckedChange={(next: boolean) => onStage({ kind: "set", value: next })}
-		/>
+			value={[on ? "on" : "off"]}
+			aria-label={field.definition.label}
+			className="w-full"
+			onValueChange={(next) => {
+				// An empty array is the group saying the pressed half was pressed again, which a
+				// toggle group reads as deselection. A boolean has no third state, so that is not a
+				// change — ignoring it leaves the control exactly where it was.
+				const picked = next.at(0);
+				if (picked !== undefined) {
+					onStage({ kind: "set", value: picked === "on" });
+				}
+			}}
+		>
+			{(["off", "on"] as const).map((option) => (
+				<ToggleGroupItem
+					key={option}
+					value={option}
+					className={cn(
+						"flex-1 text-[12.5px] capitalize",
+						// Written out rather than left to the variant's default, which marks the selected
+						// half with `bg-muted` and then uses the same colour for hover on the unselected
+						// one — so hovering the half you have not chosen looks exactly like choosing it.
+						"data-[state=off]:text-subtle-foreground data-[state=off]:hover:bg-muted/50",
+						"data-[state=on]:bg-accent data-[state=on]:font-medium data-[state=on]:text-foreground",
+					)}
+				>
+					{option}
+				</ToggleGroupItem>
+			))}
+		</ToggleGroup>
 	);
 }
 
