@@ -24,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 // Type-only: `settings-service` starts with `import "server-only"`, so a value import here would
 // pull that guard into this client component's bundle. The category list itself is computed in
 // the (server) page and passed down as a prop instead.
+import type { ResolvedAddress } from "@/lib/request-context";
 import type { ClientSettingDefinition, SettingCategory, SettingGroup } from "@/lib/settings/settings-service";
 import { cn } from "@/lib/utils";
 
@@ -171,11 +172,14 @@ export function SettingsForm({
 	categories,
 	settings,
 	writable,
+	clientAddress,
 }: {
 	categories: readonly { id: SettingCategory; title: string; summary: string; groups: readonly SettingGroup[] }[];
 	settings: SettingFieldData[];
 	/** The categories this operator holds `settings:write:<category>` for. */
 	writable: readonly SettingCategory[];
+	/** What the trusted-header settings resolved *this* request to, for the readout. */
+	clientAddress: ResolvedAddress;
 }) {
 	const [selected, setSelected] = useState<SettingCategory>(categories[0]?.id ?? "limits");
 	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -193,6 +197,7 @@ export function SettingsForm({
 	const groups = (category?.groups ?? [])
 		.map((group) => ({
 			label: group.label,
+			showsClientAddress: group.showsClientAddress === true,
 			fields: group.keys
 				.map((key) => fields.find((setting) => setting.definition.key === key))
 				.filter((setting): setting is SettingFieldData => setting !== undefined),
@@ -315,6 +320,8 @@ export function SettingsForm({
 									</div>
 								)}
 
+								{group.showsClientAddress ? <ClientAddressReadout resolved={clientAddress} /> : null}
+
 								<div className="grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
 									{group.fields.map((setting) => (
 										<SettingField
@@ -334,6 +341,46 @@ export function SettingsForm({
 			</Card>
 
 			<SaveBar count={pendingKeys.length} saving={saving} onDiscard={discard} onSave={save} />
+		</div>
+	);
+}
+
+/**
+ * What the settings above resolved *this* request to.
+ *
+ * The point of the whole group. An operator cannot otherwise tell a correct configuration from a
+ * wrong one without changing it, signing in again, opening the audit record and comparing addresses
+ * to what they believe their own to be — and a wrong answer here is quiet: the sign-in throttle goes
+ * on counting, the allowlist goes on matching, both against a proxy instead of a person.
+ *
+ * Rendered from the request that drew this page, so a saved change is confirmed by the reload the
+ * save already triggers.
+ *
+ * Shown to anyone who can open the tab, including an operator who cannot write these settings. It
+ * is their own address, and the header name is configuration rather than a secret.
+ */
+function ClientAddressReadout({ resolved }: { resolved: ResolvedAddress }) {
+	const found = resolved.header !== null;
+
+	return (
+		<div className="mb-4 rounded-md border border-border bg-background px-3 py-2.5">
+			<div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+				<span className="text-[11.5px] text-subtle-foreground">Your address, as this panel sees it:</span>
+				<span className="font-mono text-[12.5px] font-medium">{resolved.address}</span>
+			</div>
+			<p className="mt-1 text-[11px] leading-relaxed text-subtle-foreground">
+				{found ? (
+					<>
+						Read from <span className="font-mono">{resolved.header}</span>. If that is not the address you are browsing
+						from, the header below is naming a proxy rather than you.
+					</>
+				) : (
+					<>
+						No trusted header carried one. Everything that keys on an address — the sign-in throttle, the allowlist,
+						every audit row — treats all callers as one until this is set.
+					</>
+				)}
+			</p>
 		</div>
 	);
 }

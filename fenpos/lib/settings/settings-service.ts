@@ -98,6 +98,18 @@ export interface SettingGroup {
 	/** The heading. Omitted from the screen when its category has only one group. */
 	readonly label: string;
 	readonly keys: readonly SettingKey[];
+	/**
+	 * Whether this group shows what the panel resolved the reader's own address to.
+	 *
+	 * A flag on the data rather than the form matching a label, because the form is a Client
+	 * Component and this module is `server-only` — it can read a field off the props it is already
+	 * given, but importing a constant from here would pull the guard into its bundle.
+	 *
+	 * The readout is what makes `server.trustedProxyHeaders` usable at all. Every other way of
+	 * finding out whether it is right involves changing it, signing in again, reading the audit
+	 * record and guessing.
+	 */
+	readonly showsClientAddress?: true;
 }
 
 /**
@@ -210,6 +222,16 @@ export const CATEGORIES: readonly {
 		title: "Security",
 		summary: "Passwords, sign-in, sessions, pairing, and what the API may be asked to do.",
 		groups: [
+			{
+				// First, because almost everything below it keys on the answer: the sign-in throttle,
+				// the address allowlist, and every address written to the audit record. Wrong here and
+				// the throttle counts the wrong thing while the allowlist admits or refuses the wrong
+				// people — which is why this group carries a live readout of what the panel currently
+				// resolves the reader's own address to.
+				label: "Client address",
+				keys: ["server.trustedProxyHeaders", "server.proxyIpPriority"],
+				showsClientAddress: true,
+			},
 			{
 				label: "Passwords",
 				keys: [
@@ -451,6 +473,8 @@ function rawWriteByteCeiling(): number {
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
 export const SETTING_KEYS = [
 	"server.publicUrl",
+	"server.trustedProxyHeaders",
+	"server.proxyIpPriority",
 	"limits.maxLines",
 	"limits.maxLineChars",
 	"limits.maxTotalChars",
@@ -554,6 +578,38 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		// means "derive from the request", which is what an install that has never set this does.
 		pattern: /^$|^https?:\/\/[^\s/$.?#][^\s]*$/i,
 		fallback: "",
+	},
+	{
+		key: "server.trustedProxyHeaders",
+		label: "Trusted address headers",
+		description:
+			"Which request headers may say who the caller is, in the order they are tried — the first one present wins. " +
+			"Behind Cloudflare and nginx together, use CF-Connecting-IP: X-Forwarded-For then ends at nginx's view of " +
+			"Cloudflare rather than the visitor. Empty means nothing is trusted and every caller reads as unknown, " +
+			"which is right only when nothing proxies this install. Anything listed here must be a header your proxy " +
+			"overwrites on every request, or a caller can simply send it themselves.",
+		category: "security",
+		type: "string",
+		maxLength: 256,
+		// Header names and separators only. Keeps a pasted URL or an address out of a field whose
+		// values are looked up as header names, where a wrong entry silently matches nothing.
+		pattern: /^$|^[A-Za-z0-9-]+(\s*,\s*[A-Za-z0-9-]+)*$/,
+		// What this file did unconditionally before the setting existed, so an install that upgrades
+		// into it keeps the behaviour it already had rather than silently losing every address.
+		fallback: "X-Forwarded-For",
+	},
+	{
+		key: "server.proxyIpPriority",
+		label: "Address to take from the list",
+		description:
+			"Which entry to use when a trusted header carries a list. Rightmost is the address the nearest proxy " +
+			"actually observed and is the safe default: entries to its left were appended by whatever came before and " +
+			"a caller can forge them. Leftmost is the original client and is only trustworthy when every hop between " +
+			"is your own. Headers carrying a single address, such as CF-Connecting-IP, are unaffected by this.",
+		category: "security",
+		type: "enum",
+		values: ["rightmost", "leftmost"],
+		fallback: "rightmost",
 	},
 	{
 		key: "limits.maxLines",
@@ -1743,6 +1799,39 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 		archiveEnabled: flag("logs.archiveEnabled"),
 		archiveRetentionDays: value("logs.archiveRetentionDays"),
 		maxMessageChars: value("logs.maxMessageChars"),
+	};
+}
+
+/** Which headers may name the caller, and which entry of a list to believe. */
+export interface GlobalProxyTrust {
+	/** Header names in the order they are tried, lowercased for lookup. Empty trusts nothing. */
+	headers: string[];
+	/** Which entry to take from a header carrying a list. */
+	priority: "rightmost" | "leftmost";
+}
+
+/**
+ * How the caller's address is to be derived from request headers.
+ *
+ * One read for both settings, the same shape as {@link globalLimits} and {@link globalSignInPolicy}
+ * and for the same reason: this is on the path of every audited action and every sign-in, and two
+ * separate accessors would be two queries where one does.
+ *
+ * @returns the headers to trust and which entry of a list to take
+ */
+export async function globalProxyTrust(): Promise<GlobalProxyTrust> {
+	const settings = await listSettings();
+	const raw = narrow(settings, "server.trustedProxyHeaders", "string") as string;
+	const priority = narrow(settings, "server.proxyIpPriority", "enum") as string;
+
+	return {
+		// Lowercased because both `Headers` and Node's `IncomingMessage.headers` key on the lowercase
+		// name, and an operator typing the conventional `X-Forwarded-For` must not miss because of it.
+		headers: raw
+			.split(",")
+			.map((name) => name.trim().toLowerCase())
+			.filter((name) => name.length > 0),
+		priority: priority === "leftmost" ? "leftmost" : "rightmost",
 	};
 }
 

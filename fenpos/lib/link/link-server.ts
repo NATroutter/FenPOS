@@ -8,6 +8,8 @@ import { type AuthenticatedAgent, handleAgentConnection } from "@/lib/link/agent
 import { AGENT_LINK_PATH } from "@/lib/link/link-path";
 import { closeAllLinks } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
+import { resolveAddress, UNKNOWN_ADDRESS } from "@/lib/request-context";
+import { globalProxyTrust } from "@/lib/settings/settings-service";
 
 /**
  * The agent link endpoint.
@@ -87,7 +89,7 @@ async function routeUpgrade(
 	socket: Duplex,
 	head: Buffer,
 ): Promise<void> {
-	const address = clientAddress(request);
+	const address = await clientAddress(request);
 
 	try {
 		const token = bearerToken(request.headers.authorization);
@@ -165,29 +167,36 @@ function refuse(socket: Duplex, status: number, message: string): void {
 /**
  * Reads the caller's address from an upgrade request.
  *
- * Mirrors the reasoning in lib/request-context.ts: the rightmost `X-Forwarded-For` entry is
- * the one the nearest proxy observed and a client cannot append after it. Falls back to the
- * socket's own peer address, which is correct when nothing is proxying.
+ * Shares `resolveAddress` with the HTTP path rather than repeating its rules, so an agent's address
+ * in the link log means the same thing as an operator's in the audit record. Falls back to the
+ * socket's own peer address, which this side has and a server action does not — so an install that
+ * trusts no header still logs something real for an agent.
+ *
+ * **Never throws.** It is called before the try in {@link routeUpgrade} and reads settings to do its
+ * job; a database hiccup must cost an agent its address in the log, not its connection.
  *
  * @param request the upgrade request
  * @returns the caller's address
  */
-function clientAddress(request: IncomingMessage): string {
-	const forwarded = request.headers["x-forwarded-for"];
-	const list = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
+async function clientAddress(request: IncomingMessage): Promise<string> {
+	const peer = request.socket.remoteAddress ?? UNKNOWN_ADDRESS;
 
-	if (list) {
-		const hops = list
-			.split(",")
-			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0);
-		const nearest = hops.at(-1);
-		if (nearest) {
-			return nearest;
-		}
+	try {
+		const { address } = resolveAddress(
+			(name) => {
+				const value = request.headers[name];
+				return Array.isArray(value) ? value.join(",") : value;
+			},
+			await globalProxyTrust(),
+		);
+
+		return address === UNKNOWN_ADDRESS ? peer : address;
+	} catch (error) {
+		logger.warn("Could not read the trusted address headers; using the socket's peer address", {
+			reason: error instanceof Error ? error.message : String(error),
+		});
+		return peer;
 	}
-
-	return request.socket.remoteAddress ?? "unknown";
 }
 
 /**

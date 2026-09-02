@@ -2,6 +2,7 @@ import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/sett
 import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
+import { describeClientAddress } from "@/lib/request-context";
 import { CATEGORIES, listSettings, toClientDefinition } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings" };
@@ -57,7 +58,14 @@ export default async function SettingsPage() {
 	return (
 		<div className="flex flex-col gap-5">
 			<div>
-				<SettingsForm categories={categories} settings={fields} writable={writable} />
+				{/* Resolved on this request, so what the operator is shown is what the settings below
+				    actually did to their own call rather than a description of what they should do. */}
+				<SettingsForm
+					categories={categories}
+					settings={fields}
+					writable={writable}
+					clientAddress={await describeClientAddress()}
+				/>
 			</div>
 		</div>
 	);

@@ -362,6 +362,8 @@ describe("setting definitions", () => {
 		// tests, not a check on the declared type itself — this is that check.
 		const expectedTypes: Record<SettingKey, SettingType> = {
 			"server.publicUrl": "string",
+			"server.trustedProxyHeaders": "string",
+			"server.proxyIpPriority": "enum",
 			"limits.maxLines": "integer",
 			"limits.maxLineChars": "integer",
 			"limits.maxTotalChars": "integer",
