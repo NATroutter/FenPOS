@@ -533,6 +533,7 @@ function ListControl({ field, value, locked, onStage }: ControlProps<ListField>)
 			label={field.definition.label}
 			placeholder="Nothing trusted"
 			accepts={accepts}
+			suggestions={field.definition.suggestions}
 			onChange={(next) => onStage({ kind: "set", value: next.join(", ") })}
 		/>
 	);

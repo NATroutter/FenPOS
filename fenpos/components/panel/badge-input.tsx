@@ -35,6 +35,14 @@ export function BadgeInput({
 	 * badge, so the operator sees what was wrong with it instead of having it silently dropped.
 	 */
 	accepts,
+	/**
+	 * Entries offered as one-click additions under the box.
+	 *
+	 * Only the ones not already added are shown, so the row is always a list of things clicking will
+	 * actually do — and removing a badge brings its suggestion back, which is what makes trying a
+	 * different header a pair of clicks rather than a retype.
+	 */
+	suggestions = [],
 }: {
 	values: string[];
 	onChange: (next: string[]) => void;
@@ -43,6 +51,7 @@ export function BadgeInput({
 	/** Names the inner box for a screen reader, which has no label of its own to read. */
 	label: string;
 	accepts?: (entry: string) => boolean;
+	suggestions?: readonly string[];
 }) {
 	const [draft, setDraft] = useState("");
 	const [refused, setRefused] = useState(false);
@@ -118,84 +127,115 @@ export function BadgeInput({
 		box.current?.focus();
 	};
 
-	return (
-		// Not a <label>: it wraps an input, so a click on a badge's remove button would also focus
-		// the box through the label's own activation behaviour, fighting the focus `remove` moves
-		// there deliberately.
-		//
-		// The two ignores below are for the same fact. This div is not a control and does not want a
-		// role: it is a border drawn around one. The control is the input inside it, which is in the
-		// tab order and takes every key this component handles; the handler here only forwards a
-		// click on the padding to it, which is what makes the whole box feel like one field to a
-		// mouse. There is nothing a keyboard user could do with a handler on the div that they
-		// cannot already do on the input.
-		// biome-ignore lint/a11y/useKeyWithClickEvents: the inner input is the keyboard target and is reachable on its own.
-		// biome-ignore lint/a11y/noStaticElementInteractions: as above — a wrapper forwarding a mouse click, not a control.
-		<div
-			onClick={() => box.current?.focus()}
-			className={cn(
-				"flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border bg-transparent px-2 py-1.5 text-sm",
-				"focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
-				refused ? "border-destructive" : "border-input",
-				disabled ? "cursor-not-allowed opacity-50" : "cursor-text",
-			)}
-		>
-			{values.map((value, index) => (
-				<span
-					key={value}
-					className="flex items-center gap-1 rounded bg-muted py-0.5 pr-0.5 pl-1.5 font-mono text-[11.5px] text-foreground"
-				>
-					{value}
-					<button
-						type="button"
-						disabled={disabled}
-						aria-label={`Remove ${value}`}
-						title={`Remove ${value}`}
-						className="rounded p-0.5 text-subtle-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none"
-						onClick={(event) => {
-							// The wrapper focuses the box on click; without this the removal would also
-							// be a click on the wrapper.
-							event.stopPropagation();
-							remove(index);
-						}}
-					>
-						<X className="size-3" />
-					</button>
-				</span>
-			))}
+	// Case-insensitively, matching how `commit` dedupes: a suggestion still offered after its own
+	// header was added under a different capitalisation is an offer that does nothing.
+	const chosen = new Set(values.map((value) => value.toLowerCase()));
+	const offered = suggestions.filter((entry) => !chosen.has(entry.toLowerCase()));
 
-			<input
-				ref={box}
-				value={draft}
-				disabled={disabled}
-				aria-label={label}
-				placeholder={values.length === 0 ? placeholder : undefined}
-				className="min-w-24 flex-1 bg-transparent font-mono text-[12.5px] outline-none placeholder:text-subtle-foreground disabled:cursor-not-allowed"
-				onChange={(event) => {
-					setDraft(event.target.value);
-					setRefused(false);
-				}}
-				onKeyDown={onKeyDown}
-				// Committed on the way out too. A typed entry the operator never pressed Enter on is
-				// one they believe they added, and losing it silently on Save is worse than adding it.
-				onBlur={() => {
-					if (draft.trim() !== "" && commit(draft)) {
-						setDraft("");
+	// The box is not a <label>, though it wraps an input: a click on a badge's remove button would
+	// then also focus the box through the label's own activation behaviour, fighting the focus
+	// `remove` moves there deliberately.
+	//
+	// The two ignores below are for the same fact. That div is not a control and does not want a
+	// role: it is a border drawn around one. The control is the input inside it, which is in the tab
+	// order and takes every key this component handles; the handler only forwards a click on the
+	// padding to it, which is what makes the whole box feel like one field to a mouse. There is
+	// nothing a keyboard user could do with a handler on the div that they cannot already do on the
+	// input.
+	return (
+		<div className="flex flex-col gap-1.5">
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: the inner input is the keyboard target and is reachable on its own. */}
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: as above — a wrapper forwarding a mouse click, not a control. */}
+			<div
+				onClick={() => box.current?.focus()}
+				className={cn(
+					"flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border bg-transparent px-2 py-1.5 text-sm",
+					"focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+					refused ? "border-destructive" : "border-input",
+					disabled ? "cursor-not-allowed opacity-50" : "cursor-text",
+				)}
+			>
+				{values.map((value, index) => (
+					<span
+						key={value}
+						className="flex items-center gap-1 rounded bg-muted py-0.5 pr-0.5 pl-1.5 font-mono text-[11.5px] text-foreground"
+					>
+						{value}
+						<button
+							type="button"
+							disabled={disabled}
+							aria-label={`Remove ${value}`}
+							title={`Remove ${value}`}
+							className="rounded p-0.5 text-subtle-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none"
+							onClick={(event) => {
+								// The wrapper focuses the box on click; without this the removal would also
+								// be a click on the wrapper.
+								event.stopPropagation();
+								remove(index);
+							}}
+						>
+							<X className="size-3" />
+						</button>
+					</span>
+				))}
+
+				<input
+					ref={box}
+					value={draft}
+					disabled={disabled}
+					aria-label={label}
+					placeholder={values.length === 0 ? placeholder : undefined}
+					className="min-w-24 flex-1 bg-transparent font-mono text-[12.5px] outline-none placeholder:text-subtle-foreground disabled:cursor-not-allowed"
+					onChange={(event) => {
+						setDraft(event.target.value);
 						setRefused(false);
-					}
-				}}
-				onPaste={(event) => {
-					const text = event.clipboardData.getData("text");
-					if (/[,\s\n]/.test(text)) {
-						event.preventDefault();
-						if (commit(text)) {
+					}}
+					onKeyDown={onKeyDown}
+					// Committed on the way out too. A typed entry the operator never pressed Enter on is
+					// one they believe they added, and losing it silently on Save is worse than adding it.
+					onBlur={() => {
+						if (draft.trim() !== "" && commit(draft)) {
+							setDraft("");
 							setRefused(false);
-						} else {
-							setRefused(true);
 						}
-					}
-				}}
-			/>
+					}}
+					onPaste={(event) => {
+						const text = event.clipboardData.getData("text");
+						if (/[,\s\n]/.test(text)) {
+							event.preventDefault();
+							if (commit(text)) {
+								setRefused(false);
+							} else {
+								setRefused(true);
+							}
+						}
+					}}
+				/>
+			</div>
+
+			{/* Only what is not already in the box, so every chip here does something. The row goes
+			    entirely once they have all been added, rather than leaving a heading over five
+			    disabled buttons. */}
+			{offered.length === 0 || disabled ? null : (
+				<div className="flex flex-wrap items-center gap-1.5">
+					<span className="text-[11px] text-subtle-foreground">Common ones:</span>
+					{offered.map((entry) => (
+						<button
+							key={entry}
+							type="button"
+							title={`Add ${entry}`}
+							className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-subtle-foreground hover:border-input hover:bg-accent hover:text-foreground"
+							onClick={() => {
+								commit(entry);
+								// Back to the box, so adding one and typing another is uninterrupted.
+								box.current?.focus();
+							}}
+						>
+							{entry}
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }

@@ -384,7 +384,24 @@ export type SettingDefinition =
 	 * into a Client Component, which is the entire subject of {@link ClientSettingDefinition}. As a
 	 * string it crosses safely, so the form can hold an entry to the same rule the server will.
 	 */
-	| (SettingBase & { type: "list"; maxLength: number; itemPattern?: string; fallback: string });
+	| (SettingBase & {
+			type: "list";
+			maxLength: number;
+			itemPattern?: string;
+			/**
+			 * Entries offered as one-click additions under the box.
+			 *
+			 * For a setting whose valid values are a short, known set that nobody remembers the exact
+			 * spelling of. `CF-Connecting-IP` typed as `CF-Connecting-Ip` is a header that matches
+			 * nothing, and the failure is silent — so the ones worth having are worth offering rather
+			 * than leaving to be recalled correctly.
+			 *
+			 * Not a closed set: the box still takes anything `itemPattern` allows, because a proxy
+			 * this list has never heard of is a normal thing to be behind.
+			 */
+			suggestions?: readonly string[];
+			fallback: string;
+	  });
 
 /** The four kinds of value a setting can hold. */
 export type SettingType = SettingDefinition["type"];
@@ -609,6 +626,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		// A header name and nothing else, per entry. Keeps a pasted URL or an address out of a field
 		// whose values are looked up as header names, where a wrong entry silently matches nothing.
 		itemPattern: "^[A-Za-z0-9-]+$",
+		// The headers a proxy in front of this actually sets, in rough order of how often. Offered
+		// rather than left to memory because every one of them fails silently when misspelled: the
+		// lookup simply misses and the caller resolves to the next header, or to unknown.
+		suggestions: ["X-Forwarded-For", "CF-Connecting-IP", "X-Real-IP", "True-Client-IP", "Fly-Client-IP"],
 		// What this file did unconditionally before the setting existed, so an install that upgrades
 		// into it keeps the behaviour it already had rather than silently losing every address.
 		fallback: "X-Forwarded-For",
