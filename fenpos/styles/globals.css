@@ -129,11 +129,21 @@
 	/* A step dimmer than muted-foreground, for timestamps and monospace annotations. */
 	--subtle-foreground: #737373;
 
-	--chart-1: #e5e5e5;
-	--chart-2: #a1a1a1;
-	--chart-3: #737373;
-	--chart-4: #5a5a5a;
-	--chart-5: #404040;
+	/*--chart-1: #e5e5e5;*/
+	/*--chart-2: #a1a1a1;*/
+	/*--chart-3: #737373;*/
+	/*--chart-4: #5a5a5a;*/
+	/*--chart-5: #404040;*/
+	--chart-1: hsl(220 70% 50%);
+	--chart-2: hsl(160 60% 45%);
+	--chart-3: hsl(30 80% 55%);
+	--chart-4: hsl(280 65% 60%);
+	--chart-5: hsl(340 75% 55%);
+	--chart-6: hsl(120 65% 45%);
+	--chart-7: hsl(200 70% 50%);
+	--chart-8: hsl(50 75% 55%);
+	--chart-9: hsl(260 70% 55%);
+	--chart-10: hsl(10 80% 58%);
 
 	/* 10px cards, which yields 8px buttons and inputs and 14px dialogs on the radius scale. */
 	--radius: 0.625rem;
