@@ -7,7 +7,7 @@ import { auditDb, logsDb, prisma } from "@/lib/db";
 import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { archiveDirectory, runMaintenancePass } from "@/lib/maintenance/pass";
-import { setSetting } from "@/lib/settings/settings-service";
+import { clearSetting, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * `AUDIT_ARCHIVE_DIRECTORY` resolves to `data/archives`, which is where a developer's own audit
@@ -56,8 +56,12 @@ describe("a maintenance pass", () => {
 		vi.restoreAllMocks();
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
 		rmSync(dirname(AUDIT_ARCHIVE_DIRECTORY), { recursive: true, force: true });
+		// The test database is per worker process, not per file — a later test file in this same
+		// worker gets whatever row this one leaves behind. Left as `false`, it would silently skip
+		// the rollup in `maintenance-metrics.test.ts` if that file happens to run after this one.
+		await clearSetting("stats.enabled");
 	});
 
 	/**

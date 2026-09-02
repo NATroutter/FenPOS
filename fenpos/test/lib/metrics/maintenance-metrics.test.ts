@@ -5,6 +5,10 @@ import { setSetting } from "@/lib/settings/settings-service";
 
 describe("maintenance runs the metrics rollup", () => {
 	beforeEach(async () => {
+		// The test database is per worker process, not per file, so a setting another file in this
+		// worker left overridden (`stats.enabled=false`, in particular) would otherwise leak in here
+		// and silently skip the rollup. Cleared like the ~50 other suites that depend on defaults.
+		await prisma.setting.deleteMany();
 		await prisma.job.deleteMany();
 		await metricsDb.metricJobHourly.deleteMany();
 		await metricsDb.metricWatermark.deleteMany();
