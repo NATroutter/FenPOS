@@ -100,7 +100,8 @@ describe("permittedNavHrefs", () => {
 		const user = await account("p6");
 		await prisma.userPermission.create({ data: { userId: user.id, permission: "audit:read" } });
 
-		expect(await permittedNavHrefs(user)).toEqual(["/archives", "/audit"]);
+		// Sidebar order: Audit now sits beside Logs and Archives in the Monitor group, ahead of Archives.
+		expect(await permittedNavHrefs(user)).toEqual(["/audit", "/archives"]);
 	});
 
 	it("offers Users to an account that may read it, and not Roles", async () => {
