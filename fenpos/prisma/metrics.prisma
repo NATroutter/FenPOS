@@ -1,0 +1,159 @@
+// FenPOS metrics schema.
+//
+// A fourth database, wired like logs.prisma: own generated client, own migration history, url
+// supplied by prisma-metrics.config.ts (derived from DATABASE_URL — see lib/database-url.ts).
+// Migrate with `pnpm db:migrate:metrics`, never a bare `--schema`.
+//
+// Everything in here is derived data. Ids are plain columns and names are denormalised because
+// this file cannot join to the application's tables — and because a chart about a deleted printer
+// must keep its label. The whole file can be deleted and rebuilt from raw jobs, except the
+// fleet/api/auth streams, which only ever existed here.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-metrics"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// One printer's hour: job counts, volume, and three latency histograms.
+model MetricJobHourly {
+  /// UTC hour start.
+  bucket     DateTime
+  deviceId   String   @map("device_id")
+  agentId    String   @map("agent_id")
+  deviceName String   @map("device_name")
+  agentName  String   @map("agent_name")
+
+  completed Int @default(0)
+  failed    Int @default(0)
+  cancelled Int @default(0)
+
+  panelJobs Int @default(0) @map("panel_jobs")
+  apiJobs   Int @default(0) @map("api_jobs")
+
+  bytesTotal Int @default(0) @map("bytes_total")
+  linesTotal Int @default(0) @map("lines_total")
+
+  /// JSON arrays of 16 bucket counts — see lib/metrics/histogram.ts.
+  /// queue = started−submitted, print = finished−started, total = finished−submitted.
+  queueHist String @default("[]") @map("queue_hist")
+  printHist String @default("[]") @map("print_hist")
+  totalHist String @default("[]") @map("total_hist")
+
+  queueSumMs Int  @default(0) @map("queue_sum_ms")
+  queueCount Int  @default(0) @map("queue_count")
+  queueMinMs Int? @map("queue_min_ms")
+  queueMaxMs Int? @map("queue_max_ms")
+  printSumMs Int  @default(0) @map("print_sum_ms")
+  printCount Int  @default(0) @map("print_count")
+  printMinMs Int? @map("print_min_ms")
+  printMaxMs Int? @map("print_max_ms")
+  totalSumMs Int  @default(0) @map("total_sum_ms")
+  totalCount Int  @default(0) @map("total_count")
+  totalMinMs Int? @map("total_min_ms")
+  totalMaxMs Int? @map("total_max_ms")
+
+  /// Durations that came out negative (agent clock behind server) — clamped to 0, counted here.
+  clockSkewCount Int @default(0) @map("clock_skew_count")
+
+  @@id([bucket, deviceId])
+  @@index([bucket])
+  @@index([agentId, bucket])
+  @@map("metric_job_hourly")
+}
+
+/// One printer's failures for one error code in one hour.
+model MetricErrorHourly {
+  bucket     DateTime
+  deviceId   String   @map("device_id")
+  errorCode  String   @map("error_code")
+  agentId    String   @map("agent_id")
+  deviceName String   @map("device_name")
+  agentName  String   @map("agent_name")
+  count      Int      @default(0)
+
+  @@id([bucket, deviceId, errorCode])
+  @@index([bucket])
+  @@map("metric_error_hourly")
+}
+
+/// One (route, status class, key) combination's hour of API traffic.
+/// `route` also carries the rejection pseudo-routes `reject:auth`, `reject:rate-limit`,
+/// `reject:validation` so refused calls chart without a second table.
+model MetricApiHourly {
+  bucket       DateTime
+  route        String
+  /// "2xx" | "4xx" | "5xx"
+  statusClass  String   @map("status_class")
+  /// Empty string when the request never authenticated.
+  apiKeyId     String   @map("api_key_id")
+  count        Int      @default(0)
+  durationSumMs Int     @default(0) @map("duration_sum_ms")
+  durationHist String   @default("[]") @map("duration_hist")
+
+  @@id([bucket, route, statusClass, apiKeyId])
+  @@index([bucket])
+  @@map("metric_api_hourly")
+}
+
+/// One security-relevant kind's hour. Kinds: signin_success, signin_failed, twofactor_failed,
+/// denied_action, api_auth_failed, rate_limited, session_created, and `category:<prefix>` rows
+/// rolled from the audit record (e.g. category:devices).
+model MetricAuthHourly {
+  bucket DateTime
+  kind   String
+  count  Int      @default(0)
+
+  @@id([bucket, kind])
+  @@index([bucket])
+  @@map("metric_auth_hourly")
+}
+
+/// One webhook's hour of deliveries.
+model MetricWebhookHourly {
+  bucket      DateTime
+  webhookId   String   @map("webhook_id")
+  webhookName String   @map("webhook_name")
+  queued      Int      @default(0)
+  delivered   Int      @default(0)
+  failed      Int      @default(0)
+  attemptsSum Int      @default(0) @map("attempts_sum")
+  attemptsMax Int      @default(0) @map("attempts_max")
+
+  @@id([bucket, webhookId])
+  @@index([bucket])
+  @@map("metric_webhook_hourly")
+}
+
+/// One 5-minute snapshot of what only exists in memory (plus cheap DB counts).
+model FleetSample {
+  id               String   @id @default(cuid())
+  at               DateTime
+  agentsTotal      Int      @map("agents_total")
+  agentsOnline     Int      @map("agents_online")
+  devicesTotal     Int      @map("devices_total")
+  devicesConnected Int      @map("devices_connected")
+  /// Jobs currently QUEUED or PRINTING, summed across the fleet.
+  queueDepth       Int      @map("queue_depth")
+  pendingWebhooks  Int      @map("pending_webhooks")
+  activeSessions   Int      @map("active_sessions")
+  dbMainBytes      Int      @map("db_main_bytes")
+  dbAuditBytes     Int      @map("db_audit_bytes")
+  dbLogsBytes      Int      @map("db_logs_bytes")
+
+  @@index([at])
+  @@map("fleet_samples")
+}
+
+/// How far each rollup stream has been rolled. `rolledThrough` is the start of the first hour
+/// NOT yet covered; every pass also re-rolls the trailing 26 hours to absorb late settles.
+model MetricWatermark {
+  /// "jobs" | "webhooks" | "audit"
+  stream        String   @id
+  rolledThrough DateTime @map("rolled_through")
+
+  @@map("metric_watermarks")
+}
