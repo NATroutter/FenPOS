@@ -3,6 +3,7 @@
 import { Lock, Pencil, Trash2 } from "lucide-react";
 import { useTransition } from "react";
 import { toast } from "sonner";
+import type { VariablePermits } from "@/app/(panel)/tab-permits";
 import { removeVariable } from "@/app/(panel)/variables/actions";
 import { VariableDialog } from "@/app/(panel)/variables/variable-dialog";
 import {
@@ -62,8 +63,12 @@ export interface VariableRowData extends VariableDefinition {
  * flag, and a glance at a padlock says it faster than a word would, the same way the Keys tab uses a
  * badge rather than a sentence for "revoked".
  */
-export function VariableRow({ variable }: { variable: VariableRowData }) {
+export function VariableRow({ variable, permits }: { variable: VariableRowData; permits: VariablePermits }) {
 	const [pending, startTransition] = useTransition();
+
+	// The page drops the header above this column on the same condition, so an operator who can do
+	// neither is not left with a 96px strip of nothing at the end of every row.
+	const canManage = permits["variables:update"] || permits["variables:delete"];
 
 	return (
 		<TableRow>
@@ -89,69 +94,76 @@ export function VariableRow({ variable }: { variable: VariableRowData }) {
 			>
 				{variable.description ?? "—"}
 			</TableCell>
-			<TableCell>
-				<div className="flex items-center justify-end gap-1.5">
-					<VariableDialog
-						variableId={variable.id}
-						initial={variable}
-						trigger={
-							<Button
-								variant="outline"
-								size="icon"
-								className="size-8"
-								title="Edit"
-								aria-label={`Edit ${variable.name}`}
-							>
-								<Pencil className="size-3.5" />
-							</Button>
-						}
-					/>
+			{!canManage ? null : (
+				<TableCell>
+					<div className="flex items-center justify-end gap-1.5">
+						{!permits["variables:update"] ? null : (
+							<VariableDialog
+								variableId={variable.id}
+								initial={variable}
+								canPreview={permits["variables:preview"]}
+								trigger={
+									<Button
+										variant="outline"
+										size="icon"
+										className="size-8"
+										title="Edit"
+										aria-label={`Edit ${variable.name}`}
+									>
+										<Pencil className="size-3.5" />
+									</Button>
+								}
+							/>
+						)}
 
-					<AlertDialog>
-						<AlertDialogTrigger
-							disabled={pending}
-							render={
-								<Button
-									variant="outline"
-									size="icon"
-									className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-									title="Delete"
-									aria-label={`Delete ${variable.name}`}
-								>
-									{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
-								</Button>
-							}
-						/>
-						<AlertDialogContent>
-							<AlertDialogHeader>
-								<AlertDialogTitle>Delete {variable.name}?</AlertDialogTitle>
-								<AlertDialogDescription>
-									Any receipt that says <span className="font-mono">{`{${variable.name}}`}</span> fails to compile until
-									it is changed, or until a variable of that name is defined again. This cannot be undone.
-								</AlertDialogDescription>
-							</AlertDialogHeader>
-							<AlertDialogFooter>
-								<AlertDialogCancel>Cancel</AlertDialogCancel>
-								<AlertDialogAction
-									className="bg-destructive text-white hover:bg-destructive/90"
-									onClick={() =>
-										startTransition(async () => {
-											const result = await removeVariable(variable.id);
-											if (result.error) {
-												toast.error(result.error);
-											} else {
-												toast.success(`${variable.name} deleted.`);
-											}
-										})
+						{!permits["variables:delete"] ? null : (
+							<AlertDialog>
+								<AlertDialogTrigger
+									disabled={pending}
+									render={
+										<Button
+											variant="outline"
+											size="icon"
+											className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+											title="Delete"
+											aria-label={`Delete ${variable.name}`}
+										>
+											{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+										</Button>
 									}
-								>
-									Delete
-								</AlertDialogAction>
-							</AlertDialogFooter>
-						</AlertDialogContent>
-					</AlertDialog>
-				</div>
-			</TableCell>
+								/>
+								<AlertDialogContent>
+									<AlertDialogHeader>
+										<AlertDialogTitle>Delete {variable.name}?</AlertDialogTitle>
+										<AlertDialogDescription>
+											Any receipt that says <span className="font-mono">{`{${variable.name}}`}</span> fails to compile
+											until it is changed, or until a variable of that name is defined again. This cannot be undone.
+										</AlertDialogDescription>
+									</AlertDialogHeader>
+									<AlertDialogFooter>
+										<AlertDialogCancel>Cancel</AlertDialogCancel>
+										<AlertDialogAction
+											className="bg-destructive text-white hover:bg-destructive/90"
+											onClick={() =>
+												startTransition(async () => {
+													const result = await removeVariable(variable.id);
+													if (result.error) {
+														toast.error(result.error);
+													} else {
+														toast.success(`${variable.name} deleted.`);
+													}
+												})
+											}
+										>
+											Delete
+										</AlertDialogAction>
+									</AlertDialogFooter>
+								</AlertDialogContent>
+							</AlertDialog>
+						)}
+					</div>
+				</TableCell>
+			)}
 		</TableRow>
 	);
 }

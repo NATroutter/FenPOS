@@ -1,5 +1,7 @@
 import { type SettingFieldData, SettingsForm } from "@/app/(panel)/settings/settings-form";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
+import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { CATEGORIES, listSettings, toClientDefinition } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "Settings" };
@@ -16,9 +18,21 @@ export const dynamic = "force-dynamic";
  */
 export default async function SettingsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("settings:read", "/settings");
+	const user = await requirePagePermission("settings:read", "/settings");
 
 	const settings = await listSettings();
+
+	// Derived from `CATEGORIES` rather than written out, so a category added to the settings service
+	// arrives here already asked about instead of silently defaulting to writable. The cast is the
+	// one place this correspondence is asserted: `settings:write:<category>` is a real permission for
+	// every member of `CATEGORIES`, and `panel-permissions.ts` is where that list lives.
+	const writePermissions = CATEGORIES.map((category) => `settings:write:${category.id}` as PanelPermission);
+	// Resolved here because a client component cannot read the database. Convenience only — every
+	// write is refused again by its own gate; see `permitsFor`.
+	const permits = await permitsFor(user, writePermissions);
+	const writable = CATEGORIES.filter((category) => permits[`settings:write:${category.id}` as PanelPermission]).map(
+		(category) => category.id,
+	);
 
 	// The definition is passed through whole, not flattened field by field — flattening a union
 	// loses the discriminant the form narrows on. Which categories and controls actually appear is
@@ -43,7 +57,7 @@ export default async function SettingsPage() {
 	return (
 		<div className="flex flex-col gap-5">
 			<div>
-				<SettingsForm categories={categories} settings={fields} />
+				<SettingsForm categories={categories} settings={fields} writable={writable} />
 			</div>
 		</div>
 	);

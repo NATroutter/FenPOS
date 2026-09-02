@@ -46,7 +46,16 @@ const MUTED_CELL = "text-[11.5px] text-muted-foreground";
  * The two sources render different columns, because they are read for different questions — a log
  * line for its message, a recorded event for who did what and whether it worked.
  */
-export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; error: string | null }) {
+export function ArchiveTable({
+	periods,
+	error,
+	canDelete,
+}: {
+	periods: ArchivePeriod[];
+	error: string | null;
+	/** Whether the operator holds `audit:archive-delete`. */
+	canDelete: boolean;
+}) {
 	const [opened, setOpened] = useState<ArchiveRef | null>(null);
 	const [search, setSearch] = useState("");
 	const [skip, setSkip] = useState(0);
@@ -149,8 +158,10 @@ export function ArchiveTable({ periods, error }: { periods: ArchivePeriod[]; err
 											Open
 										</Button>
 										{/* Only audit periods, because only they have a delete: a log archive ages out on the
-										    maintenance pass, and there is no action to remove one by hand. */}
-										{period.source === "audit" ? (
+										    maintenance pass, and there is no action to remove one by hand. And only for a
+										    holder of `audit:archive-delete`, which is held apart from reading the record
+										    precisely because this destroys evidence. */}
+										{period.source === "audit" && canDelete ? (
 											<DeleteAuditPeriod periodKey={period.periodKey} onDeleted={() => closeIfOpen(period)} />
 										) : null}
 									</div>

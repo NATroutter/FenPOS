@@ -45,8 +45,11 @@ const LIVE_STATUSES: JobStatus[] = ["QUEUED", "PRINTING"];
  * Sorting `state` orders by the stored string, so the sequence is alphabetical — cancelled,
  * completed, failed, printing, queued — rather than by any notion of progress. That is a real
  * ordering and a stable one, which is what the column is for: grouping every failure together.
+ *
+ * A function of one permission, but still module scope: both answers are built once, below, and the
+ * component picks between them rather than rebuilding either.
  */
-const columns: DataTableColumns<JobSummary> = [
+const columnsFor = (canCancel: boolean): DataTableColumns<JobSummary> => [
 	{
 		id: "id",
 		header: "Job",
@@ -99,15 +102,21 @@ const columns: DataTableColumns<JobSummary> = [
 		id: "actions",
 		header: "",
 		enableSorting: false,
-		meta: { headClassName: "w-[100px]" },
+		// Narrower without Cancel, so the column is the width of what is in it rather than of what
+		// used to be. Details stays either way: it is the job's own record, which is what `jobs:read`
+		// is for.
+		meta: { headClassName: canCancel ? "w-[100px]" : "w-[64px]" },
 		cell: ({ row }) => (
 			<div className="flex items-center justify-end gap-1.5">
 				<JobDetail job={row.original} />
-				<CancelJobButton job={row.original} />
+				{canCancel ? <CancelJobButton job={row.original} /> : null}
 			</div>
 		),
 	},
 ];
+
+/** Both column sets, built once. See {@link columnsFor}. */
+const COLUMNS = { withCancel: columnsFor(true), readOnly: columnsFor(false) };
 
 /**
  * The job list.
@@ -117,7 +126,7 @@ const columns: DataTableColumns<JobSummary> = [
  * catch it would hammer the database of an install that is doing nothing. The stream already
  * carries every state change, so the list reacts to exactly the changes that happened.
  */
-export function JobTable({ jobs, live }: { jobs: JobSummary[]; live: boolean }) {
+export function JobTable({ jobs, live, canCancel }: { jobs: JobSummary[]; live: boolean; canCancel: boolean }) {
 	const router = useRouter();
 
 	// Subscribed only while the header's live chip is on, so pausing genuinely stops the work
@@ -127,7 +136,7 @@ export function JobTable({ jobs, live }: { jobs: JobSummary[]; live: boolean }) 
 	return (
 		<DataTable
 			rows={jobs}
-			columns={columns}
+			columns={canCancel ? COLUMNS.withCancel : COLUMNS.readOnly}
 			defaultSort={{ id: JOB_DEFAULT_SORT.column, desc: JOB_DEFAULT_SORT.desc }}
 			minWidth="880px"
 			empty={

@@ -1,6 +1,7 @@
 import { Server } from "lucide-react";
 import { AddAgentDialog } from "@/app/(panel)/agents/add-agent-dialog";
-import { AGENT_PERMISSIONS, AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
+import { AgentCard, type AgentCardData } from "@/app/(panel)/agents/agent-card";
+import { AGENT_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAgents } from "@/lib/agents/agent-service";

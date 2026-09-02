@@ -1,5 +1,7 @@
 import { listArchivePeriods } from "@/app/(panel)/archives/actions";
 import { ArchiveTable } from "@/app/(panel)/archives/archive-table";
+import { ARCHIVE_PERMISSIONS } from "@/app/(panel)/tab-permits";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 
 export const metadata = { title: "Archives" };
@@ -28,9 +30,14 @@ export const dynamic = "force-dynamic";
  */
 export default async function ArchivesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission(["logs:read", "audit:read"], "/archives");
+	const user = await requirePagePermission(["logs:read", "audit:read"], "/archives");
 
-	const listing = await listArchivePeriods();
+	const [listing, permits] = await Promise.all([
+		listArchivePeriods(),
+		// Resolved here because a client component cannot read the database. Convenience only — the
+		// action is refused again by its own gate; see `permitsFor`.
+		permitsFor(user, ARCHIVE_PERMISSIONS),
+	]);
 
-	return <ArchiveTable periods={listing.periods} error={listing.error} />;
+	return <ArchiveTable periods={listing.periods} error={listing.error} canDelete={permits["audit:archive-delete"]} />;
 }

@@ -39,18 +39,26 @@ import { describeBytes } from "@/lib/format/bytes";
 export function UploadDialog({
 	maxBytes,
 	acceptedFormats,
+	canUpload,
+	canImport,
 	trigger,
 }: {
 	maxBytes: number;
 	/** The configured `assets.acceptedFormats`, read server-side — `settings-service.ts` is
 	 *  server-only, so this has to arrive as a plain, serialisable prop rather than be read here. */
 	acceptedFormats: AcceptedFormats;
+	/** Whether the operator holds `assets:upload`, which is the File source. */
+	canUpload: boolean;
+	/** Whether the operator holds `assets:import`, which is the URL source. The two are separate
+	    permissions because fetching a URL makes this server issue an outbound request, which
+	    uploading a file does not. The caller does not render this dialog at all without one of them. */
+	canImport: boolean;
 	trigger: ReactElement;
 }) {
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [saving, startSave] = useTransition();
-	const source = useImageSource(maxBytes);
+	const source = useImageSource(maxBytes, canUpload ? "file" : "url");
 
 	const ready = name.trim() !== "" && source.ready;
 
@@ -130,7 +138,13 @@ export function UploadDialog({
 							</FieldDescription>
 						</Field>
 
-						<ImageSourceTabs source={source} acceptedFormats={acceptedFormats} disabled={saving} idPrefix="asset-add" />
+						<ImageSourceTabs
+							source={source}
+							acceptedFormats={acceptedFormats}
+							disabled={saving}
+							idPrefix="asset-add"
+							allow={{ file: canUpload, url: canImport }}
+						/>
 
 						{source.error ? (
 							<Alert variant="destructive">

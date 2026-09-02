@@ -5,6 +5,7 @@ import { useTransition } from "react";
 import { toast } from "sonner";
 import { clearQueue, deleteDevice, printTestPage, setConnected, setPaused } from "@/app/(panel)/devices/actions";
 import { DeviceDialog, type DeviceFormValues, type OverridableVariable } from "@/app/(panel)/devices/device-dialog";
+import type { DevicePermits } from "@/app/(panel)/tab-permits";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -54,15 +55,31 @@ const CONNECTION_STYLE: Record<ConnectionStatus, { label: string; className: str
 /**
  * One printer: what it is, whether it is reachable, and what can be done to it.
  *
- * Control actions are disabled when the agent is offline rather than hidden. A hidden button
- * makes an operator wonder whether the feature exists; a disabled one with a reason tells them
- * what to fix.
+ * **Offline disables; unpermitted hides.** The two look similar on screen and mean opposite
+ * things. Offline is a state the operator can fix, and often the very thing they opened this card
+ * to fix, so the button stays put with a reason under it — hiding it would make them wonder
+ * whether the feature exists at all. Not holding `devices:pause` is not a state and there is
+ * nothing to fix, so the button goes.
  */
-export function DeviceCard({ device }: { device: DeviceCardData }) {
+export function DeviceCard({ device, permits }: { device: DeviceCardData; permits: DevicePermits }) {
 	const [pending, startTransition] = useTransition();
 	const connection = device.connection ? CONNECTION_STYLE[device.connection] : null;
 	const online = device.agentOnline;
 	const connected = device.connection === "CONNECTED";
+
+	// The Configure dialog holds two separately-granted things: the printer's own settings, and its
+	// variable overrides. Either one alone is reason enough to open it.
+	const canConfigure = permits["devices:update"] || permits["devices:override"];
+
+	// An operator holding devices:read alone gets no action row at all, rather than an empty strip
+	// of padding where one used to be.
+	const anyAction =
+		canConfigure ||
+		permits["devices:connect"] ||
+		permits["devices:pause"] ||
+		permits["devices:test-page"] ||
+		permits["devices:clear-queue"] ||
+		permits["devices:delete"];
 
 	const act = (label: string, action: () => Promise<{ error: string | null }>): void => {
 		startTransition(async () => {
@@ -101,106 +118,127 @@ export function DeviceCard({ device }: { device: DeviceCardData }) {
 					<Detail label="Printing" value={device.paused ? "Paused" : "Running"} />
 				</dl>
 
-				{/* `mt-0` because the offline note sits below this row. On `mt-auto` the row was pushed
-					    down the card until it met the note, which left a gap above the buttons. */}
-				<CardActions className="mt-0 gap-2">
-					<Action
-						title={connected ? "Close the port" : "Open the port"}
-						disabled={!online || pending}
-						pending={pending}
-						onClick={() => act(connected ? "Port closed." : "Port opened.", () => setConnected(device.id, !connected))}
-					>
-						{connected ? <PlugZap className="size-3.5" /> : <Plug className="size-3.5" />}
-					</Action>
-
-					<Action
-						title={device.paused ? "Resume printing" : "Pause printing"}
-						disabled={!online || pending}
-						pending={pending}
-						onClick={() =>
-							act(device.paused ? "Printing resumed." : "Printing paused.", () => setPaused(device.id, !device.paused))
-						}
-					>
-						{device.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
-					</Action>
-
-					<Action
-						title="Print a test page"
-						disabled={!online || pending}
-						pending={pending}
-						onClick={() => act("Test page queued.", () => printTestPage(device.id))}
-					>
-						<FileText className="size-3.5" />
-					</Action>
-
-					<Action
-						title="Cancel every waiting job"
-						disabled={!online || pending}
-						pending={pending}
-						onClick={() => act("Queue cleared.", () => clearQueue(device.id))}
-					>
-						<Trash className="size-3.5" />
-					</Action>
-
-					<div className="flex-1" />
-
-					<DeviceDialog
-						agentId={device.agentId}
-						agentName={device.agentName}
-						agentOnline={online}
-						deviceId={device.id}
-						initial={device.settings}
-						variables={device.variables}
-						trigger={
-							<Button
-								variant="outline"
-								size="icon"
-								className="size-8"
-								title="Configure"
-								aria-label="Configure printer"
-								disabled={pending}
+				{!anyAction ? null : (
+					/* `mt-0` because the offline note sits below this row. On `mt-auto` the row was pushed
+					    down the card until it met the note, which left a gap above the buttons. */
+					<CardActions className="mt-0 gap-2">
+						{!permits["devices:connect"] ? null : (
+							<Action
+								title={connected ? "Close the port" : "Open the port"}
+								disabled={!online || pending}
+								pending={pending}
+								onClick={() =>
+									act(connected ? "Port closed." : "Port opened.", () => setConnected(device.id, !connected))
+								}
 							>
-								<Settings2 className="size-3.5" />
-							</Button>
-						}
-					/>
+								{connected ? <PlugZap className="size-3.5" /> : <Plug className="size-3.5" />}
+							</Action>
+						)}
 
-					<AlertDialog>
-						<AlertDialogTrigger
-							disabled={pending}
-							render={
-								<Button
-									variant="outline"
-									size="icon"
-									className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-									title="Delete"
-									aria-label="Delete printer"
-								>
-									<Trash2 className="size-3.5" />
-								</Button>
-							}
-						/>
-						<AlertDialogContent>
-							<AlertDialogHeader>
-								<AlertDialogTitle>Delete {device.name}?</AlertDialogTitle>
-								<AlertDialogDescription>
-									This also deletes its job history, and any API key grant that named it. This cannot be undone.
-								</AlertDialogDescription>
-							</AlertDialogHeader>
-							<AlertDialogFooter>
-								<AlertDialogCancel>Cancel</AlertDialogCancel>
-								<AlertDialogAction onClick={() => act(`${device.name} deleted.`, () => deleteDevice(device.id))}>
-									Delete
-								</AlertDialogAction>
-							</AlertDialogFooter>
-						</AlertDialogContent>
-					</AlertDialog>
-				</CardActions>
+						{!permits["devices:pause"] ? null : (
+							<Action
+								title={device.paused ? "Resume printing" : "Pause printing"}
+								disabled={!online || pending}
+								pending={pending}
+								onClick={() =>
+									act(device.paused ? "Printing resumed." : "Printing paused.", () =>
+										setPaused(device.id, !device.paused),
+									)
+								}
+							>
+								{device.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+							</Action>
+						)}
+
+						{!permits["devices:test-page"] ? null : (
+							<Action
+								title="Print a test page"
+								disabled={!online || pending}
+								pending={pending}
+								onClick={() => act("Test page queued.", () => printTestPage(device.id))}
+							>
+								<FileText className="size-3.5" />
+							</Action>
+						)}
+
+						{!permits["devices:clear-queue"] ? null : (
+							<Action
+								title="Cancel every waiting job"
+								disabled={!online || pending}
+								pending={pending}
+								onClick={() => act("Queue cleared.", () => clearQueue(device.id))}
+							>
+								<Trash className="size-3.5" />
+							</Action>
+						)}
+
+						<div className="flex-1" />
+
+						{!canConfigure ? null : (
+							<DeviceDialog
+								agentId={device.agentId}
+								agentName={device.agentName}
+								agentOnline={online}
+								deviceId={device.id}
+								initial={device.settings}
+								variables={device.variables}
+								permits={permits}
+								trigger={
+									<Button
+										variant="outline"
+										size="icon"
+										className="size-8"
+										title={permits["devices:update"] ? "Configure" : "Variable overrides"}
+										aria-label={permits["devices:update"] ? "Configure printer" : "Override this printer's variables"}
+										disabled={pending}
+									>
+										<Settings2 className="size-3.5" />
+									</Button>
+								}
+							/>
+						)}
+
+						{!permits["devices:delete"] ? null : (
+							<AlertDialog>
+								<AlertDialogTrigger
+									disabled={pending}
+									render={
+										<Button
+											variant="outline"
+											size="icon"
+											className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+											title="Delete"
+											aria-label="Delete printer"
+										>
+											<Trash2 className="size-3.5" />
+										</Button>
+									}
+								/>
+								<AlertDialogContent>
+									<AlertDialogHeader>
+										<AlertDialogTitle>Delete {device.name}?</AlertDialogTitle>
+										<AlertDialogDescription>
+											This also deletes its job history, and any API key grant that named it. This cannot be undone.
+										</AlertDialogDescription>
+									</AlertDialogHeader>
+									<AlertDialogFooter>
+										<AlertDialogCancel>Cancel</AlertDialogCancel>
+										<AlertDialogAction onClick={() => act(`${device.name} deleted.`, () => deleteDevice(device.id))}>
+											Delete
+										</AlertDialogAction>
+									</AlertDialogFooter>
+								</AlertDialogContent>
+							</AlertDialog>
+						)}
+					</CardActions>
+				)}
 
 				{!online ? (
 					<p className="text-[11.5px] text-subtle-foreground">
-						{device.agentName} is offline. Configuration can still be changed; it reaches the printer when the agent
-						reconnects.
+						{device.agentName} is offline.{" "}
+						{permits["devices:update"]
+							? "Configuration can still be changed; it reaches the printer when the agent reconnects."
+							: "Nothing can be sent to this printer until the agent reconnects."}
 					</p>
 				) : null}
 			</CardContent>

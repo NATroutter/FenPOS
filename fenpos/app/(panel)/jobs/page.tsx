@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { JobTable } from "@/app/(panel)/jobs/job-table";
+import { JOB_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { buttonVariants } from "@/components/ui/button";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import { JobStatus } from "@/lib/domain/enums";
@@ -35,7 +37,7 @@ export default async function JobsPage({
 	}>;
 }) {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("jobs:read", "/jobs");
+	const user = await requirePagePermission("jobs:read", "/jobs");
 
 	const params = await searchParams;
 	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
@@ -51,13 +53,16 @@ export default async function JobsPage({
 
 	const pageSize = await integerSetting("panel.jobPageSize");
 
-	const [agents, devices, page] = await Promise.all([
+	const [agents, devices, page, permits] = await Promise.all([
 		prisma.agent.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
 		prisma.device.findMany({
 			orderBy: [{ agent: { name: "asc" } }, { name: "asc" }],
 			select: { id: true, name: true, agent: { select: { name: true } } },
 		}),
 		listJobs({ agentId: agentIds, deviceId: deviceIds, status: statuses, skip, sort, desc, take: pageSize }),
+		// Resolved here because a client component cannot read the database. Convenience only — every
+		// action is refused again by its own gate; see `permitsFor`.
+		permitsFor(user, JOB_PERMISSIONS),
 	]);
 
 	const query = (next: Record<string, string | undefined>): string => {
@@ -99,7 +104,7 @@ export default async function JobsPage({
 				]}
 			/>
 
-			<JobTable jobs={page.jobs} live />
+			<JobTable jobs={page.jobs} live canCancel={permits["jobs:cancel"]} />
 
 			{/* Links, not Base UI Buttons rendering anchors — see the note on the Audit page. */}
 			{skip > 0 || page.more ? (

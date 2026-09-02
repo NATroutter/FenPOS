@@ -384,7 +384,19 @@ const INSERT_CHOICES: TagChoice[] = [
  * That costs a round trip per edit, which is why it is debounced rather than run on every
  * keystroke.
  */
-export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
+export function MarkupTool({
+	devices,
+	canPreview,
+	canPrint,
+}: {
+	devices: ToolDevice[];
+	/** Whether the operator holds `tools:preview`. Without it the paper card is left out and nothing
+	    is compiled — the editor still composes markup, it just cannot be shown against the paper. */
+	canPreview: boolean;
+	/** Whether the operator holds `tools:print`. Takes the Print button and the line-ending picker
+	    beside it, which is a choice about sending rather than about the markup. */
+	canPrint: boolean;
+}) {
 	const [deviceId, setDeviceId] = useSessionState("tools.markup.device", devices[0]?.id ?? "");
 	const [source, setSource] = useSessionState("tools.markup.source", SAMPLE);
 	const [linefeed, setLinefeed] = useSessionState("tools.markup.linefeed", DEVICE_DEFAULT);
@@ -472,7 +484,9 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 	}, []);
 
 	useEffect(() => {
-		if (!deviceId) {
+		// `canPreview` here as well as at the card: without it every keystroke would spend a round
+		// trip on a compile that comes back refused.
+		if (!deviceId || !canPreview) {
 			return;
 		}
 		const timer = setTimeout(() => {
@@ -482,7 +496,7 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 		// `linefeed` is a dependency even though it cannot change the paper — it changes the bytes,
 		// not the layout. Without it the footer went on reporting whichever ending was in force when
 		// the markup last changed, which is worse than not stating it at all.
-	}, [deviceId, source, linefeed]);
+	}, [deviceId, source, linefeed, canPreview]);
 
 	if (devices.length === 0) {
 		return (
@@ -496,8 +510,10 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 
 	return (
 		// No `items-start`: the two cards stretch to the taller of them, so the preview's paper is
-		// as tall as the editor beside it rather than stopping halfway up the row.
-		<div className="grid gap-4 lg:grid-cols-2">
+		// as tall as the editor beside it rather than stopping halfway up the row. With no preview
+		// card there is nothing to sit beside, so the editor takes the full width instead of leaving
+		// half the row empty.
+		<div className={`grid gap-4 ${canPreview ? "lg:grid-cols-2" : ""}`}>
 			<Card className="flex flex-col">
 				<CardHeader className="flex flex-row flex-wrap items-center gap-3 border-b border-border pb-3">
 					<Code className="size-4.5 shrink-0 text-subtle-foreground" />
@@ -628,68 +644,74 @@ export function MarkupTool({ devices }: { devices: ToolDevice[] }) {
 					<InsertDialog tag={prompting} onClose={() => setPrompting(null)} onInsert={applyTag} />
 
 					{/* A rule inside the content rather than a filled footer band, matching how the
-					    other tabs' cards separate their controls from what they act on. */}
-					<CardActions className="min-h-17">
-						<LinefeedPicker value={linefeed} onChange={setLinefeed} />
+					    other tabs' cards separate their controls from what they act on. The whole row
+					    goes with the Print button: the line ending is a choice about sending, so on its
+					    own it would be a control over nothing. */}
+					{!canPrint ? null : (
+						<CardActions className="min-h-17">
+							<LinefeedPicker value={linefeed} onChange={setLinefeed} />
 
-						<div className="flex-1" />
+							<div className="flex-1" />
 
-						<Button
-							type="button"
-							disabled={printing || !device}
-							onClick={() =>
-								startPrint(async () => {
-									const outcome = await printMarkup(deviceId, source, chosenLinefeed(linefeed));
-									if (outcome.error) {
-										toast.error(outcome.error);
-									} else {
-										toast.success(outcome.message ?? "Queued.");
-									}
-								})
-							}
-						>
-							{printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
-							Print
-						</Button>
-					</CardActions>
+							<Button
+								type="button"
+								disabled={printing || !device}
+								onClick={() =>
+									startPrint(async () => {
+										const outcome = await printMarkup(deviceId, source, chosenLinefeed(linefeed));
+										if (outcome.error) {
+											toast.error(outcome.error);
+										} else {
+											toast.success(outcome.message ?? "Queued.");
+										}
+									})
+								}
+							>
+								{printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
+								Print
+							</Button>
+						</CardActions>
+					)}
 				</CardContent>
 			</Card>
 
-			<Card className="flex flex-col">
-				<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
-					<ReceiptText className="size-4.5 shrink-0 text-subtle-foreground" />
-					<div className="min-w-0 flex-1">
-						<h3 className="text-[13px] font-medium">Paper preview</h3>
-						<p className="mt-0.5 text-[11.5px] text-muted-foreground">
-							Compiled by the server, at this printer's own width and codepage.
-						</p>
-					</div>
-					{/* The measurements sit with the verdict below, beside what they describe.
+			{!canPreview ? null : (
+				<Card className="flex flex-col">
+					<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
+						<ReceiptText className="size-4.5 shrink-0 text-subtle-foreground" />
+						<div className="min-w-0 flex-1">
+							<h3 className="text-[13px] font-medium">Paper preview</h3>
+							<p className="mt-0.5 text-[11.5px] text-muted-foreground">
+								Compiled by the server, at this printer's own width and codepage.
+							</p>
+						</div>
+						{/* The measurements sit with the verdict below, beside what they describe.
 					    Repeating them here would state the same numbers twice. */}
-					{compiling ? <Spinner className="size-3.5" /> : null}
-				</CardHeader>
-				<CardContent className="flex flex-1 flex-col pt-4">
-					{result && result.errors.length > 0 ? <Problems errors={result.errors} /> : <Paper result={result} />}
+						{compiling ? <Spinner className="size-3.5" /> : null}
+					</CardHeader>
+					<CardContent className="flex flex-1 flex-col pt-4">
+						{result && result.errors.length > 0 ? <Problems errors={result.errors} /> : <Paper result={result} />}
 
-					{/* Only when it compiles. A failing preview already says everything there is to say
+						{/* Only when it compiles. A failing preview already says everything there is to say
 					    where the paper would have been, and a second verdict under it would be one
 					    judgement too many on the same markup. */}
-					{result && result.errors.length === 0 && result.lines ? (
-						// A column, so `justify-center` is what centres it the way `items-center` centres
-						// the single-row cases. Without it the two lines sat at the top of the row.
-						<CardActions className="min-h-17 flex-col items-start justify-center gap-1">
-							<div className="flex items-center gap-2">
-								<CircleCheck className="size-4 shrink-0 text-emerald-400" />
-								<span className="text-[12.5px] font-medium">Compiles clean</span>
-							</div>
-							<p className="text-[11.5px] text-muted-foreground">
-								{result.outputLines} output {result.outputLines === 1 ? "line" : "lines"} of {result.maxOutputLines} ·{" "}
-								{result.columns} columns · linefeed {result.linefeed}
-							</p>
-						</CardActions>
-					) : null}
-				</CardContent>
-			</Card>
+						{result && result.errors.length === 0 && result.lines ? (
+							// A column, so `justify-center` is what centres it the way `items-center` centres
+							// the single-row cases. Without it the two lines sat at the top of the row.
+							<CardActions className="min-h-17 flex-col items-start justify-center gap-1">
+								<div className="flex items-center gap-2">
+									<CircleCheck className="size-4 shrink-0 text-emerald-400" />
+									<span className="text-[12.5px] font-medium">Compiles clean</span>
+								</div>
+								<p className="text-[11.5px] text-muted-foreground">
+									{result.outputLines} output {result.outputLines === 1 ? "line" : "lines"} of {result.maxOutputLines} ·{" "}
+									{result.columns} columns · linefeed {result.linefeed}
+								</p>
+							</CardActions>
+						) : null}
+					</CardContent>
+				</Card>
+			)}
 		</div>
 	);
 }

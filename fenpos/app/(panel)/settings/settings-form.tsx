@@ -70,8 +70,13 @@ interface ControlProps<Field extends SettingFieldData> {
 	field: Field;
 	/** The value to display: the staged edit if there is one, otherwise what the server holds. */
 	value: SettingValue;
-	/** Whether a save is in flight, during which no control accepts input. */
-	saving: boolean;
+	/**
+	 * Whether the control refuses input.
+	 *
+	 * Two reasons, deliberately one flag: a save is in flight, or this category is one the operator
+	 * may read but not write. Neither is a state the control itself can do anything about.
+	 */
+	locked: boolean;
 	/** Stages an edit. Passing a value equal to the current stored state clears the draft instead. */
 	onStage: (draft: Draft) => void;
 }
@@ -132,13 +137,25 @@ function effective(field: SettingFieldData, draft: Draft | undefined): { value: 
  * can only exist somewhere that can see every field at once. It also means a change in a category
  * you are not looking at is still counted and still saved — which is what the marker on the rail is
  * for, since otherwise the bar would claim three changes over a category that looks untouched.
+ *
+ * **A category the operator cannot write is shown read-only rather than hidden, and this is the one
+ * place in the panel that goes that way.** Everywhere else an unusable control is left out, because
+ * what is left out is a control. Here the values *are* the content: `settings:read` is a grant to
+ * see what this install is configured to do, which is exactly what somebody diagnosing a refused
+ * print needs, and hiding every category they cannot write would leave them a page with nothing on
+ * it. So the fields stay, the controls are locked, and a line at the top of the panel says which it
+ * is — because a form full of greyed boxes with no explanation is the failure a plain disable
+ * usually is.
  */
 export function SettingsForm({
 	categories,
 	settings,
+	writable,
 }: {
 	categories: readonly { id: SettingCategory; title: string; summary: string }[];
 	settings: SettingFieldData[];
+	/** The categories this operator holds `settings:write:<category>` for. */
+	writable: readonly SettingCategory[];
 }) {
 	const [selected, setSelected] = useState<SettingCategory>(categories[0]?.id ?? "limits");
 	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -148,6 +165,7 @@ export function SettingsForm({
 	const category = categories.find((entry) => entry.id === selected) ?? categories[0];
 	const fields = settings.filter((setting) => setting.definition.category === selected);
 	const pendingKeys = Object.keys(drafts);
+	const canWrite = writable.includes(selected);
 
 	const stage = (field: SettingFieldData, draft: Draft): void => {
 		setDrafts((previous) => {
@@ -238,6 +256,15 @@ export function SettingsForm({
 						<h3 className="text-[13px] font-medium">{category?.title}</h3>
 						<p className="mt-0.5 text-[11.5px] text-muted-foreground">{category?.summary}</p>
 
+						{/* Stated once, above the fields, rather than as a tooltip on each of forty controls.
+						    Without it a locked category is a screen of greyed boxes that could equally mean a
+						    save is in flight, a bug, or something the operator did. */}
+						{canWrite ? null : (
+							<p className="mt-3 rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-subtle-foreground">
+								You can see these settings but not change them.
+							</p>
+						)}
+
 						<div className="mt-5 grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
 							{fields.map((setting) => (
 								<SettingField
@@ -245,7 +272,7 @@ export function SettingsForm({
 									field={setting}
 									draft={drafts[setting.definition.key]}
 									error={errors[setting.definition.key]}
-									saving={saving}
+									locked={saving || !canWrite}
 									onStage={(draft) => stage(setting, draft)}
 								/>
 							))}
@@ -316,13 +343,14 @@ function SettingField({
 	field,
 	draft,
 	error,
-	saving,
+	locked,
 	onStage,
 }: {
 	field: SettingFieldData;
 	draft: Draft | undefined;
 	error: string | undefined;
-	saving: boolean;
+	/** Whether this field refuses input — see {@link ControlProps}. */
+	locked: boolean;
 	onStage: (draft: Draft) => void;
 }) {
 	const { value, overridden } = effective(field, draft);
@@ -337,9 +365,9 @@ function SettingField({
 				<div className="mt-0.5 truncate font-mono text-[11px] text-subtle-foreground">{field.definition.key}</div>
 			</div>
 
-			<Control field={field} value={value} saving={saving} onStage={onStage} />
+			<Control field={field} value={value} locked={locked} onStage={onStage} />
 
-			<FieldFooter field={field} overridden={overridden} error={error} saving={saving} onStage={onStage} />
+			<FieldFooter field={field} overridden={overridden} error={error} locked={locked} onStage={onStage} />
 		</div>
 	);
 }
@@ -352,16 +380,16 @@ function SettingField({
  * property down, not on `field` directly. The `as` below is safe precisely because the `case`
  * already checked it.
  */
-function Control({ field, value, saving, onStage }: ControlProps<SettingFieldData>) {
+function Control({ field, value, locked, onStage }: ControlProps<SettingFieldData>) {
 	switch (field.definition.type) {
 		case "integer":
-			return <IntegerControl field={field as IntegerField} value={value} saving={saving} onStage={onStage} />;
+			return <IntegerControl field={field as IntegerField} value={value} locked={locked} onStage={onStage} />;
 		case "boolean":
-			return <BooleanControl value={value} saving={saving} onStage={onStage} />;
+			return <BooleanControl value={value} locked={locked} onStage={onStage} />;
 		case "enum":
-			return <EnumControl field={field as EnumField} value={value} saving={saving} onStage={onStage} />;
+			return <EnumControl field={field as EnumField} value={value} locked={locked} onStage={onStage} />;
 		case "string":
-			return <StringControl field={field as StringField} value={value} saving={saving} onStage={onStage} />;
+			return <StringControl field={field as StringField} value={value} locked={locked} onStage={onStage} />;
 	}
 }
 
@@ -420,20 +448,20 @@ function bounds(definition: ClientSettingDefinition): ReactNode {
  * @param field the setting this footer describes
  * @param overridden whether the setting currently reads as overridden, following any staged draft
  * @param error the server's refusal message for this setting, from the last save
- * @param saving whether a save is in flight
+ * @param locked whether the control refuses input — see {@link ControlProps}
  * @param onStage stages the reset
  */
 function FieldFooter({
 	field,
 	overridden,
 	error,
-	saving,
+	locked,
 	onStage,
 }: {
 	field: SettingFieldData;
 	overridden: boolean;
 	error: string | undefined;
-	saving: boolean;
+	locked: boolean;
 	onStage: (draft: Draft) => void;
 }) {
 	const { definition } = field;
@@ -460,7 +488,7 @@ function FieldFooter({
 						<Button
 							variant="link"
 							className="h-auto p-0 text-[11.5px] font-normal"
-							disabled={saving}
+							disabled={locked}
 							onClick={() => onStage({ kind: "reset" })}
 						>
 							<RotateCcw className="size-3" />
@@ -508,7 +536,7 @@ function useEditableCopy<T>(value: T): [T, (next: T) => void] {
  * the increment, because focus had gone straight from the button to the save bar without ever
  * leaving the field. Blur is left doing the one job it is still needed for, below.
  */
-function IntegerControl({ field, value, saving, onStage }: ControlProps<IntegerField>) {
+function IntegerControl({ field, value, locked, onStage }: ControlProps<IntegerField>) {
 	const { definition } = field;
 	const [draft, setDraft] = useEditableCopy<number | null>(value as number);
 
@@ -517,7 +545,7 @@ function IntegerControl({ field, value, saving, onStage }: ControlProps<IntegerF
 			value={draft}
 			min={definition.min}
 			max={definition.max}
-			disabled={saving}
+			disabled={locked}
 			onValueChange={(next) => {
 				setDraft(next);
 				// A half-typed number is a real state of the box — `-` on its own, or an empty field
@@ -551,18 +579,18 @@ function IntegerControl({ field, value, saving, onStage }: ControlProps<IntegerF
  * Takes no `field`, unlike its siblings — a switch renders from the value alone, with nothing to
  * read off the definition.
  */
-function BooleanControl({ value, saving, onStage }: Omit<ControlProps<BooleanField>, "field">) {
+function BooleanControl({ value, locked, onStage }: Omit<ControlProps<BooleanField>, "field">) {
 	return (
 		<Switch
 			checked={value as boolean}
-			disabled={saving}
+			disabled={locked}
 			onCheckedChange={(next: boolean) => onStage({ kind: "set", value: next })}
 		/>
 	);
 }
 
 /** A setting chosen from a fixed set. Stages on change, for the same reason. */
-function EnumControl({ field, value, saving, onStage }: ControlProps<EnumField>) {
+function EnumControl({ field, value, locked, onStage }: ControlProps<EnumField>) {
 	// Past the threshold a dropdown stops being something you read and becomes something you scroll
 	// through — see ENUM_SEARCH_THRESHOLD. The two timezone settings are the only ones over it.
 	if (field.definition.values.length > ENUM_SEARCH_THRESHOLD) {
@@ -570,7 +598,7 @@ function EnumControl({ field, value, saving, onStage }: ControlProps<EnumField>)
 			<GroupedCombobox
 				values={field.definition.values}
 				value={value as string}
-				disabled={saving}
+				disabled={locked}
 				placeholder="Search…"
 				onValueChange={(next) => onStage({ kind: "set", value: next })}
 			/>
@@ -580,7 +608,7 @@ function EnumControl({ field, value, saving, onStage }: ControlProps<EnumField>)
 	return (
 		<Select
 			value={value as string}
-			disabled={saving}
+			disabled={locked}
 			onValueChange={(next) => {
 				// Base UI's single-select allows `null` in the type to cover "nothing selected"; this
 				// select always has an item selected, so only the non-null branch ever runs.
@@ -614,13 +642,13 @@ function EnumControl({ field, value, saving, onStage }: ControlProps<EnumField>)
  * there is nothing to defer, and an edit that only counts once focus moves is an edit somebody can
  * lose by clicking straight at Save.
  */
-function StringControl({ field, value, saving, onStage }: ControlProps<StringField>) {
+function StringControl({ field, value, locked, onStage }: ControlProps<StringField>) {
 	const [draft, setDraft] = useEditableCopy(value as string);
 
 	return (
 		<Input
 			value={draft}
-			disabled={saving}
+			disabled={locked}
 			maxLength={field.definition.maxLength}
 			className="font-mono"
 			onChange={(event) => {

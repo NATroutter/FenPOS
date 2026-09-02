@@ -51,10 +51,14 @@ export interface ImageSource {
  * Holds one image source's state.
  *
  * @param maxBytes the configured upload cap, used to refuse an oversized file before it is sent
+ * @param initialTab which source to open on. The add dialog's two sources are separate permissions
+ *   — `assets:upload` and `assets:import` — so an operator holding only the second must not open on
+ *   a File tab that is not there. Replacing is one permission whichever source the bytes come from,
+ *   so that dialog leaves this at its default.
  * @returns the state and the handlers a dialog needs
  */
-export function useImageSource(maxBytes: number): ImageSource {
-	const [tab, setTab] = useState<SourceTab>("file");
+export function useImageSource(maxBytes: number, initialTab: SourceTab = "file"): ImageSource {
+	const [tab, setTab] = useState<SourceTab>(initialTab);
 	const [file, setFile] = useState<File | null>(null);
 	const [url, setUrl] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -106,7 +110,7 @@ export function useImageSource(maxBytes: number): ImageSource {
 		choose,
 		clearFile,
 		reset: () => {
-			setTab("file");
+			setTab(initialTab);
 			setUrl("");
 			setError(null);
 			clearFile();
@@ -123,28 +127,35 @@ export function useImageSource(maxBytes: number): ImageSource {
  * @param acceptedFormats the configured `assets.acceptedFormats`, for the file picker's filter
  * @param disabled whether a save is in flight
  * @param idPrefix distinguishes this instance's input ids from another dialog's on the same page
+ * @param allow which sources the operator may use. With only one, the strip goes: a tab bar
+ *   offering a single choice is a control over nothing, and the field below it already says which
+ *   source this is.
  */
 export function ImageSourceTabs({
 	source,
 	acceptedFormats,
 	disabled,
 	idPrefix,
+	allow = { file: true, url: true },
 }: {
 	source: ImageSource;
 	acceptedFormats: AcceptedFormats;
 	disabled: boolean;
 	idPrefix: string;
+	allow?: { file: boolean; url: boolean };
 }) {
 	return (
 		<Tabs value={source.tab} onValueChange={(next) => source.setTab(next as SourceTab)}>
-			<TabsList className="w-full">
-				<TabsTrigger value="file" disabled={disabled}>
-					File
-				</TabsTrigger>
-				<TabsTrigger value="url" disabled={disabled}>
-					URL
-				</TabsTrigger>
-			</TabsList>
+			{!(allow.file && allow.url) ? null : (
+				<TabsList className="w-full">
+					<TabsTrigger value="file" disabled={disabled}>
+						File
+					</TabsTrigger>
+					<TabsTrigger value="url" disabled={disabled}>
+						URL
+					</TabsTrigger>
+				</TabsList>
+			)}
 
 			<TabsContent value="file" className="pt-1">
 				<Field>

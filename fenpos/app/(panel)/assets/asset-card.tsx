@@ -8,6 +8,7 @@ import { PreviewDialog } from "@/app/(panel)/assets/preview-dialog";
 import type { AcceptedFormats } from "@/app/(panel)/assets/prose";
 import { RenameDialog } from "@/app/(panel)/assets/rename-dialog";
 import { ReplaceDialog } from "@/app/(panel)/assets/replace-dialog";
+import type { AssetPermits } from "@/app/(panel)/tab-permits";
 import { DitheredImage } from "@/components/panel/dithered-image";
 import {
 	AlertDialog,
@@ -62,12 +63,14 @@ export function AssetCard({
 	asset,
 	maxBytes,
 	acceptedFormats,
+	permits,
 }: {
 	asset: AssetCardData;
 	/** The configured upload cap, needed by the replace dialog this card owns. */
 	maxBytes: number;
 	/** The configured `assets.acceptedFormats`, read server-side and passed down as a plain prop. */
 	acceptedFormats: AcceptedFormats;
+	permits: AssetPermits;
 }) {
 	const [pending, startTransition] = useTransition();
 	const [copied, setCopied] = useState(false);
@@ -178,86 +181,94 @@ export function AssetCard({
 					{/* Ordered by how much they change and how recoverable they are: rename moves the
 					    reference, replace moves the picture, delete takes both away. The destructive one
 					    is last and set apart by colour, so the two ordinary edits are not sitting next to
-					    it looking equally final. */}
-					<RenameDialog
-						assetId={asset.id}
-						assetName={asset.name}
-						trigger={
-							<Button
-								variant="outline"
-								size="icon"
-								className="size-8"
-								title="Rename"
-								aria-label={`Rename ${asset.name}`}
-								disabled={pending}
-							>
-								<Pencil className="size-3.5" />
-							</Button>
-						}
-					/>
-
-					<ReplaceDialog
-						assetId={asset.id}
-						assetName={asset.name}
-						maxBytes={maxBytes}
-						acceptedFormats={acceptedFormats}
-						trigger={
-							<Button
-								variant="outline"
-								size="icon"
-								className="size-8"
-								title="Replace the image"
-								aria-label={`Replace the image for ${asset.name}`}
-								disabled={pending}
-							>
-								<Upload className="size-3.5" />
-							</Button>
-						}
-					/>
-
-					<AlertDialog>
-						<AlertDialogTrigger
-							disabled={pending}
-							render={
+					    it looking equally final. Each is its own permission, so the row thins out rather
+					    than disappearing — Copy reference is always there, and it is the one thing an
+					    operator holding `assets:read` alone actually came for. */}
+					{!permits["assets:rename"] ? null : (
+						<RenameDialog
+							assetId={asset.id}
+							assetName={asset.name}
+							trigger={
 								<Button
 									variant="outline"
 									size="icon"
-									className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
-									title="Delete"
-									aria-label="Delete image"
+									className="size-8"
+									title="Rename"
+									aria-label={`Rename ${asset.name}`}
+									disabled={pending}
 								>
-									{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+									<Pencil className="size-3.5" />
 								</Button>
 							}
 						/>
-						<AlertDialogContent>
-							<AlertDialogHeader>
-								<AlertDialogTitle>Delete {asset.name}?</AlertDialogTitle>
-								<AlertDialogDescription>
-									Any receipt that says <span className="font-mono">{reference}</span> is refused until it is changed,
-									or until an image of that name is stored again. This cannot be undone.
-								</AlertDialogDescription>
-							</AlertDialogHeader>
-							<AlertDialogFooter>
-								<AlertDialogCancel>Cancel</AlertDialogCancel>
-								<AlertDialogAction
-									className="bg-destructive text-white hover:bg-destructive/90"
-									onClick={() =>
-										startTransition(async () => {
-											const result = await removeAsset(asset.id);
-											if (result.error) {
-												toast.error(result.error);
-											} else {
-												toast.success(`${asset.name} deleted.`);
-											}
-										})
-									}
+					)}
+
+					{!permits["assets:replace"] ? null : (
+						<ReplaceDialog
+							assetId={asset.id}
+							assetName={asset.name}
+							maxBytes={maxBytes}
+							acceptedFormats={acceptedFormats}
+							trigger={
+								<Button
+									variant="outline"
+									size="icon"
+									className="size-8"
+									title="Replace the image"
+									aria-label={`Replace the image for ${asset.name}`}
+									disabled={pending}
 								>
-									Delete
-								</AlertDialogAction>
-							</AlertDialogFooter>
-						</AlertDialogContent>
-					</AlertDialog>
+									<Upload className="size-3.5" />
+								</Button>
+							}
+						/>
+					)}
+
+					{!permits["assets:delete"] ? null : (
+						<AlertDialog>
+							<AlertDialogTrigger
+								disabled={pending}
+								render={
+									<Button
+										variant="outline"
+										size="icon"
+										className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
+										title="Delete"
+										aria-label="Delete image"
+									>
+										{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+									</Button>
+								}
+							/>
+							<AlertDialogContent>
+								<AlertDialogHeader>
+									<AlertDialogTitle>Delete {asset.name}?</AlertDialogTitle>
+									<AlertDialogDescription>
+										Any receipt that says <span className="font-mono">{reference}</span> is refused until it is changed,
+										or until an image of that name is stored again. This cannot be undone.
+									</AlertDialogDescription>
+								</AlertDialogHeader>
+								<AlertDialogFooter>
+									<AlertDialogCancel>Cancel</AlertDialogCancel>
+									<AlertDialogAction
+										className="bg-destructive text-white hover:bg-destructive/90"
+										onClick={() =>
+											startTransition(async () => {
+												const result = await removeAsset(asset.id);
+												if (result.error) {
+													toast.error(result.error);
+												} else {
+													toast.success(`${asset.name} deleted.`);
+												}
+											})
+										}
+									>
+										Delete
+									</AlertDialogAction>
+								</AlertDialogFooter>
+							</AlertDialogContent>
+						</AlertDialog>
+					)}
 				</CardActions>
 			</CardContent>
 		</Card>

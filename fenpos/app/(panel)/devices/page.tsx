@@ -1,9 +1,11 @@
 import { Plus, Printer, Server } from "lucide-react";
 import { DeviceCard, type DeviceCardData } from "@/app/(panel)/devices/device-card";
 import { DeviceDialog, EMPTY_DEVICE } from "@/app/(panel)/devices/device-dialog";
+import { DEVICE_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { LiveRefresh } from "@/components/panel/live-refresh";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
 import type { Codepage, FlowControl, Linefeed, Parity, UnsupportedPolicy } from "@/lib/domain/enums";
@@ -32,14 +34,17 @@ export const dynamic = "force-dynamic";
  */
 export default async function DevicesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("devices:read", "/devices");
+	const user = await requirePagePermission("devices:read", "/devices");
 
-	const [agents, variables] = await Promise.all([
+	const [agents, variables, permits] = await Promise.all([
 		prisma.agent.findMany({
 			orderBy: { name: "asc" },
 			include: { devices: { orderBy: { name: "asc" } } },
 		}),
 		listVariables(),
+		// Resolved here because a client component cannot read the database. Convenience only — every
+		// action is refused again by its own gate; see `permitsFor`.
+		permitsFor(user, DEVICE_PERMISSIONS),
 	]);
 
 	// Only a `STATIC` variable can carry a per-printer value — `setDeviceOverride` refuses any
@@ -139,17 +144,20 @@ export default async function DevicesPage() {
 								{group.devices.length === 1 ? "printer" : "printers"}
 							</span>
 							<div className="flex-1" />
-							<DeviceDialog
-								agentId={group.id}
-								agentName={group.name}
-								agentOnline={group.online}
-								trigger={
-									<Button variant="outline" size="sm" className="h-8">
-										<Plus className="size-3.5" />
-										Add printer
-									</Button>
-								}
-							/>
+							{!permits["devices:create"] ? null : (
+								<DeviceDialog
+									agentId={group.id}
+									agentName={group.name}
+									agentOnline={group.online}
+									permits={permits}
+									trigger={
+										<Button variant="outline" size="sm" className="h-8">
+											<Plus className="size-3.5" />
+											Add printer
+										</Button>
+									}
+								/>
+							)}
 						</div>
 
 						{group.devices.length === 0 ? (
@@ -159,7 +167,7 @@ export default async function DevicesPage() {
 						) : (
 							<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] items-stretch gap-4">
 								{group.devices.map((device) => (
-									<DeviceCard key={device.id} device={device} />
+									<DeviceCard key={device.id} device={device} permits={permits} />
 								))}
 							</div>
 						)}
@@ -167,7 +175,7 @@ export default async function DevicesPage() {
 				))
 			)}
 
-			{agents.length > 0 && total === 0 ? (
+			{agents.length > 0 && total === 0 && permits["devices:create"] ? (
 				<p className="text-[12.5px] text-subtle-foreground">
 					Add a printer to an agent above, then use its test page to check the paper width and codepage.
 				</p>

@@ -2,10 +2,12 @@ import { Image as ImageIcon, Plus } from "lucide-react";
 import { AssetCard, type AssetCardData } from "@/app/(panel)/assets/asset-card";
 import type { AcceptedFormats } from "@/app/(panel)/assets/prose";
 import { UploadDialog } from "@/app/(panel)/assets/upload-dialog";
+import { ASSET_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { listAssets, maxAssetBytes, rasterFor } from "@/lib/assets/asset-service";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { logger } from "@/lib/logger";
 import { dotWidth } from "@/lib/markup/blocks";
@@ -45,11 +47,17 @@ const PREVIEW_DOTS = dotWidth(32);
  */
 export default async function AssetsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("assets:read", "/assets");
+	const user = await requirePagePermission("assets:read", "/assets");
 
 	const assets = await listAssets();
 	const uploadCap = await maxAssetBytes();
 	const acceptedFormats = await enumSetting<AcceptedFormats>("assets.acceptedFormats");
+	// Resolved here because a client component cannot read the database. Convenience only — every
+	// action is refused again by its own gate; see `permitsFor`.
+	const permits = await permitsFor(user, ASSET_PERMISSIONS);
+
+	// The Add dialog is one form over two sources, either of which is reason enough to open it.
+	const canAdd = permits["assets:upload"] || permits["assets:import"];
 
 	// One at a time, not `Promise.all`. Rendering a preview decodes the image, and `MAX_IMAGE_DIMENSION`
 	// in the asset service is a bound on *one* decode — a 4096-pixel JPEG costs about half a gigabyte
@@ -76,16 +84,20 @@ export default async function AssetsPage() {
 			{/* The section's own description is in the top bar; what is left here is the one action
 			    this page offers, kept on its own row so it stays put as the grid below changes. */}
 			<div className="flex justify-end">
-				<UploadDialog
-					maxBytes={uploadCap}
-					acceptedFormats={acceptedFormats}
-					trigger={
-						<Button>
-							<Plus className="size-3.5" />
-							Add image
-						</Button>
-					}
-				/>
+				{!canAdd ? null : (
+					<UploadDialog
+						maxBytes={uploadCap}
+						acceptedFormats={acceptedFormats}
+						canUpload={permits["assets:upload"]}
+						canImport={permits["assets:import"]}
+						trigger={
+							<Button>
+								<Plus className="size-3.5" />
+								Add image
+							</Button>
+						}
+					/>
+				)}
 			</div>
 
 			{cards.length === 0 ? (
@@ -98,14 +110,20 @@ export default async function AssetsPage() {
 						<EmptyDescription>
 							An image stored here is printed by name, so a receipt says{" "}
 							<span className="font-mono">&lt;image&gt;logo&lt;/image&gt;</span> rather than carrying the picture with
-							it. Add one to put a logo on a receipt.
+							it.{canAdd ? " Add one to put a logo on a receipt." : ""}
 						</EmptyDescription>
 					</EmptyHeader>
 				</Empty>
 			) : (
 				<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] items-stretch gap-4">
 					{cards.map((asset) => (
-						<AssetCard key={asset.id} asset={asset} maxBytes={uploadCap} acceptedFormats={acceptedFormats} />
+						<AssetCard
+							key={asset.id}
+							asset={asset}
+							maxBytes={uploadCap}
+							acceptedFormats={acceptedFormats}
+							permits={permits}
+						/>
 					))}
 				</div>
 			)}

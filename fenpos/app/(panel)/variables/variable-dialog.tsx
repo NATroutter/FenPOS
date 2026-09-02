@@ -104,10 +104,15 @@ function toFormValues(source: VariableDefinition | undefined): VariableDefinitio
 export function VariableDialog({
 	variableId,
 	initial,
+	canPreview,
 	trigger,
 }: {
 	variableId?: string;
 	initial?: VariableDefinition;
+	/** Whether the operator holds `variables:preview`, which renders the pattern against the current
+	    instant. Without it the pattern is still editable — it just goes in unseen, the way it did
+	    before this reading existed. */
+	canPreview: boolean;
 	trigger: ReactElement;
 }) {
 	const [open, setOpen] = useState(false);
@@ -162,14 +167,14 @@ export function VariableDialog({
 	// "—" for the whole editing session. Creating a variable concealed the bug, because choosing
 	// DATETIME changes `kind` and re-triggers this on the way in.
 	useEffect(() => {
-		if (!open || kind !== "DATETIME") {
+		if (!open || !canPreview || kind !== "DATETIME") {
 			return;
 		}
 		const timer = setTimeout(() => {
 			void previewMoment(pattern ?? "", offsetAmount, offsetUnit).then(setPreview);
 		}, PREVIEW_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [open, kind, pattern, offsetAmount, offsetUnit]);
+	}, [open, canPreview, kind, pattern, offsetAmount, offsetUnit]);
 
 	const close = (): void => setOpen(false);
 
@@ -317,7 +322,7 @@ export function VariableDialog({
 													</Button>
 												))}
 											</div>
-											{preview.error ? (
+											{!canPreview ? null : preview.error ? (
 												<FieldDescription className="text-destructive">{preview.error}</FieldDescription>
 											) : (
 												<FieldDescription>

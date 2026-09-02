@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { deleteAgent, renameAgent, sendTestPrint, unpairAgent } from "@/app/(panel)/agents/actions";
 import { PairingPanel } from "@/app/(panel)/agents/pairing-panel";
+import type { AgentPermits } from "@/app/(panel)/tab-permits";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -37,24 +38,6 @@ export interface AgentCardData {
 	deviceCount: number;
 	pairing: { code: string; expiresAt: string } | null;
 }
-
-/**
- * The permissions this tab's controls are gated on.
- *
- * Declared here beside the controls rather than in the page, so adding an action and forgetting to
- * ask about it is one edit rather than two files apart. The page passes the answers back down.
- */
-export const AGENT_PERMISSIONS = [
-	"agents:create",
-	"agents:rename",
-	"agents:pairing-code",
-	"agents:unpair",
-	"agents:delete",
-	"agents:test-print",
-] as const;
-
-/** What the acting account may do on this tab. Convenience only — see `permitsFor`. */
-export type AgentPermits = Record<(typeof AGENT_PERMISSIONS)[number], boolean>;
 
 /** Chip styling per connection state. */
 const STATUS_STYLE: Record<AgentStatus, { label: string; className: string }> = {

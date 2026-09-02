@@ -1,11 +1,13 @@
 import { Braces, Plus } from "lucide-react";
 import Link from "next/link";
+import { VARIABLE_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { VariableDialog } from "@/app/(panel)/variables/variable-dialog";
 import { VariableRow, type VariableRowData } from "@/app/(panel)/variables/variable-row";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { logger } from "@/lib/logger";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
@@ -30,9 +32,19 @@ export const dynamic = "force-dynamic";
  */
 export default async function VariablesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
-	await requirePagePermission("variables:read", "/variables");
+	const user = await requirePagePermission("variables:read", "/variables");
 
-	const [variables, enabled] = await Promise.all([listVariables(), booleanSetting("variables.enabled")]);
+	const [variables, enabled, permits] = await Promise.all([
+		listVariables(),
+		booleanSetting("variables.enabled"),
+		// Resolved here because a client component cannot read the database. Convenience only — every
+		// action is refused again by its own gate; see `permitsFor`.
+		permitsFor(user, VARIABLE_PERMISSIONS),
+	]);
+
+	// The row drops its action cell on the same condition; the header below has to match or the
+	// columns come apart.
+	const canManage = permits["variables:update"] || permits["variables:delete"];
 
 	// `resolveVariables` returns null when the feature is off, which is handled below with the
 	// banner. A row it cannot evaluate is now omitted from the map rather than thrown through — so
@@ -79,14 +91,17 @@ export default async function VariablesPage() {
 			{/* The section's own description is in the top bar; what is left here is the one action
 			    this page offers, kept on its own row so it stays put as the table below changes. */}
 			<div className="flex justify-end">
-				<VariableDialog
-					trigger={
-						<Button>
-							<Plus className="size-3.5" />
-							Add variable
-						</Button>
-					}
-				/>
+				{!permits["variables:create"] ? null : (
+					<VariableDialog
+						canPreview={permits["variables:preview"]}
+						trigger={
+							<Button>
+								<Plus className="size-3.5" />
+								Add variable
+							</Button>
+						}
+					/>
+				)}
 			</div>
 
 			{rows.length === 0 ? (
@@ -112,12 +127,12 @@ export default async function VariablesPage() {
 							<TableHead>Resolves to</TableHead>
 							<TableHead className="w-[36px]" />
 							<TableHead>Description</TableHead>
-							<TableHead className="w-[96px]" />
+							{canManage ? <TableHead className="w-[96px]" /> : null}
 						</TableRow>
 					</TableHeader>
 					<TableBody>
 						{rows.map((variable) => (
-							<VariableRow key={variable.id} variable={variable} />
+							<VariableRow key={variable.id} variable={variable} permits={permits} />
 						))}
 					</TableBody>
 				</Table>

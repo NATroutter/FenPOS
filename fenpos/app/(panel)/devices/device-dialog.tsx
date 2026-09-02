@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { type ReactElement, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createDevice, saveDeviceOverride, scanAgentPorts, updateDevice } from "@/app/(panel)/devices/actions";
+import type { DevicePermits } from "@/app/(panel)/tab-permits";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -108,6 +109,12 @@ export const EMPTY_DEVICE: DeviceFormValues = {
  * fails as a device that simply never connects — indistinguishable from broken hardware, and
  * diagnosed nowhere near the typo. Typing one is still possible for a port that is not plugged
  * in yet, but the list is what the dialog leads with.
+ *
+ * **This dialog holds two separately-granted things**, so it can open as either or both. Settings
+ * need `devices:update` (or `devices:create`, when there is no printer yet); overrides need
+ * `devices:override`. Somebody holding only the latter gets the dialog with the settings left out
+ * entirely rather than shown greyed, which is what the rest of the panel does, and what Save would
+ * have written for them was never theirs to write.
  */
 export function DeviceDialog({
 	agentId,
@@ -116,6 +123,7 @@ export function DeviceDialog({
 	deviceId,
 	initial,
 	variables = [],
+	permits,
 	trigger,
 }: {
 	agentId: string;
@@ -125,8 +133,14 @@ export function DeviceDialog({
 	initial?: DeviceFormValues;
 	/** This printer's `STATIC` variables, for the overrides section. Empty on the "Add printer" dialog, which has no `deviceId` yet to hang an override on. */
 	variables?: OverridableVariable[];
+	permits: DevicePermits;
 	trigger: ReactElement;
 }) {
+	// Adding a printer is `devices:create`, which the caller checked before rendering the trigger at
+	// all; changing one that already exists is `devices:update`, which it may not hold.
+	const canEditSettings = deviceId ? permits["devices:update"] : true;
+	const canOverride = deviceId ? permits["devices:override"] : false;
+
 	const [open, setOpen] = useState(false);
 	const [values, setValues] = useState<DeviceFormValues>(initial ?? EMPTY_DEVICE);
 	const [error, setError] = useState<string | null>(null);
@@ -149,11 +163,14 @@ export function DeviceDialog({
 
 	// Scanned as the dialog opens rather than behind a button the operator has to find. The
 	// list is the point of the dialog; making them ask for it adds a step to every use.
+	//
+	// `devices:scan-ports` is asked here as well as at the button: without it the scan is refused,
+	// and firing it on open would put an error under a field the operator has not touched yet.
 	useEffect(() => {
-		if (open && agentOnline && ports === null) {
+		if (open && agentOnline && canEditSettings && permits["devices:scan-ports"] && ports === null) {
 			scan();
 		}
-	}, [open, agentOnline, ports]);
+	}, [open, agentOnline, canEditSettings, permits, ports]);
 
 	const save = (): void => {
 		setError(null);
@@ -186,195 +203,216 @@ export function DeviceDialog({
 			<DialogTrigger render={trigger} />
 			<DialogContent className="sm:max-w-[820px]">
 				<DialogHeader>
-					<DialogTitle>{deviceId ? "Configure printer" : "Add printer"}</DialogTitle>
+					<DialogTitle>
+						{!canEditSettings ? "Variable overrides" : deviceId ? "Configure printer" : "Add printer"}
+					</DialogTitle>
 					<DialogDescription>
-						On <span className="font-mono">{agentName}</span>. Serial settings must match what the printer expects; its
-						manual or a label on the back usually says.
+						On <span className="font-mono">{agentName}</span>.{" "}
+						{canEditSettings
+							? "Serial settings must match what the printer expects; its manual or a label on the back usually says."
+							: `What this printer resolves a variable to, in place of the install-wide value.`}
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
 					<div className="flex flex-col gap-4">
-						<Field>
-							<FieldLabel htmlFor="device-name">Name</FieldLabel>
-							<Input
-								id="device-name"
-								value={values.name}
-								disabled={saving}
-								placeholder="kitchen"
-								onChange={(event) => set("name", toNameCandidate(event.target.value, { keepTrailingSeparator: true }))}
-							/>
-							<FieldDescription>
-								Used in the print API path, so it is a slug. Unique within this agent only — another site can have its
-								own <span className="font-mono">kitchen</span>.
-							</FieldDescription>
-						</Field>
+						{!canEditSettings ? null : (
+							<>
+								<Field>
+									<FieldLabel htmlFor="device-name">Name</FieldLabel>
+									<Input
+										id="device-name"
+										value={values.name}
+										disabled={saving}
+										placeholder="kitchen"
+										onChange={(event) =>
+											set("name", toNameCandidate(event.target.value, { keepTrailingSeparator: true }))
+										}
+									/>
+									<FieldDescription>
+										Used in the print API path, so it is a slug. Unique within this agent only — another site can have
+										its own <span className="font-mono">kitchen</span>.
+									</FieldDescription>
+								</Field>
 
-						<Field>
-							<FieldLabel htmlFor="device-port">Serial port</FieldLabel>
-							<div className="flex gap-2">
-								<Input
-									id="device-port"
-									value={values.port}
-									disabled={saving}
-									placeholder="COM3 or /dev/ttyUSB0"
-									className="font-mono"
-									onChange={(event) => set("port", event.target.value)}
-								/>
-								<Button
-									type="button"
-									variant="outline"
-									size="icon"
-									title="Rescan ports"
-									aria-label="Rescan ports"
-									disabled={!agentOnline || scanning || saving}
-									onClick={scan}
-								>
-									{scanning ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
-								</Button>
-							</div>
-
-							{!agentOnline ? (
-								<FieldDescription>
-									{agentName} is offline, so its ports cannot be listed. Type the port if you know it.
-								</FieldDescription>
-							) : scanError ? (
-								<FieldDescription className="text-destructive">{scanError}</FieldDescription>
-							) : ports && ports.length > 0 ? (
-								<div className="flex flex-wrap gap-1.5 pt-1">
-									{ports.map((port) => (
-										<Button
-											key={port.name}
-											type="button"
-											variant={values.port === port.name ? "default" : "outline"}
-											size="sm"
-											className="h-7 font-mono text-[11.5px]"
+								<Field>
+									<FieldLabel htmlFor="device-port">Serial port</FieldLabel>
+									<div className="flex gap-2">
+										<Input
+											id="device-port"
+											value={values.port}
 											disabled={saving}
-											onClick={() => set("port", port.name)}
-											title={`${port.description}${port.serialNumber ? ` · ${port.serialNumber}` : ""}`}
-										>
-											{port.name}
-										</Button>
-									))}
+											placeholder="COM3 or /dev/ttyUSB0"
+											className="font-mono"
+											onChange={(event) => set("port", event.target.value)}
+										/>
+										{!permits["devices:scan-ports"] ? null : (
+											<Button
+												type="button"
+												variant="outline"
+												size="icon"
+												title="Rescan ports"
+												aria-label="Rescan ports"
+												disabled={!agentOnline || scanning || saving}
+												onClick={scan}
+											>
+												{scanning ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+											</Button>
+										)}
+									</div>
+
+									{!permits["devices:scan-ports"] ? (
+										<FieldDescription>Type the port the printer is on, as {agentName} names it.</FieldDescription>
+									) : !agentOnline ? (
+										<FieldDescription>
+											{agentName} is offline, so its ports cannot be listed. Type the port if you know it.
+										</FieldDescription>
+									) : scanError ? (
+										<FieldDescription className="text-destructive">{scanError}</FieldDescription>
+									) : ports && ports.length > 0 ? (
+										<div className="flex flex-wrap gap-1.5 pt-1">
+											{ports.map((port) => (
+												<Button
+													key={port.name}
+													type="button"
+													variant={values.port === port.name ? "default" : "outline"}
+													size="sm"
+													className="h-7 font-mono text-[11.5px]"
+													disabled={saving}
+													onClick={() => set("port", port.name)}
+													title={`${port.description}${port.serialNumber ? ` · ${port.serialNumber}` : ""}`}
+												>
+													{port.name}
+												</Button>
+											))}
+										</div>
+									) : ports ? (
+										<FieldDescription>{agentName} reports no serial ports. Is the printer plugged in?</FieldDescription>
+									) : (
+										<FieldDescription>Listing ports on {agentName}…</FieldDescription>
+									)}
+								</Field>
+
+								<div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+									<Choice
+										label="Baud rate"
+										value={String(values.baudRate)}
+										options={BAUD_RATES.map((rate) => String(rate))}
+										disabled={saving}
+										onChange={(next) => set("baudRate", Number(next))}
+									/>
+									<Choice
+										label="Columns"
+										value={String(values.columns)}
+										options={COLUMN_PRESETS.map((columns) => String(columns))}
+										disabled={saving}
+										onChange={(next) => set("columns", Number(next))}
+										description="42 for 80mm paper, 32 for 58mm."
+									/>
+									<Choice
+										label="Codepage"
+										value={values.codepage}
+										options={[...Codepage.values]}
+										disabled={saving}
+										onChange={(next) => set("codepage", next as CodepageValue)}
+									/>
+									<Choice
+										label="Parity"
+										value={values.parity}
+										options={[...Parity.values]}
+										disabled={saving}
+										onChange={(next) => set("parity", next as ParityValue)}
+									/>
+									<Choice
+										label="Flow control"
+										value={values.flowControl}
+										options={[...FlowControl.values]}
+										disabled={saving}
+										onChange={(next) => set("flowControl", next as FlowControlValue)}
+									/>
+									<Choice
+										label="Data bits"
+										value={String(values.dataBits)}
+										options={["5", "6", "7", "8"]}
+										disabled={saving}
+										onChange={(next) => set("dataBits", Number(next))}
+									/>
+									<Choice
+										label="Stop bits"
+										value={String(values.stopBits)}
+										options={["1", "2"]}
+										disabled={saving}
+										onChange={(next) => set("stopBits", Number(next))}
+									/>
+									<Choice
+										label="Line ending"
+										value={values.defaultLinefeed}
+										options={[...Linefeed.values]}
+										disabled={saving}
+										onChange={(next) => set("defaultLinefeed", next as LinefeedValue)}
+									/>
+									<Choice
+										label="Unsupported characters"
+										value={values.onUnsupported}
+										options={[...UnsupportedPolicy.values]}
+										disabled={saving}
+										onChange={(next) => set("onUnsupported", next as UnsupportedPolicyValue)}
+										description="What to do with a character the codepage cannot print."
+									/>
+									<NumberField
+										label="Queue depth"
+										value={values.maxQueueDepth}
+										disabled={saving}
+										onChange={(next) => set("maxQueueDepth", next)}
+										description="Jobs the agent will hold before refusing more."
+									/>
+									<NumberField
+										label="Write timeout (ms)"
+										value={values.writeTimeoutMs}
+										disabled={saving}
+										onChange={(next) => set("writeTimeoutMs", next)}
+									/>
+									<NumberField
+										label="Reconnect delay (s)"
+										value={values.reconnectDelaySeconds}
+										disabled={saving}
+										onChange={(next) => set("reconnectDelaySeconds", next)}
+									/>
 								</div>
-							) : ports ? (
-								<FieldDescription>{agentName} reports no serial ports. Is the printer plugged in?</FieldDescription>
-							) : (
-								<FieldDescription>Listing ports on {agentName}…</FieldDescription>
-							)}
-						</Field>
 
-						<div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-							<Choice
-								label="Baud rate"
-								value={String(values.baudRate)}
-								options={BAUD_RATES.map((rate) => String(rate))}
-								disabled={saving}
-								onChange={(next) => set("baudRate", Number(next))}
-							/>
-							<Choice
-								label="Columns"
-								value={String(values.columns)}
-								options={COLUMN_PRESETS.map((columns) => String(columns))}
-								disabled={saving}
-								onChange={(next) => set("columns", Number(next))}
-								description="42 for 80mm paper, 32 for 58mm."
-							/>
-							<Choice
-								label="Codepage"
-								value={values.codepage}
-								options={[...Codepage.values]}
-								disabled={saving}
-								onChange={(next) => set("codepage", next as CodepageValue)}
-							/>
-							<Choice
-								label="Parity"
-								value={values.parity}
-								options={[...Parity.values]}
-								disabled={saving}
-								onChange={(next) => set("parity", next as ParityValue)}
-							/>
-							<Choice
-								label="Flow control"
-								value={values.flowControl}
-								options={[...FlowControl.values]}
-								disabled={saving}
-								onChange={(next) => set("flowControl", next as FlowControlValue)}
-							/>
-							<Choice
-								label="Data bits"
-								value={String(values.dataBits)}
-								options={["5", "6", "7", "8"]}
-								disabled={saving}
-								onChange={(next) => set("dataBits", Number(next))}
-							/>
-							<Choice
-								label="Stop bits"
-								value={String(values.stopBits)}
-								options={["1", "2"]}
-								disabled={saving}
-								onChange={(next) => set("stopBits", Number(next))}
-							/>
-							<Choice
-								label="Line ending"
-								value={values.defaultLinefeed}
-								options={[...Linefeed.values]}
-								disabled={saving}
-								onChange={(next) => set("defaultLinefeed", next as LinefeedValue)}
-							/>
-							<Choice
-								label="Unsupported characters"
-								value={values.onUnsupported}
-								options={[...UnsupportedPolicy.values]}
-								disabled={saving}
-								onChange={(next) => set("onUnsupported", next as UnsupportedPolicyValue)}
-								description="What to do with a character the codepage cannot print."
-							/>
-							<NumberField
-								label="Queue depth"
-								value={values.maxQueueDepth}
-								disabled={saving}
-								onChange={(next) => set("maxQueueDepth", next)}
-								description="Jobs the agent will hold before refusing more."
-							/>
-							<NumberField
-								label="Write timeout (ms)"
-								value={values.writeTimeoutMs}
-								disabled={saving}
-								onChange={(next) => set("writeTimeoutMs", next)}
-							/>
-							<NumberField
-								label="Reconnect delay (s)"
-								value={values.reconnectDelaySeconds}
-								disabled={saving}
-								onChange={(next) => set("reconnectDelaySeconds", next)}
-							/>
-						</div>
+								<div className="flex flex-col gap-2.5 border-t border-border pt-3">
+									<Toggle
+										id="device-auto-connect"
+										label="Open the port automatically"
+										checked={values.autoConnect}
+										disabled={saving}
+										onChange={(next) => set("autoConnect", next)}
+									/>
+									<Toggle
+										id="device-auto-reconnect"
+										label="Reopen it if the printer disappears"
+										checked={values.autoReconnect}
+										disabled={saving}
+										onChange={(next) => set("autoReconnect", next)}
+									/>
+									<Toggle
+										id="device-default-wrap"
+										label="Wrap long lines to the paper width"
+										checked={values.defaultWrap}
+										disabled={saving}
+										onChange={(next) => set("defaultWrap", next)}
+									/>
+								</div>
+							</>
+						)}
 
-						<div className="flex flex-col gap-2.5 border-t border-border pt-3">
-							<Toggle
-								id="device-auto-connect"
-								label="Open the port automatically"
-								checked={values.autoConnect}
+						{deviceId && canOverride ? (
+							<OverridesSection
+								deviceId={deviceId}
+								variables={variables}
 								disabled={saving}
-								onChange={(next) => set("autoConnect", next)}
+								standalone={!canEditSettings}
 							/>
-							<Toggle
-								id="device-auto-reconnect"
-								label="Reopen it if the printer disappears"
-								checked={values.autoReconnect}
-								disabled={saving}
-								onChange={(next) => set("autoReconnect", next)}
-							/>
-							<Toggle
-								id="device-default-wrap"
-								label="Wrap long lines to the paper width"
-								checked={values.defaultWrap}
-								disabled={saving}
-								onChange={(next) => set("defaultWrap", next)}
-							/>
-						</div>
-
-						{deviceId ? <OverridesSection deviceId={deviceId} variables={variables} disabled={saving} /> : null}
+						) : null}
 
 						{error ? (
 							<Alert variant="destructive">
@@ -384,13 +422,17 @@ export function DeviceDialog({
 					</div>
 				</DialogBody>
 				<DialogFooter>
+					{/* Each override field saves itself on blur, so with the settings left out there is
+					    nothing for Save to write and nothing for Cancel to abandon. */}
 					<Button type="button" variant="outline" disabled={saving} onClick={() => setOpen(false)}>
-						Cancel
+						{canEditSettings ? "Cancel" : "Close"}
 					</Button>
-					<Button type="button" disabled={saving || values.name === "" || values.port === ""} onClick={save}>
-						{saving ? <Spinner className="size-3.5" /> : null}
-						{deviceId ? "Save" : "Add printer"}
-					</Button>
+					{!canEditSettings ? null : (
+						<Button type="button" disabled={saving || values.name === "" || values.port === ""} onClick={save}>
+							{saving ? <Spinner className="size-3.5" /> : null}
+							{deviceId ? "Save" : "Add printer"}
+						</Button>
+					)}
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
@@ -508,20 +550,26 @@ function OverridesSection({
 	deviceId,
 	variables,
 	disabled,
+	standalone,
 }: {
 	deviceId: string;
 	variables: OverridableVariable[];
 	disabled: boolean;
+	/** Whether this is the whole dialog, the settings above it having been left out. Drops the rule
+	    and the heading, which would be dividing this section from nothing and naming the dialog twice. */
+	standalone: boolean;
 }) {
 	return (
-		<div className="flex flex-col gap-2.5 border-t border-border pt-3">
-			<div>
-				<FieldLabel>Variable overrides</FieldLabel>
-				<FieldDescription>
-					A date's format and a printer's own name are the same on every printer, so only text variables can be
-					overridden here.
-				</FieldDescription>
-			</div>
+		<div className={`flex flex-col gap-2.5 ${standalone ? "" : "border-t border-border pt-3"}`}>
+			{standalone ? null : (
+				<div>
+					<FieldLabel>Variable overrides</FieldLabel>
+					<FieldDescription>
+						A date's format and a printer's own name are the same on every printer, so only text variables can be
+						overridden here.
+					</FieldDescription>
+				</div>
+			)}
 
 			{variables.length === 0 ? (
 				<p className="text-[11.5px] text-subtle-foreground">
