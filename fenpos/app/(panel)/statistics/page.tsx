@@ -16,10 +16,12 @@ export const dynamic = "force-dynamic";
 /**
  * The Statistics page.
  *
- * A shell today. `TabContent` renders a placeholder `Empty` for every tab until Task 13 replaces it
- * with real charts, but the URL contract this page reads — `?tab=&range=&from=&to=&agent=&device=`
- * — is the one every later task queries with, so it is parsed once, here, and handed down rather than
- * re-parsed per chart.
+ * Entirely URL-driven: `?tab=&range=&from=&to=&agent=&device=` is parsed once, here, and handed down
+ * rather than re-parsed per chart, which is what lets every control on the page — the tab strip, the
+ * range picker, the agent/device filter — act by rewriting the URL instead of holding client state.
+ * `TabContent` dispatches `tab` to one of eight data-backed tab Server Components (overview, jobs,
+ * reliability, latency, fleet, webhooks, api, security — see `tabs.ts`), each fetching its own metrics
+ * and laying out charts per the spec's chart-to-primitive mapping.
  *
  * Collection being off (`stats.enabled`) does not hide the page: an account with `stats:read` and no
  * way to flip that setting itself should still be able to see whatever was already rolled up, with
