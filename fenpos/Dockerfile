@@ -40,9 +40,20 @@ COPY . .
 # before the type checker or the bundler can see it.
 RUN pnpm db:generate
 
-# A build-time value only. Next validates the environment at build, and the real
-# database is not reachable from a build container — nothing here touches it.
-ENV DATABASE_URL="file:./data/build.db"
+# Build-time values only. `next build` collects page data by evaluating every
+# route module, and lib/env.ts validates the whole environment at module load, so
+# a route that transitively reaches it refuses the build outright unless every
+# required variable is present. The real values belong to the deployment: the
+# database is not reachable from a build container and the signing key is the
+# operator's, so both are placeholders here.
+#
+# Neither reaches the runtime stage — this ENV applies to `build` alone, and the
+# final stage sets its own DATABASE_URL and takes BETTER_AUTH_SECRET from the
+# deployment. The placeholder secret is deliberately spelled to be unusable if it
+# ever did leak forward: nothing signed with it would survive a real deployment,
+# and the runtime stage would refuse to start without a value of its own anyway.
+ENV DATABASE_URL="file:./data/build.db" \
+    BETTER_AUTH_SECRET="build-only-placeholder-never-used-at-runtime"
 RUN pnpm build
 
 # ---- runtime --------------------------------------------------------------
@@ -91,6 +102,11 @@ COPY --from=build --chown=fenpos:fenpos /build/prisma-logs.config.ts ./prisma-lo
 # audit-log.ts) swallows it — but a read does not: listAuditEvents (lib/audit/audit-query.ts) throws,
 # so the first sign of it is the Audit tab erroring the moment someone opens it, not an empty page.
 COPY --from=build --chown=fenpos:fenpos /build/prisma-audit.config.ts ./prisma-audit.config.ts
+# The metrics database's CLI config, for the same reason again. Its contents are rollups that
+# could in principle be rebuilt, so losing them is not losing the record — but an unmigrated
+# database is not an empty one, and the read path behind the Statistics tab throws on it rather
+# than showing nothing, so the symptom is the same: the tab errors the moment someone opens it.
+COPY --from=build --chown=fenpos:fenpos /build/prisma-metrics.config.ts ./prisma-metrics.config.ts
 COPY --from=build --chown=fenpos:fenpos /build/server.ts ./server.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation.ts ./instrumentation.ts
 COPY --from=build --chown=fenpos:fenpos /build/instrumentation-runtime.ts ./instrumentation-runtime.ts
@@ -127,12 +143,14 @@ VOLUME ["/app/data"]
 # volume the image has never seen. Deploy rather than dev: it applies what is
 # committed and refuses to invent a migration against a production database.
 #
-# All three databases, in one command, because they are one install. The second is the logs
-# database and the third the audit record; both URLs are derived from DATABASE_URL above, so they
-# land in the same volume and no further path has to be configured. Migrating one and forgetting
-# another does not crash the server: every write into either database swallows its own failure and
-# logs it instead (ingestLog in lib/logs/ingest.ts, appendEvent in lib/audit/audit-log.ts), the same
-# way recordServerLog already did. What it does mean is that nothing from that database is ever
-# recorded, and the first sign of it is the Logs or Audit tab erroring the moment someone opens it,
-# since the read paths behind those tabs do not swallow the same way.
-CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && ./node_modules/.bin/prisma migrate deploy --config prisma-audit.config.ts && exec ./node_modules/.bin/tsx server.ts"]
+# All four databases, in one command, because they are one install. After the main one come the
+# logs database, the audit record and the metrics rollups; all three URLs are derived from
+# DATABASE_URL above, so they land in the same volume and no further path has to be configured.
+# Migrating one and forgetting another does not crash the server: every write into them swallows
+# its own failure and logs it instead (ingestLog in lib/logs/ingest.ts, appendEvent in lib/audit/
+# audit-log.ts), the same way recordServerLog already did. What it does mean is that nothing from
+# that database is ever recorded, and the first sign of it is the Logs, Audit or Statistics tab
+# erroring the moment someone opens it, since the read paths behind those tabs do not swallow the
+# same way. Adding a database means adding it here as well; the metrics one shipped without this
+# line and the tab reading it was broken in every image built until it was noticed.
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/prisma migrate deploy --config prisma-logs.config.ts && ./node_modules/.bin/prisma migrate deploy --config prisma-audit.config.ts && ./node_modules/.bin/prisma migrate deploy --config prisma-metrics.config.ts && exec ./node_modules/.bin/tsx server.ts"]
