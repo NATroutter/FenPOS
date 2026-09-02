@@ -13,6 +13,7 @@ import {
 	LineChart,
 	Pie,
 	PieChart,
+	ReferenceLine,
 	XAxis,
 	YAxis,
 } from "recharts";
@@ -125,6 +126,11 @@ function truncate(label: string, max: number): string {
  * Time series: `kind` picks the mark; `stacked` applies to area and bar; `stepped` draws a step
  * curve on area/line. Renders an explicit empty state when every series value in every row is 0 or
  * null. Colors cycle `var(--chart-1..5)`.
+ *
+ * `referenceY`, when given, draws one flat dashed line at that value — e.g. the 100% line behind a
+ * success-rate chart, so a reader can see how far the series sits below "everything succeeded"
+ * without doing the arithmetic themselves. Muted rather than one of the series colors, since it is a
+ * fixed target, not a value the data reports.
  */
 export function TimeSeriesChart(props: {
 	kind: "area" | "bar" | "line";
@@ -133,9 +139,10 @@ export function TimeSeriesChart(props: {
 	stacked?: boolean;
 	stepped?: boolean;
 	valueFormat?: ValueFormat;
+	referenceY?: number;
 	className?: string;
 }) {
-	const { kind, data, series, stacked, stepped, valueFormat, className } = props;
+	const { kind, data, series, stacked, stepped, valueFormat, referenceY, className } = props;
 	const keys = series.map((s) => s.key);
 
 	if (isEmptySeries(data, keys)) {
@@ -173,6 +180,9 @@ export function TimeSeriesChart(props: {
 						tickFormatter={valueTick}
 						domain={yDomain}
 					/>
+					{referenceY !== undefined ? (
+						<ReferenceLine y={referenceY} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
+					) : null}
 					<ChartTooltip
 						content={
 							<ChartTooltipContent
@@ -223,6 +233,9 @@ export function TimeSeriesChart(props: {
 						tickFormatter={valueTick}
 						domain={yDomain}
 					/>
+					{referenceY !== undefined ? (
+						<ReferenceLine y={referenceY} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
+					) : null}
 					<ChartTooltip
 						content={
 							<ChartTooltipContent
@@ -270,6 +283,9 @@ export function TimeSeriesChart(props: {
 						tickFormatter={valueTick}
 						domain={yDomain}
 					/>
+					{referenceY !== undefined ? (
+						<ReferenceLine y={referenceY} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
+					) : null}
 					<ChartTooltip
 						content={
 							<ChartTooltipContent

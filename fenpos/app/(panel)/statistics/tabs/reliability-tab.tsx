@@ -28,6 +28,7 @@ export async function ReliabilityTab({ range, filter }: { range: ResolvedRange; 
 						data={data.successRate}
 						series={[{ key: "rate", label: "Success rate" }]}
 						valueFormat="percent"
+						referenceY={1}
 					/>
 				</ChartCard>
 
