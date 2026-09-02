@@ -97,10 +97,13 @@ export async function jobsWatermark(): Promise<Date> {
  * The merged job series for `range`, re-bucketed to `range.granularity`, zero-filled across every
  * display bucket in the range.
  *
- * Rolled rows cover `[range.from, min(watermark, range.to))`; a live aggregation over raw
- * terminal jobs (grouped by effective hour and rolled up with {@link computeJobRollup}, the exact
- * function the background job uses) covers `[watermark, range.to)`. That split is what keeps a job
- * from being counted on both sides of the watermark.
+ * Rolled rows cover `[hourStart(range.from), min(watermark, range.to))` — the lower bound is
+ * floored to the hour so the rollup row straddling `range.from` isn't dropped just because its
+ * bucket starts a little earlier. A live aggregation over raw terminal jobs (grouped by effective
+ * hour and rolled up with {@link computeJobRollup}, the exact function the background job uses)
+ * covers `[watermark, range.to)` — the watermark is always hour-aligned already, so no equivalent
+ * flooring is needed there. That split is what keeps a job from being counted on both sides of the
+ * watermark.
  */
 export async function jobSeries(range: ResolvedRange, filter: MetricsFilter): Promise<JobSeriesBucket[]> {
 	const watermark = await jobsWatermark();
@@ -121,10 +124,16 @@ export async function jobSeries(range: ResolvedRange, filter: MetricsFilter): Pr
 		return bucket;
 	}
 
-	if (rolledEnd.getTime() > range.from.getTime()) {
+	// The rollup table's bucket column is always hour-aligned, but `range.from` (a preset's
+	// "now minus a span", or a custom range's start-of-day) almost never is. Comparing the raw
+	// value would drop the one hourly row whose bucket starts before `range.from` but whose hour
+	// still overlaps it — so the lower bound is floored to the hour first.
+	const rolledFrom = hourStart(range.from);
+
+	if (rolledEnd.getTime() > rolledFrom.getTime()) {
 		const rolled = await metricsDb.metricJobHourly.findMany({
 			where: {
-				bucket: { gte: range.from, lt: rolledEnd },
+				bucket: { gte: rolledFrom, lt: rolledEnd },
 				...(filter.deviceId ? { deviceId: filter.deviceId } : {}),
 				...(filter.agentId ? { agentId: filter.agentId } : {}),
 			},
