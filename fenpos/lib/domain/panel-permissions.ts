@@ -44,6 +44,8 @@ export interface PanelPermissionGroup {
 export const PANEL_PERMISSION_IDS = [
 	"dashboard:read",
 
+	"stats:read",
+
 	"agents:read",
 	"agents:create",
 	"agents:rename",
@@ -162,6 +164,10 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 	{
 		label: "Dashboard",
 		permissions: [{ id: "dashboard:read", description: "See the Dashboard and what it summarises." }],
+	},
+	{
+		label: "Statistics",
+		permissions: [{ id: "stats:read", description: "See the Statistics page and every chart on it." }],
 	},
 	{
 		label: "Agents",

@@ -3,6 +3,7 @@ import {
 	Archive,
 	BookOpen,
 	Braces,
+	ChartColumn,
 	CodeXml,
 	History,
 	// `Image` is also a DOM global, and one that a React file legitimately reaches for. Aliased so
@@ -98,6 +99,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description: "What is reachable now, and what the last day produced.",
 				icon: LayoutDashboard,
 				permission: "dashboard:read",
+			},
+			{
+				href: "/statistics",
+				label: "Statistics",
+				title: "Statistics",
+				description: "What the system did over time: throughput, reliability, latency, fleet health.",
+				icon: ChartColumn,
+				permission: "stats:read",
 			},
 			{
 				href: "/jobs",
