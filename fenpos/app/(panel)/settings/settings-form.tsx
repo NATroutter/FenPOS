@@ -106,9 +106,16 @@ interface ControlProps<Field extends SettingFieldData> {
  * nothing, which is worse than not counting at all — it asks for a decision about work that does
  * not exist.
  *
+ * **A value equal to the one on screen is not a change even when nothing is stored.** This used to
+ * treat any `set` on a setting with no row as a change, on the reasoning that saving it would write
+ * one — which is true, and is still the wrong answer: an operator who switches something on and
+ * straight back off is looking at the value they started with and is told they have an unsaved
+ * change. Writing a row that pins the current default is a thing no control on this page can
+ * express anyway, since it would look identical to leaving it alone.
+ *
  * @param field the setting as the server holds it
  * @param draft the staged edit
- * @returns whether the draft differs from the stored state
+ * @returns whether the draft differs from what is currently in effect
  */
 function changesAnything(field: SettingFieldData, draft: Draft): boolean {
 	if (draft.kind === "reset") {
@@ -122,7 +129,7 @@ function changesAnything(field: SettingFieldData, draft: Draft): boolean {
 	if (draft.kind === "set" && field.definition.type === "secret" && draft.value === "") {
 		return false;
 	}
-	return !field.overridden || draft.value !== field.value;
+	return draft.value !== field.value;
 }
 
 /**
@@ -750,9 +757,11 @@ function BooleanControl({ field, value, locked, onStage }: ControlProps<BooleanF
 
 	return (
 		<ToggleGroup
-			// `lg` is the h-9 variant, which is the height `Input` and `SelectTrigger` use. `spacing={0}`
-			// joins the halves into one control instead of two buttons that happen to be adjacent.
-			size="lg"
+			// `default` is the h-8 variant, which is the 32px `Input`, `SelectTrigger` and the number
+			// field all stand at — measured rather than assumed, having first shipped this as `lg` on
+			// the belief they were h-9. `spacing={0}` joins the halves into one control instead of two
+			// buttons that happen to be adjacent.
+			size="default"
 			variant="outline"
 			spacing={0}
 			disabled={locked}

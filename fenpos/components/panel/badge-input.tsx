@@ -149,7 +149,9 @@ export function BadgeInput({
 			<div
 				onClick={() => box.current?.focus()}
 				className={cn(
-					"flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border bg-transparent px-2 py-1.5 text-sm",
+					// `min-h-8`, not a fixed height: this is the 32px every other control stands at, and
+					// the box grows past it only when the badges wrap onto a second line.
+					"flex min-h-8 flex-wrap items-center gap-1.5 rounded-md border bg-transparent px-2 py-1 text-sm",
 					"focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
 					refused ? "border-destructive" : "border-input",
 					disabled ? "cursor-not-allowed opacity-50" : "cursor-text",
