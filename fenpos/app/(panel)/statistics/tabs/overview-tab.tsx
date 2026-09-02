@@ -6,7 +6,7 @@ import { overviewTabData } from "@/lib/metrics/query/overview";
 import type { ResolvedRange } from "@/lib/metrics/range";
 
 /**
- * The Overview tab: six headline stat cards, then the three charts they summarize.
+ * The Overview tab: six headline stat cards, then the four charts they summarize.
  *
  * Three cards read the current registry/queue state (`agentsOnline`, `printersConnected`,
  * `queueDepth` — see `overviewTabData`'s module comment) and carry a "Live" badge with no
@@ -15,6 +15,14 @@ import type { ResolvedRange } from "@/lib/metrics/range";
 export async function OverviewTab({ range, filter }: { range: ResolvedRange; filter: StatisticsFilter }) {
 	const data = await overviewTabData(range, filter);
 	const { cards } = data;
+
+	// Derived here rather than fetched: `jobsOverTime` already carries both counts, and a fourth
+	// query for a ratio of two numbers the tab holds would be a round trip for arithmetic. Null on
+	// an empty bucket so a quiet hour reads as a gap, not a cliff to 0%.
+	const successRate = data.jobsOverTime.map((point) => {
+		const settled = point.completed + point.failed;
+		return { t: point.t, rate: settled > 0 ? point.completed / settled : null };
+	});
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -66,6 +74,16 @@ export async function OverviewTab({ range, filter }: { range: ResolvedRange; fil
 
 				<ChartCard title="Failures over time">
 					<TimeSeriesChart kind="bar" data={data.failuresOverTime} series={[{ key: "failed", label: "Failed" }]} />
+				</ChartCard>
+
+				<ChartCard title="Success rate" description="Completed as a share of settled jobs">
+					<TimeSeriesChart
+						kind="line"
+						data={successRate}
+						series={[{ key: "rate", label: "Success rate" }]}
+						valueFormat="percent"
+						referenceY={1}
+					/>
 				</ChartCard>
 			</div>
 		</div>
