@@ -6,6 +6,7 @@ import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import type { SettingChange } from "@/app/(panel)/settings/actions";
 import { saveSettings } from "@/app/(panel)/settings/actions";
+import { BadgeInput } from "@/components/panel/badge-input";
 import { DirtyDot } from "@/components/panel/dirty-dot";
 import { GroupedCombobox } from "@/components/panel/grouped-combobox";
 import {
@@ -68,6 +69,9 @@ type StringField = SettingFieldData & { definition: Extract<ClientSettingDefinit
 
 /** {@link SettingFieldData} narrowed to the secret variant. */
 type SecretField = SettingFieldData & { definition: Extract<ClientSettingDefinition, { type: "secret" }> };
+
+/** {@link SettingFieldData} narrowed to the list variant. */
+type ListField = SettingFieldData & { definition: Extract<ClientSettingDefinition, { type: "list" }> };
 
 /** What a control needs to render itself and stage an edit. */
 interface ControlProps<Field extends SettingFieldData> {
@@ -497,7 +501,41 @@ function Control({ field, value, locked, staged, onStage }: ControlProps<Setting
 			return (
 				<SecretControl field={field as SecretField} value={value} locked={locked} staged={staged} onStage={onStage} />
 			);
+		case "list":
+			return <ListControl field={field as ListField} value={value} locked={locked} staged={staged} onStage={onStage} />;
 	}
+}
+
+/**
+ * A list, edited as badges.
+ *
+ * Stages the joined string, so what reaches the server is the same value a text box would have
+ * produced and the setting's storage is unchanged. Joined with `", "` rather than `","` because the
+ * stored value is also read by people, in a database and in this file's own defaults.
+ *
+ * `itemPattern` arrives as a source string rather than a `RegExp` — see `SettingDefinition` — so the
+ * box can hold an entry to the same rule the server will, and refuse it while the operator is
+ * looking at it rather than on the round trip after Save.
+ */
+function ListControl({ field, value, locked, onStage }: ControlProps<ListField>) {
+	const entries = String(value)
+		.split(/[,\n]/)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+
+	const { itemPattern } = field.definition;
+	const accepts = itemPattern === undefined ? undefined : (entry: string) => new RegExp(itemPattern).test(entry);
+
+	return (
+		<BadgeInput
+			values={entries}
+			disabled={locked}
+			label={field.definition.label}
+			placeholder="Nothing trusted"
+			accepts={accepts}
+			onChange={(next) => onStage({ kind: "set", value: next.join(", ") })}
+		/>
+	);
 }
 
 /**
@@ -545,6 +583,10 @@ function bounds(definition: ClientSettingDefinition): ReactNode {
 		case "secret":
 			// The control below it already says whether one is stored, and a character limit is not
 			// something anybody chooses about a key they were handed.
+			return null;
+		case "list":
+			// A total character budget across every entry is not a number anybody edits against, and
+			// the badges make the only count that matters visible already.
 			return null;
 	}
 }

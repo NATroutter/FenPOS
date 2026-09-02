@@ -369,7 +369,22 @@ export type SettingDefinition =
 	 * is the same reach they already have over session tokens, so this adds a credential to that
 	 * blast radius rather than widening it; the file's own permissions are what protect both.
 	 */
-	| (SettingBase & { type: "secret"; maxLength: number; fallback: "" });
+	| (SettingBase & { type: "secret"; maxLength: number; fallback: "" })
+	/**
+	 * Several short values, stored as one comma-joined string.
+	 *
+	 * The storage is a plain string and always was — `"X-Forwarded-For"` and
+	 * `"CF-Connecting-IP, X-Forwarded-For"` are the same rows they would have been as a `string`
+	 * setting — so nothing migrates and a row written before this type existed still parses. What
+	 * the type buys is that both ends stop guessing: `fits` checks each entry rather than the joined
+	 * line, and the panel can offer entries as things you add and remove instead of punctuation you
+	 * have to get right in a text box.
+	 *
+	 * `itemPattern` is a **source string**, not a `RegExp`, and deliberately: a `RegExp` cannot cross
+	 * into a Client Component, which is the entire subject of {@link ClientSettingDefinition}. As a
+	 * string it crosses safely, so the form can hold an entry to the same rule the server will.
+	 */
+	| (SettingBase & { type: "list"; maxLength: number; itemPattern?: string; fallback: string });
 
 /** The four kinds of value a setting can hold. */
 export type SettingType = SettingDefinition["type"];
@@ -589,11 +604,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 			"which is right only when nothing proxies this install. Anything listed here must be a header your proxy " +
 			"overwrites on every request, or a caller can simply send it themselves.",
 		category: "security",
-		type: "string",
+		type: "list",
 		maxLength: 256,
-		// Header names and separators only. Keeps a pasted URL or an address out of a field whose
-		// values are looked up as header names, where a wrong entry silently matches nothing.
-		pattern: /^$|^[A-Za-z0-9-]+(\s*,\s*[A-Za-z0-9-]+)*$/,
+		// A header name and nothing else, per entry. Keeps a pasted URL or an address out of a field
+		// whose values are looked up as header names, where a wrong entry silently matches nothing.
+		itemPattern: "^[A-Za-z0-9-]+$",
 		// What this file did unconditionally before the setting existed, so an install that upgrades
 		// into it keeps the behaviour it already had rather than silently losing every address.
 		fallback: "X-Forwarded-For",
@@ -1655,7 +1670,37 @@ function fits(definition: SettingDefinition, value: unknown): boolean {
 			// No pattern. A credential's shape belongs to whoever issues it, and a check here would
 			// come to refuse a perfectly good key the day that format changed.
 			return typeof value === "string" && value.length <= definition.maxLength;
+		case "list": {
+			if (typeof value !== "string" || value.length > definition.maxLength) {
+				return false;
+			}
+			if (definition.itemPattern === undefined) {
+				return true;
+			}
+			// Checked per entry rather than against the joined line, which is the point of the type:
+			// a pattern written for the whole string has to describe the separators too, and every
+			// such pattern this file had was really a per-entry rule with comma handling bolted on.
+			const item = new RegExp(definition.itemPattern);
+			return parseList(value).every((entry) => item.test(entry));
+		}
 	}
+}
+
+/**
+ * Splits a `list` setting into its entries.
+ *
+ * Commas and newlines both separate, matching what `ip-allowlist.ts` already accepts: an operator
+ * pasting a list from anywhere will use one or the other, and neither is worth refusing. Blanks are
+ * dropped, so a trailing comma is not an empty entry.
+ *
+ * @param raw the setting as stored
+ * @returns the entries, trimmed, in order
+ */
+export function parseList(raw: string): string[] {
+	return raw
+		.split(/[,\n]/)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
 }
 
 /**
@@ -1821,16 +1866,13 @@ export interface GlobalProxyTrust {
  */
 export async function globalProxyTrust(): Promise<GlobalProxyTrust> {
 	const settings = await listSettings();
-	const raw = narrow(settings, "server.trustedProxyHeaders", "string") as string;
+	const raw = narrow(settings, "server.trustedProxyHeaders", "list") as string;
 	const priority = narrow(settings, "server.proxyIpPriority", "enum") as string;
 
 	return {
 		// Lowercased because both `Headers` and Node's `IncomingMessage.headers` key on the lowercase
 		// name, and an operator typing the conventional `X-Forwarded-For` must not miss because of it.
-		headers: raw
-			.split(",")
-			.map((name) => name.trim().toLowerCase())
-			.filter((name) => name.length > 0),
+		headers: parseList(raw).map((name) => name.toLowerCase()),
 		priority: priority === "leftmost" ? "leftmost" : "rightmost",
 	};
 }
@@ -2028,6 +2070,8 @@ function expectation(definition: SettingDefinition): string {
 		case "string":
 		case "secret":
 			return `must be text of at most ${definition.maxLength} characters`;
+		case "list":
+			return `must be a list of at most ${definition.maxLength} characters in total`;
 	}
 }
 

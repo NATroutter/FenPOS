@@ -22,6 +22,7 @@ import {
 	globalLogIngestSettings,
 	globalPasswordLifetime,
 	globalPasswordPolicy,
+	globalProxyTrust,
 	globalSessionPolicy,
 	globalSignInPolicy,
 	integerSetting,
@@ -354,6 +355,48 @@ describe("setting definitions", () => {
 		});
 	});
 
+	/**
+	 * The `list` type, whose storage is deliberately indistinguishable from a `string`.
+	 *
+	 * That is what makes it migration-free — a row written when this setting was a `string` still
+	 * parses — and it is also what makes the checks worth having: nothing about the stored value
+	 * would reveal that per-entry validation had stopped happening.
+	 */
+	describe("a list setting", () => {
+		const KEY = "server.trustedProxyHeaders";
+
+		it("accepts several entries", async () => {
+			await setSetting(KEY, "CF-Connecting-IP, X-Forwarded-For");
+
+			expect((await globalProxyTrust()).headers).toEqual(["cf-connecting-ip", "x-forwarded-for"]);
+		});
+
+		it("accepts an empty list, which is what trusting nothing means", async () => {
+			await setSetting(KEY, "");
+
+			expect((await globalProxyTrust()).headers).toEqual([]);
+		});
+
+		it("refuses an entry that is not a header name", async () => {
+			// Checked per entry rather than against the joined line: the first entry here is fine and
+			// the second is a pasted URL, which would silently match no header at all.
+			await expect(setSetting(KEY, "X-Forwarded-For, https://example.com")).rejects.toBeInstanceOf(ApiError);
+		});
+
+		it("drops blanks rather than reading a trailing comma as an entry", async () => {
+			await setSetting(KEY, "X-Forwarded-For, , ");
+
+			expect((await globalProxyTrust()).headers).toEqual(["x-forwarded-for"]);
+		});
+
+		it("reads a value stored before the type existed", async () => {
+			// The row a `string` setting would have written. No migration ran, so this must still parse.
+			await prisma.setting.create({ data: { key: KEY, value: JSON.stringify("X-Real-IP") } });
+
+			expect((await globalProxyTrust()).headers).toEqual(["x-real-ip"]);
+		});
+	});
+
 	it("declares the type every setting is documented to have", () => {
 		// A key→type map rather than a blanket "every setting is an integer" (which stopped being
 		// true the moment `logs.minimumLevel`, the first enum, joined them): this must fail if ANY
@@ -362,7 +405,7 @@ describe("setting definitions", () => {
 		// tests, not a check on the declared type itself — this is that check.
 		const expectedTypes: Record<SettingKey, SettingType> = {
 			"server.publicUrl": "string",
-			"server.trustedProxyHeaders": "string",
+			"server.trustedProxyHeaders": "list",
 			"server.proxyIpPriority": "enum",
 			"limits.maxLines": "integer",
 			"limits.maxLineChars": "integer",
