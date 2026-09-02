@@ -27,8 +27,8 @@ export interface SecurityTabData {
 	failedByIp: { ip: string; count: number }[];
 	deniedActions: { t: string; denied: number }[];
 	auditCategories: { t: string; [category: string]: string | number }[];
-	activeSessions: { t: string; sessions: number }[];
-	storage: { t: string; mainMB: number; auditMB: number; logsMB: number }[];
+	activeSessions: { t: string; sessions: number | null }[];
+	storage: { t: string; mainMB: number | null; auditMB: number | null; logsMB: number | null }[];
 }
 
 const TOP_CATEGORIES = 6;
@@ -182,14 +182,15 @@ export async function securityTabData(range: ResolvedRange, filter: MetricsFilte
 		if (list) list.push(entry);
 		else sampleBuckets.set(key, [entry]);
 	}
+	// A bucket with no samples yields null throughout — a gap in the chart, not a false zero.
 	const orderedSamples = [...sampleBuckets.entries()].sort((a, b) => a[0] - b[0]);
 	const activeSessions = orderedSamples.map(([key, list]) => ({
 		t: new Date(key).toISOString(),
-		sessions: list.length ? Math.round(list.reduce((sum, s) => sum + s.activeSessions, 0) / list.length) : 0,
+		sessions: list.length ? Math.round(list.reduce((sum, s) => sum + s.activeSessions, 0) / list.length) : null,
 	}));
 	const storage = orderedSamples.map(([key, list]) => {
-		const avg = (pick: (s: (typeof list)[number]) => number): number =>
-			list.length ? list.reduce((sum, s) => sum + pick(s), 0) / list.length / BYTES_PER_MB : 0;
+		const avg = (pick: (s: (typeof list)[number]) => number): number | null =>
+			list.length ? list.reduce((sum, s) => sum + pick(s), 0) / list.length / BYTES_PER_MB : null;
 		return {
 			t: new Date(key).toISOString(),
 			mainMB: avg((s) => s.dbMainBytes),

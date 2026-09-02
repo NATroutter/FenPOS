@@ -19,7 +19,7 @@ export interface WebhooksTabData {
 	successRate: { t: string; rate: number | null }[];
 	attempts: { bucket: string; count: number }[];
 	perWebhook: { name: string; delivered: number; failed: number }[];
-	backlog: { t: string; pending: number }[];
+	backlog: { t: string; pending: number | null }[];
 }
 
 async function webhooksWatermark(): Promise<Date> {
@@ -181,11 +181,12 @@ export async function webhooksTabData(range: ResolvedRange, filter: MetricsFilte
 			buckets.set(key, [sample.pendingWebhooks]);
 		}
 	}
+	// A bucket with no samples yields null — a gap in the chart, not a false zero.
 	const backlog = [...buckets.entries()]
 		.sort((a, b) => a[0] - b[0])
 		.map(([key, list]) => ({
 			t: new Date(key).toISOString(),
-			pending: list.length ? Math.round(list.reduce((sum, v) => sum + v, 0) / list.length) : 0,
+			pending: list.length ? Math.round(list.reduce((sum, v) => sum + v, 0) / list.length) : null,
 		}));
 
 	return { deliveries, successRate, attempts, perWebhook, backlog };

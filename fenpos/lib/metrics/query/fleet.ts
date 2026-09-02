@@ -18,9 +18,9 @@ import { displayBucket, displayBuckets, type ResolvedRange } from "@/lib/metrics
  */
 
 export interface FleetTabData {
-	agentsOnline: { t: string; online: number; total: number }[];
-	devicesConnected: { t: string; connected: number; total: number }[];
-	queueDepth: { t: string; depth: number }[];
+	agentsOnline: { t: string; online: number | null; total: number | null }[];
+	devicesConnected: { t: string; connected: number | null; total: number | null }[];
+	queueDepth: { t: string; depth: number | null }[];
 	statusNow: { status: string; count: number }[];
 	versions: { version: string; count: number }[];
 	platforms: { platform: string; count: number }[];
@@ -53,8 +53,9 @@ function bucketTimes(range: ResolvedRange): Date[] {
 	return displayBuckets(range);
 }
 
-function average(list: SampleRow[], pick: (s: SampleRow) => number): number {
-	if (list.length === 0) return 0;
+/** A bucket with no samples yields null — a gap in the chart, not a false zero. */
+function average(list: SampleRow[], pick: (s: SampleRow) => number): number | null {
+	if (list.length === 0) return null;
 	return Math.round(list.reduce((sum, s) => sum + pick(s), 0) / list.length);
 }
 

@@ -301,6 +301,21 @@ describe("fleetTabData", () => {
 
 		const sampledBucket = result.agentsOnline.find((b) => b.online === 3 && b.total === 5);
 		expect(sampledBucket).toBeDefined();
+
+		// A bucket with no fleet samples in it must report null, not a false zero — the whole range
+		// only has one sample, ~30 minutes ago, so the earliest display bucket (~24h ago) is empty.
+		const firstBucketIso = displayBuckets(range)[0].toISOString();
+		expect(result.agentsOnline.find((b) => b.t === firstBucketIso)).toEqual({
+			t: firstBucketIso,
+			online: null,
+			total: null,
+		});
+		expect(result.devicesConnected.find((b) => b.t === firstBucketIso)).toEqual({
+			t: firstBucketIso,
+			connected: null,
+			total: null,
+		});
+		expect(result.queueDepth.find((b) => b.t === firstBucketIso)).toEqual({ t: firstBucketIso, depth: null });
 	});
 });
 
@@ -347,6 +362,21 @@ describe("webhooksTabData", () => {
 				createdAt: new Date(Date.now() - 20 * 60 * 1000),
 			},
 		});
+		await metricsDb.fleetSample.create({
+			data: {
+				at: new Date(Date.now() - 40 * 60 * 1000),
+				agentsTotal: 0,
+				agentsOnline: 0,
+				devicesTotal: 0,
+				devicesConnected: 0,
+				queueDepth: 0,
+				pendingWebhooks: 4,
+				activeSessions: 0,
+				dbMainBytes: 0,
+				dbAuditBytes: 0,
+				dbLogsBytes: 0,
+			},
+		});
 
 		const range = hourRange(24);
 		const result = await webhooksTabData(range, {});
@@ -354,6 +384,12 @@ describe("webhooksTabData", () => {
 		expect(result.deliveries).toHaveLength(displayBuckets(range).length);
 		expect(result.successRate).toHaveLength(displayBuckets(range).length);
 		expect(result.backlog).toHaveLength(displayBuckets(range).length);
+
+		const sampledBacklog = result.backlog.find((b) => b.pending === 4);
+		expect(sampledBacklog).toBeDefined();
+		// A bucket with no fleet samples in it must report null, not a false zero.
+		const firstBucketIso = displayBuckets(range)[0].toISOString();
+		expect(result.backlog.find((b) => b.t === firstBucketIso)).toEqual({ t: firstBucketIso, pending: null });
 
 		const totalDelivered = result.deliveries.reduce((sum, b) => sum + b.delivered, 0);
 		const totalFailed = result.deliveries.reduce((sum, b) => sum + b.failed, 0);
@@ -435,6 +471,21 @@ describe("securityTabData", () => {
 		await metricsDb.metricAuthHourly.create({ data: { bucket, kind: "signin_success", count: 3 } });
 		await metricsDb.metricAuthHourly.create({ data: { bucket, kind: "signin_failed", count: 1 } });
 		await metricsDb.metricAuthHourly.create({ data: { bucket, kind: "denied_action", count: 2 } });
+		await metricsDb.fleetSample.create({
+			data: {
+				at: new Date(Date.now() - 45 * 60 * 1000),
+				agentsTotal: 0,
+				agentsOnline: 0,
+				devicesTotal: 0,
+				devicesConnected: 0,
+				queueDepth: 0,
+				pendingWebhooks: 0,
+				activeSessions: 5,
+				dbMainBytes: 2 * 1024 * 1024,
+				dbAuditBytes: 1024 * 1024,
+				dbLogsBytes: 512 * 1024,
+			},
+		});
 
 		const range = hourRange(24);
 		const result = await securityTabData(range, {});
@@ -451,6 +502,26 @@ describe("securityTabData", () => {
 		expect(totalFailed).toBe(1);
 		const totalDenied = result.deniedActions.reduce((sum, b) => sum + b.denied, 0);
 		expect(totalDenied).toBe(2);
+
+		const sampledSessions = result.activeSessions.find((b) => b.sessions === 5);
+		expect(sampledSessions).toBeDefined();
+		const sampledStorage = result.storage.find((b) => b.mainMB !== null);
+		expect(sampledStorage?.mainMB).toBeCloseTo(2);
+		expect(sampledStorage?.auditMB).toBeCloseTo(1);
+		expect(sampledStorage?.logsMB).toBeCloseTo(0.5);
+
+		// A bucket with no fleet samples in it must report null, not a false zero.
+		const firstBucketIso = displayBuckets(range)[0].toISOString();
+		expect(result.activeSessions.find((b) => b.t === firstBucketIso)).toEqual({
+			t: firstBucketIso,
+			sessions: null,
+		});
+		expect(result.storage.find((b) => b.t === firstBucketIso)).toEqual({
+			t: firstBucketIso,
+			mainMB: null,
+			auditMB: null,
+			logsMB: null,
+		});
 	});
 
 	it("reads failedByIp and auditCategories from raw audit rows", async () => {
