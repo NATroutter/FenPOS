@@ -6,6 +6,7 @@ import { getHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
 import { runMaintenancePass } from "@/lib/maintenance/pass";
 import { startMetricsFlusher } from "@/lib/metrics/counters";
+import { startFleetSampler } from "@/lib/metrics/sampler";
 import { applyPushedSettings } from "@/lib/settings/settings-service";
 import { deliverDue } from "@/lib/webhooks/deliver";
 
@@ -46,6 +47,7 @@ export async function registerRuntime(): Promise<void> {
 	startDeliveryDrain();
 	startMaintenance();
 	startMetricsFlusher();
+	startFleetSampler();
 }
 
 /**
