@@ -416,6 +416,42 @@ describe("listMoreAuditEvents", () => {
 		expect(second.events).toEqual([]);
 	});
 
+	it("reaches more: false once every event has been paged through", async () => {
+		await account(["audit:read"]);
+		const total = 130;
+		for (let index = 0; index < total; index += 1) {
+			await appendEvent({ action: "test:paging", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		}
+
+		const seen = new Set<number>();
+		let offset = 0;
+		let more = true;
+		let iterations = 0;
+
+		while (more) {
+			iterations += 1;
+			// A runaway `more` would otherwise hang the test at the suite's own timeout rather than
+			// failing with a message that says what went wrong.
+			expect(iterations).toBeLessThan(20);
+
+			const batch = await listMoreAuditEvents({ offset, action: "test:paging" });
+			expect(batch.error).toBeNull();
+			for (const event of batch.events) {
+				seen.add(event.seq);
+			}
+			offset += batch.events.length;
+			more = batch.more;
+
+			// A page must make progress: `more: true` with nothing new in it is the same hang wearing a
+			// different shape, since `offset` would never advance and the loop above would never end.
+			if (more) {
+				expect(batch.events.length).toBeGreaterThan(0);
+			}
+		}
+
+		expect(seen.size).toBe(total);
+	}, 20_000);
+
 	it("narrows by several actions at once, the way the multi-select dropdown sends them", async () => {
 		await account(["audit:read"]);
 		await appendEvent({ action: "devices:delete", outcome: "SUCCESS", actor: SYSTEM_ACTOR });

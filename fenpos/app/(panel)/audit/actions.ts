@@ -4,7 +4,7 @@ import { type AuditSearchParams, parseAuditSearchParams } from "@/app/(panel)/au
 import { periodKeyFor } from "@/lib/archive/period";
 import { listArchives } from "@/lib/archive/read";
 import { toAuditCsv } from "@/lib/audit/audit-csv";
-import { type AuditEventSummary, type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
+import { AUDIT_PAGE_SIZE, type AuditEventSummary, type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
 import { readEpoch } from "@/lib/audit/epoch";
 import { describeVerification, verifyAuditChain } from "@/lib/audit/verify";
 import { panelQuery } from "@/lib/auth/panel-action";
@@ -193,6 +193,11 @@ export async function listMoreAuditEvents(request: AuditBatchRequest): Promise<A
 				sort: filter.sort,
 				desc: filter.desc,
 				skip: parseOffset(request.offset),
+				// Explicit, and equal to the page's own first `listAuditEvents` call — see
+				// `AUDIT_PAGE_SIZE`'s doc. Batch after batch has to page at the same size the first one
+				// did, or `more`'s arithmetic (`rows.length > take`) answers a different question on
+				// every call than the one the operator's scroll is actually asking.
+				take: AUDIT_PAGE_SIZE,
 			});
 			return { events: page.events, more: page.more, error: null };
 		},

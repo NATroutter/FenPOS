@@ -85,6 +85,23 @@ export interface InfiniteScrollState<T> {
 const FETCH_FAILURE_MESSAGE = "Could not load more rows. Check your connection and try again.";
 
 /**
+ * What a batch's own `more` should actually be taken as, once the rows it carries are known.
+ *
+ * Ordinarily this is just `batch.more` — every batch this hook is handed comes from a `listX` function
+ * whose own `more` is `rows.length > take`, which is already correct on its own terms. This exists as
+ * the second opinion anyway: a batch of zero rows can never have more behind it, whatever its own
+ * `more` claims, because there is nothing in it to have paged forward from. Trusting `more` alone in
+ * that one case is exactly the failure mode that leaves a sentinel spinning forever should a caller's
+ * `more` and its `rows` ever disagree — a page-size mismatch between two callers of the same `listX`
+ * function, for one, is precisely the kind of drift `rows.length > take` stops answering correctly for.
+ * Applied both to the seed a caller hands in and to every `loadMore` result, so neither end of this
+ * hook's lifetime can get stuck this way.
+ */
+function settledMore<T>(batch: InfiniteBatch<T>): boolean {
+	return batch.rows.length > 0 && batch.more;
+}
+
+/**
  * Backs every infinite-scrolling table in the panel. See the module doc for the batch-0 reconciliation
  * this performs and why a real filter change is handled by remounting rather than by a branch here.
  *
@@ -102,7 +119,7 @@ export function useInfiniteScroll<T>({
 	loadMore: (offset: number) => Promise<InfiniteBatchResult<T>>;
 }): InfiniteScrollState<T> {
 	const [appended, setAppended] = useState<T[]>([]);
-	const [more, setMore] = useState(batch.more);
+	const [more, setMore] = useState(() => settledMore(batch));
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [batchVersion, setBatchVersion] = useState(0);
@@ -145,7 +162,7 @@ export function useInfiniteScroll<T>({
 		// The dedupe: an appended row that now also appears in the fresh batch 0 is dropped from
 		// `appended`, so it renders once — wherever the fresh data says it belongs — rather than twice.
 		setAppended((current) => current.filter((row) => !freshIds.has(getIdRef.current(row))));
-		setMore(batch.more);
+		setMore(settledMore(batch));
 		setError(null);
 		setBatchVersion((version) => version + 1);
 	}, [batch]);
@@ -162,7 +179,7 @@ export function useInfiniteScroll<T>({
 		try {
 			const next = await loadMore(rowCount);
 			setAppended((current) => current.concat(next.rows));
-			setMore(next.more);
+			setMore(settledMore(next));
 			setError(next.error ?? null);
 		} catch {
 			setError(FETCH_FAILURE_MESSAGE);

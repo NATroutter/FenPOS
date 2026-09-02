@@ -6,7 +6,7 @@ import { ChainBanner } from "@/app/(panel)/audit/chain-banner";
 import { parseAuditSearchParams } from "@/app/(panel)/audit/search-params";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { buttonVariants } from "@/components/ui/button";
-import { auditFilterOptions, listAuditEvents } from "@/lib/audit/audit-query";
+import { AUDIT_PAGE_SIZE, auditFilterOptions, listAuditEvents } from "@/lib/audit/audit-query";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { AuditOutcome } from "@/lib/domain/audit";
@@ -86,6 +86,9 @@ export default async function AuditPage({
 			to,
 			sort,
 			desc,
+			// Explicit, and equal to `listMoreAuditEvents`'s own explicit `take` — see `AUDIT_PAGE_SIZE`'s
+			// doc for why this used to be two callers relying on one function's default to agree.
+			take: AUDIT_PAGE_SIZE,
 		}),
 		userHolds(user, "audit:verify"),
 		userHolds(user, "audit:export"),

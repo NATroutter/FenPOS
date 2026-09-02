@@ -100,7 +100,7 @@ export interface AuditFilter {
 	sort?: AuditSortColumn;
 	/** Which way that ordering runs. Defaults to {@link AUDIT_DEFAULT_SORT}. */
 	desc?: boolean;
-	/** How many rows to return. Defaults to {@link DEFAULT_PAGE_SIZE}. */
+	/** How many rows to return. Defaults to {@link AUDIT_PAGE_SIZE}. */
 	take?: number;
 }
 
@@ -110,8 +110,16 @@ export interface AuditFilter {
  * A constant rather than a setting: `panel.jobPageSize` exists because an operator watching a busy
  * kitchen genuinely wants a different number than one watching a quiet one, and nobody has that
  * relationship with an audit table. One less knob on a page that already has five filters.
+ *
+ * **Exported, and read explicitly by both `app/(panel)/audit/page.tsx`'s own first batch and
+ * `listMoreAuditEvents`'s later ones**, rather than left as this function's own implicit default for
+ * both to happen to share. Jobs and Logs read their page size from a setting and pass it explicitly to
+ * both halves for the same reason: two callers of `listAuditEvents` agreeing only because neither
+ * passes `take` is an agreement one of them can silently break — pass a value from anywhere else in
+ * this file, or resize `AUDIT_PAGE_SIZE` in a future edit while forgetting the other caller exists,
+ * and the two halves would page at different sizes without either call site's own code showing why.
  */
-const DEFAULT_PAGE_SIZE = 50;
+export const AUDIT_PAGE_SIZE = 50;
 
 /**
  * Lists events, newest first.
@@ -142,7 +150,7 @@ export async function listAuditEvents(
 	// outcome, and without it a page boundary in those orderings would show a row twice.
 	const orderBy = [chosen, { seq: "desc" as const }];
 
-	const take = filter.take ?? DEFAULT_PAGE_SIZE;
+	const take = filter.take ?? AUDIT_PAGE_SIZE;
 
 	// One extra row rather than a count: counting this table on every page view is a scan run to
 	// answer a question worth one boolean.
