@@ -5,7 +5,7 @@ import { attachAgentLink, shutdownAgentLinks } from "@/lib/link/link-server";
 import { getHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
 import { runMaintenancePass } from "@/lib/maintenance/pass";
-import { startMetricsFlusher } from "@/lib/metrics/counters";
+import { flushMetricCounters, startMetricsFlusher } from "@/lib/metrics/counters";
 import { startFleetSampler } from "@/lib/metrics/sampler";
 import { applyPushedSettings } from "@/lib/settings/settings-service";
 import { deliverDue } from "@/lib/webhooks/deliver";
@@ -44,6 +44,7 @@ export async function registerRuntime(): Promise<void> {
 	// attempted at startup.
 	await applyPushedSettings();
 	attachLink();
+	publishMetricsFlush();
 	startDeliveryDrain();
 	startMaintenance();
 	startMetricsFlusher();
@@ -151,6 +152,30 @@ function attachLink(): void {
 	} catch (error) {
 		logger.error("Could not attach the agent link endpoint", error);
 	}
+}
+
+/**
+ * Publishes {@link flushMetricCounters} on the running HTTP server, so the entry point can drain
+ * the in-memory API/auth counters during shutdown without importing a server-only module — the
+ * same handoff {@link attachLink} uses above for `fenposCloseLinks`.
+ *
+ * Without this, an orderly restart only ever stops the process between two ticks of
+ * `startMetricsFlusher`'s 60 s timer, silently dropping whatever counters accumulated since the
+ * last one. `server.ts` calls the published hook itself, guarded so a failure there cannot block
+ * shutdown; the missing-server case is already logged by {@link attachLink}, so this stays quiet
+ * about it rather than logging the same thing twice.
+ *
+ * Exported so a test can assert the hook lands on the server object, the way {@link startDeliveryDrain}
+ * and {@link startMaintenance} are exported for their own guards; {@link registerRuntime} is its only
+ * caller in the running server.
+ */
+export function publishMetricsFlush(): void {
+	const server = getHttpServer();
+	if (!server) {
+		return;
+	}
+
+	Object.assign(server, { fenposFlushMetrics: flushMetricCounters });
 }
 
 /**

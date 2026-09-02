@@ -68,13 +68,25 @@ function installShutdownHandlers(server: Server): void {
 		const closeLinks = (server as Server & { fenposCloseLinks?: (reason: string) => void }).fenposCloseLinks;
 		closeLinks?.("server shutting down");
 
-		server.close((error) => {
-			if (error) {
-				process.stderr.write(`Error while closing the server: ${error.message}\n`);
-				process.exit(1);
-			}
-			process.exit(0);
-		});
+		// Same handoff as fenposCloseLinks above: the in-memory metric counters live behind a
+		// server-only module, so instrumentation publishes the flush on the server object instead
+		// of this file importing it directly. Awaited via .finally() rather than blocking the
+		// signal handler, so a rejected or hanging flush still lets shutdown proceed — the grace
+		// timer above is what bounds how long it can take.
+		const flushMetrics = (server as Server & { fenposFlushMetrics?: () => Promise<void> }).fenposFlushMetrics;
+		Promise.resolve(flushMetrics?.())
+			.catch((error: unknown) => {
+				process.stderr.write(`Could not flush metric counters during shutdown: ${String(error)}\n`);
+			})
+			.finally(() => {
+				server.close((error) => {
+					if (error) {
+						process.stderr.write(`Error while closing the server: ${error.message}\n`);
+						process.exit(1);
+					}
+					process.exit(0);
+				});
+			});
 	};
 
 	process.on("SIGTERM", () => shutdown("SIGTERM"));

@@ -1,10 +1,13 @@
 import { rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { dirname } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { startDeliveryDrain, startMaintenance } from "@/instrumentation-runtime";
-import { auditDb, logsDb } from "@/lib/db";
+import { publishMetricsFlush, startDeliveryDrain, startMaintenance } from "@/instrumentation-runtime";
+import { auditDb, logsDb, metricsDb } from "@/lib/db";
 import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
+import { publishHttpServer } from "@/lib/link/server-handle";
 import { logger } from "@/lib/logger";
+import { flushMetricCounters, recordApiMetric } from "@/lib/metrics/counters";
 
 /**
  * Redirected for the same reason `test/lib/maintenance/pass.test.ts` redirects it: a pass started
@@ -213,5 +216,49 @@ describe("startDeliveryDrain", () => {
 			// it would keep the worker alive and calling `deliverDue` every five seconds.
 			clearInterval(timer);
 		}
+	});
+});
+
+/**
+ * The graceful-shutdown flush hook, published on the HTTP server the same way `attachLink` above
+ * publishes `fenposCloseLinks`. `server.ts` is the actual caller during a real shutdown, but it binds a
+ * real port as a side effect of import and so is not something this suite can exercise directly — this
+ * covers the half of the wiring that lives on this side of the handoff: the hook lands on the server
+ * object, and calling it drains whatever counters were pending.
+ */
+describe("publishMetricsFlush", () => {
+	afterEach(async () => {
+		delete (globalThis as { __fenposHttpServer?: unknown }).__fenposHttpServer;
+		await metricsDb.metricApiHourly.deleteMany();
+		await flushMetricCounters();
+		await metricsDb.metricApiHourly.deleteMany();
+	});
+
+	it("publishes a hook on the server that flushes the live counters when called", async () => {
+		const server = createServer();
+		publishHttpServer(server);
+
+		try {
+			publishMetricsFlush();
+			const hook = (server as Server & { fenposFlushMetrics?: () => Promise<void> }).fenposFlushMetrics;
+			expect(hook).toBeDefined();
+
+			recordApiMetric({ route: "api:GET /v1/jobs", status: 200, apiKeyId: "k1", durationMs: 5 });
+			// Goes red if the published hook is not `flushMetricCounters` itself, or is a copy that no
+			// longer drains the same in-memory maps `recordApiMetric` just wrote to.
+			await hook?.();
+
+			const rows = await metricsDb.metricApiHourly.findMany({ where: { route: "api:GET /v1/jobs" } });
+			expect(rows).toHaveLength(1);
+			expect(rows[0].count).toBe(1);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("publishes nothing when no HTTP server has been published", () => {
+		// The `next start` case `attachLink` already logs about; this hook must fail the same way —
+		// quietly — rather than throwing when there is no server to attach to.
+		expect(() => publishMetricsFlush()).not.toThrow();
 	});
 });
