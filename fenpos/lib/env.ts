@@ -63,6 +63,20 @@ export const envSchema = z.object({
 		.optional(),
 
 	/**
+	 * Overrides the derived path to the metrics database. See {@link METRICS_DATABASE_URL}.
+	 *
+	 * The same validation as `LOGS_DATABASE_URL` and `AUDIT_DATABASE_URL` above, for the same reason:
+	 * everything that writes here is a rollup that can be rebuilt, but a typo is still how an install
+	 * silently stops recording it until someone notices the charts are empty.
+	 */
+	METRICS_DATABASE_URL: z
+		.string()
+		.refine((value) => value.startsWith("file:"), {
+			message: "must be a SQLite file URL beginning with file:",
+		})
+		.optional(),
+
+	/**
 	 * Signing key for Better Auth's cookies and tokens.
 	 *
 	 * Required with no default, deliberately. A generated-if-absent fallback would mean every
@@ -154,6 +168,18 @@ export const LOGS_DATABASE_URL: string = env.LOGS_DATABASE_URL ?? siblingDatabas
  * gives the variable the same precedence, so the CLI and the running server always agree.
  */
 export const AUDIT_DATABASE_URL: string = env.AUDIT_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "audit.db");
+
+/**
+ * Where the metrics database lives, derived the same way {@link LOGS_DATABASE_URL} is.
+ *
+ * `METRICS_DATABASE_URL` overrides the derivation, and exists for one caller: the test suite runs
+ * each file in its own worker process against its own database file, and every worker shares one
+ * `data/` directory, so derivation alone would hand them all the same metrics file.
+ * `prisma-metrics.config.ts` gives the variable the same precedence, so the CLI and the running
+ * server always agree.
+ */
+export const METRICS_DATABASE_URL: string =
+	env.METRICS_DATABASE_URL ?? siblingDatabaseUrl(env.DATABASE_URL, "metrics.db");
 
 /**
  * Where `lib/archive/rotate.ts` writes archives — the audit record's and the log table's alike, since

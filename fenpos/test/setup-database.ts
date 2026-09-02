@@ -22,6 +22,7 @@ const SERVER_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const DATABASE_FILE = join(SERVER_ROOT, "data", `test-${process.pid}.db`);
 const LOGS_DATABASE_FILE = join(SERVER_ROOT, "data", `test-${process.pid}-logs.db`);
 const AUDIT_DATABASE_FILE = join(SERVER_ROOT, "data", `test-${process.pid}-audit.db`);
+const METRICS_DATABASE_FILE = join(SERVER_ROOT, "data", `test-${process.pid}-metrics.db`);
 
 process.env.DATABASE_URL = `file:${DATABASE_FILE}`;
 
@@ -35,6 +36,10 @@ process.env.LOGS_DATABASE_URL = `file:${LOGS_DATABASE_FILE}`;
 // into one file would each chain onto whatever the other had just committed, and a `deleteMany` in
 // one worker's `beforeEach` would break a chain the other was mid-way through verifying.
 process.env.AUDIT_DATABASE_URL = `file:${AUDIT_DATABASE_FILE}`;
+
+// Set for the same reason as the two above. Everything in the metrics database is derived data,
+// but two workers sharing one file would still evict each other's fleet samples and rollups.
+process.env.METRICS_DATABASE_URL = `file:${METRICS_DATABASE_FILE}`;
 
 // lib/env.ts parses the environment at import time and refuses a missing signing key, so this
 // must be set before any module that reaches it is imported — the same reason DATABASE_URL is
@@ -72,20 +77,29 @@ beforeAll(() => {
 		stdio: "pipe",
 		shell: process.platform === "win32",
 	});
+
+	// And the metrics database, which has its own of all three for the same reasons.
+	execFileSync("npx", ["prisma", "migrate", "deploy", "--config", "prisma-metrics.config.ts"], {
+		cwd: SERVER_ROOT,
+		env: { ...process.env, METRICS_DATABASE_URL: `file:${METRICS_DATABASE_FILE}` },
+		stdio: "pipe",
+		shell: process.platform === "win32",
+	});
 });
 
 afterAll(async () => {
 	// Imported dynamically: a static import would be hoisted above the DATABASE_URL
 	// assignment at the top of this file, and lib/env.ts reads the environment on import.
-	const { auditDb, logsDb, prisma } = await import("@/lib/db");
+	const { auditDb, logsDb, metricsDb, prisma } = await import("@/lib/db");
 
 	// Windows keeps the file locked until the pool is closed, so this must precede removal.
 	await prisma.$disconnect();
 	await logsDb.$disconnect();
 	await auditDb.$disconnect();
+	await metricsDb.$disconnect();
 
 	// SQLite writes sidecar files in WAL mode; remove them too so a rerun starts clean.
-	for (const file of [DATABASE_FILE, LOGS_DATABASE_FILE, AUDIT_DATABASE_FILE]) {
+	for (const file of [DATABASE_FILE, LOGS_DATABASE_FILE, AUDIT_DATABASE_FILE, METRICS_DATABASE_FILE]) {
 		for (const suffix of ["", "-journal", "-wal", "-shm"]) {
 			try {
 				rmSync(`${file}${suffix}`, { force: true });

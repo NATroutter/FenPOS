@@ -3,7 +3,8 @@ import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaClient as AuditPrismaClient } from "@/generated/prisma-audit/client";
 import { PrismaClient as LogsPrismaClient } from "@/generated/prisma-logs/client";
-import { AUDIT_DATABASE_URL, env, isProduction, LOGS_DATABASE_URL } from "@/lib/env";
+import { PrismaClient as MetricsPrismaClient } from "@/generated/prisma-metrics/client";
+import { AUDIT_DATABASE_URL, env, isProduction, LOGS_DATABASE_URL, METRICS_DATABASE_URL } from "@/lib/env";
 
 /**
  * The application's Prisma clients, one per database file.
@@ -65,10 +66,27 @@ function createAuditClient(): AuditPrismaClient {
 	});
 }
 
+/**
+ * Builds a client bound to the metrics database file.
+ *
+ * @returns a client ready for queries against the rollup and fleet-sample tables
+ */
+function createMetricsClient(): MetricsPrismaClient {
+	const adapter = new PrismaBetterSqlite3({ url: METRICS_DATABASE_URL });
+
+	return new MetricsPrismaClient({
+		adapter,
+		// Off for the same reason as above: everything here is derived data, but a statement can
+		// still carry a device or agent name.
+		log: ["warn", "error"],
+	});
+}
+
 const globalForPrisma = globalThis as unknown as {
 	prisma: PrismaClient | undefined;
 	logsDb: LogsPrismaClient | undefined;
 	auditDb: AuditPrismaClient | undefined;
+	metricsDb: MetricsPrismaClient | undefined;
 };
 
 export const prisma: PrismaClient = globalForPrisma.prisma ?? createPrismaClient();
@@ -109,8 +127,23 @@ export const logsDb: LogsPrismaClient = globalForPrisma.logsDb ?? createLogsClie
  */
 export const auditDb: AuditPrismaClient = globalForPrisma.auditDb ?? createAuditClient();
 
+/**
+ * The metrics database's client.
+ *
+ * Separate from {@link prisma}, {@link logsDb} and {@link auditDb} for the same reason those are
+ * split out: everything in this file is a rollup or a fleet sample, derived data that can be
+ * deleted and rebuilt, and its own file means that rebuild — or its own retention — never competes
+ * with the application, log, or audit databases for space.
+ *
+ * It is a different generated client, not the same one pointed elsewhere, so `metricsDb.fleetSample`
+ * and `prisma.agent` cannot be written into one query. The two databases cannot be joined, and the
+ * typechecker is what enforces it.
+ */
+export const metricsDb: MetricsPrismaClient = globalForPrisma.metricsDb ?? createMetricsClient();
+
 if (!isProduction) {
 	globalForPrisma.prisma = prisma;
 	globalForPrisma.logsDb = logsDb;
 	globalForPrisma.auditDb = auditDb;
+	globalForPrisma.metricsDb = metricsDb;
 }
