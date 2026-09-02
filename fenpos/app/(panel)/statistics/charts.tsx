@@ -16,6 +16,7 @@ import {
 	XAxis,
 	YAxis,
 } from "recharts";
+import { formatValue, type SeriesSpec, type ValueFormat } from "@/app/(panel)/statistics/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
 	type ChartConfig,
@@ -26,7 +27,6 @@ import {
 	ChartTooltipContent,
 } from "@/components/ui/chart";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { describeBytes } from "@/lib/format/bytes";
 
 /**
  * The chart primitives every statistics tab is built from.
@@ -35,31 +35,12 @@ import { describeBytes } from "@/lib/format/bytes";
  * category-bar chart for top-N breakdowns, a donut, a labelled-bucket histogram, and the card that
  * wraps any of them. A tab server component fetches its `*TabData` shape and lays these out — it
  * never reaches for `recharts` directly.
+ *
+ * `SeriesSpec`/`ValueFormat`/`formatValue` live in `format.ts`, not here: that module carries no
+ * `"use client"` directive, so a tab server component can call `formatValue` directly (for a
+ * `StatCard`'s value, say) without tripping the RSC rule against calling a function through a
+ * client-module import. This file only re-uses them for its own rendering.
  */
-
-export interface SeriesSpec {
-	key: string;
-	label: string;
-}
-
-export type ValueFormat = "count" | "ms" | "percent" | "bytes";
-
-/** One value, formatted the way its chart's `valueFormat` says to state it. */
-export function formatValue(value: number | string | null | undefined, format?: ValueFormat): string {
-	if (value === null || value === undefined) return "–";
-	const n = typeof value === "number" ? value : Number(value);
-	if (Number.isNaN(n)) return String(value);
-	switch (format) {
-		case "ms":
-			return n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`;
-		case "percent":
-			return `${Math.round(n * 100)}%`;
-		case "bytes":
-			return describeBytes(n);
-		default:
-			return n.toLocaleString();
-	}
-}
 
 /** Builds a `ChartConfig` from a series list: label plus a color cycling `var(--chart-1..5)`. */
 function buildConfig(series: SeriesSpec[]): ChartConfig {

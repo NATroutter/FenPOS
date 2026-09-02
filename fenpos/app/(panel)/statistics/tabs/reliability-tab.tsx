@@ -1,4 +1,5 @@
-import { CategoryBarChart, ChartCard, type SeriesSpec, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import { CategoryBarChart, ChartCard, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import type { SeriesSpec } from "@/app/(panel)/statistics/format";
 import { Sparkline } from "@/app/(panel)/statistics/stat-card";
 import type { StatisticsFilter } from "@/app/(panel)/statistics/tab-content";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";

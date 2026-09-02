@@ -1,4 +1,5 @@
-import { ChartCard, formatValue, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import { ChartCard, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import { formatValue } from "@/app/(panel)/statistics/format";
 import { StatCard } from "@/app/(panel)/statistics/stat-card";
 import type { StatisticsFilter } from "@/app/(panel)/statistics/tab-content";
 import { overviewTabData } from "@/lib/metrics/query/overview";

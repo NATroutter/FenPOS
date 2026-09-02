@@ -1,4 +1,5 @@
-import { CategoryBarChart, ChartCard, type SeriesSpec, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import { CategoryBarChart, ChartCard, TimeSeriesChart } from "@/app/(panel)/statistics/charts";
+import type { SeriesSpec } from "@/app/(panel)/statistics/format";
 import type { StatisticsFilter } from "@/app/(panel)/statistics/tab-content";
 import { securityTabData } from "@/lib/metrics/query/security";
 import type { ResolvedRange } from "@/lib/metrics/range";
