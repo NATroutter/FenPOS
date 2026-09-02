@@ -1,7 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { metricsDb } from "@/lib/db";
-import { authKindsForAudit, flushMetricCounters, recordApiMetric, recordAuthKind } from "@/lib/metrics/counters";
+import {
+	authKindsForAudit,
+	flushMetricCounters,
+	recordApiMetric,
+	recordAuthKind,
+	refreshMetricsGates,
+} from "@/lib/metrics/counters";
 import { parseHistogram } from "@/lib/metrics/histogram";
+import { clearSetting, setSetting } from "@/lib/settings/settings-service";
 
 beforeEach(async () => {
 	await metricsDb.metricApiHourly.deleteMany();
@@ -60,5 +67,46 @@ describe("recordAuthKind", () => {
 		await flushMetricCounters();
 		const rows = await metricsDb.metricAuthHourly.findMany({ where: { kind: "signin_failed" } });
 		expect(rows[0].count).toBe(2);
+	});
+});
+
+describe("the stats.enabled gate", () => {
+	afterEach(async () => {
+		// The test database is per worker process, not per file, so leaving `stats.enabled`
+		// overridden here would silently gate every later test's recording in this worker.
+		await clearSetting("stats.enabled");
+		await refreshMetricsGates();
+	});
+
+	it("stops recording and discards whatever was pending, then resumes once re-enabled", async () => {
+		// Recorded while still enabled: this is what must be discarded, not merely left unflushed,
+		// once the switch flips off below.
+		recordApiMetric({ route: "api:GET /v1/jobs", status: 200, apiKeyId: "k1", durationMs: 5 });
+		recordAuthKind("signin_failed");
+
+		await setSetting("stats.enabled", false);
+		await refreshMetricsGates();
+
+		// Recording while off is a no-op.
+		recordApiMetric({ route: "api:GET /v1/jobs", status: 200, apiKeyId: "k1", durationMs: 5 });
+		recordAuthKind("signin_failed");
+
+		await flushMetricCounters();
+		expect(await metricsDb.metricApiHourly.count()).toBe(0);
+		expect(await metricsDb.metricAuthHourly.count()).toBe(0);
+
+		await setSetting("stats.enabled", true);
+		await refreshMetricsGates();
+
+		recordApiMetric({ route: "api:GET /v1/jobs", status: 200, apiKeyId: "k1", durationMs: 5 });
+		recordAuthKind("signin_failed");
+		await flushMetricCounters();
+
+		const apiRows = await metricsDb.metricApiHourly.findMany({ where: { route: "api:GET /v1/jobs" } });
+		expect(apiRows).toHaveLength(1);
+		expect(apiRows[0].count).toBe(1);
+		const authRows = await metricsDb.metricAuthHourly.findMany({ where: { kind: "signin_failed" } });
+		expect(authRows).toHaveLength(1);
+		expect(authRows[0].count).toBe(1);
 	});
 });

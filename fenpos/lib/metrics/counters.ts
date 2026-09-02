@@ -10,7 +10,7 @@ import {
 	serializeHistogram,
 } from "@/lib/metrics/histogram";
 import { hourStart } from "@/lib/metrics/rollup";
-import { booleanSetting } from "@/lib/settings/settings-service";
+import { globalStatsSettings } from "@/lib/settings/settings-service";
 
 /**
  * Live, in-memory counters for API traffic and auth events, flushed into the metrics database
@@ -56,12 +56,14 @@ let apiCounters = new Map<string, ApiCounterEntry>();
 let authCounters = new Map<string, number>();
 
 /**
- * Whether an API sample is currently counted, refreshed once per {@link startMetricsFlusher} tick
- * from the `stats.apiMetrics` setting rather than read per request — see the module comment.
+ * Cached `stats.enabled`/`stats.apiMetrics`, refreshed once per {@link startMetricsFlusher} tick
+ * (or by a test calling {@link refreshMetricsGates} directly) rather than read per request or per
+ * event — see the module comment.
  *
- * Defaults true, matching the setting's own fallback, so a server that has not yet ticked still
- * counts.
+ * Both default true, matching the settings' own fallbacks, so a server that has not yet ticked
+ * still counts.
  */
+let statsEnabled = true;
 let apiMetricsEnabled = true;
 
 function apiCounterKey(bucketISO: string, route: string, statusClass: string, apiKeyId: string): string {
@@ -100,7 +102,7 @@ function addApiSample(
  * `apiKeyId`, so a rejection breakdown can still be sliced by key.
  *
  * Synchronous and never throws: a fault here must cost a request nothing, so every step past the
- * `stats.apiMetrics` gate is wrapped in its own `try`/`catch`.
+ * `stats.enabled`/`stats.apiMetrics` gate is wrapped in its own `try`/`catch`.
  *
  * @param sample the completed request — `apiKeyId` is null when the request never authenticated
  */
@@ -110,7 +112,7 @@ export function recordApiMetric(sample: {
 	apiKeyId: string | null;
 	durationMs: number;
 }): void {
-	if (!apiMetricsEnabled) {
+	if (!statsEnabled || !apiMetricsEnabled) {
 		return;
 	}
 
@@ -138,10 +140,17 @@ export function recordApiMetric(sample: {
 /**
  * Records one auth-adjacent event, in-memory.
  *
+ * Gated on `stats.enabled` alone — there is no auth-specific switch, unlike API traffic's
+ * `stats.apiMetrics` — via the same cached boolean {@link recordApiMetric} reads.
+ *
  * Synchronous and never throws, for the same reason as {@link recordApiMetric}: this is called from
  * `lib/audit/audit-log.ts` on the audit write's own hot path.
  */
 export function recordAuthKind(kind: AuthKind): void {
+	if (!statsEnabled) {
+		return;
+	}
+
 	try {
 		const bucketISO = hourStart(new Date()).toISOString();
 		const key = authCounterKey(bucketISO, kind);
@@ -209,9 +218,15 @@ export async function flushMetricCounters(): Promise<void> {
 		const bucket = new Date(bucketISO);
 		const where = { bucket_route_statusClass_apiKeyId: { bucket, route, statusClass, apiKeyId } };
 
+		// Only merged when a row already exists: the `create` branch below writes `entry.hist`
+		// verbatim, so computing a merge for it would be wasted work.
 		const existing = await metricsDb.metricApiHourly.findUnique({ where });
-		const mergedHist = existing ? parseHistogram(existing.durationHist) : emptyHistogram();
-		mergeInto(mergedHist, entry.hist);
+		let updateHist = serializeHistogram(entry.hist);
+		if (existing) {
+			const merged = parseHistogram(existing.durationHist);
+			mergeInto(merged, entry.hist);
+			updateHist = serializeHistogram(merged);
+		}
 
 		await metricsDb.metricApiHourly.upsert({
 			where,
@@ -227,7 +242,7 @@ export async function flushMetricCounters(): Promise<void> {
 			update: {
 				count: { increment: entry.count },
 				durationSumMs: { increment: entry.durationSumMs },
-				durationHist: serializeHistogram(mergedHist),
+				durationHist: updateHist,
 			},
 		});
 	}
@@ -245,17 +260,46 @@ export async function flushMetricCounters(): Promise<void> {
 }
 
 /**
+ * Refreshes {@link statsEnabled} and {@link apiMetricsEnabled} from `stats.enabled` and
+ * `stats.apiMetrics`, in one settings read.
+ *
+ * **When the master switch is off, this also discards both in-memory maps.** `stats.enabled`'s own
+ * description is "Master switch. When off, nothing samples, counts or rolls up" — and
+ * {@link recordApiMetric}/{@link recordAuthKind} refusing to add anything new is only half of that:
+ * without this, whatever was recorded before the switch flipped would sit in memory forever (the
+ * flusher's tick would never drain it while disabled, and every subsequent hour would still not be
+ * flushed), which is unbounded growth for as long as the switch stays off. Discarding it here means
+ * nothing lingers, and nothing stale flushes the moment the switch is turned back on.
+ *
+ * Exported so `startMetricsFlusher`'s tick and a test can share the one place this decision is
+ * made — a test can drive the gate directly rather than waiting on the tick's own interval.
+ *
+ * @returns the refreshed gates
+ */
+export async function refreshMetricsGates(): Promise<{ enabled: boolean; apiMetrics: boolean }> {
+	const stats = await globalStatsSettings();
+	statsEnabled = stats.enabled;
+	apiMetricsEnabled = stats.apiMetrics;
+
+	if (!statsEnabled) {
+		apiCounters = new Map();
+		authCounters = new Map();
+	}
+
+	return { enabled: statsEnabled, apiMetrics: apiMetricsEnabled };
+}
+
+/**
  * Starts the recurring pass that flushes the live counters into the metrics database.
  *
  * Ticks every 60 s, `unref()`'d and skip-while-running, following the same pattern as
  * `startDeliveryDrain` and `startMaintenance` in `instrumentation-runtime.ts`: never fatal, and a
  * slow flush cannot stack a second one on top of itself.
  *
- * Every tick also refreshes {@link apiMetricsEnabled} from `stats.apiMetrics`, which is what lets
- * {@link recordApiMetric} gate itself without a per-request database read. The flush itself only
- * runs while `stats.enabled` — the master switch — is on; while it is off the counters keep
- * accumulating in memory (auth counters are never gated) rather than being dropped, so turning
- * statistics back on does not lose whatever was recorded in between.
+ * Every tick calls {@link refreshMetricsGates} first, which is what lets {@link recordApiMetric} and
+ * {@link recordAuthKind} gate themselves without a per-event database read. The flush itself only
+ * runs while `stats.enabled` — the master switch — is on; while it is off nothing has been recorded
+ * since the gate closed (see {@link refreshMetricsGates}), so there is nothing to flush.
  */
 export function startMetricsFlusher(): void {
 	let running = false;
@@ -266,8 +310,8 @@ export function startMetricsFlusher(): void {
 		}
 		running = true;
 		(async () => {
-			apiMetricsEnabled = await booleanSetting("stats.apiMetrics");
-			if (await booleanSetting("stats.enabled")) {
+			const { enabled } = await refreshMetricsGates();
+			if (enabled) {
 				await flushMetricCounters();
 			}
 		})()
