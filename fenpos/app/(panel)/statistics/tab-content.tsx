@@ -1,7 +1,12 @@
-import { ChartColumn } from "lucide-react";
-import { TAB_LABELS, type TabId } from "@/app/(panel)/statistics/tabs";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { formatDate } from "@/lib/format/datetime";
+import type { TabId } from "@/app/(panel)/statistics/tabs";
+import { ApiTab } from "@/app/(panel)/statistics/tabs/api-tab";
+import { FleetTab } from "@/app/(panel)/statistics/tabs/fleet-tab";
+import { JobsTab } from "@/app/(panel)/statistics/tabs/jobs-tab";
+import { LatencyTab } from "@/app/(panel)/statistics/tabs/latency-tab";
+import { OverviewTab } from "@/app/(panel)/statistics/tabs/overview-tab";
+import { ReliabilityTab } from "@/app/(panel)/statistics/tabs/reliability-tab";
+import { SecurityTab } from "@/app/(panel)/statistics/tabs/security-tab";
+import { WebhooksTab } from "@/app/(panel)/statistics/tabs/webhooks-tab";
 import type { ResolvedRange } from "@/lib/metrics/range";
 
 /** The agent/device narrowing every tab's query takes, read from `?agent=` and `?device=`. */
@@ -11,28 +16,30 @@ export interface StatisticsFilter {
 }
 
 /**
- * Renders the body for the active tab.
- *
- * Every tab is a placeholder `<Empty>` until Task 13 replaces it with real charts — the point of
- * this task is that the shell renders end to end, URL contract and all, before a single chart
- * exists. `range` and `filter` are already exactly what a chart on this tab would query with, so the
- * placeholder names them rather than sitting there inert: this is a server component, and a prop this
- * task received but never read would be the kind of drift `pnpm typecheck` cannot catch on its own.
+ * Renders the body for the active tab: one of the eight tab server components, each fetching its
+ * own `*TabData` shape and laying out `ChartCard`s per the spec's chart-to-primitive mapping.
  */
 export function TabContent({ tab, range, filter }: { tab: TabId; range: ResolvedRange; filter: StatisticsFilter }) {
-	return (
-		<Empty className="min-h-64 rounded-xl border border-dashed border-border">
-			<EmptyHeader>
-				<EmptyMedia variant="icon">
-					<ChartColumn />
-				</EmptyMedia>
-				<EmptyTitle>{TAB_LABELS[tab]} is not built yet</EmptyTitle>
-				<EmptyDescription>
-					This tab will chart {formatDate(range.from)} through {formatDate(range.to)}
-					{filter.agentId ? ", narrowed to one agent" : ""}
-					{filter.deviceId ? ", narrowed to one printer" : ""}.
-				</EmptyDescription>
-			</EmptyHeader>
-		</Empty>
-	);
+	switch (tab) {
+		case "overview":
+			return <OverviewTab range={range} filter={filter} />;
+		case "jobs":
+			return <JobsTab range={range} filter={filter} />;
+		case "reliability":
+			return <ReliabilityTab range={range} filter={filter} />;
+		case "latency":
+			return <LatencyTab range={range} filter={filter} />;
+		case "fleet":
+			return <FleetTab range={range} filter={filter} />;
+		case "webhooks":
+			return <WebhooksTab range={range} filter={filter} />;
+		case "api":
+			return <ApiTab range={range} filter={filter} />;
+		case "security":
+			return <SecurityTab range={range} filter={filter} />;
+		default: {
+			const _exhaustive: never = tab;
+			return _exhaustive;
+		}
+	}
 }
