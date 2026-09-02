@@ -30,10 +30,46 @@ async function seedJob(finishedAt: Date, status = "COMPLETED", errorCode: string
 	});
 }
 
+/**
+ * Queues one settled webhook delivery, creating its webhook (and that webhook's api key) on first
+ * use per test.
+ *
+ * `createdAt` cannot be set through `create`'s data the normal way — it defaults via `@default(now())`
+ * — so it is written with a follow-up `update`, the same two-step `deliver.test.ts` would need for the
+ * same reason.
+ */
+let webhookId: string | undefined;
+async function seedDelivery(createdAt: Date, deliveredAt: Date | null = createdAt): Promise<void> {
+	if (!webhookId) {
+		const key = await prisma.apiKey.create({
+			data: { name: "rollup-key", keyHash: `hash-${Math.random()}`, maskedHint: "abcd" },
+		});
+		const webhook = await prisma.webhook.create({
+			data: { apiKeyId: key.id, url: "https://93.184.216.34/hook", secret: "whsec_rollup_test", enabled: true },
+		});
+		webhookId = webhook.id;
+	}
+	const delivery = await prisma.webhookDelivery.create({
+		data: {
+			webhookId,
+			jobId: `job-${Math.random()}`,
+			payload: "{}",
+			status: deliveredAt ? "DELIVERED" : "PENDING",
+			deliveredAt,
+		},
+	});
+	await prisma.webhookDelivery.update({ where: { id: delivery.id }, data: { createdAt } });
+}
+
 beforeEach(async () => {
 	await prisma.job.deleteMany();
+	await prisma.webhookDelivery.deleteMany();
+	await prisma.webhook.deleteMany();
+	await prisma.apiKey.deleteMany();
+	webhookId = undefined;
 	await metricsDb.metricJobHourly.deleteMany();
 	await metricsDb.metricErrorHourly.deleteMany();
+	await metricsDb.metricWebhookHourly.deleteMany();
 	await metricsDb.metricWatermark.deleteMany();
 });
 
@@ -85,5 +121,39 @@ describe("runMetricsRollup", () => {
 		await seedJob(new Date("2026-08-02T12:10:00Z"));
 		await runMetricsRollup(clients, now);
 		expect(await metricsDb.metricJobHourly.count()).toBe(0);
+	});
+
+	// The count-capped sweep in `sweepDeliveriesNow` (lib/webhooks/deliver.ts) can remove the raw
+	// `webhookDelivery` rows for an hour that already sits inside the rollup's trailing re-roll
+	// window, well before that hour ages out of it. Rolling "zero raw rows" as "zero deliveries" in
+	// that case would erase the rolled history the sweep never touches — this is the regression the
+	// bucket-skip in `rollWebhooksHour` exists to prevent.
+	it("keeps a webhook hour's rolled rows when its raw deliveries are later swept away", async () => {
+		const now = new Date("2026-08-02T12:30:00Z");
+		await seedDelivery(new Date("2026-08-01T10:05:00Z"));
+
+		await runMetricsRollup(clients, now);
+		const bucket = new Date("2026-08-01T10:00:00Z");
+		const before = await metricsDb.metricWebhookHourly.findMany({ where: { bucket } });
+		expect(before).toHaveLength(1);
+		expect(before[0].delivered).toBe(1);
+		expect(before[0].queued).toBe(1);
+		// Every other hour in the backfilled range (08-01T10:00 through the current hour) had no
+		// deliveries at all and must still roll to nothing, proving the ordinary quiet-hour path is
+		// untouched by the new bucket-skip below.
+		expect(await metricsDb.metricWebhookHourly.count()).toBe(1);
+
+		// Simulates `sweepDeliveriesNow` pruning the raw table down to its count cap: the already-rolled
+		// hour's raw rows are gone, but the rolled row itself must survive.
+		await prisma.webhookDelivery.deleteMany();
+
+		await runMetricsRollup(clients, now);
+		const after = await metricsDb.metricWebhookHourly.findMany({ where: { bucket } });
+		expect(after).toHaveLength(1);
+		expect(after[0].delivered).toBe(1);
+		expect(after[0].queued).toBe(1);
+		// A second re-roll of the same window must not leave any *new* rows behind either — only the
+		// one bucket's rolled row, preserved, exists.
+		expect(await metricsDb.metricWebhookHourly.count()).toBe(1);
 	});
 });

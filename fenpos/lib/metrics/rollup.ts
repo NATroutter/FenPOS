@@ -175,6 +175,20 @@ async function rollJobsHour(clients: RollupClients, bucket: Date): Promise<void>
  * The delivery table has no relation back to jobs, only to webhooks, and a delivery whose webhook
  * was since deleted keeps its id but resolves to no name — those deliveries are reported under
  * `webhookName: "(deleted)"` rather than dropped, so the hour's totals still add up.
+ *
+ * **Skips the rewrite when the raw rows are gone but the hour was already rolled.** `webhookDelivery`
+ * is pruned by a *count* cap, not an age cap — {@link sweepDeliveriesNow} in `lib/webhooks/deliver.ts`
+ * deletes the oldest settled rows once the table exceeds `webhooks.maxDeliveryRecords`, with no regard
+ * for how recent they are. On a busy install that cap can be reached inside the {@link REROLL_HOURS}
+ * trailing window this function replays every pass, so an hour this function already rolled correctly
+ * can, on a later pass, find zero raw rows for a bucket it has real rolled data for. Rolling that as
+ * "zero deliveries" and deleting the existing `MetricWebhookHourly` rows would erase real history
+ * under the same count-capped sweep that rollups exist to survive — the spec's promise is that a
+ * rollup, once written, is permanent. So: three empty raw queries plus an existing rolled row for the
+ * bucket means "already rolled, raw rows since swept," and the existing rows are left untouched rather
+ * than replaced with nothing. Three empty raw queries with *no* existing rolled row is the ordinary
+ * "genuinely nothing happened this hour" case, and still rolls (to an empty transaction, same as
+ * today) so a watermark advances over a quiet hour exactly as before.
  */
 async function rollWebhooksHour(clients: RollupClients, bucket: Date): Promise<void> {
 	const bucketEnd = new Date(bucket.getTime() + HOUR_MS);
@@ -240,6 +254,16 @@ async function rollWebhooksHour(clients: RollupClients, bucket: Date): Promise<v
 		attemptsSum: a.attemptsSum,
 		attemptsMax: a.attemptsMax,
 	}));
+
+	if (created.length === 0 && delivered.length === 0 && failed.length === 0) {
+		const alreadyRolled = await clients.metricsDb.metricWebhookHourly.count({ where: { bucket } });
+		if (alreadyRolled > 0) {
+			// See the doc comment above: the count-capped sweep, not a genuinely quiet hour, is the
+			// likely reason all three raw queries came back empty. Leave the existing rolled rows in
+			// place rather than rewriting them away.
+			return;
+		}
+	}
 
 	await clients.metricsDb.$transaction([
 		clients.metricsDb.metricWebhookHourly.deleteMany({ where: { bucket } }),
