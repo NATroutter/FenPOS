@@ -70,6 +70,21 @@ describe("overviewTabData", () => {
 		await mk("COMPLETED", new Date(Date.now() - 60 * 60 * 1000));
 		await mk("COMPLETED", new Date(Date.now() - 30 * 60 * 1000));
 		await mk("FAILED", new Date(Date.now() - 10 * 60 * 1000));
+		await metricsDb.fleetSample.create({
+			data: {
+				at: new Date(Date.now() - 40 * 60 * 1000),
+				agentsTotal: 4,
+				agentsOnline: 2,
+				devicesTotal: 0,
+				devicesConnected: 0,
+				queueDepth: 0,
+				pendingWebhooks: 0,
+				activeSessions: 0,
+				dbMainBytes: 0,
+				dbAuditBytes: 0,
+				dbLogsBytes: 0,
+			},
+		});
 
 		const range = hourRange(24);
 		const result = await overviewTabData(range, { agentId: agent.id });
@@ -82,6 +97,16 @@ describe("overviewTabData", () => {
 		expect(result.cards.agentsOnline).toEqual({ online: 0, total: 1 });
 		expect(result.cards.printersConnected).toEqual({ connected: 0, total: 1 });
 		expect(result.cards.queueDepth).toBe(0);
+
+		const sampledAvailability = result.availability.find((b) => b.agentsOnline === 2 && b.agentsTotal === 4);
+		expect(sampledAvailability).toBeDefined();
+		// A bucket with no fleet samples in it must report null, not a false zero.
+		const firstBucketIso = displayBuckets(range)[0].toISOString();
+		expect(result.availability.find((b) => b.t === firstBucketIso)).toEqual({
+			t: firstBucketIso,
+			agentsOnline: null,
+			agentsTotal: null,
+		});
 	});
 });
 

@@ -24,7 +24,7 @@ export interface OverviewTabData {
 		queueDepth: number;
 	};
 	jobsOverTime: { t: string; completed: number; failed: number; cancelled: number }[];
-	availability: { t: string; agentsOnline: number; agentsTotal: number }[];
+	availability: { t: string; agentsOnline: number | null; agentsTotal: number | null }[];
 	failuresOverTime: { t: string; failed: number }[];
 }
 
@@ -107,12 +107,13 @@ export async function overviewTabData(range: ResolvedRange, filter: MetricsFilte
 			buckets.set(key, [{ agentsOnline: sample.agentsOnline, agentsTotal: sample.agentsTotal }]);
 		}
 	}
+	// A bucket with no fleet samples in it yields null — a gap in the chart, not a false zero.
 	const availability = [...buckets.entries()]
 		.sort((a, b) => a[0] - b[0])
 		.map(([key, list]) => ({
 			t: new Date(key).toISOString(),
-			agentsOnline: list.length ? Math.round(list.reduce((sum, s) => sum + s.agentsOnline, 0) / list.length) : 0,
-			agentsTotal: list.length ? Math.round(list.reduce((sum, s) => sum + s.agentsTotal, 0) / list.length) : 0,
+			agentsOnline: list.length ? Math.round(list.reduce((sum, s) => sum + s.agentsOnline, 0) / list.length) : null,
+			agentsTotal: list.length ? Math.round(list.reduce((sum, s) => sum + s.agentsTotal, 0) / list.length) : null,
 		}));
 
 	return {
