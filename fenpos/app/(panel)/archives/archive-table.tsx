@@ -287,6 +287,14 @@ function DeleteAuditPeriod({ periodKey, onDeleted }: { periodKey: string; onDele
  * seed this with, unlike Jobs, Logs and Audit: opening a period is a client action, not something the
  * Archives page pre-fetches, so the seed here is simply empty with `more: true`, and the sentinel's
  * own first approach (immediate, since an empty list has nowhere to scroll before it) fetches page one.
+ *
+ * **The terminal "nothing matches" state only renders once querying has actually concluded.** An
+ * earlier version bailed out to it whenever `rows.length === 0`, which is also true before the very
+ * first read has run — and `InfiniteScrollFooter`'s sentinel, the only thing that can trigger that
+ * read, is rendered in the branch below this one. That made every period permanently show "nothing
+ * matches": the sentinel that would have proven otherwise never mounted to find out. `more` is what
+ * actually distinguishes "hasn't tried yet" (`more` still `true`, from the seed) from "tried, and there
+ * was nothing" (`more` false because `readArchivePage` said so), so the terminal message waits for it.
  */
 function OpenedArchivePeriod({ archive, search }: { archive: ArchiveRef; search: string }) {
 	// A stable seed rather than a literal in the hook call: `useInfiniteScroll` compares `batch` by
@@ -303,14 +311,7 @@ function OpenedArchivePeriod({ archive, search }: { archive: ArchiveRef; search:
 		},
 	});
 
-	if (rows.length === 0) {
-		if (loading) {
-			return (
-				<div className="flex justify-center py-6">
-					<Spinner className="size-4" />
-				</div>
-			);
-		}
+	if (rows.length === 0 && !loading && !more) {
 		if (error) {
 			return <p className="text-[12px] text-destructive">{error}</p>;
 		}
@@ -319,9 +320,9 @@ function OpenedArchivePeriod({ archive, search }: { archive: ArchiveRef; search:
 
 	return (
 		<>
-			<OpenedRows rows={rows} />
+			{rows.length > 0 ? <OpenedRows rows={rows} /> : null}
 			<InfiniteScrollFooter more={more} loading={loading} error={error} sentinelRef={sentinelRef} onRetry={retry} />
-			<BackToTop />
+			{rows.length > 0 ? <BackToTop /> : null}
 		</>
 	);
 }

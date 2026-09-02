@@ -2,7 +2,12 @@
 
 import { type JobsBatchRequest, listMoreJobs } from "@/app/(panel)/jobs/actions";
 import { JobTable } from "@/app/(panel)/jobs/job-table";
-import { BackToTop, InfiniteScrollFooter, useInfiniteScroll } from "@/components/panel/infinite-scroll";
+import {
+	BackToTop,
+	type InfiniteBatch,
+	InfiniteScrollFooter,
+	useInfiniteScroll,
+} from "@/components/panel/infinite-scroll";
 import type { JobSummary } from "@/lib/jobs/job-service";
 
 /**
@@ -15,6 +20,14 @@ import type { JobSummary } from "@/lib/jobs/job-service";
  * Rendered with `key={...}` built from the tab's filters and sort by the page itself, so a real change
  * to either remounts this component with a clean slate rather than trying to reconcile one query's
  * scroll history against another's — see `components/panel/infinite-scroll.tsx`'s module doc.
+ *
+ * **`initial` is handed to `useInfiniteScroll` exactly as received, not wrapped in a new object.**
+ * `useInfiniteScroll` tells one server refresh from another by comparing `batch` for identity, and a
+ * prop passed straight through keeps the reference the server actually gave this component across
+ * every one of its own re-renders — a `{ rows: initial.jobs, ... }` literal rebuilt here would look
+ * like a fresh batch on every render regardless, which was exactly the infinite render loop this shape
+ * exists to avoid. `initial`'s own field is therefore named `rows` to match {@link InfiniteBatch}
+ * directly, rather than `jobs`.
  */
 export function JobList({
 	initial,
@@ -23,14 +36,14 @@ export function JobList({
 	canCancel,
 }: {
 	/** The server page's own first batch. */
-	initial: { jobs: JobSummary[]; more: boolean };
+	initial: InfiniteBatch<JobSummary>;
 	/** The filter and sort to carry into every `listMoreJobs` call, exactly as the URL holds them. */
 	query: Omit<JobsBatchRequest, "offset">;
 	live: boolean;
 	canCancel: boolean;
 }) {
 	const { rows, more, loading, error, sentinelRef, retry } = useInfiniteScroll<JobSummary>({
-		batch: { rows: initial.jobs, more: initial.more },
+		batch: initial,
 		getId: (job) => job.id,
 		loadMore: async (offset) => {
 			const page = await listMoreJobs({ ...query, offset });

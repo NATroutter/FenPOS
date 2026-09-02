@@ -94,19 +94,37 @@ export function anyOf<T extends string | number>(
 }
 
 /**
+ * The most rows any infinite-scroll action will step over.
+ *
+ * A caller legitimately scrolling — even through an install's entire history at the smallest
+ * configured page size — reaches offsets in the tens of thousands at most. This is set two orders of
+ * magnitude past that: high enough that no real scroll ever reaches it, and low enough to bound the
+ * cost of somebody who skips the scrolling and just posts a number. Without an upper bound, a caller
+ * holding a real read permission — this is not a permission check, `panelQuery`'s gate is — could
+ * still ask `OFFSET 4000000000` of a query that has no reason to expect it, on every one of these
+ * actions' underlying tables.
+ */
+const MAX_OFFSET = 1_000_000;
+
+/**
  * Reads how many rows to step over, from a value that crossed the wire.
  *
  * `offset` is not a filter's value — it never appears in a URL and it is never multi-valued — but
  * every infinite-scroll action reads it across the same boundary its filters cross, and it needs the
  * same scepticism: a server action is a public endpoint, and a caller can post anything. Clamped to a
- * whole number at or above zero rather than handed straight to Prisma's `skip`, which rejects a
- * fractional or negative bound outright. Mirrors `archives/actions.ts`'s own `pageOf`, which clamps
- * its `skip` the same way for the same reason.
+ * whole number between zero and {@link MAX_OFFSET} rather than handed straight to Prisma's `skip`,
+ * which rejects a fractional or negative bound outright and would otherwise accept an unbounded one.
+ * Mirrors `archives/actions.ts`'s own `pageOf`, which clamps its `skip` at zero for the same reason,
+ * extended with the upper bound that action does not need — it reads one decompressed period at a
+ * time, capped at 100 rows per read, rather than a live table a caller could ask to skip the whole of.
  *
  * @param value whatever the caller sent
- * @returns a safe offset to skip by
+ * @returns a safe offset to skip by, no larger than {@link MAX_OFFSET}
  */
 export function parseOffset(value: unknown): number {
 	const parsed = Math.trunc(Number(value));
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return 0;
+	}
+	return Math.min(parsed, MAX_OFFSET);
 }

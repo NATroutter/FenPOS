@@ -156,6 +156,10 @@ export function LogStream({
 				rows={all}
 				columns={columns}
 				defaultSort={{ id: LOG_DEFAULT_SORT.column, desc: LOG_DEFAULT_SORT.desc }}
+				// The line's own id, not its position: infinite scroll can reorder this list under a live
+				// batch-0 replacement, and lines arriving live are prepended ahead of it too. See
+				// `DataTable`'s own doc on `getRowId`.
+				getRowId={(line) => line.id}
 				minWidth="640px"
 				sortable={sortable}
 				empty={

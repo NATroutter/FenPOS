@@ -104,6 +104,9 @@ export function AuditTable({ events }: { events: AuditEventSummary[] }) {
 			rows={events}
 			columns={columns}
 			defaultSort={{ id: AUDIT_DEFAULT_SORT.column, desc: AUDIT_DEFAULT_SORT.desc }}
+			// The event's own sequence, not its position: infinite scroll can reorder this list under a
+			// live batch-0 replacement. See `DataTable`'s own doc on `getRowId`.
+			getRowId={(event) => String(event.seq)}
 			minWidth="900px"
 			empty={
 				<Empty className="border border-dashed border-border">

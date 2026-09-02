@@ -166,7 +166,7 @@ export default async function AuditPage({
 					from: from?.toISOString(),
 					to: to?.toISOString(),
 				})}
-				initial={{ events: page.events, more: page.more }}
+				initial={{ rows: page.events, more: page.more }}
 				query={{
 					actor: params.actor,
 					action: params.action,

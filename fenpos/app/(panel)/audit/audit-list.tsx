@@ -2,7 +2,12 @@
 
 import { type AuditBatchRequest, listMoreAuditEvents } from "@/app/(panel)/audit/actions";
 import { AuditTable } from "@/app/(panel)/audit/audit-table";
-import { BackToTop, InfiniteScrollFooter, useInfiniteScroll } from "@/components/panel/infinite-scroll";
+import {
+	BackToTop,
+	type InfiniteBatch,
+	InfiniteScrollFooter,
+	useInfiniteScroll,
+} from "@/components/panel/infinite-scroll";
 import type { AuditEventSummary } from "@/lib/audit/audit-query";
 
 /**
@@ -13,18 +18,21 @@ import type { AuditEventSummary } from "@/lib/audit/audit-query";
  * `key={...}` built from the tab's filters and sort by the page itself, so a real change to either
  * remounts this with a clean slate rather than reconciling one query's scroll history against
  * another's.
+ *
+ * `initial` is handed to `useInfiniteScroll` exactly as received — see `job-list.tsx`'s doc for why
+ * rewrapping it in a fresh object here would be an infinite render loop rather than a convenience.
  */
 export function AuditList({
 	initial,
 	query,
 }: {
 	/** The server page's own first batch. */
-	initial: { events: AuditEventSummary[]; more: boolean };
+	initial: InfiniteBatch<AuditEventSummary>;
 	/** The filter and sort to carry into every `listMoreAuditEvents` call, exactly as the URL holds them. */
 	query: Omit<AuditBatchRequest, "offset">;
 }) {
 	const { rows, more, loading, error, sentinelRef, retry } = useInfiniteScroll<AuditEventSummary>({
-		batch: { rows: initial.events, more: initial.more },
+		batch: initial,
 		getId: (event) => String(event.seq),
 		loadMore: async (offset) => {
 			const page = await listMoreAuditEvents({ ...query, offset });

@@ -65,6 +65,7 @@ export function DataTable<TData extends RowData>({
 	className,
 	minWidth,
 	sortable = true,
+	getRowId,
 }: {
 	rows: TData[];
 	columns: DataTableColumns<TData>;
@@ -80,6 +81,20 @@ export function DataTable<TData extends RowData>({
 	 * the dashboard ignores, so the arrows moved and the rows did not.
 	 */
 	sortable?: boolean;
+	/**
+	 * Identifies a row by the record it holds rather than by its position in `rows`.
+	 *
+	 * Left unset, `useTable` falls back to the row's index in `rows`, and that index is what
+	 * `<TableRow key>` below is built from. That is fine for a list that only ever replaces its
+	 * whole `rows` array at once — but Jobs, Audit and Logs no longer do only that: a live refresh
+	 * replaces the first batch in place while an infinite-scrolled table keeps everything appended
+	 * after it, and a row's position can change between one render and the next as the live batch
+	 * reorders. An index-keyed row then keeps whatever per-row state React attached to that
+	 * position — `CancelJobButton`'s own pending flag, for one — and hands it to whichever row now
+	 * sits there, which is a different job. Every table whose rows can move under it this way must
+	 * pass this.
+	 */
+	getRowId?: (row: TData) => string;
 }) {
 	const router = useRouter();
 	const params = useSearchParams();
@@ -117,6 +132,7 @@ export function DataTable<TData extends RowData>({
 		enableSorting: sortable,
 		state: { sorting },
 		onSortingChange,
+		getRowId: getRowId ? (row) => getRowId(row) : undefined,
 	});
 
 	if (rows.length === 0) {

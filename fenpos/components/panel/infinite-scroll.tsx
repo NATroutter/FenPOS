@@ -109,25 +109,46 @@ export function useInfiniteScroll<T>({
 
 	// Compared by identity on purpose: a caller passes a new `batch` object exactly when the server
 	// rendered a fresh one, which is the one event this effect exists to catch. See the module doc.
+	//
+	// **This is why every caller must hand in a `batch` that is only a new object when the underlying
+	// data actually is.** `job-list.tsx`, `audit-list.tsx` and `log-list.tsx` all pass their server
+	// prop straight through as `batch` rather than rewrapping it (`{ rows: initial.jobs, ... }`) —
+	// their own server prop already carries a stable identity across their own re-renders, and it is
+	// the rewrapping that would not. The Archives reader has no server prop to begin with, so it seeds
+	// `batch` from a `useRef` created once instead. A `batch` rebuilt as a fresh object literal on every
+	// render of the caller would look "new" to this comparison on every render, which would run the
+	// effect below, which calls `setState`, which triggers exactly the render that manufactures the
+	// next "new" batch — an infinite loop disguised as reconciliation. React's own "Maximum update depth
+	// exceeded" is what that looks like from outside; this file's earlier revision had exactly this bug.
 	const previousBatch = useRef(batch);
 	// A ref rather than relying on `loading` state: state set inside `load` would not be visible to a
 	// second call already in flight when it read it, and two overlapping sentinel firings would then
 	// both proceed.
 	const loadingRef = useRef(false);
 
+	// `getId` is read through a ref, exactly as `useSentinel` reads `onIntersect` below, rather than
+	// listed as a dependency of the reconciliation effect. A caller's `getId` is typically an inline
+	// arrow (`(job) => job.id`), a fresh function every render; if the effect depended on it directly, an
+	// otherwise-stable `batch` would still make the effect re-run on every render — the same infinite
+	// loop the `batch` note above describes, from the other input.
+	const getIdRef = useRef(getId);
+	useEffect(() => {
+		getIdRef.current = getId;
+	});
+
 	useEffect(() => {
 		if (previousBatch.current === batch) {
 			return;
 		}
 		previousBatch.current = batch;
-		const freshIds = new Set(batch.rows.map(getId));
+		const freshIds = new Set(batch.rows.map((row) => getIdRef.current(row)));
 		// The dedupe: an appended row that now also appears in the fresh batch 0 is dropped from
 		// `appended`, so it renders once — wherever the fresh data says it belongs — rather than twice.
-		setAppended((current) => current.filter((row) => !freshIds.has(getId(row))));
+		setAppended((current) => current.filter((row) => !freshIds.has(getIdRef.current(row))));
 		setMore(batch.more);
 		setError(null);
 		setBatchVersion((version) => version + 1);
-	}, [batch, getId]);
+	}, [batch]);
 
 	const rows = batch.rows.concat(appended);
 	const rowCount = rows.length;

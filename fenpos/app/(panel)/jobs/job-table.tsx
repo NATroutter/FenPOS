@@ -138,6 +138,11 @@ export function JobTable({ jobs, live, canCancel }: { jobs: JobSummary[]; live: 
 			rows={jobs}
 			columns={canCancel ? COLUMNS.withCancel : COLUMNS.readOnly}
 			defaultSort={{ id: JOB_DEFAULT_SORT.column, desc: JOB_DEFAULT_SORT.desc }}
+			// The job's own id, not its position: a live refresh can reorder this list (a job moving
+			// from PRINTING to COMPLETED changes where it sorts), and an index-keyed row would hand
+			// `CancelJobButton`'s pending state to whichever job now sits at the old index. See
+			// `DataTable`'s own doc on `getRowId`.
+			getRowId={(job) => job.id}
 			minWidth="880px"
 			empty={
 				<Empty className="border border-dashed border-border">

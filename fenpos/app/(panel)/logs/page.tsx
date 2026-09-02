@@ -156,7 +156,7 @@ export default async function LogsPage({
 						from: from?.toISOString(),
 						to: to?.toISOString(),
 					})}
-					initial={{ lines: page.lines, more: page.more }}
+					initial={{ rows: page.lines, more: page.more }}
 					query={{
 						agent: params.agent,
 						key: params.key,

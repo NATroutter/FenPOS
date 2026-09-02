@@ -2,7 +2,12 @@
 
 import { type LogsBatchRequest, listMoreLogs } from "@/app/(panel)/logs/actions";
 import { LogStream } from "@/app/(panel)/logs/log-stream";
-import { BackToTop, InfiniteScrollFooter, useInfiniteScroll } from "@/components/panel/infinite-scroll";
+import {
+	BackToTop,
+	type InfiniteBatch,
+	InfiniteScrollFooter,
+	useInfiniteScroll,
+} from "@/components/panel/infinite-scroll";
 import type { LogLine } from "@/lib/logs/log-service";
 
 /**
@@ -22,18 +27,21 @@ import type { LogLine } from "@/lib/logs/log-service";
  * scroll-triggered append changes `lines` without changing `batchVersion` and leaves `arrived` alone,
  * while a live refresh changes both and clears it — exactly the distinction `LogStream` cannot draw
  * from `lines` alone.
+ *
+ * `initial` is handed to `useInfiniteScroll` exactly as received — see `job-list.tsx`'s doc for why
+ * rewrapping it in a fresh object here would be an infinite render loop rather than a convenience.
  */
 export function LogList({
 	initial,
 	query,
 }: {
 	/** The server page's own first batch. */
-	initial: { lines: LogLine[]; more: boolean };
+	initial: InfiniteBatch<LogLine>;
 	/** The filter and sort to carry into every `listMoreLogs` call, exactly as the URL holds them. */
 	query: Omit<LogsBatchRequest, "offset">;
 }) {
 	const { rows, more, loading, error, sentinelRef, retry, batchVersion } = useInfiniteScroll<LogLine>({
-		batch: { rows: initial.lines, more: initial.more },
+		batch: initial,
 		getId: (line) => line.id,
 		loadMore: async (offset) => {
 			const page = await listMoreLogs({ ...query, offset });

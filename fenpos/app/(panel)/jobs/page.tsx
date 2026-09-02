@@ -90,7 +90,7 @@ export default async function JobsPage({
 				// Remounts on a real filter or sort change, so scroll history from one query is never
 				// reconciled against another's — see `components/panel/infinite-scroll.tsx`.
 				key={JSON.stringify({ agentIds, deviceIds, statuses, sort, desc })}
-				initial={{ jobs: page.jobs, more: page.more }}
+				initial={{ rows: page.jobs, more: page.more }}
 				query={{
 					agent: params.agent,
 					device: params.device,
