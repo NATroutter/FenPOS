@@ -2,15 +2,13 @@ import { Archive } from "lucide-react";
 import Link from "next/link";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { FollowProvider, FollowToggle } from "@/app/(panel)/logs/follow";
-import { LogStream } from "@/app/(panel)/logs/log-stream";
+import { LogList } from "@/app/(panel)/logs/log-list";
+import { parseLogsSearchParams } from "@/app/(panel)/logs/search-params";
 import { buttonVariants } from "@/components/ui/button";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
-import { dayBound } from "@/lib/format/datetime";
-import { archiveCovering, FILTERABLE_LEVELS, isFilterableLevel, listLogs } from "@/lib/logs/log-service";
-import { isLogSortColumn } from "@/lib/logs/log-sort";
+import { archiveCovering, FILTERABLE_LEVELS, listLogs } from "@/lib/logs/log-service";
 import { integerSetting } from "@/lib/settings/settings-service";
-import { parseKnownValues, parseValues } from "@/lib/table/multi-filter";
 
 export const metadata = { title: "Logs" };
 
@@ -38,6 +36,11 @@ const SIGNPOST =
  * archived would only move the operator's failure from "the data is gone" to "the data is somewhere
  * nobody told you to look". `archiveCovering` decides whether there is anything to point at, and the
  * banner is not rendered at all when there is not.
+ *
+ * **Scrolls rather than pages.** The server component below still renders one page-size worth of
+ * lines and `LogList` appends further batches as the operator scrolls, through `listMoreLogs`. A
+ * stale bookmark carrying `?skip=` from before this feature is simply ignored: this page reads no
+ * such parameter, so it renders the first page exactly as any other visit would.
  */
 export default async function LogsPage({
 	searchParams,
@@ -48,7 +51,6 @@ export default async function LogsPage({
 		level?: string;
 		from?: string;
 		to?: string;
-		skip?: string;
 		sort?: string;
 		dir?: string;
 	}>;
@@ -57,17 +59,7 @@ export default async function LogsPage({
 	await requirePagePermission("logs:read", "/logs");
 
 	const params = await searchParams;
-	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	// Each filter holds as many values as were ticked. Anything else in the URL — including `DEBUG`,
-	// which the dropdown has never offered — is dropped, so a stale bookmark cannot put a value in a
-	// trigger the dropdown has no label for.
-	const agentIds = parseValues(params.agent);
-	const keyIds = parseValues(params.key);
-	const levels = parseKnownValues(params.level, isFilterableLevel);
-	const sort = params.sort && isLogSortColumn(params.sort) ? params.sort : undefined;
-	const desc = params.dir ? params.dir !== "asc" : undefined;
-	const from = dayBound(params.from, "start");
-	const to = dayBound(params.to, "end");
+	const { agentIds, keyIds, levels, sort, desc, from, to } = parseLogsSearchParams(params);
 	// Either end alone is a range: "everything since March" and "everything up to March" both narrow
 	// the view, and both can reach back past the live window.
 	const ranged = from !== undefined || to !== undefined;
@@ -79,29 +71,19 @@ export default async function LogsPage({
 		// Revoked keys included: a key stops working the moment it is revoked, and the lines it wrote
 		// before that are exactly the ones somebody comes here to read afterwards.
 		prisma.apiKey.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-		listLogs({ agentId: agentIds, apiKeyId: keyIds, level: levels, from, to, skip, sort, desc, take: pageSize }),
+		listLogs({ agentId: agentIds, apiKeyId: keyIds, level: levels, from, to, sort, desc, take: pageSize }),
 		// Only when a range has actually been asked for. An unfiltered tab is not asking about a stretch
 		// of history, so the oldest archive on disk would appear under every default page load — a
 		// signpost that is always there is scenery, and stops being read long before it matters.
 		ranged ? archiveCovering({ from, to }) : null,
 	]);
 
-	// The live stream is paused whenever a filter, a page or a sort is in play. A filter or a page
-	// would be shown lines it excludes; a sort would have them pushed onto the top of an ordering
-	// that does not put them there. In every case the arriving line contradicts what the view says
-	// it is, so the honest move is to stop and let the operator reload.
-	const live = agentIds.length === 0 && keyIds.length === 0 && levels.length === 0 && !ranged && skip === 0 && !sort;
-
-	const query = (next: Record<string, string | undefined>): string => {
-		const search = new URLSearchParams();
-		for (const [key, value] of Object.entries({ ...params, ...next })) {
-			if (value) {
-				search.set(key, value);
-			}
-		}
-		const rendered = search.toString();
-		return rendered ? `?${rendered}` : "?";
-	};
+	// The live stream is paused whenever a filter or a sort is in play. A filter would be shown lines
+	// it excludes; a sort would have them pushed onto the top of an ordering that does not put them
+	// there. In either case the arriving line contradicts what the view says it is, so the honest move
+	// is to stop and let the operator reload. Scrolling further down an unfiltered, unsorted view does
+	// not change what "the view" means the way a filter or a sort would, so it is not part of this.
+	const live = agentIds.length === 0 && keyIds.length === 0 && levels.length === 0 && !ranged && !sort;
 
 	return (
 		<FollowProvider streamable={live}>
@@ -162,28 +144,29 @@ export default async function LogsPage({
 					</div>
 				)}
 
-				<LogStream lines={page.lines} />
-
-				{skip > 0 || page.more ? (
-					<div className="flex items-center gap-2">
-						{skip > 0 ? (
-							<Link
-								href={query({ skip: String(Math.max(0, skip - pageSize)) })}
-								className={buttonVariants({ variant: "outline", size: "sm" })}
-							>
-								Newer
-							</Link>
-						) : null}
-						{page.more ? (
-							<Link
-								href={query({ skip: String(skip + pageSize) })}
-								className={buttonVariants({ variant: "outline", size: "sm" })}
-							>
-								Older
-							</Link>
-						) : null}
-					</div>
-				) : null}
+				<LogList
+					// Remounts on a real filter or sort change, so scroll history from one query is never
+					// reconciled against another's — see `components/panel/infinite-scroll.tsx`.
+					key={JSON.stringify({
+						agentIds,
+						keyIds,
+						levels,
+						sort,
+						desc,
+						from: from?.toISOString(),
+						to: to?.toISOString(),
+					})}
+					initial={{ lines: page.lines, more: page.more }}
+					query={{
+						agent: params.agent,
+						key: params.key,
+						level: params.level,
+						from: params.from,
+						to: params.to,
+						sort: params.sort,
+						dir: params.dir,
+					}}
+				/>
 			</div>
 		</FollowProvider>
 	);

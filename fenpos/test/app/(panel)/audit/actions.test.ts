@@ -40,7 +40,9 @@ vi.mock("@/lib/env", async (importOriginal) => {
 	return { ...actual, AUDIT_ARCHIVE_DIRECTORY: join(root, "archives") };
 });
 
-const { auditArchiveCovering, exportAuditCsv, verifyChain } = await import("@/app/(panel)/audit/actions");
+const { auditArchiveCovering, exportAuditCsv, listMoreAuditEvents, verifyChain } = await import(
+	"@/app/(panel)/audit/actions"
+);
 const { archivePeriod } = await import("@/lib/archive/rotate");
 const { appendEvent, SYSTEM_ACTOR } = await import("@/lib/audit/audit-log");
 const { auditDb, logsDb, prisma } = await import("@/lib/db");
@@ -54,6 +56,19 @@ async function superuser() {
 	const id = `audit-action-${nextAccount}`;
 	await prisma.user.create({ data: { id, name: id, email: `${id}@example.com`, isSuperuser: true } });
 	const user = { id, name: id, email: `${id}@example.com`, isSuperuser: true, mustChangePassword: false };
+	currentSessionUser.mockResolvedValue(user);
+	return user;
+}
+
+/** An account holding exactly the permissions named, with an id no earlier case has used. */
+async function account(permissions: string[]) {
+	nextAccount += 1;
+	const id = `audit-action-${nextAccount}`;
+	await prisma.user.create({ data: { id, name: id, email: `${id}@example.com`, isSuperuser: false } });
+	for (const permission of permissions) {
+		await prisma.userPermission.create({ data: { userId: id, permission } });
+	}
+	const user = { id, name: id, email: `${id}@example.com`, isSuperuser: false, mustChangePassword: false };
 	currentSessionUser.mockResolvedValue(user);
 	return user;
 }
@@ -136,6 +151,7 @@ beforeEach(async () => {
 	await auditDb.auditAnchor.deleteMany({});
 	await auditDb.auditEpoch.deleteMany({});
 	await logsDb.logEntry.deleteMany({});
+	await prisma.userPermission.deleteMany({});
 	await prisma.session.deleteMany({});
 	await prisma.account.deleteMany({});
 	await prisma.user.deleteMany({});
@@ -362,5 +378,84 @@ describe("auditArchiveCovering", () => {
 		// a filtered view, so a recorded success would be a row per page load, and the rows worth reading
 		// would be buried under them. Goes red if the entry's `kind` becomes `command`.
 		expect(await auditDb.auditEvent.count()).toBe(0);
+	});
+});
+
+/**
+ * The Audit tab's infinite scroll action.
+ *
+ * `permission-matrix.test.ts` already proves the gate itself is consulted; what is left here is that
+ * the body narrows exactly as `listAuditEvents` would from the page's own `searchParams`, that a
+ * hostile offset cannot reach it unclamped, and that a scroll writes nothing to the record it reads.
+ */
+describe("listMoreAuditEvents", () => {
+	it("refuses a caller without audit:read, and records the refusal", async () => {
+		await account([]);
+
+		const batch = await listMoreAuditEvents({ offset: 0 });
+
+		expect(batch.events).toEqual([]);
+		expect(batch.more).toBe(false);
+		expect(batch.error).toContain("permission");
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		expect(row.action).toBe("audit:list-more");
+		expect(row.outcome).toBe("DENIED");
+	});
+
+	it("returns the batch starting at the given offset", async () => {
+		await account(["audit:read"]);
+		await appendEvent({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		await appendEvent({ action: "test:two", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		const first = await listMoreAuditEvents({ offset: 0 });
+		expect(first.events).toHaveLength(2);
+		expect(first.more).toBe(false);
+		expect(first.error).toBeNull();
+
+		const second = await listMoreAuditEvents({ offset: first.events.length });
+		expect(second.events).toEqual([]);
+	});
+
+	it("narrows by several actions at once, the way the multi-select dropdown sends them", async () => {
+		await account(["audit:read"]);
+		await appendEvent({ action: "devices:delete", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		await appendEvent({ action: "keys:create", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		const batch = await listMoreAuditEvents({ offset: 0, action: "devices:delete,keys:create" });
+
+		expect(batch.events.map((event) => event.action).sort()).toEqual(["devices:delete", "keys:create"]);
+	});
+
+	it("drops an outcome this system does not use rather than erroring", async () => {
+		await account(["audit:read"]);
+		await appendEvent({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		// Deliberately not the strict reading `exportAuditCsv`'s own parser takes — see
+		// `search-params.ts`'s doc for why this one drops rather than throws.
+		const batch = await listMoreAuditEvents({ offset: 0, outcome: "NOT_AN_OUTCOME" });
+
+		expect(batch.error).toBeNull();
+		expect(batch.events).toHaveLength(1);
+	});
+
+	it("clamps a hostile offset rather than handing it to the database unclamped", async () => {
+		await account(["audit:read"]);
+		await appendEvent({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+		await appendEvent({ action: "test:two", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		const batch = await listMoreAuditEvents({ offset: { not: "a number" } });
+
+		expect(batch.error).toBeNull();
+		expect(batch.events).toHaveLength(2);
+	});
+
+	it("does not record a success, so a scroll does not bury the tab's own commands", async () => {
+		await account(["audit:read"]);
+		await appendEvent({ action: "test:one", outcome: "SUCCESS", actor: SYSTEM_ACTOR });
+
+		await listMoreAuditEvents({ offset: 0 });
+
+		const row = await auditDb.auditEvent.findFirstOrThrow({ orderBy: { seq: "desc" } });
+		expect(row.action).toBe("test:one");
 	});
 });

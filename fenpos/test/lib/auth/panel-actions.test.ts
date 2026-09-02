@@ -70,6 +70,12 @@ describe("panel action registry", () => {
 		// `audit:read` governs. A permission of its own would gate the signpost separately from the table
 		// it stands beside, so a reader could be shown an empty range and not told why.
 		"audit:archive-covering": "audit:read",
+		// Loading the next batch of an infinite-scrolled list is part of reading the list: it is the
+		// same query the page's own first batch runs, asked again with a different offset, so it is
+		// governed by the same permission as the tab itself rather than one of its own.
+		"jobs:list-more": "jobs:read",
+		"audit:list-more": "audit:read",
+		"logs:list-more": "logs:read",
 	};
 
 	it("gives every gated entry the permission its id names, or a documented shared one", () => {

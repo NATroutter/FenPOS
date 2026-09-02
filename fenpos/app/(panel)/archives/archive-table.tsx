@@ -1,16 +1,21 @@
 "use client";
 
 import { Trash2 } from "lucide-react";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
-	type ArchivePage,
 	type ArchivePeriod,
 	type ArchiveRef,
 	type ArchiveRow,
 	deleteAuditArchive,
 	readArchivePage,
 } from "@/app/(panel)/archives/actions";
+import {
+	BackToTop,
+	type InfiniteBatch,
+	InfiniteScrollFooter,
+	useInfiniteScroll,
+} from "@/components/panel/infinite-scroll";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -45,6 +50,12 @@ const MUTED_CELL = "text-[11.5px] text-muted-foreground";
  *
  * The two sources render different columns, because they are read for different questions — a log
  * line for its message, a recorded event for who did what and whether it worked.
+ *
+ * **Scrolls rather than pages, once a period is open.** `OpenedArchivePeriod` below reads it through
+ * `readArchivePage` the same way this always has — `search` and `skip` — but the old Newer/Older
+ * buttons are gone in favour of a sentinel, matching the other three tabs. There is no "Newer" here
+ * because there does not need to be one: scrolling only ever adds to what is already on screen, so
+ * whatever an operator scrolled past is still sitting above, right where it was.
  */
 export function ArchiveTable({
 	periods,
@@ -58,38 +69,26 @@ export function ArchiveTable({
 }) {
 	const [opened, setOpened] = useState<ArchiveRef | null>(null);
 	const [search, setSearch] = useState("");
-	const [skip, setSkip] = useState(0);
+	const [submittedSearch, setSubmittedSearch] = useState("");
 	/**
-	 * The `skip` of each page walked past to reach this one.
+	 * Bumped on every fresh read — opening a period, or submitting a search over one already open.
 	 *
-	 * Stepping back needs the previous page's offset, and the page size is the server's — a
-	 * `"use server"` module may export only functions, so it cannot be shared as a constant, and
-	 * copying its value here would be a second spelling of one number. The trail sidesteps that: every
-	 * offset it holds is one the server actually answered.
+	 * `OpenedArchivePeriod` is keyed by this alongside `opened`, so either kind of change remounts it
+	 * with a clean slate: a new period or a new search is a new query, not more of the one already on
+	 * screen, and reconciling scroll history across that boundary the way a live refresh is reconciled
+	 * would mix two unrelated result sets. See `components/panel/infinite-scroll.tsx`'s module doc.
 	 */
-	const [trail, setTrail] = useState<number[]>([]);
-	const [page, setPage] = useState<ArchivePage | null>(null);
-	const [pending, startTransition] = useTransition();
-
-	const load = (archive: ArchiveRef, text: string, from: number): void => {
-		startTransition(async () => {
-			setSkip(from);
-			setPage(await readArchivePage(archive, { search: text, skip: from }));
-		});
-	};
+	const [generation, setGeneration] = useState(0);
 
 	const open = (period: ArchivePeriod): void => {
-		const archive = { source: period.source, periodKey: period.periodKey };
-		setOpened(archive);
+		setOpened({ source: period.source, periodKey: period.periodKey });
 		setSearch("");
-		setTrail([]);
-		setPage(null);
-		load(archive, "", 0);
+		setSubmittedSearch("");
+		setGeneration((value) => value + 1);
 	};
 
 	const close = (): void => {
 		setOpened(null);
-		setPage(null);
 	};
 
 	/**
@@ -154,7 +153,7 @@ export function ArchiveTable({
 								<TableCell className={MUTED_CELL}>{describeBytes(period.bytes)}</TableCell>
 								<TableCell>
 									<div className="flex items-center justify-end gap-1.5">
-										<Button variant="outline" size="sm" disabled={pending} onClick={() => open(period)}>
+										<Button variant="outline" size="sm" onClick={() => open(period)}>
 											Open
 										</Button>
 										{/* Only audit periods, because only they have a delete: a log archive ages out on the
@@ -182,8 +181,8 @@ export function ArchiveTable({
 							className="flex items-center gap-2"
 							onSubmit={(event) => {
 								event.preventDefault();
-								setTrail([]);
-								load(opened, search, 0);
+								setSubmittedSearch(search);
+								setGeneration((value) => value + 1);
 							}}
 						>
 							<Input
@@ -193,56 +192,22 @@ export function ArchiveTable({
 								className="h-8 w-[220px] text-[12px]"
 								onChange={(event) => setSearch(event.target.value)}
 							/>
-							<Button type="submit" variant="outline" size="sm" disabled={pending}>
+							<Button type="submit" variant="outline" size="sm">
 								Search
 							</Button>
 						</form>
 						<div className="flex-1" />
-						{pending ? <Spinner className="size-4" /> : null}
 						<Button variant="outline" size="sm" onClick={close}>
 							Close
 						</Button>
 					</div>
 
-					{page === null ? null : page.error !== null ? (
-						<p className="text-[12px] text-destructive">{page.error}</p>
-					) : page.rows.length === 0 ? (
-						<p className="text-[12px] text-subtle-foreground">Nothing in this period matches.</p>
-					) : (
-						<OpenedRows rows={page.rows} />
-					)}
-
-					{page !== null && page.error === null && (trail.length > 0 || page.more) ? (
-						<div className="flex items-center gap-2">
-							{trail.length > 0 ? (
-								<Button
-									variant="outline"
-									size="sm"
-									disabled={pending}
-									onClick={() => {
-										const previous = trail[trail.length - 1];
-										setTrail(trail.slice(0, -1));
-										load(opened, search, previous);
-									}}
-								>
-									Newer
-								</Button>
-							) : null}
-							{page.more ? (
-								<Button
-									variant="outline"
-									size="sm"
-									disabled={pending}
-									onClick={() => {
-										setTrail([...trail, skip]);
-										load(opened, search, skip + page.rows.length);
-									}}
-								>
-									Older
-								</Button>
-							) : null}
-						</div>
-					) : null}
+					<OpenedArchivePeriod
+						// A new period or a new submitted search is a new query — see the `generation` doc above.
+						key={`${opened.source}-${opened.periodKey}-${generation}`}
+						archive={opened}
+						search={submittedSearch}
+					/>
 				</div>
 			)}
 		</div>
@@ -310,6 +275,54 @@ function DeleteAuditPeriod({ periodKey, onDeleted }: { periodKey: string; onDele
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>
+	);
+}
+
+/**
+ * One opened period's rows, scrolling in as the operator nears the bottom.
+ *
+ * Remounted by its own `key` (see `ArchiveTable`) whenever the period or the search changes, so this
+ * always starts from nothing and asks `readArchivePage` for offset zero itself — through the same
+ * `loadMore` the sentinel calls for every batch after it. There is no server-rendered first batch to
+ * seed this with, unlike Jobs, Logs and Audit: opening a period is a client action, not something the
+ * Archives page pre-fetches, so the seed here is simply empty with `more: true`, and the sentinel's
+ * own first approach (immediate, since an empty list has nowhere to scroll before it) fetches page one.
+ */
+function OpenedArchivePeriod({ archive, search }: { archive: ArchiveRef; search: string }) {
+	// A stable seed rather than a literal in the hook call: `useInfiniteScroll` compares `batch` by
+	// identity to detect a fresh server-provided batch 0, and a literal would look like a new one on
+	// every render of this component, wiping `more` and `error` back to their initial values each time.
+	const seed = useRef<InfiniteBatch<ArchiveRow>>({ rows: [], more: true }).current;
+
+	const { rows, more, loading, error, sentinelRef, retry } = useInfiniteScroll<ArchiveRow>({
+		batch: seed,
+		getId: (row) => row.id,
+		loadMore: async (offset) => {
+			const result = await readArchivePage(archive, { search, skip: offset });
+			return { rows: result.rows, more: result.more, error: result.error };
+		},
+	});
+
+	if (rows.length === 0) {
+		if (loading) {
+			return (
+				<div className="flex justify-center py-6">
+					<Spinner className="size-4" />
+				</div>
+			);
+		}
+		if (error) {
+			return <p className="text-[12px] text-destructive">{error}</p>;
+		}
+		return <p className="text-[12px] text-subtle-foreground">Nothing in this period matches.</p>;
+	}
+
+	return (
+		<>
+			<OpenedRows rows={rows} />
+			<InfiniteScrollFooter more={more} loading={loading} error={error} sentinelRef={sentinelRef} onRetry={retry} />
+			<BackToTop />
+		</>
 	);
 }
 

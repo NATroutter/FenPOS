@@ -83,17 +83,37 @@ const columns: DataTableColumns<LogLine> = [
  * while it is off, matching the header chip — someone who stopped the view wants it to hold still,
  * and what they missed is a reload away.
  */
-export function LogStream({ lines, sortable = true }: { lines: LogLine[]; sortable?: boolean }) {
+export function LogStream({
+	lines,
+	sortable = true,
+	resetOn,
+}: {
+	lines: LogLine[];
+	sortable?: boolean;
+	/**
+	 * What clearing `arrived` should actually be keyed on, when that is not simply `lines` changing.
+	 *
+	 * The Logs tab's own wrapper (`log-list.tsx`) appends further pages onto `lines` as the operator
+	 * scrolls an infinite-scrolled list, which changes `lines`' identity without meaning "a fresh
+	 * authoritative snapshot arrived" — the arrived buffer is unrelated to whatever page just got
+	 * appended, and clearing it there would silently drop lines the operator has not seen yet. That
+	 * wrapper passes its own `batchVersion` here instead, which changes only when the *first* batch is
+	 * actually replaced. Omitted by every other caller — the dashboard's tail included — which keeps
+	 * their `lines` array itself as the signal, exactly as before this prop existed.
+	 */
+	resetOn?: unknown;
+}) {
 	const router = useRouter();
 	const { following, streamable } = useFollow();
 	const live = streamable && following;
 	const [arrived, setArrived] = useState<LogLine[]>([]);
 
-	// Lines that arrived live are dropped whenever the server sends a new page, since that page
-	// already contains them. Without this they would appear twice after any navigation.
+	// Lines that arrived live are dropped whenever a fresh authoritative snapshot arrives, since that
+	// snapshot already contains them. Without this they would appear twice after any navigation.
+	const resetSignal = resetOn ?? lines;
 	useEffect(() => {
 		setArrived([]);
-	}, [lines]);
+	}, [resetSignal]);
 
 	useEventStream(
 		"log",

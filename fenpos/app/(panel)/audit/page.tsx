@@ -1,25 +1,20 @@
 import { Archive } from "lucide-react";
 import Link from "next/link";
 import { auditArchiveCovering } from "@/app/(panel)/audit/actions";
-import { AuditTable } from "@/app/(panel)/audit/audit-table";
+import { AuditList } from "@/app/(panel)/audit/audit-list";
 import { ChainBanner } from "@/app/(panel)/audit/chain-banner";
+import { parseAuditSearchParams } from "@/app/(panel)/audit/search-params";
 import { Filters } from "@/app/(panel)/jobs/filters";
 import { buttonVariants } from "@/components/ui/button";
 import { auditFilterOptions, listAuditEvents } from "@/lib/audit/audit-query";
-import { isAuditSortColumn } from "@/lib/audit/audit-sort";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { AuditOutcome } from "@/lib/domain/audit";
-import { dayBound } from "@/lib/format/datetime";
-import { parseKnownValues, parseValues } from "@/lib/table/multi-filter";
 
 export const metadata = { title: "Audit record" };
 
 /** Never cached: the newest row is usually the one somebody came here to read. */
 export const dynamic = "force-dynamic";
-
-/** How many rows one page shows. Mirrors `listAuditEvents`'s own default, for the paging arithmetic. */
-const PAGE_SIZE = 50;
 
 /**
  * The signpost's own styling, and the Logs tab's exactly — one rule, kept identical, because the two
@@ -50,6 +45,12 @@ const SIGNPOST =
  *
  * Filters and sort live in the URL, so a view can be bookmarked and sent to somebody else — which on
  * this table is most of what it is for.
+ *
+ * **Scrolls rather than pages.** The server component below still renders one page-size worth of
+ * events and `AuditList` appends further batches as the operator scrolls, through
+ * `listMoreAuditEvents`. A stale bookmark carrying `?skip=` from before this feature is simply
+ * ignored: this page reads no such parameter, so it renders the first page exactly as any other
+ * visit would.
  */
 export default async function AuditPage({
 	searchParams,
@@ -61,7 +62,6 @@ export default async function AuditPage({
 		target?: string;
 		from?: string;
 		to?: string;
-		skip?: string;
 		sort?: string;
 		dir?: string;
 	}>;
@@ -70,17 +70,7 @@ export default async function AuditPage({
 	const user = await requirePagePermission("audit:read", "/audit");
 
 	const params = await searchParams;
-	const skip = Math.max(0, Number.parseInt(params.skip ?? "0", 10) || 0);
-	// Each filter holds as many values as were ticked. An unknown one is dropped rather than erroring:
-	// a bookmark saved before a column was renamed should still list events.
-	const actorIds = parseValues(params.actor);
-	const actions = parseValues(params.action);
-	const outcomes = parseKnownValues(params.outcome, AuditOutcome.is);
-	const targetIds = parseValues(params.target);
-	const sort = params.sort && isAuditSortColumn(params.sort) ? params.sort : undefined;
-	const desc = params.dir ? params.dir !== "asc" : undefined;
-	const from = dayBound(params.from, "start");
-	const to = dayBound(params.to, "end");
+	const { actorIds, actions, outcomes, targetIds, sort, desc, from, to } = parseAuditSearchParams(params);
 	// Either end alone is a range: "everything since March" and "everything up to March" both narrow the
 	// view, and both can reach back past the live window.
 	const ranged = from !== undefined || to !== undefined;
@@ -94,10 +84,8 @@ export default async function AuditPage({
 			targetId: targetIds,
 			from,
 			to,
-			skip,
 			sort,
 			desc,
-			take: PAGE_SIZE,
 		}),
 		userHolds(user, "audit:verify"),
 		userHolds(user, "audit:export"),
@@ -106,17 +94,6 @@ export default async function AuditPage({
 		// signpost that is always there is scenery, and stops being read long before it matters.
 		ranged ? auditArchiveCovering({ from, to }) : null,
 	]);
-
-	const query = (next: Record<string, string | undefined>): string => {
-		const search = new URLSearchParams();
-		for (const [key, value] of Object.entries({ ...params, ...next })) {
-			if (value) {
-				search.set(key, value);
-			}
-		}
-		const rendered = search.toString();
-		return rendered ? `?${rendered}` : "?";
-	};
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -176,28 +153,31 @@ export default async function AuditPage({
 				</div>
 			)}
 
-			<AuditTable events={page.events} />
-
-			{skip > 0 || page.more ? (
-				<div className="flex items-center gap-2">
-					{skip > 0 ? (
-						<Link
-							href={query({ skip: String(Math.max(0, skip - PAGE_SIZE)) })}
-							className={buttonVariants({ variant: "outline", size: "sm" })}
-						>
-							Newer
-						</Link>
-					) : null}
-					{page.more ? (
-						<Link
-							href={query({ skip: String(skip + PAGE_SIZE) })}
-							className={buttonVariants({ variant: "outline", size: "sm" })}
-						>
-							Older
-						</Link>
-					) : null}
-				</div>
-			) : null}
+			<AuditList
+				// Remounts on a real filter or sort change, so scroll history from one query is never
+				// reconciled against another's — see `components/panel/infinite-scroll.tsx`.
+				key={JSON.stringify({
+					actorIds,
+					actions,
+					outcomes,
+					targetIds,
+					sort,
+					desc,
+					from: from?.toISOString(),
+					to: to?.toISOString(),
+				})}
+				initial={{ events: page.events, more: page.more }}
+				query={{
+					actor: params.actor,
+					action: params.action,
+					outcome: params.outcome,
+					target: params.target,
+					from: params.from,
+					to: params.to,
+					sort: params.sort,
+					dir: params.dir,
+				}}
+			/>
 		</div>
 	);
 }

@@ -93,7 +93,12 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
 						    relies solely on the server-side guards until the next navigation. */}
 						{currentSession ? <SessionExpiry expiresAt={currentSession.session.expiresAt.getTime()} /> : null}
 						<PanelHeader startedAt={SERVER_STARTED_AT} />
-						<div className="flex-1 overflow-y-auto px-6 pt-5 pb-16">{children}</div>
+						{/* `data-panel-scroll` names this as the panel's own scroll container, for
+						    `components/panel/infinite-scroll.tsx`'s sentinel and Back to top button — the
+						    content below the header scrolls itself rather than the window. */}
+						<div data-panel-scroll className="flex-1 overflow-y-auto px-6 pt-5 pb-16">
+							{children}
+						</div>
 					</EventStreamProvider>
 				</SidebarInset>
 			</SidebarProvider>

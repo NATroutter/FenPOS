@@ -219,6 +219,17 @@ export const PANEL_ACTIONS = [
 		exportName: "cancelJob",
 		description: "Cancelled a queued job",
 	},
+	// `query`, like the two list-more actions beside it on the Audit and Logs tabs: it runs on every
+	// approach to the bottom of an infinite-scrolled table, so a row per scroll would bury the one
+	// action on this tab worth recording.
+	{
+		id: "jobs:list-more",
+		kind: "query",
+		permission: "jobs:read",
+		module: "(panel)/jobs/actions.ts",
+		exportName: "listMoreJobs",
+		description: "Loaded the next batch of jobs for infinite scroll",
+	},
 
 	// --- Tools ---
 	{
@@ -573,6 +584,18 @@ export const PANEL_ACTIONS = [
 		description: "Deleted a role",
 	},
 
+	// --- Logs ---
+	// One action, because this tab records nothing else at all: everything here is a read, and the
+	// only one worth a server round trip beyond the page's own first batch is the infinite scroll's.
+	{
+		id: "logs:list-more",
+		kind: "query",
+		permission: "logs:read",
+		module: "(panel)/logs/actions.ts",
+		exportName: "listMoreLogs",
+		description: "Loaded the next batch of log lines for infinite scroll",
+	},
+
 	// --- Audit ---
 	// All three are reads, and the first two are `command`. `kind` decides what is written, not what
 	// the action does: a `query` stays quiet about succeeding because `preview` runs on every
@@ -606,6 +629,17 @@ export const PANEL_ACTIONS = [
 		module: "(panel)/audit/actions.ts",
 		exportName: "auditArchiveCovering",
 		description: "Looked for the archived month a filtered range reaches into",
+	},
+	// Also `query`, and for the same reason as the one above it: it runs on every approach to the
+	// bottom of the tab's infinite-scrolled table, so a row per scroll would bury the two commands
+	// this tab actually records.
+	{
+		id: "audit:list-more",
+		kind: "query",
+		permission: "audit:read",
+		module: "(panel)/audit/actions.ts",
+		exportName: "listMoreAuditEvents",
+		description: "Loaded the next batch of events for infinite scroll",
 	},
 
 	// --- Archives ---

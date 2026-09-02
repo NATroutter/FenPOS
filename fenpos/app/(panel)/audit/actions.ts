@@ -1,17 +1,19 @@
 "use server";
 
+import { type AuditSearchParams, parseAuditSearchParams } from "@/app/(panel)/audit/search-params";
 import { periodKeyFor } from "@/lib/archive/period";
 import { listArchives } from "@/lib/archive/read";
 import { toAuditCsv } from "@/lib/audit/audit-csv";
-import { type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
+import { type AuditEventSummary, type AuditFilter, listAuditEvents } from "@/lib/audit/audit-query";
 import { readEpoch } from "@/lib/audit/epoch";
 import { describeVerification, verifyAuditChain } from "@/lib/audit/verify";
 import { panelQuery } from "@/lib/auth/panel-action";
+import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { auditDb } from "@/lib/db";
 import { AuditOutcome } from "@/lib/domain/audit";
 import { ApiError } from "@/lib/errors";
 import { archiveDirectory } from "@/lib/maintenance/pass";
-import { parseValues } from "@/lib/table/multi-filter";
+import { parseOffset, parseValues } from "@/lib/table/multi-filter";
 
 /**
  * Server actions behind the Audit tab.
@@ -141,6 +143,62 @@ export async function exportAuditCsv(request: ExportRequest): Promise<ExportResu
 			// The filter, and nothing else. A copy of the exported rows inside the record would double
 			// the table every time somebody pressed the button.
 			detail: { ...request },
+		},
+	);
+}
+
+/** What {@link listMoreAuditEvents} takes: the tab's current filter and sort, plus how many rows are already loaded. */
+export interface AuditBatchRequest extends AuditSearchParams {
+	offset: unknown;
+}
+
+/** What {@link listMoreAuditEvents} hands back. */
+export interface AuditBatch {
+	events: AuditEventSummary[];
+	more: boolean;
+	error: string | null;
+}
+
+/**
+ * Loads the next batch of events for the Audit tab's infinite scroll.
+ *
+ * **Re-checks `audit:read` itself, rather than trusting that the page already did.** A server action
+ * is a public endpoint reachable by anyone who can construct the POST it compiles to, not only by a
+ * browser that first rendered the page behind `requirePagePermission` — the gate here is what actually
+ * stops that request, not a formality restating one already run.
+ *
+ * **Registered `query`, unlike {@link verifyChain} and {@link exportAuditCsv} beside it.** Those two
+ * are deliberate button presses and belong in the record; this runs on every approach to the bottom of
+ * the table, and a row per scroll would bury the two actions on this tab actually worth recording.
+ *
+ * **Reuses `listAuditEvents`, the same function the page's own first batch comes from**, narrowed by
+ * {@link parseAuditSearchParams} — the same parser the page uses on its own `searchParams` — so a batch
+ * the sentinel appends is narrowed exactly as the page's own first batch was.
+ *
+ * @param request the tab's filter and sort, and how many events are already on screen
+ * @returns the next batch, or an empty one with a reason when it could not be read
+ */
+export async function listMoreAuditEvents(request: AuditBatchRequest): Promise<AuditBatch> {
+	return panelQuery<AuditBatch>(
+		"audit:list-more",
+		async () => {
+			const filter = parseAuditSearchParams(request);
+			const page = await listAuditEvents({
+				actorUserId: filter.actorIds,
+				action: filter.actions,
+				outcome: filter.outcomes,
+				targetId: filter.targetIds,
+				from: filter.from,
+				to: filter.to,
+				sort: filter.sort,
+				desc: filter.desc,
+				skip: parseOffset(request.offset),
+			});
+			return { events: page.events, more: page.more, error: null };
+		},
+		{
+			refused: () => ({ events: [], more: false, error: REFUSAL_MESSAGE }),
+			failed: () => ({ events: [], more: false, error: "Something went wrong. Check the server log." }),
 		},
 	);
 }

@@ -92,3 +92,21 @@ export function anyOf<T extends string | number>(
 	}
 	return list.length === 1 ? { equals: list[0] } : { in: list };
 }
+
+/**
+ * Reads how many rows to step over, from a value that crossed the wire.
+ *
+ * `offset` is not a filter's value — it never appears in a URL and it is never multi-valued — but
+ * every infinite-scroll action reads it across the same boundary its filters cross, and it needs the
+ * same scepticism: a server action is a public endpoint, and a caller can post anything. Clamped to a
+ * whole number at or above zero rather than handed straight to Prisma's `skip`, which rejects a
+ * fractional or negative bound outright. Mirrors `archives/actions.ts`'s own `pageOf`, which clamps
+ * its `skip` the same way for the same reason.
+ *
+ * @param value whatever the caller sent
+ * @returns a safe offset to skip by
+ */
+export function parseOffset(value: unknown): number {
+	const parsed = Math.trunc(Number(value));
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
