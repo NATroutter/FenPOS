@@ -171,8 +171,14 @@ jobs:
 
       # The digest is all the merge job needs. Passing it as a file named after itself avoids
       # having to care which architecture wrote it.
+      #
+      # `success()` is spelled out because writing any `if` at all removes the implicit one, and
+      # without it this step still runs after the build has failed. There is no metadata output
+      # to read then, so `fromJSON` below is handed an empty string and the job reports "The
+      # template is not valid ... Error reading JToken" — an error about this file, pointing at
+      # this line, for a failure that happened in the build. It cost a real debugging session.
       - name: Export the digest
-        if: github.event_name != 'pull_request'
+        if: ${{ success() && github.event_name != 'pull_request' }}
         run: |
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"
