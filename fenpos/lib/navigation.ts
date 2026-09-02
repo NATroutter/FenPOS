@@ -85,12 +85,15 @@ export interface NavGroup {
 /**
  * Sidebar groups, in display order.
  *
- * Grouped by what the operator is doing rather than by data model: watching the system,
- * managing the hardware, or administering access.
+ * Grouped by what the operator is doing rather than by data model: watching what the system did,
+ * managing the hardware, curating what receipts print, deciding who may act, and configuring the
+ * install. Five small groups rather than three big ones, because a seven-item "Administration"
+ * had stopped saying anything about what was inside it — and it split the record pages, leaving
+ * Audit a group away from the Logs and Archives it belongs beside.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
 	{
-		label: "Operations",
+		label: "Monitor",
 		items: [
 			{
 				href: "/dashboard",
@@ -123,6 +126,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description: "What the agents forwarded. Each also keeps its own complete log on the machine it runs on.",
 				icon: ScrollText,
 				permission: "logs:read",
+			},
+			{
+				href: "/audit",
+				label: "Audit",
+				title: "Audit record",
+				description:
+					"Who did what, and what came of it. Append-only and hash-chained: there is no edit control here because there is no edit path.",
+				icon: History,
+				permission: "audit:read",
 			},
 			{
 				href: "/archives",
@@ -172,7 +184,30 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 		],
 	},
 	{
-		label: "Administration",
+		label: "Content",
+		items: [
+			{
+				href: "/assets",
+				label: "Assets",
+				title: "Assets",
+				description:
+					"Images receipts can print. Referenced from markup by name, and pushed to the agents that need them.",
+				icon: ImageIcon,
+				permission: "assets:read",
+			},
+			{
+				href: "/variables",
+				label: "Variables",
+				title: "Variables",
+				description:
+					"Values receipts refer to by name. Written as {name} in markup and filled in when the receipt is printed, so a phone number or an address is changed in one place.",
+				icon: Braces,
+				permission: "variables:read",
+			},
+		],
+	},
+	{
+		label: "Access",
 		items: [
 			{
 				href: "/users",
@@ -193,15 +228,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				permission: "roles:read",
 			},
 			{
-				href: "/audit",
-				label: "Audit",
-				title: "Audit record",
-				description:
-					"Who did what, and what came of it. Append-only and hash-chained: there is no edit control here because there is no edit path.",
-				icon: History,
-				permission: "audit:read",
-			},
-			{
 				href: "/keys",
 				label: "API keys",
 				title: "API keys",
@@ -210,24 +236,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				icon: KeyRound,
 				permission: "keys:read",
 			},
-			{
-				href: "/assets",
-				label: "Assets",
-				title: "Assets",
-				description:
-					"Images receipts can print. Referenced from markup by name, and pushed to the agents that need them.",
-				icon: ImageIcon,
-				permission: "assets:read",
-			},
-			{
-				href: "/variables",
-				label: "Variables",
-				title: "Variables",
-				description:
-					"Values receipts refer to by name. Written as {name} in markup and filled in when the receipt is printed, so a phone number or an address is changed in one place.",
-				icon: Braces,
-				permission: "variables:read",
-			},
+		],
+	},
+	{
+		label: "System",
+		items: [
 			{
 				href: "/settings",
 				label: "Settings",
