@@ -21,6 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 // Type-only: `settings-service` starts with `import "server-only"`, so a value import here would
 // pull that guard into this client component's bundle. The category list itself is computed in
@@ -155,10 +156,11 @@ function effective(field: SettingFieldData, draft: Draft | undefined): { value: 
 /**
  * The install-wide settings form.
  *
- * A category at a time, chosen from the rail on the left. Stacked cards were right for seven
- * settings and stop being right well before forty: a page you scroll past nine cards to reach the
- * tenth is one where the way to find a setting is ctrl-F, and a settings page whose navigation is
- * the browser's is not navigable.
+ * A category at a time, chosen from the tab strip above the card — the same strip the Statistics
+ * page uses, so the two pages read as one interface. Stacked cards were right for seven settings
+ * and stop being right well before forty: a page you scroll past nine cards to reach the tenth is
+ * one where the way to find a setting is ctrl-F, and a settings page whose navigation is the
+ * browser's is not navigable.
  *
  * The category is held in state and is neither routed nor persisted, the same choice the profile
  * dialog makes: a settings category is not a place you link someone to.
@@ -167,7 +169,7 @@ function effective(field: SettingFieldData, draft: Draft | undefined): { value: 
  * reaches the server until Save is pressed. This is why the drafts live here rather than in each
  * control: a bar that says how many changes are outstanding, and a Discard that drops all of them,
  * can only exist somewhere that can see every field at once. It also means a change in a category
- * you are not looking at is still counted and still saved — which is what the marker on the rail is
+ * you are not looking at is still counted and still saved — which is what the marker on the tab is
  * for, since otherwise the bar would claim three changes over a category that looks untouched.
  *
  * **A category the operator cannot write is shown read-only rather than hidden, and this is the one
@@ -273,81 +275,77 @@ export function SettingsForm({
 	};
 
 	return (
-		<div className="flex flex-col">
-			<Card className="overflow-hidden p-0">
-				<div className="grid sm:grid-cols-[170px_1fr]">
-					{/* The rail. A row of tabs would run out of width at eight categories and wrap, and a
-					    wrapped tab row reads as two rows of unrelated things. */}
-					<nav className="flex gap-1 overflow-x-auto border-b p-2 sm:flex-col sm:overflow-visible sm:border-r sm:border-b-0">
+		<div className="flex flex-col gap-3">
+			{/* The same tab strip the Statistics page uses, kept in component state rather than the URL:
+			    the form below holds unsaved drafts, and a navigation re-render is a way to lose them. At
+			    eleven categories the strip can outgrow a narrow screen, so it scrolls sideways rather
+			    than wrapping — a wrapped tab row reads as two rows of unrelated things. */}
+			{/* pb-1.5 keeps the active tab's underline (drawn 5px below the strip) inside the scroll
+			    container, so no vertical scrollbar appears beside it. */}
+			<div className="overflow-x-auto overflow-y-hidden pb-1.5">
+				<Tabs value={selected} onValueChange={(next) => setSelected(next as SettingCategory)}>
+					<TabsList variant="line">
 						{categories.map((entry) => {
 							const dirty = settings.some(
 								(setting) => setting.definition.category === entry.id && setting.definition.key in drafts,
 							);
 
 							return (
-								<button
-									key={entry.id}
-									type="button"
-									onClick={() => setSelected(entry.id)}
-									data-active={entry.id === selected || undefined}
-									className={cn(
-										"flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-left text-[13px] text-muted-foreground",
-										"hover:bg-accent hover:text-foreground",
-										"data-active:bg-accent data-active:font-medium data-active:text-foreground",
-									)}
-								>
-									<span className="min-w-0 flex-1 truncate">{entry.title}</span>
+								<TabsTrigger key={entry.id} value={entry.id}>
+									{entry.title}
 									{dirty ? <DirtyDot /> : null}
-								</button>
+								</TabsTrigger>
 							);
 						})}
-					</nav>
+					</TabsList>
+				</Tabs>
+			</div>
 
-					<div className="min-w-0 p-5">
-						<h3 className="text-[13px] font-medium">{category?.title}</h3>
-						<p className="mt-0.5 text-[11.5px] text-muted-foreground">{category?.summary}</p>
+			<Card className="overflow-hidden p-0">
+				<div className="min-w-0 p-5">
+					<h3 className="text-[13px] font-medium">{category?.title}</h3>
+					<p className="mt-0.5 text-[11.5px] text-muted-foreground">{category?.summary}</p>
 
-						{/* Stated once, above the fields, rather than as a tooltip on each of forty controls.
+					{/* Stated once, above the fields, rather than as a tooltip on each of forty controls.
 						    Without it a locked category is a screen of greyed boxes that could equally mean a
 						    save is in flight, a bug, or something the operator did. */}
-						{canWrite ? null : (
-							<p className="mt-3 rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-subtle-foreground">
-								You can see these settings but not change them.
-							</p>
-						)}
+					{canWrite ? null : (
+						<p className="mt-3 rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-subtle-foreground">
+							You can see these settings but not change them.
+						</p>
+					)}
 
-						{groups.map((group) => (
-							<section key={group.label} className="mt-5">
-								{/* A rule that runs to the edge with the label sitting on the left of it, rather
+					{groups.map((group) => (
+						<section key={group.label} className="mt-5">
+							{/* A rule that runs to the edge with the label sitting on the left of it, rather
 								    than a bare heading. Twenty settings in one grid read as one list however
 								    they are spaced; a line across the column is what actually says "the thing
 								    above is finished". */}
-								{!showHeadings ? null : (
-									<div className="mb-4 flex items-center gap-3">
-										<h4 className="shrink-0 text-[11.5px] font-medium tracking-wide text-subtle-foreground uppercase">
-											{group.label}
-										</h4>
-										<span className="h-px flex-1 bg-border" />
-									</div>
-								)}
-
-								{group.showsClientAddress ? <ClientAddressReadout resolved={clientAddress} /> : null}
-
-								<div className="grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
-									{group.fields.map((setting) => (
-										<SettingField
-											key={setting.definition.key}
-											field={setting}
-											draft={drafts[setting.definition.key]}
-											error={errors[setting.definition.key]}
-											locked={saving || !canWrite}
-											onStage={(draft) => stage(setting, draft)}
-										/>
-									))}
+							{!showHeadings ? null : (
+								<div className="mb-4 flex items-center gap-3">
+									<h4 className="shrink-0 text-[11.5px] font-medium tracking-wide text-subtle-foreground uppercase">
+										{group.label}
+									</h4>
+									<span className="h-px flex-1 bg-border" />
 								</div>
-							</section>
-						))}
-					</div>
+							)}
+
+							{group.showsClientAddress ? <ClientAddressReadout resolved={clientAddress} /> : null}
+
+							<div className="grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
+								{group.fields.map((setting) => (
+									<SettingField
+										key={setting.definition.key}
+										field={setting}
+										draft={drafts[setting.definition.key]}
+										error={errors[setting.definition.key]}
+										locked={saving || !canWrite}
+										onStage={(draft) => stage(setting, draft)}
+									/>
+								))}
+							</div>
+						</section>
+					))}
 				</div>
 			</Card>
 
