@@ -41,6 +41,13 @@ describe("a maintenance pass", () => {
 		await auditDb.auditEpoch.deleteMany({});
 		await logsDb.logEntry.deleteMany({});
 		await prisma.setting.deleteMany({});
+		// This file exercises the log and audit halves only; the metrics half has its own test
+		// (`test/lib/metrics/maintenance-metrics.test.ts`). Left on, every pass here would also run a
+		// real rollup against whatever `Job`/`WebhookDelivery` rows other test files in this worker
+		// happen to have left behind, and this file's own fake-clock jumps (`agedAuditPeriod`) would
+		// send the rollup's watermark backwards and forwards across real time — turning an incidental
+		// side effect into a slow, order-dependent backfill on every test.
+		await setSetting("stats.enabled", false);
 		rmSync(AUDIT_ARCHIVE_DIRECTORY, { recursive: true, force: true });
 	});
 

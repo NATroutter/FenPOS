@@ -244,6 +244,7 @@ describe("setting definitions", () => {
 			"audit",
 			"connections",
 			"panel",
+			"statistics",
 		]);
 	});
 
@@ -489,6 +490,11 @@ describe("setting definitions", () => {
 			"panel.locale": "enum",
 			"panel.timeFormat": "enum",
 			"panel.timezone": "enum",
+			"stats.enabled": "boolean",
+			"stats.sampleIntervalSeconds": "integer",
+			"stats.autoRefreshSeconds": "integer",
+			"stats.sampleRetentionDays": "integer",
+			"stats.apiMetrics": "boolean",
 		};
 
 		// Catches a key missing from the map above (as well as one present here but no longer in

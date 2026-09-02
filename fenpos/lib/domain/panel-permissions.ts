@@ -130,6 +130,7 @@ export const PANEL_PERMISSION_IDS = [
 	"settings:write:audit",
 	"settings:write:connections",
 	"settings:write:panel",
+	"settings:write:statistics",
 
 	"docs:read",
 ] as const;
@@ -334,6 +335,10 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 				description: "Change the timeouts on the links to agents and to this panel.",
 			},
 			{ id: "settings:write:panel", description: "Change how this interface displays things." },
+			{
+				id: "settings:write:statistics",
+				description: "Change whether usage is sampled and rolled up, and how long it is kept.",
+			},
 		],
 	},
 	{

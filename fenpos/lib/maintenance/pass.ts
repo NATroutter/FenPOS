@@ -4,10 +4,12 @@ import { pruneLogArchives } from "@/lib/archive/prune";
 import { appendEvent, SYSTEM_ACTOR } from "@/lib/audit/audit-log";
 import { sweepAuditNow } from "@/lib/audit/retention";
 import { AUDIT_SWEEP_ACTION } from "@/lib/audit/system-actions";
+import { auditDb, metricsDb, prisma } from "@/lib/db";
 import { AUDIT_ARCHIVE_DIRECTORY } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { sweepLogsNow } from "@/lib/logs/retention";
-import { globalAuditSettings, globalLogIngestSettings } from "@/lib/settings/settings-service";
+import { runMetricsRollup } from "@/lib/metrics/rollup";
+import { globalAuditSettings, globalLogIngestSettings, globalStatsSettings } from "@/lib/settings/settings-service";
 
 /**
  * The recurring work that keeps both record databases inside their windows.
@@ -107,5 +109,22 @@ export async function runMaintenancePass(): Promise<void> {
 		}
 	} catch (error) {
 		logger.error("An audit retention pass could not run", error);
+	}
+
+	try {
+		const stats = await globalStatsSettings();
+		if (stats.enabled) {
+			const { rolledHours } = await runMetricsRollup({ db: prisma, metricsDb, auditDb });
+			if (rolledHours > 0) {
+				logger.info("Rolled hourly metrics", { rolledHours });
+			}
+			const cutoff = new Date(Date.now() - stats.sampleRetentionDays * 24 * 60 * 60 * 1000);
+			const { count } = await metricsDb.fleetSample.deleteMany({ where: { at: { lt: cutoff } } });
+			if (count > 0) {
+				logger.info("Pruned fleet samples past the retention window", { count });
+			}
+		}
+	} catch (error) {
+		logger.error("A metrics rollup pass could not run", error);
 	}
 }

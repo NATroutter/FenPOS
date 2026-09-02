@@ -80,7 +80,8 @@ export type SettingCategory =
 	| "security"
 	| "audit"
 	| "connections"
-	| "panel";
+	| "panel"
+	| "statistics";
 
 /**
  * A run of settings under one heading, within a category.
@@ -325,6 +326,23 @@ export const CATEGORIES: readonly {
 			{ label: "Page sizes", keys: ["panel.jobPageSize", "panel.logPageSize"] },
 			{ label: "Dashboard", keys: ["panel.dashboardWindowHours", "panel.dashboardTailLines"] },
 			{ label: "Display", keys: ["panel.locale", "panel.timeFormat", "panel.timezone"] },
+		],
+	},
+	{
+		id: "statistics",
+		title: "Statistics",
+		summary: "Whether usage is sampled and rolled up, and how long it is kept.",
+		groups: [
+			{
+				label: "Collection",
+				keys: [
+					"stats.enabled",
+					"stats.sampleIntervalSeconds",
+					"stats.autoRefreshSeconds",
+					"stats.sampleRetentionDays",
+					"stats.apiMetrics",
+				],
+			},
 		],
 	},
 ];
@@ -587,6 +605,11 @@ export const SETTING_KEYS = [
 	"panel.locale",
 	"panel.timeFormat",
 	"panel.timezone",
+	"stats.enabled",
+	"stats.sampleIntervalSeconds",
+	"stats.autoRefreshSeconds",
+	"stats.sampleRetentionDays",
+	"stats.apiMetrics",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -1565,6 +1588,58 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		values: TIME_ZONES,
 		fallback: "system",
 	},
+	{
+		key: "stats.enabled",
+		label: "Collect statistics",
+		description: "Master switch. When off, nothing samples, counts or rolls up, and the Statistics page says so.",
+		category: "statistics",
+		type: "boolean",
+		fallback: true,
+	},
+	{
+		key: "stats.sampleIntervalSeconds",
+		label: "Fleet sample interval",
+		description: "How often the fleet sampler takes a snapshot of every agent and printer's state.",
+		category: "statistics",
+		type: "integer",
+		min: 60,
+		max: 3_600,
+		fallback: 300,
+		unit: "seconds",
+	},
+	{
+		key: "stats.autoRefreshSeconds",
+		label: "Auto-refresh",
+		description:
+			"How often the Statistics page's live cards and current bucket redraw while the tab is visible. Zero turns auto-refresh off.",
+		category: "statistics",
+		type: "integer",
+		min: 0,
+		max: 600,
+		fallback: 30,
+		unit: "seconds",
+	},
+	{
+		key: "stats.sampleRetentionDays",
+		label: "Sample retention",
+		description:
+			"How long a fleet sample is kept before it is pruned. Hourly rollups are unaffected and are kept forever.",
+		category: "statistics",
+		type: "integer",
+		min: 30,
+		max: 3_650,
+		fallback: 400,
+		unit: "days",
+	},
+	{
+		key: "stats.apiMetrics",
+		label: "Count API requests",
+		description:
+			"Whether API requests are counted toward the Statistics page's API tab. Off stops the counting, not the requests themselves.",
+		category: "statistics",
+		type: "boolean",
+		fallback: true,
+	},
 ];
 
 /** A setting's current value, and whether it is stored or the built-in default. */
@@ -2038,6 +2113,40 @@ export async function globalAuditSettings(): Promise<GlobalAuditSettings> {
 		retentionDays: integer("audit.retentionDays"),
 		recordPageViews: narrow(settings, "audit.recordPageViews", "boolean") as boolean,
 	};
+}
+
+/** The `stats.*` settings as one object, in the shape the metrics rollup and sampler read them. */
+export interface GlobalStatsSettings {
+	/** `stats.enabled`: master switch. Off stops sampling, counting and rolling up alike. */
+	enabled: boolean;
+	/** `stats.sampleIntervalSeconds`: how often the fleet sampler takes a snapshot. */
+	sampleIntervalSeconds: number;
+	/** `stats.autoRefreshSeconds`: how often the Statistics page redraws itself. Zero is off. */
+	autoRefreshSeconds: number;
+	/** `stats.sampleRetentionDays`: how long a fleet sample is kept before it is pruned. */
+	sampleRetentionDays: number;
+	/** `stats.apiMetrics`: whether API requests are counted. */
+	apiMetrics: boolean;
+}
+
+/**
+ * Reads the statistics settings as one object, honouring overrides.
+ *
+ * One call rather than five, for the same reason {@link globalAuditSettings} exists: the maintenance
+ * pass and the fleet sampler each want every one of these at once.
+ *
+ * @returns the statistics settings in effect install-wide
+ */
+export async function globalStatsSettings(): Promise<GlobalStatsSettings> {
+	const [enabled, sampleIntervalSeconds, autoRefreshSeconds, sampleRetentionDays, apiMetrics] = await Promise.all([
+		booleanSetting("stats.enabled"),
+		integerSetting("stats.sampleIntervalSeconds"),
+		integerSetting("stats.autoRefreshSeconds"),
+		integerSetting("stats.sampleRetentionDays"),
+		booleanSetting("stats.apiMetrics"),
+	]);
+
+	return { enabled, sampleIntervalSeconds, autoRefreshSeconds, sampleRetentionDays, apiMetrics };
 }
 
 /**

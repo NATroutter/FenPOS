@@ -18,14 +18,15 @@ import {
  */
 describe("panel permissions", () => {
 	it("declares the complete set the spec names", () => {
-		// Seventy-seven: seventy-five derived by walking every `"use server"` export that exists plus
+		// Seventy-eight: seventy-five derived by walking every `"use server"` export that exists plus
 		// every action phases 4 through 8 add, `settings:write:audit`, which that derivation could not
 		// have counted because the `audit` settings category did not exist yet, and
 		// `audit:archive-delete`, which nothing could have derived at all — deleting an archived audit
 		// period is not a read of anything, and no existing permission could be widened to cover it
-		// without letting somebody who may export the record destroy it. A count rather than a list, so
-		// adding one deliberately is a one-line change and adding one accidentally is a failure.
-		expect(PANEL_PERMISSION_IDS).toHaveLength(77);
+		// without letting somebody who may export the record destroy it — plus `settings:write:statistics`,
+		// added with the "statistics" settings category. A count rather than a list, so adding one
+		// deliberately is a one-line change and adding one accidentally is a failure.
+		expect(PANEL_PERMISSION_IDS).toHaveLength(78);
 	});
 
 	it("names each identifier once", () => {
