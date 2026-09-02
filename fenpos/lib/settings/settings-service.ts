@@ -240,6 +240,13 @@ export const CATEGORIES: readonly {
 					"auth.lastSeenRefreshMinutes",
 				],
 			},
+			{
+				// Its own group rather than more of "Sign-in", because the three are one feature that is
+				// configured together and is either wholly on or wholly off — and because the pair of
+				// keys means nothing without the switch above them.
+				label: "Bot challenge",
+				keys: ["auth.turnstileEnabled", "auth.turnstileSiteKey", "auth.turnstileSecretKey"],
+			},
 			{ label: "Agent pairing", keys: ["pairing.enabled", "pairing.codeMinutes"] },
 			{ label: "API access", keys: ["api.readsPerMinute"] },
 			{
@@ -321,7 +328,26 @@ export type SettingDefinition =
 	| (SettingBase & { type: "integer"; min: number; max: number; fallback: number; unit: string })
 	| (SettingBase & { type: "boolean"; fallback: boolean })
 	| (SettingBase & { type: "enum"; values: readonly string[]; fallback: string })
-	| (SettingBase & { type: "string"; maxLength: number; pattern?: RegExp; fallback: string });
+	| (SettingBase & { type: "string"; maxLength: number; pattern?: RegExp; fallback: string })
+	/**
+	 * A credential this install holds on somebody else's behalf.
+	 *
+	 * Stored like a string and handled like nothing else in this file. **A secret's value never
+	 * leaves the server**: {@link listSettings} substitutes the empty string for it, so the Settings
+	 * page renders a box that says whether one is configured and never what it is, and
+	 * {@link setSetting} redacts it from the line it logs. The audit row never carried values in the
+	 * first place — see `saveSettings`, whose own comment anticipated this exact case.
+	 *
+	 * `fallback` is always the empty string, which is what "not configured" means: there is no
+	 * sensible default for a credential, and a feature that needs one is off until it has one.
+	 *
+	 * **It is stored in plain text**, in the same SQLite file as everything else, because it has to
+	 * be sent verbatim to the service it authenticates against — hashing it, as `api_keys` does with
+	 * its own secrets, would make it useless. Anyone who can read the database file can read it. That
+	 * is the same reach they already have over session tokens, so this adds a credential to that
+	 * blast radius rather than widening it; the file's own permissions are what protect both.
+	 */
+	| (SettingBase & { type: "secret"; maxLength: number; fallback: "" });
 
 /** The four kinds of value a setting can hold. */
 export type SettingType = SettingDefinition["type"];
@@ -472,6 +498,9 @@ export const SETTING_KEYS = [
 	"auth.require2fa",
 	"auth.idleTimeoutMinutes",
 	"auth.maxConcurrentSessions",
+	"auth.turnstileEnabled",
+	"auth.turnstileSiteKey",
+	"auth.turnstileSecretKey",
 	"audit.retentionDays",
 	"audit.recordPageViews",
 	"api.readsPerMinute",
@@ -1068,6 +1097,42 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		unit: "sessions",
 	},
 	{
+		key: "auth.turnstileEnabled",
+		label: "Require a bot challenge",
+		description:
+			"Whether the sign-in page runs a Cloudflare Turnstile challenge before the password is checked. It stands " +
+			"in front of the password rather than replacing anything: an attacker who solves it still needs the " +
+			"credential. Off until both keys below are filled in — a challenge switched on with no keys would refuse " +
+			"every sign-in, including the one that would switch it back off.",
+		category: "security",
+		type: "boolean",
+		fallback: false,
+	},
+	{
+		key: "auth.turnstileSiteKey",
+		label: "Turnstile site key",
+		description:
+			"The public half of the pair, from the Turnstile section of the Cloudflare dashboard. It is embedded in " +
+			"the sign-in page and is meant to be visible; it identifies the widget rather than authenticating anything.",
+		category: "security",
+		type: "string",
+		// No pattern. Cloudflare's keys are `0x` followed by a fixed run of characters today, and a
+		// check written to that shape is a check that refuses a good key the day the shape changes.
+		maxLength: 128,
+		fallback: "",
+	},
+	{
+		key: "auth.turnstileSecretKey",
+		label: "Turnstile secret key",
+		description:
+			"The private half of the pair. Used once per sign-in, from this server, to ask Cloudflare whether the " +
+			"challenge was really solved. It is never shown again after it is saved and never leaves this server.",
+		category: "security",
+		type: "secret",
+		maxLength: 128,
+		fallback: "",
+	},
+	{
 		key: "audit.retentionDays",
 		label: "Audit retention",
 		description:
@@ -1413,6 +1478,13 @@ export const SETTINGS: readonly SettingDefinition[] = [
 /** A setting's current value, and whether it is stored or the built-in default. */
 export interface SettingValue {
 	definition: SettingDefinition;
+	/**
+	 * The current value — **except for a `secret`, which always reads as the empty string.**
+	 *
+	 * See {@link listSettings}. `overridden` is what says whether one is configured; the value
+	 * itself is never handed out by this function at all. Use {@link secretSetting} on the server
+	 * when the credential is actually needed.
+	 */
 	value: number | string | boolean;
 	/** False when no row exists, so the panel can say the default is in effect. */
 	overridden: boolean;
@@ -1421,7 +1493,16 @@ export interface SettingValue {
 /**
  * Reads every setting, filling in defaults where nothing is stored.
  *
- * @returns each setting with its current value
+ * **A `secret` setting's value is not returned.** This function feeds the Settings page, whose props
+ * cross into a Client Component and therefore into the browser, so a credential returned here would
+ * be readable in the page source by anyone holding `settings:read` — a permission granted for seeing
+ * how the install is configured, which is not the same thing as holding its credentials. The empty
+ * string is substituted and `overridden` carries the only fact the screen needs: whether one is set.
+ *
+ * That is deliberately enforced here rather than at the page, so a second caller cannot leak what
+ * this one does not.
+ *
+ * @returns each setting with its current value, secrets excepted
  */
 export async function listSettings(): Promise<SettingValue[]> {
 	const rows = await prisma.setting.findMany({ where: { key: { in: [...SETTING_KEYS] } } });
@@ -1431,12 +1512,40 @@ export async function listSettings(): Promise<SettingValue[]> {
 		const parsed = parseStored(stored.get(definition.key));
 		const usable = parsed !== undefined && fits(definition, parsed);
 
+		if (definition.type === "secret") {
+			// `overridden` means "a credential is stored", so an empty stored string reads as unset —
+			// which is what it is. Clearing the box and saving is how a credential is removed.
+			return { definition, value: "", overridden: usable && parsed !== "" };
+		}
+
 		return {
 			definition,
 			value: usable ? parsed : definition.fallback,
 			overridden: usable,
 		};
 	});
+}
+
+/**
+ * Reads one `secret` setting's actual value.
+ *
+ * The counterpart to {@link listSettings}'s refusal to return one: this is the single way a secret
+ * is read back, and it is `server-only` by this module's own first line. Callers are the code that
+ * has to present the credential to whoever issued it.
+ *
+ * @param key which secret
+ * @returns the stored credential, or the empty string when none is configured
+ * @throws Error when the key names a setting that is not a secret
+ */
+export async function secretSetting(key: SettingKey): Promise<string> {
+	const definition = SETTINGS.find((setting) => setting.key === key);
+	if (definition?.type !== "secret") {
+		throw new Error(`'${key}' is not a secret setting.`);
+	}
+
+	const row = await prisma.setting.findUnique({ where: { key } });
+	const parsed = parseStored(row?.value);
+	return typeof parsed === "string" && fits(definition, parsed) ? parsed : "";
 }
 
 /**
@@ -1486,6 +1595,10 @@ function fits(definition: SettingDefinition, value: unknown): boolean {
 				value.length <= definition.maxLength &&
 				(definition.pattern === undefined || definition.pattern.test(value))
 			);
+		case "secret":
+			// No pattern. A credential's shape belongs to whoever issues it, and a check here would
+			// come to refuse a perfectly good key the day that format changed.
+			return typeof value === "string" && value.length <= definition.maxLength;
 	}
 }
 
@@ -1802,7 +1915,10 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 		create: { key, value: stored },
 	});
 
-	logger.info("Setting changed", { key, value });
+	// A secret's new value is not logged. Server logs are the one channel that routinely leaves the
+	// machine — forwarded, tailed over a shoulder, pasted into a ticket — and the audit row already
+	// records that this key changed without saying to what.
+	logger.info("Setting changed", { key, value: definition.type === "secret" ? "[redacted]" : value });
 	await applyPushedSettings();
 }
 
@@ -1821,6 +1937,7 @@ function expectation(definition: SettingDefinition): string {
 		case "enum":
 			return `must be one of ${definition.values.join(", ")}`;
 		case "string":
+		case "secret":
 			return `must be text of at most ${definition.maxLength} characters`;
 	}
 }

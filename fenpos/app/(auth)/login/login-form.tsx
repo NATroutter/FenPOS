@@ -1,9 +1,10 @@
 "use client";
 
 import { REGEXP_ONLY_DIGITS_AND_CHARS } from "input-otp";
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { type SignInState, signIn, verifyTwoFactor } from "@/app/(auth)/login/actions";
 import { PasswordInput } from "@/components/password-input";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,14 +32,35 @@ const SIX_DIGITS = 6;
  * It renders the card's header as well as its content, which is why the page hands it a bare `Card`.
  * Which step is on screen is client state, and a header left on the server said "Enter your email and
  * password" over a form asking for a six-digit code.
+ *
+ * @param turnstileSiteKey the public key to render a bot challenge with, or null when the install
+ *   has none configured. Only ever the public half — see `turnstileConfig`.
  */
-export function LoginForm() {
+export function LoginForm({ turnstileSiteKey }: { turnstileSiteKey: string | null }) {
 	const [signInState, signInAction, signInPending] = useActionState(signIn, INITIAL_STATE);
 	const [verifyState, verifyAction, verifyPending] = useActionState(verifyTwoFactor, {
 		error: null,
 		twoFactorRequired: true,
 	});
 	const [recoveryCode, setRecoveryCode] = useState(false);
+
+	/**
+	 * How many times the password step has come back refused.
+	 *
+	 * Feeds the widget's `resetKey`. A Turnstile token is single-use, so the one sitting in the form
+	 * after a refusal is already spent whatever the refusal was about — a wrong password leaves a
+	 * dead token exactly as a failed challenge does, and without this the operator's second, correct
+	 * attempt would be refused by Cloudflare for reusing it.
+	 *
+	 * Counted rather than keyed on the message, because two identical refusals in a row still need
+	 * two different tokens.
+	 */
+	const [refusals, setRefusals] = useState(0);
+	useEffect(() => {
+		if (signInState.error !== null) {
+			setRefusals((count) => count + 1);
+		}
+	}, [signInState]);
 
 	// Once the password has been accepted the challenge is the only thing left to do, and it stays on
 	// screen through a refused code — `signInState` is what decides this, and nothing in
@@ -177,6 +199,10 @@ export function LoginForm() {
 							required
 						/>
 					</Field>
+
+					{/* Above the messages and the button, which is where it is solved: the challenge is
+					    something to finish before submitting, not a result of having submitted. */}
+					{turnstileSiteKey ? <TurnstileWidget siteKey={turnstileSiteKey} resetKey={refusals} /> : null}
 
 					{signInState.ban ? (
 						<Alert variant="destructive">

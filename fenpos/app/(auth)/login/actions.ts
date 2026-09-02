@@ -10,6 +10,7 @@ import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth/lockout";
 import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
 import { enforceSessionCap } from "@/lib/auth/session-policy";
+import { TURNSTILE_FIELD, turnstileConfig, verifyTurnstile } from "@/lib/auth/turnstile";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format/datetime";
 import { logger } from "@/lib/logger";
@@ -70,6 +71,16 @@ export interface SignInState {
 
 /** Shown for every failure that is not a ban, whatever its cause. */
 const REJECTION_MESSAGE = "That email address and password do not match an account.";
+
+/**
+ * Shown when the bot challenge did not stand.
+ *
+ * Its own message rather than {@link REJECTION_MESSAGE}, and that is not a leak: it says nothing
+ * about whether the address holds an account, only that the widget on this page needs solving
+ * again. Collapsing it into "credentials do not match" would send an operator to reset a password
+ * that was never looked at — the same mistake the ban message was fixed to stop making.
+ */
+const CHALLENGE_MESSAGE = "That challenge could not be verified. Try again.";
 
 /** The code better-auth's admin plugin puts on the refusal it throws for a banned account. */
 const BANNED_CODE = "BANNED_USER";
@@ -215,6 +226,35 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 			provenance: await requestProvenance(),
 		});
 		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
+	}
+
+	// Before the password is examined and after the two cheap refusals above it: the challenge is a
+	// network round trip, and spending one on a junk POST or on an address that is already over its
+	// throttle would let the thing meant to make this form expensive to hammer be the expensive part.
+	//
+	// After the malformed check for the same reason, and before the lockout read because a bot
+	// working through addresses should not get to find out which ones are locked.
+	const challenge = await turnstileConfig();
+	if (challenge.enabled) {
+		const submitted = formData.get(TURNSTILE_FIELD);
+		const verdict = await verifyTurnstile(typeof submitted === "string" ? submitted : "", address);
+		if (!verdict.ok) {
+			logger.warn("Sign-in refused by the bot challenge", {
+				address,
+				reason: verdict.reason,
+				// Cloudflare's own codes, which name causes an operator can act on — a wrong secret key,
+				// or a token already spent. Never shown to whoever is signing in.
+				...(verdict.reason === "rejected" ? { codes: verdict.codes } : {}),
+			});
+			await recordAudit({
+				action: AUTH_AUDIT_ACTIONS.SIGN_IN,
+				outcome: "DENIED",
+				actor: unknownUserActor(readEmail(formData)),
+				detail: { reason: "challenge-failed", challenge: verdict.reason },
+				provenance: await requestProvenance(),
+			});
+			return { error: CHALLENGE_MESSAGE, twoFactorRequired: false };
+		}
 	}
 
 	// After the throttle, because this is a database read and that one is in memory; and after the

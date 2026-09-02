@@ -28,6 +28,7 @@ import {
 	listSettings,
 	SETTING_KEYS,
 	SETTINGS,
+	secretSetting,
 	setSetting,
 	stringSetting,
 	toClientDefinition,
@@ -301,6 +302,58 @@ describe("setting definitions", () => {
 		expect(await booleanSetting("audit.recordPageViews")).toBe(false);
 	});
 
+	/**
+	 * The containment around a `secret`.
+	 *
+	 * Each of these is a way the credential could reach somewhere it must not, and none of them
+	 * fails loudly on its own: a secret returned by `listSettings` looks like an ordinary string
+	 * until somebody views the sign-in page's source, and one written to the log looks like an
+	 * ordinary log line until the log is forwarded somewhere.
+	 */
+	describe("a secret setting", () => {
+		const KEY = "auth.turnstileSecretKey";
+
+		it("is never returned by listSettings, which feeds the browser", async () => {
+			await setSetting(KEY, "0x-a-real-looking-secret");
+
+			const entry = (await listSettings()).find((setting) => setting.definition.key === KEY);
+
+			expect(entry?.value).toBe("");
+			// The one fact the screen does get: that a key is stored.
+			expect(entry?.overridden).toBe(true);
+		});
+
+		it("reads back in full on the server", async () => {
+			await setSetting(KEY, "0x-a-real-looking-secret");
+
+			expect(await secretSetting(KEY)).toBe("0x-a-real-looking-secret");
+		});
+
+		it("reads as unset, not as stored, when the row holds an empty string", async () => {
+			// Clearing the box and saving is how a credential is removed, and an empty row must not
+			// leave the screen claiming one is configured.
+			await setSetting(KEY, "");
+
+			const entry = (await listSettings()).find((setting) => setting.definition.key === KEY);
+
+			expect(entry?.overridden).toBe(false);
+			expect(await secretSetting(KEY)).toBe("");
+		});
+
+		it("is redacted from the line the logger writes", async () => {
+			const written = vi.spyOn(logger, "info");
+
+			await setSetting(KEY, "0x-a-real-looking-secret");
+
+			expect(written).toHaveBeenCalledWith("Setting changed", { key: KEY, value: "[redacted]" });
+			expect(JSON.stringify(written.mock.calls)).not.toContain("0x-a-real-looking-secret");
+		});
+
+		it("refuses to hand back a setting that is not one", async () => {
+			await expect(secretSetting("server.publicUrl")).rejects.toThrow("is not a secret setting");
+		});
+	});
+
 	it("declares the type every setting is documented to have", () => {
 		// A key→type map rather than a blanket "every setting is an integer" (which stopped being
 		// true the moment `logs.minimumLevel`, the first enum, joined them): this must fail if ANY
@@ -356,6 +409,11 @@ describe("setting definitions", () => {
 			"auth.require2fa": "boolean",
 			"auth.idleTimeoutMinutes": "integer",
 			"auth.maxConcurrentSessions": "integer",
+			"auth.turnstileEnabled": "boolean",
+			"auth.turnstileSiteKey": "string",
+			// The only `secret` in the file. If this line ever reads "string", the Settings page starts
+			// returning a live credential to the browser — see `listSettings`.
+			"auth.turnstileSecretKey": "secret",
 			"audit.retentionDays": "integer",
 			"audit.recordPageViews": "boolean",
 			"api.readsPerMinute": "integer",

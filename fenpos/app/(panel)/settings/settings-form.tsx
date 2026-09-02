@@ -65,6 +65,9 @@ type EnumField = SettingFieldData & { definition: Extract<ClientSettingDefinitio
 /** {@link SettingFieldData} narrowed to the string variant. */
 type StringField = SettingFieldData & { definition: Extract<ClientSettingDefinition, { type: "string" }> };
 
+/** {@link SettingFieldData} narrowed to the secret variant. */
+type SecretField = SettingFieldData & { definition: Extract<ClientSettingDefinition, { type: "secret" }> };
+
 /** What a control needs to render itself and stage an edit. */
 interface ControlProps<Field extends SettingFieldData> {
 	field: Field;
@@ -77,6 +80,15 @@ interface ControlProps<Field extends SettingFieldData> {
 	 * may read but not write. Neither is a state the control itself can do anything about.
 	 */
 	locked: boolean;
+	/**
+	 * Whether this field currently has a staged edit.
+	 *
+	 * Read only by {@link SecretControl}, which is the one control holding text the form cannot
+	 * re-derive: every other control shows `value`, and a saved or discarded edit reaches them as a
+	 * new `value` on its own. A secret's box has no `value` to fall back to — the server never sends
+	 * one — so it needs to be told when what it is holding has stopped being staged.
+	 */
+	staged: boolean;
 	/** Stages an edit. Passing a value equal to the current stored state clears the draft instead. */
 	onStage: (draft: Draft) => void;
 }
@@ -96,6 +108,14 @@ interface ControlProps<Field extends SettingFieldData> {
 function changesAnything(field: SettingFieldData, draft: Draft): boolean {
 	if (draft.kind === "reset") {
 		return field.overridden;
+	}
+	// An empty box on a secret means "leave the stored credential alone", never "store an empty one".
+	// Without this the ordinary comparison below reads it as a change on a setting that has nothing
+	// stored yet — `field.value` is always "" for a secret — and an operator who typed a key, thought
+	// better of it and cleared the box would save an empty credential. Removing one is the footer's
+	// Clear, which stages a reset.
+	if (draft.kind === "set" && field.definition.type === "secret" && draft.value === "") {
+		return false;
 	}
 	return !field.overridden || draft.value !== field.value;
 }
@@ -397,7 +417,7 @@ function SettingField({
 				<div className="mt-0.5 truncate font-mono text-[11px] text-subtle-foreground">{field.definition.key}</div>
 			</div>
 
-			<Control field={field} value={value} locked={locked} onStage={onStage} />
+			<Control field={field} value={value} locked={locked} staged={draft !== undefined} onStage={onStage} />
 
 			<FieldFooter field={field} overridden={overridden} error={error} locked={locked} onStage={onStage} />
 		</div>
@@ -412,16 +432,24 @@ function SettingField({
  * property down, not on `field` directly. The `as` below is safe precisely because the `case`
  * already checked it.
  */
-function Control({ field, value, locked, onStage }: ControlProps<SettingFieldData>) {
+function Control({ field, value, locked, staged, onStage }: ControlProps<SettingFieldData>) {
 	switch (field.definition.type) {
 		case "integer":
-			return <IntegerControl field={field as IntegerField} value={value} locked={locked} onStage={onStage} />;
+			return (
+				<IntegerControl field={field as IntegerField} value={value} locked={locked} staged={staged} onStage={onStage} />
+			);
 		case "boolean":
-			return <BooleanControl value={value} locked={locked} onStage={onStage} />;
+			return <BooleanControl value={value} locked={locked} staged={staged} onStage={onStage} />;
 		case "enum":
-			return <EnumControl field={field as EnumField} value={value} locked={locked} onStage={onStage} />;
+			return <EnumControl field={field as EnumField} value={value} locked={locked} staged={staged} onStage={onStage} />;
 		case "string":
-			return <StringControl field={field as StringField} value={value} locked={locked} onStage={onStage} />;
+			return (
+				<StringControl field={field as StringField} value={value} locked={locked} staged={staged} onStage={onStage} />
+			);
+		case "secret":
+			return (
+				<SecretControl field={field as SecretField} value={value} locked={locked} staged={staged} onStage={onStage} />
+			);
 	}
 }
 
@@ -467,6 +495,10 @@ function bounds(definition: ClientSettingDefinition): ReactNode {
 			return `at most ${definition.maxLength} characters`;
 		case "boolean":
 			return null;
+		case "secret":
+			// The control below it already says whether one is stored, and a character limit is not
+			// something anybody chooses about a key they were handed.
+			return null;
 	}
 }
 
@@ -504,6 +536,10 @@ function FieldFooter({
 	// label than the setting-agnostic "Reset" this falls back to.
 	const fallbackLabel = String(definition.fallback);
 
+	// A secret has no default to go back to, so "Reset" would be the wrong verb for the only thing
+	// the link can do — and "· default" would claim a credential is in effect when none is stored.
+	const secret = definition.type === "secret";
+
 	return (
 		<>
 			<p className="text-[11.5px] leading-relaxed text-muted-foreground">
@@ -524,10 +560,10 @@ function FieldFooter({
 							onClick={() => onStage({ kind: "reset" })}
 						>
 							<RotateCcw className="size-3" />
-							{fallbackLabel ? `Reset to ${fallbackLabel}` : "Reset"}
+							{secret ? "Clear the stored key" : fallbackLabel ? `Reset to ${fallbackLabel}` : "Reset"}
 						</Button>
 					</>
-				) : (
+				) : secret ? null : (
 					<span className="text-subtle-foreground"> · default</span>
 				)}
 			</p>
@@ -674,6 +710,61 @@ function EnumControl({ field, value, locked, onStage }: ControlProps<EnumField>)
  * there is nothing to defer, and an edit that only counts once focus moves is an edit somebody can
  * lose by clicking straight at Save.
  */
+/**
+ * A credential.
+ *
+ * **The box always starts empty, because the server never sends the stored value.** `listSettings`
+ * substitutes the empty string for a secret, so there is nothing here to show and nothing to leak
+ * into the page source. What the operator gets instead is the state — configured or not — and a box
+ * that replaces it.
+ *
+ * Nothing is staged while the box is empty, which is what makes "leave it alone" the default: an
+ * operator changing a setting three groups up must not have their credential blanked by a box they
+ * never touched. Removing one is the footer's Clear, which stages a reset like any other.
+ *
+ * `type="password"` and `autoComplete="off"`: this is not the operator's own credential and a
+ * password manager offering to fill or save it would be offering the wrong one.
+ */
+function SecretControl({ field, locked, staged, onStage }: ControlProps<SecretField>) {
+	const [draft, setDraft] = useState("");
+
+	// Emptied once the edit is no longer staged — saved, or discarded. Every other control gets this
+	// for free by rendering `value`; this one is holding text nothing else knows, so leaving it would
+	// show a saved credential still sitting in the box as though it were unsaved.
+	useEffect(() => {
+		if (!staged) {
+			setDraft("");
+		}
+	}, [staged]);
+
+	return (
+		<div className="flex flex-col gap-1.5">
+			<Input
+				type="password"
+				value={draft}
+				disabled={locked}
+				maxLength={field.definition.maxLength}
+				autoComplete="off"
+				placeholder={field.overridden ? "Replace the stored key" : "Not set"}
+				className="font-mono"
+				// Staged unconditionally, empty box included: `changesAnything` is what decides an empty
+				// one is "leave it alone", and routing it through there is also what *clears* a draft
+				// somebody typed and then backspaced away. Skipping the call for an empty box instead
+				// left that first keystroke staged with nothing on screen to show for it.
+				onChange={(event) => {
+					setDraft(event.target.value);
+					onStage({ kind: "set", value: event.target.value });
+				}}
+			/>
+			<p className="text-[11.5px] text-subtle-foreground">
+				{field.overridden
+					? "A key is stored. It is never shown again — type a new one to replace it."
+					: "No key is stored."}
+			</p>
+		</div>
+	);
+}
+
 function StringControl({ field, value, locked, onStage }: ControlProps<StringField>) {
 	const [draft, setDraft] = useEditableCopy(value as string);
 

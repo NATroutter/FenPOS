@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { signInThrottlePhrase } from "@/lib/auth/rate-limit";
 import { currentUser } from "@/lib/auth/require-session";
 import { isInstallClaimed } from "@/lib/auth/setup-key";
+import { turnstileConfig } from "@/lib/auth/turnstile";
 import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata: Metadata = {
@@ -33,6 +34,9 @@ export default async function LoginPage() {
 	}
 
 	const signInAttemptsPerMinute = await integerSetting("auth.signInAttemptsPerMinute");
+	// Only the public half: `turnstileConfig` returns the site key and never the secret, because this
+	// value is a prop on a Client Component and therefore reaches the browser.
+	const challenge = await turnstileConfig();
 
 	return (
 		<main className="flex min-h-screen items-center justify-center p-6">
@@ -42,7 +46,7 @@ export default async function LoginPage() {
 				{/* The header is the form's, not the page's: which step is on screen is client state, and
 				    the title and description change with it. */}
 				<Card>
-					<LoginForm />
+					<LoginForm turnstileSiteKey={challenge.enabled ? challenge.siteKey : null} />
 				</Card>
 
 				<p className="mt-3.5 text-xs leading-relaxed text-subtle-foreground">
