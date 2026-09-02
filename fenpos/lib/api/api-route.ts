@@ -3,6 +3,7 @@ import { type ApiRouteEntry, apiRouteEntry } from "@/lib/api/api-routes";
 import { type ApiLogTarget, recordApiRequest } from "@/lib/api/request-log";
 import { toErrorResponse } from "@/lib/errors";
 import { type AuthenticatedKey, authenticateKey, requirePermission } from "@/lib/keys/authenticate";
+import { recordApiMetric } from "@/lib/metrics/counters";
 
 /**
  * The one place a keyed v1 request is authenticated, permitted, recorded and answered.
@@ -97,6 +98,8 @@ export function apiRoute<P extends Record<string, string> = Record<string, never
 	const entry = declaredRoute(id);
 
 	return async (request, context) => {
+		const startedAtMs = performance.now();
+
 		// Outside the try, exactly where every route resolved its own parameters before this existed:
 		// they name the error context below, so there is nothing useful to report until they are known.
 		//
@@ -130,10 +133,23 @@ export function apiRoute<P extends Record<string, string> = Record<string, never
 				target: result.target,
 			});
 
+			recordApiMetric({
+				route: id,
+				status: result.response.status,
+				apiKeyId: key?.id ?? null,
+				durationMs: performance.now() - startedAtMs,
+			});
 			return result.response;
 		} catch (error) {
 			await recordApiRequest(entry, key, { status: "threw", error });
-			return toErrorResponse(error, { route: id, ...params });
+			const response = toErrorResponse(error, { route: id, ...params });
+			recordApiMetric({
+				route: id,
+				status: response.status,
+				apiKeyId: key?.id ?? null,
+				durationMs: performance.now() - startedAtMs,
+			});
+			return response;
 		}
 	};
 }

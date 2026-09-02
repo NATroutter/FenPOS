@@ -4,6 +4,7 @@ import type { RequestProvenance } from "@/lib/audit/provenance";
 import { auditDb } from "@/lib/db";
 import type { AuditOutcome } from "@/lib/domain/audit";
 import { logger } from "@/lib/logger";
+import { authKindsForAudit, recordAuthKind } from "@/lib/metrics/counters";
 
 /**
  * Writing the audit record.
@@ -126,6 +127,9 @@ export interface AuditEventInput {
 export async function appendEvent(input: AuditEventInput): Promise<void> {
 	try {
 		await appendAuditEvent(auditDb, input);
+		for (const kind of authKindsForAudit(input.action, input.outcome)) {
+			recordAuthKind(kind);
+		}
 	} catch (error) {
 		// Swallowed on purpose — see the module comment. Logged with the action so an event missing
 		// from the record is diagnosable rather than merely absent.
