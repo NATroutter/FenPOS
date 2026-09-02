@@ -24,7 +24,7 @@ import { Switch } from "@/components/ui/switch";
 // Type-only: `settings-service` starts with `import "server-only"`, so a value import here would
 // pull that guard into this client component's bundle. The category list itself is computed in
 // the (server) page and passed down as a prop instead.
-import type { ClientSettingDefinition, SettingCategory } from "@/lib/settings/settings-service";
+import type { ClientSettingDefinition, SettingCategory, SettingGroup } from "@/lib/settings/settings-service";
 import { cn } from "@/lib/utils";
 
 /**
@@ -152,7 +152,7 @@ export function SettingsForm({
 	settings,
 	writable,
 }: {
-	categories: readonly { id: SettingCategory; title: string; summary: string }[];
+	categories: readonly { id: SettingCategory; title: string; summary: string; groups: readonly SettingGroup[] }[];
 	settings: SettingFieldData[];
 	/** The categories this operator holds `settings:write:<category>` for. */
 	writable: readonly SettingCategory[];
@@ -166,6 +166,21 @@ export function SettingsForm({
 	const fields = settings.filter((setting) => setting.definition.category === selected);
 	const pendingKeys = Object.keys(drafts);
 	const canWrite = writable.includes(selected);
+
+	// The category's groups, each carrying the fields it actually has. A group whose settings are
+	// all absent is dropped rather than rendered as a heading over nothing — which is what a group
+	// looks like on an install where a feature's settings have not been declared yet.
+	const groups = (category?.groups ?? [])
+		.map((group) => ({
+			label: group.label,
+			fields: group.keys
+				.map((key) => fields.find((setting) => setting.definition.key === key))
+				.filter((setting): setting is SettingFieldData => setting !== undefined),
+		}))
+		.filter((group) => group.fields.length > 0);
+
+	// One group is the whole category, so its heading would only repeat the title already above it.
+	const showHeadings = groups.length > 1;
 
 	const stage = (field: SettingFieldData, draft: Draft): void => {
 		setDrafts((previous) => {
@@ -265,18 +280,35 @@ export function SettingsForm({
 							</p>
 						)}
 
-						<div className="mt-5 grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
-							{fields.map((setting) => (
-								<SettingField
-									key={setting.definition.key}
-									field={setting}
-									draft={drafts[setting.definition.key]}
-									error={errors[setting.definition.key]}
-									locked={saving || !canWrite}
-									onStage={(draft) => stage(setting, draft)}
-								/>
-							))}
-						</div>
+						{groups.map((group) => (
+							<section key={group.label} className="mt-5">
+								{/* A rule that runs to the edge with the label sitting on the left of it, rather
+								    than a bare heading. Twenty settings in one grid read as one list however
+								    they are spaced; a line across the column is what actually says "the thing
+								    above is finished". */}
+								{!showHeadings ? null : (
+									<div className="mb-4 flex items-center gap-3">
+										<h4 className="shrink-0 text-[11.5px] font-medium tracking-wide text-subtle-foreground uppercase">
+											{group.label}
+										</h4>
+										<span className="h-px flex-1 bg-border" />
+									</div>
+								)}
+
+								<div className="grid gap-x-6 gap-y-6 lg:grid-cols-2 2xl:grid-cols-3">
+									{group.fields.map((setting) => (
+										<SettingField
+											key={setting.definition.key}
+											field={setting}
+											draft={drafts[setting.definition.key]}
+											error={errors[setting.definition.key]}
+											locked={saving || !canWrite}
+											onStage={(draft) => stage(setting, draft)}
+										/>
+									))}
+								</div>
+							</section>
+						))}
 					</div>
 				</div>
 			</Card>

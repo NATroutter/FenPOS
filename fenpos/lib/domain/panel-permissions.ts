@@ -306,7 +306,10 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 		permissions: [
 			{ id: "settings:read", description: "See the Settings page." },
 			{ id: "settings:write:general", description: "Change how this install identifies itself." },
-			{ id: "settings:write:limits", description: "Change the print limits applied to every request." },
+			{
+				id: "settings:write:limits",
+				description: "Change what one request may carry, and how many records an API listing returns.",
+			},
 			{
 				id: "settings:write:jobs",
 				description: "Change how much job history is kept and how a shutdown waits.",
@@ -319,7 +322,8 @@ export const PANEL_PERMISSION_GROUPS: readonly PanelPermissionGroup[] = [
 			},
 			{
 				id: "settings:write:security",
-				description: "Change sessions, sign-in throttling, pairing, and whether raw writes are allowed at all.",
+				description:
+					"Change passwords, sign-in, sessions, pairing, the API's rate limit, and whether raw writes are allowed at all.",
 			},
 			{
 				id: "settings:write:audit",

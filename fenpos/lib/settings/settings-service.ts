@@ -83,30 +83,221 @@ export type SettingCategory =
 	| "panel";
 
 /**
- * The categories in the order the panel lists them.
+ * A run of settings under one heading, within a category.
+ *
+ * Membership is listed here as keys rather than declared on each setting, so the whole information
+ * architecture is one block somebody can read and argue with. The alternative — a `group` field on
+ * all seventy-eight definitions — answers "which group is this in" at the cost of never being able
+ * to answer "what is in this group" without reading the file end to end, and the second question is
+ * the one somebody reorganising a tab is actually asking.
+ *
+ * `setting definitions` (settings-service.test.ts) holds the two halves together: every setting
+ * appears in exactly one group, in the group list of the category it declares.
+ */
+export interface SettingGroup {
+	/** The heading. Omitted from the screen when its category has only one group. */
+	readonly label: string;
+	readonly keys: readonly SettingKey[];
+}
+
+/**
+ * The categories in the order the panel lists them, each divided into headed groups.
  *
  * Only the categories with at least one setting appear here — an entry with nothing under it
- * would be a dead spot in the nav. `panel` joins as the settings that belong to it are added.
+ * would be a dead spot in the nav.
+ *
+ * **The groups exist because a category is not a small thing any more.** Security holds twenty
+ * settings and Connections sixteen, and twenty controls in one undifferentiated grid is a list you
+ * search rather than read: nothing on screen says that a password rule and a heartbeat timeout are
+ * different kinds of decision, so every one of them has to be read to be ruled out. The headings
+ * are the same argument the category rail already makes, one level further down.
  */
-export const CATEGORIES: readonly { id: SettingCategory; title: string; summary: string }[] = [
-	{ id: "general", title: "General", summary: "How this install identifies itself." },
+export const CATEGORIES: readonly {
+	id: SettingCategory;
+	title: string;
+	summary: string;
+	groups: readonly SettingGroup[];
+}[] = [
+	{
+		id: "general",
+		title: "General",
+		summary: "How this install identifies itself.",
+		groups: [{ label: "Identity", keys: ["server.publicUrl"] }],
+	},
 	{
 		id: "limits",
-		title: "Print limits",
-		summary: "Counted on the request as received, before markup is interpreted.",
+		title: "Request limits",
+		// No longer only print limits: the API's page sizes moved here from Security, where they had
+		// never been a security control — nothing about how many rows come back in one response
+		// decides who may ask. What stayed behind is `api.readsPerMinute`, which is a quota against
+		// abuse and belongs with the other throttles.
+		summary: "What one request may carry, and how much comes back.",
+		groups: [
+			{
+				label: "Print requests",
+				keys: ["limits.maxLines", "limits.maxLineChars", "limits.maxTotalChars", "limits.maxOutputLines"],
+			},
+			{ label: "API responses", keys: ["api.defaultPageSize", "api.maxPageSize"] },
+		],
 	},
-	{ id: "jobs", title: "Jobs", summary: "How much job history each agent keeps, and how a shutdown waits." },
-	{ id: "logs", title: "Logs", summary: "How much output is written and kept." },
-	{ id: "media", title: "Images & assets", summary: "Uploads, and the images a job may fetch." },
+	{
+		id: "jobs",
+		title: "Jobs",
+		summary: "How much job history each agent keeps, and how a shutdown waits.",
+		groups: [
+			{
+				label: "History kept",
+				keys: ["jobs.retentionMinutes", "jobs.maxRecords", "jobs.maxErrorMessageChars"],
+			},
+			{ label: "Shutdown", keys: ["jobs.shutdownGraceSeconds"] },
+		],
+	},
+	{
+		id: "logs",
+		title: "Logs",
+		summary: "How much output is written and kept.",
+		groups: [
+			{
+				label: "What is written",
+				keys: ["logs.minimumLevel", "logs.maxMessageChars", "logs.recordApiReads", "logs.linesPerMinutePerAgent"],
+			},
+			{
+				label: "Retention",
+				keys: ["logs.retentionDays", "logs.archiveEnabled", "logs.archiveRetentionDays"],
+			},
+		],
+	},
+	{
+		id: "media",
+		title: "Images & assets",
+		summary: "Uploads, and the images a job may fetch.",
+		groups: [
+			{
+				label: "Stored images",
+				keys: ["assets.maxUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"],
+			},
+			{
+				// Split from the stored library because the two are different risks, not two halves of
+				// one topic: an upload is bytes somebody here chose, and a remote reference is this
+				// server making an outbound request on a caller's say-so.
+				label: "Remote images",
+				keys: [
+					"images.maxRemoteReferences",
+					"images.remoteFetchTimeoutMs",
+					"images.allowPlainHttp",
+					"images.allowedRemoteHosts",
+				],
+			},
+		],
+	},
 	{
 		id: "variables",
 		title: "Variables",
 		summary: "What `{name}` may resolve to, and how much of it one receipt may ask for.",
+		groups: [
+			{ label: "Availability", keys: ["variables.enabled", "variables.allowRequestValues"] },
+			{
+				label: "Limits",
+				keys: ["variables.maxCount", "variables.maxValueChars", "variables.maxPerRequest", "variables.maxPerElement"],
+			},
+			// Named "printed" throughout, because the Panel tab carries the same two settings for the
+			// screen and the pair being confusable is the whole reason both exist.
+			{ label: "Printed formatting", keys: ["variables.timezone", "variables.locale"] },
+		],
 	},
-	{ id: "security", title: "Security", summary: "Sessions, sign-in, and pairing." },
-	{ id: "audit", title: "Audit", summary: "How much of the record is kept, and how much of it is written." },
-	{ id: "connections", title: "Connections", summary: "Timeouts on the links to agents and to this panel." },
-	{ id: "panel", title: "Panel", summary: "How this interface displays things." },
+	{
+		id: "security",
+		title: "Security",
+		summary: "Passwords, sign-in, sessions, pairing, and what the API may be asked to do.",
+		groups: [
+			{
+				label: "Passwords",
+				keys: [
+					"auth.minimumPasswordLength",
+					"auth.requireMixedCase",
+					"auth.requireDigit",
+					"auth.requireSymbol",
+					"auth.passwordReuseCount",
+					"auth.passwordExpiryDays",
+				],
+			},
+			{
+				label: "Sign-in",
+				keys: [
+					"auth.require2fa",
+					"auth.signInAttemptsPerMinute",
+					"auth.lockoutAfterFailures",
+					"auth.lockoutMinutes",
+					"auth.ipAllowlist",
+				],
+			},
+			{
+				label: "Sessions",
+				keys: [
+					"auth.sessionHours",
+					"auth.idleTimeoutMinutes",
+					"auth.maxConcurrentSessions",
+					"auth.lastSeenRefreshMinutes",
+				],
+			},
+			{ label: "Agent pairing", keys: ["pairing.enabled", "pairing.codeMinutes"] },
+			{ label: "API access", keys: ["api.readsPerMinute"] },
+			{
+				// Its own heading despite being two settings, because it is the one switch here that
+				// hands a caller the printer's own language with no content check in front of it.
+				label: "Raw writes",
+				keys: ["link.allowRawApiWrites", "link.maxRawWriteBytes"],
+			},
+		],
+	},
+	{
+		id: "audit",
+		title: "Audit",
+		summary: "How much of the record is kept, and how much of it is written.",
+		groups: [{ label: "The record", keys: ["audit.retentionDays", "audit.recordPageViews"] }],
+	},
+	{
+		id: "connections",
+		title: "Connections",
+		summary: "The links to agents, to callers' webhooks, and to this panel.",
+		groups: [
+			{
+				label: "Agent link",
+				keys: [
+					"link.heartbeatSeconds",
+					"link.heartbeatTimeoutSeconds",
+					"link.handshakeTimeoutSeconds",
+					"link.commandTimeoutSeconds",
+					"link.scanTimeoutSeconds",
+					"link.statusIntervalSeconds",
+				],
+			},
+			{ label: "Agent behaviour", keys: ["agent.evictionIntervalSeconds", "agent.queuePollMs"] },
+			{
+				label: "Webhooks",
+				keys: [
+					"webhooks.enabled",
+					"webhooks.allowPlainHttp",
+					"webhooks.timeoutMs",
+					"webhooks.maxAttempts",
+					"webhooks.retryBackoffSeconds",
+					"webhooks.maxDeliveryRecords",
+					"webhooks.deliverySweepEvery",
+				],
+			},
+			{ label: "Panel live stream", keys: ["events.keepaliveSeconds"] },
+		],
+	},
+	{
+		id: "panel",
+		title: "Panel",
+		summary: "How this interface displays things.",
+		groups: [
+			{ label: "Page sizes", keys: ["panel.jobPageSize", "panel.logPageSize"] },
+			{ label: "Dashboard", keys: ["panel.dashboardWindowHours", "panel.dashboardTailLines"] },
+			{ label: "Display", keys: ["panel.locale", "panel.timeFormat", "panel.timezone"] },
+		],
+	},
 ];
 
 /** What every setting carries, whatever its type. */
@@ -916,7 +1107,10 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "api.defaultPageSize",
 		label: "API page size",
 		description: "How many records a listing endpoint returns when the caller does not ask for a number.",
-		category: "security",
+		// Moved out of `security`, where it had never belonged: how many rows come back in one
+		// response decides nothing about who may ask for them. `api.readsPerMinute` stayed behind,
+		// because a quota against abuse is a different kind of number from a page size.
+		category: "limits",
 		type: "integer",
 		min: 1,
 		max: 1_000,
@@ -928,7 +1122,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		label: "Largest API page",
 		description:
 			"The most records one listing request may ask for. A caller naming a larger number gets this instead of an error, so a client written against a looser install still works here.",
-		category: "security",
+		// With `api.defaultPageSize`, and for the same reason.
+		category: "limits",
 		type: "integer",
 		min: 1,
 		max: 1_000,

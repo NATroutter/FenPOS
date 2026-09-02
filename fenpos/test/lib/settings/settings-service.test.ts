@@ -185,6 +185,47 @@ describe("setting definitions", () => {
 	});
 
 	/**
+	 * Holds the two halves of the information architecture together.
+	 *
+	 * A setting declares its own `category`, which is what `settings:write:<category>` gates on, and
+	 * `CATEGORIES` separately lists which keys sit under which heading. Those can disagree in two
+	 * directions and neither shows up as a crash: a setting in no group silently vanishes from the
+	 * screen while still being writable by its permission, and a key listed under the wrong
+	 * category's group renders somewhere its permission does not gate. Both are exactly the mistake
+	 * a reorganisation makes.
+	 */
+	it("puts every setting in exactly one group, under the category it declares", () => {
+		const placements = new Map<string, string[]>();
+		for (const category of CATEGORIES) {
+			for (const group of category.groups) {
+				for (const key of group.keys) {
+					placements.set(key, [...(placements.get(key) ?? []), `${category.id}/${group.label}`]);
+				}
+			}
+		}
+
+		for (const definition of SETTINGS) {
+			expect(placements.get(definition.key), `${definition.key} is in no group`).toHaveLength(1);
+			expect(placements.get(definition.key)?.[0]).toMatch(new RegExp(`^${definition.category}/`));
+		}
+
+		// The other direction: a group naming a key that no longer exists would leave a heading over
+		// nothing, or no heading at all if it were the group's only key.
+		const declared = new Set<string>(SETTINGS.map((definition) => definition.key));
+		for (const key of placements.keys()) {
+			expect(declared, `${key} is grouped but not declared`).toContain(key);
+		}
+	});
+
+	it("gives every group at least one setting, so no heading stands over nothing", () => {
+		for (const category of CATEGORIES) {
+			for (const group of category.groups) {
+				expect(group.keys.length, `${category.id}/${group.label}`).toBeGreaterThan(0);
+			}
+		}
+	});
+
+	/**
 	 * Pins down the rail's order (spec §3), which drifted once already: each earlier task inserted
 	 * its category relative to the previous one, but `logs` was already present, so every
 	 * insertion landed in front of it rather than where the spec puts it.
