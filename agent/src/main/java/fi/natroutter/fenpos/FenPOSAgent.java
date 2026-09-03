@@ -31,6 +31,7 @@ import fi.natroutter.fenpos.link.LinkClient;
 import fi.natroutter.fenpos.link.LinkDispatcher;
 import fi.natroutter.fenpos.pair.EnvironmentPairing;
 import fi.natroutter.fenpos.pair.PairingClient;
+import fi.natroutter.fenpos.pair.PairingException;
 import fi.natroutter.fenpos.pair.PairingService;
 import fi.natroutter.fenpos.print.JobSettings;
 import fi.natroutter.fenpos.print.PrintQueue;
@@ -176,6 +177,7 @@ public class FenPOSAgent extends FoxLib {
                 new LinkDispatcher(devices, printService, connections, FenPOSAgent::applyConfig, logger);
         link = new LinkClient(info, dispatcher, logger);
         dispatcher.attach(link::send);
+        link.onUnpaired(FenPOSAgent::forgetPairing);
         startStatusReports(dispatcher, AgentSettings.DEFAULTS.statusInterval());
 
         Runtime.getRuntime().addShutdownHook(new Thread(FenPOSAgent::shutdown, "fenpos-agent-shutdown"));
@@ -223,6 +225,29 @@ public class FenPOSAgent extends FoxLib {
         PrintQueue.setPollInterval(agent.queuePoll());
 
         logger.info("Configuration applied: " + devices.size() + " device(s)");
+    }
+
+    /**
+     * Forgets the credential and the device set after the server unpaired this agent.
+     * <p>
+     * The same two steps the console's {@code unpair} command takes, for the same reason: the
+     * printers belonged to the server this agent has just been cut off from, and a credential the
+     * server no longer knows would only stop the next boot from pairing again. Before this the
+     * agent kept its stale identity, retried the link every minute against a token that would
+     * never be accepted, and ignored the fresh {@code FENPOS_PAIR_CODE} an operator had already
+     * put in place.
+     */
+    private static void forgetPairing() {
+        try {
+            pairing.unpair();
+        } catch (PairingException e) {
+            logger.error("Could not clear the stored credential after the server unpaired this agent: "
+                    + Diagnostics.describe(e));
+        }
+        applyConfig(List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS);
+        logger.warn("To pair again, generate a new code in the panel under Agents, then either set "
+                + EnvironmentPairing.CODE_VARIABLE + " and restart, or run 'pair <server-url> <code>' "
+                + "on this console.");
     }
 
     /**

@@ -43,7 +43,9 @@ export default async function AgentsPage() {
 	const cards: AgentCardData[] = agents.map((agent) => ({
 		id: agent.id,
 		name: agent.name,
-		status: agent.pairing ? "PENDING" : isConnected(agent.id) ? "ONLINE" : "OFFLINE",
+		// Awaiting pairing is a property of the credential, not of the code: an unpaired agent whose
+		// code has lapsed is still unpaired, and the card must still offer a way to issue one.
+		status: !agent.paired ? "PENDING" : isConnected(agent.id) ? "ONLINE" : "OFFLINE",
 		lastSeenAt: agent.lastSeenAt?.toISOString() ?? null,
 		agentVersion: agent.agentVersion,
 		platform: agent.platform,

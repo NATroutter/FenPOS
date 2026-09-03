@@ -25,6 +25,10 @@ import { Spinner } from "@/components/ui/spinner";
  * When pairing is switched off, redeeming the code shown here would always be refused — the
  * endpoint cannot tell a stale code from a disabled one — so this shows a plain notice instead of
  * a code nobody could use.
+ *
+ * `code` is null when the agent is unpaired but no code is live: the last one lapsed, or was purged
+ * at startup. The panel still renders, because the agent is still one that needs pairing, and the
+ * "New code" button is the way out of that state.
  */
 export function PairingPanel({
 	agentId,
@@ -38,8 +42,8 @@ export function PairingPanel({
 }: {
 	agentId: string;
 	agentName: string;
-	code: string;
-	expiresAt: string;
+	code: string | null;
+	expiresAt: string | null;
 	serverAddress: string;
 	/** Whether the address was derived from this request rather than configured. */
 	addressIsInferred: boolean;
@@ -66,18 +70,27 @@ export function PairingPanel({
 
 			{pairingEnabled ? (
 				<>
-					<div className="flex flex-col gap-1.5">
-						<span className="text-[11px] font-medium text-subtle-foreground">Pairing code</span>
-						<CopyableValue value={code} label="Pairing code" large />
-						<Countdown expiresAt={expiresAt} />
-					</div>
+					{code !== null && expiresAt !== null ? (
+						<>
+							<div className="flex flex-col gap-1.5">
+								<span className="text-[11px] font-medium text-subtle-foreground">Pairing code</span>
+								<CopyableValue value={code} label="Pairing code" large />
+								<Countdown expiresAt={expiresAt} />
+							</div>
 
-					<div className="rounded-md border border-border bg-background p-3">
-						<p className="text-[11px] font-medium text-subtle-foreground">Run on the agent</p>
-						<code className="mt-1.5 block overflow-x-auto font-mono text-xs whitespace-nowrap text-foreground">
-							pair {serverAddress} {code}
-						</code>
-					</div>
+							<div className="rounded-md border border-border bg-background p-3">
+								<p className="text-[11px] font-medium text-subtle-foreground">Run on the agent</p>
+								<code className="mt-1.5 block overflow-x-auto font-mono text-xs whitespace-nowrap text-foreground">
+									pair {serverAddress} {code}
+								</code>
+							</div>
+						</>
+					) : (
+						<p className="text-[11px] leading-relaxed text-subtle-foreground">
+							No pairing code is live for this agent; the last one lapsed.{" "}
+							{canRefresh ? "Issue a new one to pair a machine." : "An operator with pairing rights can issue one."}
+						</p>
+					)}
 
 					{!canRefresh ? null : (
 						<Button

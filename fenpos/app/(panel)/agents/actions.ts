@@ -13,6 +13,7 @@ import { panelAction } from "@/lib/auth/panel-action";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
+import { CLOSE } from "@/lib/link/agent-connection";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
 
@@ -86,6 +87,11 @@ export async function refreshPairingCode(agentId: string): Promise<ActionState> 
  * alone would leave the current connection running until it happened to drop — the agent
  * would keep printing after an operator believed they had cut it off.
  *
+ * Closed with the `unpaired` code rather than the ordinary one, so the agent knows to forget its
+ * credential instead of reconnecting: with the ordinary code it retried forever against a token
+ * this server no longer knows, and a `FENPOS_PAIR_CODE` set for the next boot was ignored because
+ * an identity was still stored.
+ *
  * @param agentId the agent to unpair
  * @returns the state to render
  */
@@ -94,7 +100,7 @@ export async function unpairAgent(agentId: string): Promise<ActionState> {
 		"agents:unpair",
 		async () => {
 			await unpairAgentRecord(agentId);
-			getLink(agentId)?.close("unpaired by the administrator");
+			getLink(agentId)?.close("unpaired by the administrator", CLOSE.unpaired);
 			logger.info("Agent unpaired", { agentId });
 		},
 		{ revalidate, target: { kind: "agent", id: agentId } },

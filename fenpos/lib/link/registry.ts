@@ -30,8 +30,10 @@ export interface AgentLink {
 	 * Closes the connection.
 	 *
 	 * @param reason short text recorded in the log and sent in the close frame
+	 * @param code the close code to send; "going away" when omitted. An unpair passes its own
+	 *             code, because the agent must tell being sent away from being revoked
 	 */
-	close(reason: string): void;
+	close(reason: string, code?: number): void;
 }
 
 const globalForRegistry = globalThis as unknown as {

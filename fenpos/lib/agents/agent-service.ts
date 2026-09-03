@@ -25,7 +25,16 @@ export interface AgentSummary {
 	createdAt: Date;
 	/** How many printers are configured behind this agent. */
 	deviceCount: number;
-	/** The outstanding pairing code, present only while the agent is unpaired. */
+	/**
+	 * Whether the agent holds a credential.
+	 *
+	 * This, not the presence of a pairing code, is what says whether an agent can connect: a code
+	 * lapses on its own after `pairing.codeMinutes`, and an unpaired agent whose code has lapsed is
+	 * still unpaired. Deriving "awaiting pairing" from the code alone showed exactly that agent as
+	 * merely offline, with no code on screen and no way to issue one.
+	 */
+	paired: boolean;
+	/** The outstanding pairing code, present only while the agent is unpaired and one is live. */
 	pairing: { code: string; expiresAt: Date } | null;
 }
 
@@ -63,6 +72,7 @@ export async function listAgents(now: Date = new Date()): Promise<AgentSummary[]
 		lastAddress: agent.lastAddress,
 		createdAt: agent.createdAt,
 		deviceCount: agent._count.devices,
+		paired: agent.tokenHash !== null,
 		pairing: agent.pairingCodes[0] ?? null,
 	}));
 }
@@ -144,14 +154,21 @@ export async function renameAgent(agentId: string, rawName: string): Promise<voi
  * refused, and it cannot reconnect until it is paired again. Devices are kept, so re-pairing
  * a replaced machine restores the site without reconfiguring every printer.
  *
+ * A fresh pairing code is issued in the same step, for the same reason {@link createAgent}
+ * issues one: an unpaired agent's next state is "pair it", and the operator who just unpaired it
+ * is the one standing there needing the code. Without this the card showed the agent as merely
+ * offline — the same button, the same details, nothing to type on the replacement machine — and
+ * the only way to a code was deleting the agent and creating it again, printers and all.
+ *
  * Closing the live connection is the caller's responsibility — the registry that owns
  * sockets is deliberately not reachable from here, so that this module stays testable
  * without one.
  *
  * @param agentId the agent to unpair
+ * @returns the new pairing code and its expiry
  * @throws ApiError when the agent is unknown
  */
-export async function unpairAgent(agentId: string): Promise<void> {
+export async function unpairAgent(agentId: string): Promise<{ code: string; expiresAt: Date }> {
 	const updated = await prisma.agent.updateMany({
 		where: { id: agentId },
 		data: { status: "PENDING", tokenHash: null, lastSeenAt: null },
@@ -161,8 +178,9 @@ export async function unpairAgent(agentId: string): Promise<void> {
 		throw new ApiError("unknown_agent", "No such agent.");
 	}
 
-	// Any outstanding code belonged to the previous pairing attempt and must not carry over.
-	await prisma.pairingCode.deleteMany({ where: { agentId, consumedAt: null } });
+	// Replaces any outstanding code: one from the previous pairing attempt must not carry over,
+	// and issuePairingCode already invalidates whatever is there before writing the new one.
+	return issuePairingCode(agentId);
 }
 
 /**

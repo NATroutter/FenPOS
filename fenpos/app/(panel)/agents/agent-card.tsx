@@ -80,12 +80,12 @@ export function AgentCard({
 			</CardHeader>
 
 			<CardContent className="flex flex-1 flex-col gap-4 pt-4">
-				{agent.pairing ? (
+				{agent.status === "PENDING" ? (
 					<PairingPanel
 						agentId={agent.id}
 						agentName={agent.name}
-						code={agent.pairing.code}
-						expiresAt={agent.pairing.expiresAt}
+						code={agent.pairing?.code ?? null}
+						expiresAt={agent.pairing?.expiresAt ?? null}
 						serverAddress={serverAddress}
 						addressIsInferred={addressIsInferred}
 						pairingEnabled={pairingEnabled}

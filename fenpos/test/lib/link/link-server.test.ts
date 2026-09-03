@@ -336,6 +336,26 @@ describe("agent link", () => {
 			expect(stored.status).toBe("OFFLINE");
 		});
 
+		/**
+		 * The unpair action closes with its own code so the agent knows not to reconnect. What is
+		 * asserted is what the *agent* receives, because the whole point of the code is what the
+		 * other end does with it.
+		 */
+		it("closes with the code the caller asks for, so an unpair is told apart from a restart", async () => {
+			const agent = await pairedAgent();
+			const socket = connect(agent.token);
+			await new Promise<void>((resolve) => socket.once("open", resolve));
+			socket.send(helloFrame());
+			await nextFrame(socket);
+			await delay(80);
+
+			getLink(agent.id)?.close("unpaired by the administrator", 4003);
+
+			expect(await closeCode(socket)).toBe(4003);
+			await delay(80);
+			expect(isConnected(agent.id)).toBe(false);
+		});
+
 		it("displaces an older connection when the agent reconnects", async () => {
 			const agent = await pairedAgent();
 

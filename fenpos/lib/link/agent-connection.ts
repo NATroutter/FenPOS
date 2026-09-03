@@ -39,15 +39,25 @@ import { queueJobSettled } from "@/lib/webhooks/notify";
  */
 const DEFAULT_MAX_QUEUE_DEPTH = 100;
 
-/** Close codes used by the server, chosen from the application range. */
-const CLOSE = {
+/**
+ * Close codes used by the server, chosen from the application range.
+ *
+ * Mirrored in `LinkClient.java`, which acts on `unpaired` — the one code that must not be
+ * followed by a reconnect.
+ */
+export const CLOSE = {
 	/** The agent never completed the opening handshake. */
 	handshakeTimeout: 4000,
 	/** The agent offered a protocol version this server does not implement. */
 	protocolMismatch: 4001,
 	/** The agent sent something that could not be parsed as a valid frame. */
 	badFrame: 4002,
-	/** The server is shutting down, or the agent was displaced or unpaired. */
+	/**
+	 * An operator unpaired the agent. Its credential is gone, so reconnecting would only ever be
+	 * refused; the agent forgets the credential on seeing this and waits to be paired again.
+	 */
+	unpaired: 4003,
+	/** The server is shutting down, or the agent was displaced by a newer connection. */
 	goingAway: 1001,
 } as const;
 
@@ -85,8 +95,8 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			socket.send(serialiseServerFrame(frame));
 			return true;
 		},
-		close(reason: string): void {
-			socket.close(CLOSE.goingAway, reason.slice(0, 120));
+		close(reason: string, code: number = CLOSE.goingAway): void {
+			socket.close(code, reason.slice(0, 120));
 		},
 	};
 

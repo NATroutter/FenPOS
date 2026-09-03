@@ -48,6 +48,16 @@ public class LinkClient {
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
     /**
+     * The close code the server sends when an operator unpairs this agent.
+     * <p>
+     * Mirrors {@code CLOSE.unpaired} in {@code lib/link/agent-connection.ts}. It is the one close
+     * that must not be followed by a reconnect: the credential is gone on the server, so every
+     * attempt would be refused, and the stored identity would keep the next boot from reading a
+     * fresh {@code FENPOS_PAIR_CODE}.
+     */
+    static final int CLOSE_UNPAIRED = 4003;
+
+    /**
      * Attempts after which failures stop being reported every time.
      * <p>
      * A agent whose server is down for a day would otherwise write tens of thousands of identical
@@ -76,6 +86,7 @@ public class LinkClient {
     private volatile LinkState state = LinkState.IDLE;
     private volatile AgentIdentity identity;
     private volatile boolean stopped;
+    private volatile Runnable unpairedHandler;
 
     /**
      * @param info    how this agent describes itself in {@code hello}
@@ -125,6 +136,19 @@ public class LinkClient {
         if (open != null) {
             open.sendClose(WebSocket.NORMAL_CLOSURE, reason);
         }
+    }
+
+    /**
+     * Registers what to do when the server unpairs this agent.
+     * <p>
+     * The link itself only knows to stop: it has no access to the stored credential or the
+     * device set, and forgetting both is the caller's decision to make. Called on the HTTP
+     * client's thread, after the link has already stopped reconnecting.
+     *
+     * @param handler runs once per remote unpair
+     */
+    public void onUnpaired(Runnable handler) {
+        this.unpairedHandler = handler;
     }
 
     /** Stops for good and releases the retry thread. Called once, during shutdown. */
@@ -377,9 +401,31 @@ public class LinkClient {
 
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            if (statusCode == CLOSE_UNPAIRED) {
+                onUnpairedByServer();
+                return null;
+            }
             onDisconnected("closed by the server (" + statusCode
                     + (reason == null || reason.isBlank() ? "" : ": " + reason) + ")");
             return null;
+        }
+
+        /**
+         * Stops for good rather than reconnecting: the credential this link was using no longer
+         * exists on the server. What happens to the stored copy is the registered handler's
+         * business.
+         */
+        private void onUnpairedByServer() {
+            socket.set(null);
+            stopped = true;
+            identity = null;
+            state = LinkState.STOPPED;
+            logger.warn("The server unpaired this agent. The link will not reconnect until it is "
+                    + "paired again.");
+            Runnable handler = unpairedHandler;
+            if (handler != null) {
+                handler.run();
+            }
         }
 
         @Override
