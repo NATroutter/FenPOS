@@ -1,6 +1,7 @@
 import "server-only";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { requestProvenance } from "@/lib/audit/provenance";
+import { describeTarget } from "@/lib/audit/target-label";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelActionId, panelActionEntry } from "@/lib/auth/panel-actions";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
@@ -126,6 +127,20 @@ async function record(
 }
 
 /**
+ * Names the target while it can still be named.
+ *
+ * Before the body, deliberately: a delete action's target no longer exists afterwards, and the whole
+ * point of the label is that it survives the thing. After the gate, so an absent session still
+ * redirects first and a refused caller's record names the thing they were refused on.
+ *
+ * @param options the caller's options
+ * @returns the same options, with the target labelled where the database knows its name
+ */
+async function withTargetLabel<T extends PanelActionOptions>(options: T): Promise<T> {
+	return { ...options, target: await describeTarget(options.target) };
+}
+
+/**
  * The message shown for an unexpected failure.
  *
  * One sentence for every one of them: an internal message in a toast is at best noise and at worst
@@ -152,6 +167,7 @@ export async function panelAction(
 ): Promise<ActionState> {
 	// Outside the try: an absent session redirects, and `redirect` signals by throwing.
 	const gated = await gate(id);
+	options = await withTargetLabel(options);
 
 	if (!gated.allowed) {
 		await record(id, gated.user, "DENIED", options, { permission: gated.permission });
@@ -196,6 +212,7 @@ export async function panelQuery<T>(
 	options: { refused: () => T; failed: (error: unknown) => T } & PanelActionOptions,
 ): Promise<T> {
 	const gated = await gate(id);
+	options = await withTargetLabel(options);
 
 	if (!gated.allowed) {
 		await record(id, gated.user, "DENIED", options, { permission: gated.permission });

@@ -158,6 +158,10 @@ function EventDetail({ event }: { event: AuditEventSummary }) {
 						<Field label="Actor kind" value={event.actorKind} />
 						<Field label="Email" value={event.actorEmail ?? "—"} />
 						<Field label="Target" value={event.targetLabel ?? event.targetId ?? "—"} />
+						{/* The id beside the name, not instead of it: the name is what a person reads and the
+						    id is what survives a rename — and what a support request will quote. */}
+						<Field label="Target id" value={event.targetId ?? "—"} />
+						<Field label="Target kind" value={event.targetKind ?? "—"} />
 						<Field label="Address" value={event.ipAddress ?? "—"} />
 						<Field label="Agent" value={event.userAgent ?? "—"} />
 					</dl>
