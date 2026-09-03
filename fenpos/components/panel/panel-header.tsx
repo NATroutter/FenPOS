@@ -40,9 +40,18 @@ export function PanelHeader({ startedAt }: { startedAt: number }) {
 		>
 			<SidebarTrigger />
 
-			<div className="min-w-[220px] flex-1">
+			{/* `min-w-0` so the truncation below can actually take effect: a flex child's default
+			    `min-width: auto` refuses to shrink past its content, and the bar would grow instead. */}
+			<div className="min-w-0 flex-1">
 				<h1 className="text-xl font-semibold tracking-tight">{item?.title ?? "FenPOS"}</h1>
-				{item ? <p className="mt-1 max-w-3xl text-[12.5px] text-muted-foreground">{item.description}</p> : null}
+				{/* One line, always. A description that wrapped made this strip taller than the sidebar's
+				    header beside it, and the two bottom borders stopped reading as one line — the seam
+				    HEADER_STRIP exists to hide. The full sentence stays reachable as a tooltip. */}
+				{item ? (
+					<p className="mt-1 max-w-3xl truncate text-[12.5px] text-muted-foreground" title={item.description}>
+						{item.description}
+					</p>
+				) : null}
 			</div>
 
 			<LiveToggle />
