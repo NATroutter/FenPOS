@@ -50,6 +50,14 @@ public class PairingClient {
     public PairingClient() {
         this(HttpClient.newBuilder()
                 .connectTimeout(TIMEOUT)
+                // HTTP/1.1 outright, because the default of HTTP/2 does something over plain http
+                // that the server cannot survive: the JDK sends the first request with an
+                // "Upgrade: h2c" header to ask for HTTP/2, and Node hands any request carrying an
+                // Upgrade header to its upgrade listener rather than its request handler. The
+                // pairing POST then never reaches the route. Over https the two negotiate through
+                // ALPN and the header is never sent, which is why this only bit the loopback
+                // install — the one case that pairs over http at all.
+                .version(HttpClient.Version.HTTP_1_1)
                 // Redirects are not followed. A redirect on this request could move the
                 // credential exchange to a host the operator never named.
                 .followRedirects(HttpClient.Redirect.NEVER)
