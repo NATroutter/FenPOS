@@ -841,7 +841,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		key: "variables.enabled",
 		label: "Enable variables",
 		description:
-			"Whether `{name}` in markup is replaced by a configured value. Switched off, a brace is ordinary text and every receipt prints exactly as it did before this feature existed — which is the reason to switch it off: turning variables on changes what existing markup means, because a slug-shaped `{something}` that used to print goes to failing as an unknown variable.",
+			"Whether `{name}` in markup is replaced by a configured value. Switched off, a brace is ordinary text and every receipt prints exactly as it did before this feature existed — which is the reason to switch it off: turning variables on changes what existing markup means, because a slug-shaped `{something}` that used to print goes to failing as an unknown variable. The Variables section leaves the sidebar while this is off; what it holds is kept.",
 		category: "variables",
 		type: "boolean",
 		fallback: true,
@@ -1591,7 +1591,8 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "stats.enabled",
 		label: "Collect statistics",
-		description: "Master switch. When off, nothing samples, counts or rolls up, and the Statistics page says so.",
+		description:
+			"Master switch. When off, nothing samples, counts or rolls up, and the Statistics section leaves the sidebar until it is turned back on.",
 		category: "statistics",
 		type: "boolean",
 		fallback: true,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PANEL_PERMISSION_IDS } from "@/lib/domain/panel-permissions";
 import { findNavItem, NAV_GROUPS, NAV_ITEMS, type NavItem } from "@/lib/navigation";
+import { SETTINGS } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the navigation table.
@@ -77,6 +78,23 @@ describe("NAV_ITEMS", () => {
 			expect(item.label.length, `${item.href} has no label`).toBeGreaterThan(0);
 			expect(item.title.length, `${item.href} has no title`).toBeGreaterThan(0);
 			expect(item.description.length, `${item.href} has no description`).toBeGreaterThan(0);
+		}
+	});
+
+	/**
+	 * A section's switch must be a boolean setting this install defines: the sidebar filter and the
+	 * page gate both read it through `booleanSetting`, which throws on any other kind of key, and the
+	 * `/no-access` page names it by looking its label up. Statistics and Variables are the two that
+	 * have one; the assertion is on the shape rather than the list, so a third needs no test change.
+	 */
+	it("names a boolean setting for every section that has a switch", () => {
+		const switched = everyItem().filter((item) => item.feature !== undefined);
+		expect(switched.map((item) => item.href)).toEqual(["/statistics", "/variables"]);
+
+		for (const item of switched) {
+			const definition = SETTINGS.find((setting) => setting.key === item.feature);
+			expect(definition, `${item.href} names a setting that does not exist`).toBeDefined();
+			expect(definition?.type, `${item.href}'s switch is not a boolean`).toBe("boolean");
 		}
 	});
 

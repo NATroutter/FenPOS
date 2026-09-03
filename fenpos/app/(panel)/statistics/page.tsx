@@ -1,5 +1,4 @@
 import { AutoRefresh } from "@/app/(panel)/statistics/auto-refresh";
-import { CollectionOffNotice } from "@/app/(panel)/statistics/collection-off-notice";
 import { StatisticsNav } from "@/app/(panel)/statistics/statistics-nav";
 import { TabContent } from "@/app/(panel)/statistics/tab-content";
 import { isTabId } from "@/app/(panel)/statistics/tabs";
@@ -23,9 +22,9 @@ export const dynamic = "force-dynamic";
  * reliability, latency, fleet, webhooks, api, security — see `tabs.ts`), each fetching its own metrics
  * and laying out charts per the spec's chart-to-primitive mapping.
  *
- * Collection being off (`stats.enabled`) does not hide the page: an account with `stats:read` and no
- * way to flip that setting itself should still be able to see whatever was already rolled up, with
- * {@link CollectionOffNotice} explaining why it may be thin.
+ * Collection being off (`stats.enabled`) removes the page: the section names that setting as its
+ * switch in `lib/navigation.ts`, so `requirePagePermission` sends the caller to `/no-access` with a
+ * note naming it, and the sidebar stops offering the tab. Nothing here has to check the switch itself.
  */
 export default async function StatisticsPage({
 	searchParams,
@@ -51,7 +50,6 @@ export default async function StatisticsPage({
 	return (
 		<div className="flex flex-col gap-5">
 			{stats.autoRefreshSeconds > 0 ? <AutoRefresh seconds={stats.autoRefreshSeconds} /> : null}
-			{!stats.enabled ? <CollectionOffNotice /> : null}
 			<StatisticsNav tab={tab} params={params} agents={agents} devices={devices} />
 			<TabContent tab={tab} range={range} filter={filter} />
 		</div>

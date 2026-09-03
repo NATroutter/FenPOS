@@ -23,6 +23,9 @@ import {
 	Wrench,
 } from "lucide-react";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
+// Type-only, and it has to stay that way: settings-service is `server-only`, and this module is
+// imported by the sidebar, a Client Component. An erased import crosses that line; a value would not.
+import type { SettingKey } from "@/lib/settings/settings-service";
 
 /**
  * The panel's navigation structure and page titles.
@@ -67,6 +70,19 @@ export interface NavItem {
 	 */
 	permission: PanelPermission | readonly PanelPermission[];
 	/**
+	 * The boolean setting that switches this section on, when one exists.
+	 *
+	 * Off, the section is neither offered in the sidebar nor openable by URL — the page gate sends the
+	 * caller to `/no-access` with a note naming the switch, the way it sends a caller who lacks the
+	 * permission. Permission still decides *who* may see the section; this decides whether the section
+	 * exists in this install at all, and an operator who turned a feature off should not keep finding
+	 * its tab in the sidebar, whatever they hold.
+	 *
+	 * Declared here, beside the route, for the reason `permission` is: the sidebar's filter and the
+	 * page's gate read the same field, so they cannot disagree about whether a section is switched off.
+	 */
+	feature?: SettingKey;
+	/**
 	 * Sections nested under this one in the sidebar.
 	 *
 	 * A parent with children is a group rather than a destination: the sidebar renders it as a
@@ -110,6 +126,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				description: "What the system did over time: throughput, reliability, latency, fleet health.",
 				icon: ChartColumn,
 				permission: "stats:read",
+				// Collection off means nothing samples, counts or rolls up; a page of charts drawn from
+				// nothing is not a page anyone needs to reach.
+				feature: "stats.enabled",
 			},
 			{
 				href: "/jobs",
@@ -199,10 +218,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 				href: "/variables",
 				label: "Variables",
 				title: "Variables",
-				description:
-					"Values receipts refer to by name. Written as {name} in markup and filled in when the receipt is printed, so a phone number or an address is changed in one place.",
+				description: "Values receipts refer to by name: write {name} in markup and it is filled in at print time.",
 				icon: Braces,
 				permission: "variables:read",
+				// Off, a brace in markup is ordinary text and nothing here is ever substituted in, so the
+				// section would be a table of values no receipt uses.
+				feature: "variables.enabled",
 			},
 		],
 	},

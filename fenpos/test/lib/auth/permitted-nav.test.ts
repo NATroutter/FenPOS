@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { permittedNavHrefs } from "@/lib/auth/require-permission";
+import { permittedNavHrefs, sectionSwitchedOff } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * What the sidebar offers.
@@ -24,6 +25,7 @@ describe("permittedNavHrefs", () => {
 		await prisma.session.deleteMany({});
 		await prisma.account.deleteMany({});
 		await prisma.user.deleteMany({});
+		await prisma.setting.deleteMany({ where: { key: { in: ["stats.enabled", "variables.enabled"] } } });
 	});
 
 	async function account(id: string, isSuperuser = false) {
@@ -111,5 +113,56 @@ describe("permittedNavHrefs", () => {
 		// Two administration sections, two permissions. An account that may see the accounts is not
 		// thereby allowed to see how roles are built.
 		expect(await permittedNavHrefs(user)).toEqual(["/users"]);
+	});
+
+	/**
+	 * A section switched off in Settings leaves the sidebar for everyone, superuser included. Whether
+	 * the account *could* open it is a separate question, answered first and answered elsewhere.
+	 */
+	it("drops a section whose feature is switched off, whatever the account holds", async () => {
+		const user = await account("f1", true);
+		expect(await permittedNavHrefs(user)).toContain("/statistics");
+		expect(await permittedNavHrefs(user)).toContain("/variables");
+
+		await setSetting("stats.enabled", false);
+		await setSetting("variables.enabled", false);
+
+		const hrefs = await permittedNavHrefs(user);
+		expect(hrefs).not.toContain("/statistics");
+		expect(hrefs).not.toContain("/variables");
+		// The switch removes its own section and nothing beside it.
+		expect(hrefs).toContain("/dashboard");
+		expect(hrefs).toContain("/assets");
+	});
+});
+
+/**
+ * The page-side half of the same switch: what `requirePagePermission` reads to decide whether to
+ * refuse a route. Tested directly because the gate itself signals by redirecting, and a test that
+ * mocked `redirect` away would be asserting against the mock.
+ */
+describe("sectionSwitchedOff", () => {
+	beforeEach(async () => {
+		await prisma.setting.deleteMany({ where: { key: { in: ["stats.enabled", "variables.enabled"] } } });
+	});
+
+	it("names the setting that has switched a section off", async () => {
+		await setSetting("stats.enabled", false);
+
+		expect(await sectionSwitchedOff("/statistics")).toBe("stats.enabled");
+		expect(await sectionSwitchedOff("/variables")).toBeNull();
+	});
+
+	it("reads a section as available while its switch is on", async () => {
+		expect(await sectionSwitchedOff("/statistics")).toBeNull();
+		expect(await sectionSwitchedOff("/variables")).toBeNull();
+	});
+
+	it("never switches off a section that has no switch, or a route it does not know", async () => {
+		await setSetting("stats.enabled", false);
+		await setSetting("variables.enabled", false);
+
+		expect(await sectionSwitchedOff("/jobs")).toBeNull();
+		expect(await sectionSwitchedOff("/nowhere")).toBeNull();
 	});
 });

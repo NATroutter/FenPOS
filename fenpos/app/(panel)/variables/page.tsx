@@ -1,9 +1,7 @@
 import { Braces, Plus } from "lucide-react";
-import Link from "next/link";
 import { VARIABLE_PERMISSIONS } from "@/app/(panel)/tab-permits";
 import { VariableDialog } from "@/app/(panel)/variables/variable-dialog";
 import { VariableRow, type VariableRowData } from "@/app/(panel)/variables/variable-row";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,7 +9,6 @@ import { permitsFor } from "@/lib/auth/permits";
 import { requirePagePermission } from "@/lib/auth/require-permission";
 import { logger } from "@/lib/logger";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
-import { booleanSetting } from "@/lib/settings/settings-service";
 import { PANEL_PRINT_CONTEXT } from "@/lib/variables/formatting";
 import { listVariables } from "@/lib/variables/variable-service";
 
@@ -34,9 +31,8 @@ export default async function VariablesPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
 	const user = await requirePagePermission("variables:read", "/variables");
 
-	const [variables, enabled, permits] = await Promise.all([
+	const [variables, permits] = await Promise.all([
 		listVariables(),
-		booleanSetting("variables.enabled"),
 		// Resolved here because a client component cannot read the database. Convenience only — every
 		// action is refused again by its own gate; see `permitsFor`.
 		permitsFor(user, VARIABLE_PERMISSIONS),
@@ -46,20 +42,18 @@ export default async function VariablesPage() {
 	// columns come apart.
 	const canManage = permits["variables:update"] || permits["variables:delete"];
 
-	// `resolveVariables` returns null when the feature is off, which is handled below with the
-	// banner. A row it cannot evaluate is now omitted from the map rather than thrown through — so
-	// that row alone reads "—" and every other variable still shows its value, which is the outcome
-	// this catch was written to approximate and could not: it could only tell that *something* had
-	// failed, and blanked the whole column for it. The catch stays for anything that genuinely does
-	// escape — a settings read, a database fault — where a table with no values beats no page.
+	// `variables.enabled` is this section's switch (see `lib/navigation.ts`), so the gate above has
+	// already sent an operator elsewhere when it is off, and `resolveVariables` — which returns null in
+	// that state — is only reached with it on; the null check below is the type's, not a live case. A
+	// row it cannot evaluate is omitted from the map rather than thrown through, so that row alone reads
+	// "—" and every other variable still shows its value. The catch stays for anything that genuinely
+	// does escape — a settings read, a database fault — where a table with no values beats no page.
 	let resolved: ReadonlyMap<string, string> | null = null;
-	if (enabled) {
-		try {
-			const context = await resolveVariables({ deviceId: "", context: PANEL_PRINT_CONTEXT, supplied: {} });
-			resolved = context?.values ?? null;
-		} catch (error) {
-			logger.error("Could not resolve variables for the panel table", error);
-		}
+	try {
+		const context = await resolveVariables({ deviceId: "", context: PANEL_PRINT_CONTEXT, supplied: {} });
+		resolved = context?.values ?? null;
+	} catch (error) {
+		logger.error("Could not resolve variables for the panel table", error);
 	}
 
 	const rows: VariableRowData[] = variables.map((variable) => ({
@@ -78,16 +72,6 @@ export default async function VariablesPage() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			{enabled ? null : (
-				<Alert>
-					<AlertDescription>
-						Variables are switched off, so <span className="font-mono">{"{name}"}</span> prints as plain text rather
-						than being substituted. Turn on <span className="font-mono">Enable variables</span> on the{" "}
-						<Link href="/settings">Settings</Link> tab to have these fill in when a receipt prints.
-					</AlertDescription>
-				</Alert>
-			)}
-
 			{/* The section's own description is in the top bar; what is left here is the one action
 			    this page offers, kept on its own row so it stays put as the table below changes. */}
 			<div className="flex justify-end">

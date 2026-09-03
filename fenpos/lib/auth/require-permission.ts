@@ -7,8 +7,8 @@ import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelUser, requireSession } from "@/lib/auth/require-session";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
-import { NAV_GROUPS } from "@/lib/navigation";
-import { globalAuditSettings } from "@/lib/settings/settings-service";
+import { findNavItem, NAV_GROUPS, type NavItem } from "@/lib/navigation";
+import { booleanSetting, globalAuditSettings, type SettingKey } from "@/lib/settings/settings-service";
 
 /**
  * The page-side half of authorisation.
@@ -81,6 +81,11 @@ export class PermissionDeniedError extends ApiError {
  * wants that. The list form exists for a section that shows two separately governed things, where
  * holding either gives the caller something to read and what they may read is decided further in.
  *
+ * **A section switched off in Settings is refused too**, after the permission check and to the same
+ * page, with the route in the query so the page can say which switch to look for. Checked after
+ * rather than before, so an account that could not open the section anyway is told it lacks
+ * permission rather than told about a setting it may not be allowed to change.
+ *
  * @param permission the permission this page requires, or the permissions any one of which opens it
  * @param route the path being opened, as it appears in `lib/navigation.ts`
  * @returns the signed-in user; never null, and never one who holds none of the permissions
@@ -93,6 +98,10 @@ export async function requirePagePermission(
 
 	if (!(await holdsAny(user, permission))) {
 		redirect("/no-access");
+	}
+
+	if (await sectionSwitchedOff(route)) {
+		redirect(`/no-access?off=${encodeURIComponent(route)}`);
 	}
 
 	const { recordPageViews } = await globalAuditSettings();
@@ -137,12 +146,12 @@ export async function permittedNavHrefs(user: PanelUser): Promise<string[]> {
 
 	for (const group of NAV_GROUPS) {
 		for (const item of group.items) {
-			if (!(await holdsAny(user, item.permission))) {
+			if (!(await holdsAny(user, item.permission)) || !(await featureOn(item))) {
 				continue;
 			}
 			hrefs.push(item.href);
 			for (const child of item.children ?? []) {
-				if (await holdsAny(user, child.permission)) {
+				if ((await holdsAny(user, child.permission)) && (await featureOn(child))) {
 					hrefs.push(child.href);
 				}
 			}
@@ -150,6 +159,34 @@ export async function permittedNavHrefs(user: PanelUser): Promise<string[]> {
 	}
 
 	return hrefs;
+}
+
+/**
+ * The setting that has switched a route's section off, if one has.
+ *
+ * The same reading {@link permittedNavHrefs} makes when deciding what to offer, so a section the
+ * sidebar dropped is one its page refuses, and one the sidebar shows is one its page opens. A route
+ * outside the navigation table, or a section with no switch, is never off.
+ *
+ * @param route the path being opened, as it appears in `lib/navigation.ts`
+ * @returns the key of the setting that is off, or null when the section is available
+ */
+export async function sectionSwitchedOff(route: string): Promise<SettingKey | null> {
+	const item = findNavItem(route);
+	if (!item?.feature) {
+		return null;
+	}
+	return (await booleanSetting(item.feature)) ? null : item.feature;
+}
+
+/**
+ * Whether a section's feature switch, if it has one, is on.
+ *
+ * @param item the section
+ * @returns true when the section has no switch, or its switch is on
+ */
+async function featureOn(item: NavItem): Promise<boolean> {
+	return item.feature === undefined || booleanSetting(item.feature);
 }
 
 /**
