@@ -45,15 +45,15 @@ const SECTIONS = [
  * Common `date-fns` patterns a `DATETIME` variable might carry, and what each prints.
  *
  * Rendered against a fixed Wednesday (2026-08-26) in `en-US`, which is why `cccc` and `EEEE`
- * agree here — see the aside beside this table for when they do not.
+ * agree here, see the aside beside this table for when they do not.
  */
 const DATE_PATTERNS: { pattern: string; example: string }[] = [
 	{ pattern: "yyyy-MM-dd", example: "2026-08-26" },
 	{ pattern: "dd.MM.yyyy", example: "26.08.2026" },
 	{ pattern: "HH:mm", example: "14:05" },
 	{ pattern: "h:mm a", example: "2:05 PM" },
-	{ pattern: "cccc", example: "Wednesday — the standalone day name" },
-	{ pattern: "EEEE", example: "Wednesday — the inflected form in some locales" },
+	{ pattern: "cccc", example: "Wednesday, the standalone day name" },
+	{ pattern: "EEEE", example: "Wednesday, the inflected form in some locales" },
 	{ pattern: "MMMM d", example: "August 26" },
 ];
 
@@ -108,7 +108,7 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{
 		syntax: "&lt;, &amp; and &lbrace;",
 		meaning:
-			"A literal <, & or {. Any other ampersand is literal text; &lbrace; only matters once a variable's braces are in play — see Variables below.",
+			"A literal <, & or {. Any other ampersand is literal text. &lbrace; only matters once a variable's braces are in play, see Variables below.",
 	},
 ];
 
@@ -116,7 +116,7 @@ const TAGS: { syntax: string; meaning: string }[] = [
  * What each symbology will accept, as `<barcode>` enforces it.
  *
  * Keyed by the symbology set itself, so a symbology added to `BarcodeSystem` fails to compile
- * until it is described here — the alternative being a table that quietly goes one row short. The
+ * until it is described here, the alternative being a table that quietly goes one row short. The
  * wording restates `BARCODE_CONTENT_RULES` in `lib/markup/blocks.ts` rather than reading it,
  * because those functions return refusals ("EAN13 requires exactly 13 digits") and a reference
  * reads better stating what is allowed than what is not.
@@ -137,7 +137,7 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
  * The markup reference.
  *
  * A language rather than an API: what goes inside one field of one endpoint's body. So there is no
- * address here and no key — a receipt template is written by someone who may never make the call
+ * address here and no key, a receipt template is written by someone who may never make the call
  * that prints it, and the material they need is the tag table and what each tag costs the paper.
  */
 export default async function MarkupDocsPage() {
@@ -164,24 +164,24 @@ export default async function MarkupDocsPage() {
 									Each element of <Mono>data</Mono> is one line before wrapping. Tags are case-insensitive and nest,
 									except <Mono>&lt;align&gt;</Mono>, <Mono>&lt;wrap&gt;</Mono>, <Mono>&lt;nowrap&gt;</Mono> and{" "}
 									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it. So do the block tags,
-									which additionally admit no tags inside them — see Blocks below.
+									which additionally admit no tags inside them, see Blocks below.
 								</P>
 
 								<P>
 									<Mono>&lt;fill&gt;</Mono> is the exception that proves it. Alignment justifies a whole line, so a
-									label on the left and an amount on the right cannot be two alignments — <Mono>&lt;fill&gt;</Mono> pads
+									label on the left and an amount on the right cannot be two alignments, <Mono>&lt;fill&gt;</Mono> pads
 									the gap between them instead, to whatever the device's width leaves over. It owns nothing, and may
 									appear anywhere on a line and as often as you like.
 								</P>
 
 								<P>
 									Control characters are refused. Markup is the only way to reach printer state, which is what stops a
-									request desynchronising the device — a raw <Mono>ESC</Mono> in your text is an error, not a command.
+									request desynchronising the device, a raw <Mono>ESC</Mono> in your text is an error, not a command.
 								</P>
 
 								<P>
 									Every refusal is like that one: it comes back as a code, with the <Mono>line</Mono> of{" "}
-									<Mono>data</Mono> that caused it and, where the problem is one character, the column — so a template
+									<Mono>data</Mono> that caused it and, where the problem is one character, the column, so a template
 									that will not print says which element to look at rather than that something was wrong somewhere. The
 									codes this page names are listed with the rest, and the body they arrive in described, under{" "}
 									<DocLink href="/docs/api#errors">Errors</DocLink>.
@@ -221,8 +221,8 @@ export default async function MarkupDocsPage() {
 							<Col>
 								<P>
 									<Mono>{"{name}"}</Mono> is replaced by a configured value when the receipt compiles. It follows the
-									same slug shape a device or agent name uses — lowercase letters, digits, dashes and underscores, up to
-									64 characters, starting with a letter or number — so <Mono>{"{phone}"}</Mono> prints whatever this
+									same slug shape a device or agent name uses, lowercase letters, digits, dashes and underscores, up to
+									64 characters, starting with a letter or number, so <Mono>{"{phone}"}</Mono> prints whatever this
 									install's <Mono>phone</Mono> variable currently holds. A name nothing defines is{" "}
 									<ErrorRef code="unknown_variable" />: a typo in a receipt has to be a failure the caller sees, not{" "}
 									<Mono>{"{phne}"}</Mono> printed literally on a customer's copy.
@@ -230,17 +230,17 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									Only a slug-shaped name is a reference. <Mono>{"Table {1 of 4}"}</Mono> prints exactly as written,
-									because a space is not part of that shape — which is what keeps braces usable in ordinary receipt text
+									because a space is not part of that shape, which is what keeps braces usable in ordinary receipt text
 									without an escape. <Mono>&amp;lbrace;</Mono> is the escape for the remaining case: printing the
 									literal characters <Mono>{"{phone}"}</Mono> on an install where <Mono>phone</Mono> really is defined.
 								</P>
 
 								<P>
-									A value is always plain text. A tag written inside one — <Mono>{"<bold>"}</Mono> in a variable's
-									value, say — prints as those visible characters and is never obeyed: the substituted text is inserted
-									as a single span, not fed back through the parser. The same holds for another reference — a value
-									holding <Mono>{"{other}"}</Mono> prints exactly those eight characters. There is no recursion anywhere
-									in this feature, deliberately: a value read once and never re-scanned is what a variable's value being
+									A value is always plain text. A tag written inside one, <Mono>{"<bold>"}</Mono> in a variable's value,
+									say, prints as those visible characters and is never obeyed: the substituted text is inserted as a
+									single span, not fed back through the parser. The same holds for another reference, a value holding{" "}
+									<Mono>{"{other}"}</Mono> prints exactly those eight characters. There is no recursion anywhere in this
+									feature, deliberately: a value read once and never re-scanned is what a variable's value being
 									"returned as-is" in the code actually means, and it is what keeps one variable's printed text from
 									depending on the order another was evaluated in.
 								</P>
@@ -248,14 +248,14 @@ export default async function MarkupDocsPage() {
 								<P>
 									Resolution has three layers, narrowest first: a value the print job itself supplied, then this
 									printer's own override, then the variable's install-wide definition. A variable defined on the panel
-									is <strong>locked by default</strong> — a print request may only replace one whose "Overridable"
-									toggle is on; supplying a value for one that is not is <ErrorRef code="variable_not_overridable" />.
-									Only the middle layer is per-printer, and only a <Mono>STATIC</Mono> variable may carry one: a date's
-									pattern and a printer's own name mean the same thing on every printer, so only a literal value can
-									differ by printer. The markup is the same whoever computed the value — <Mono>{"{return_by}"}</Mono>{" "}
-									looks identical whether it came from a definition here or from the request — but a print request can
-									also send a date's <em>pattern</em> rather than a finished date, and have this install render it in
-									its own zone and locale; see <DocLink href="/docs/api#submitting">Submitting a job</DocLink>.
+									is <strong>locked by default</strong>, a print request may only replace one whose "Overridable" toggle
+									is on. Supplying a value for one that is not is <ErrorRef code="variable_not_overridable" />. Only the
+									middle layer is per-printer, and only a <Mono>STATIC</Mono> variable may carry one: a date's pattern
+									and a printer's own name mean the same thing on every printer, so only a literal value can differ by
+									printer. The markup is the same whoever computed the value, <Mono>{"{return_by}"}</Mono> looks
+									identical whether it came from a definition here or from the request, but a print request can also
+									send a date's <em>pattern</em> rather than a finished date, and have this install render it in its own
+									zone and locale. See <DocLink href="/docs/api#submitting">Submitting a job</DocLink>.
 								</P>
 
 								<P>
@@ -266,16 +266,16 @@ export default async function MarkupDocsPage() {
 									calendar, while <Mono>DAYS</Mono>, <Mono>WEEKS</Mono> and <Mono>MONTHS</Mono> are calendar arithmetic
 									done in that same zone, which is what keeps a return-by date on the same wall-clock time across a
 									daylight-saving change rather than sliding by an hour. <Mono>CONTEXT</Mono> reads a fact about the
-									print itself: the printer's name, its paper width in columns or millimetres, its codepage; the agent's
-									name, hostname, operating system or version; the name of the API key that submitted the job; or this
-									install's own address. Any of them prints as nothing when the print does not know it — a receipt
-									composed on the Tools tab was submitted by no key, and an agent that has never connected has reported
-									no hostname — because an empty span is honest where an invented word like "unknown" would be
+									print itself: the printer's name, its paper width in columns or millimetres or its codepage, the
+									agent's name, hostname, operating system or version, the name of the API key that submitted the job,
+									or this install's own address. Any of them prints as nothing when the print does not know it, a
+									receipt composed on the Tools tab was submitted by no key, and an agent that has never connected has
+									reported no hostname, because an empty span is honest where an invented word like "unknown" would be
 									indistinguishable from a value someone configured.
 								</P>
 
 								<Aside>
-									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree —
+									<Mono>cccc</Mono> and <Mono>EEEE</Mono> both spell out a day's full name, and in English they agree ,
 									both give <Mono>Wednesday</Mono>. They part company in languages that inflect a weekday depending on
 									where it sits in a sentence: <Mono>cccc</Mono> asks for the standalone name, the one a calendar prints
 									on its own, while <Mono>EEEE</Mono> asks for the form used inside a date phrase, which in those
@@ -286,7 +286,7 @@ export default async function MarkupDocsPage() {
 								</Aside>
 
 								<P>
-									<Mono>variables.enabled</Mono>, on the Settings tab, is the switch, and it ships <strong>on</strong> —{" "}
+									<Mono>variables.enabled</Mono>, on the Settings tab, is the switch, and it ships <strong>on</strong>,{" "}
 									{variablesEnabled
 										? "as it is on this install right now"
 										: "though this install has since switched it off, so every brace below prints as plain text"}
@@ -298,13 +298,13 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									At most {maxVariableRefs} <Mono>{"{name}"}</Mono> references are allowed in one element, past which is{" "}
-									<ErrorRef code="too_many_variable_references" /> — a bound on where the expansion happens, rather than
+									<ErrorRef code="too_many_variable_references" />, a bound on where the expansion happens, rather than
 									leaving the printed-lines limit to catch it afterwards.
 								</P>
 
 								<P>
 									An agent's own console does not expand any of this. Variables are resolved here, on the server, before
-									an element ever reaches the wire; the console parses markup with its own separate implementation,
+									an element ever reaches the wire. The console parses markup with its own separate implementation,
 									which has never been taught what <Mono>{"{name}"}</Mono> means. A brace typed there stays literal.
 								</P>
 							</Col>
@@ -377,7 +377,7 @@ export default async function MarkupDocsPage() {
 							<Col>
 								<P>
 									<Mono>&lt;qr&gt;</Mono>, <Mono>&lt;barcode&gt;</Mono> and <Mono>&lt;pdf417&gt;</Mono> enclose the
-									payload of a symbology — a URL, an article number — rather than text. No tag may appear inside one,
+									payload of a symbology, a URL, an article number, rather than text. No tag may appear inside one,
 									since styling data changes nothing about the printed symbol, and nothing else may share the element: a
 									symbol is a block of dots several lines tall, so anything beside it would overflow the line by
 									construction. <Mono>&lt;align&gt;</Mono> still applies, because it justifies the whole line and the
@@ -387,15 +387,15 @@ export default async function MarkupDocsPage() {
 								<P>
 									<Mono>&lt;image&gt;</Mono> is the fourth block, and it names its picture rather than carrying it:
 									between the tags goes either the name of an image stored on the Assets tab or an <Mono>http(s)</Mono>{" "}
-									URL. Both rules above hold — no tag inside it, nothing else on the element.{" "}
-									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width; the argument is a
+									URL. Both rules above hold, no tag inside it, nothing else on the element.{" "}
+									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width. The argument is a
 									percentage, 1–100, defaulting to 100, rather than a number of dots, because one install can have both
 									80mm and 58mm printers behind a single agent and a dot count that fits one overruns the other.
 								</P>
 
 								<P>
 									A stored image is the default and a URL is the escape hatch. Stored images are dithered here, once per
-									paper width, and reach the agent with its device configuration — so a receipt printing one at the
+									paper width, and reach the agent with its device configuration, so a receipt printing one at the
 									paper's full width carries only its name, however many times it repeats. Any other width has to be
 									dithered for that width and carried inside the job, exactly as a URL's dots always are, and a receipt
 									whose images come to more than one job can hold is refused with <ErrorRef code="image_too_large" />.
@@ -403,9 +403,9 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									What an agent holds is bounded: at most {IMAGE_LIMITS.maxSyncedRasters} rasters, one per stored image
-									per distinct paper width behind that agent, taken in name order — and fewer than that when one does
-									not fit the configuration frame or is too tall for the protocol to carry, which a handful of large
-									images reach long before the count does. An image the agent does not hold, for any of those reasons or
+									per distinct paper width behind that agent, taken in name order, and fewer than that when one does not
+									fit the configuration frame or is too tall for the protocol to carry, which a handful of large images
+									reach long before the count does. An image the agent does not hold, for any of those reasons or
 									because it was stored while a job was already in flight, still prints at any width whose dots the job
 									carries. At the paper's full width, the one case whose dots do not travel, it fails at the printer
 									rather than in the response.
@@ -414,8 +414,8 @@ export default async function MarkupDocsPage() {
 								<P>
 									A URL is fetched while the job compiles, which is the cost of naming a live image: an unreachable host
 									fails the print with <ErrorRef code="invalid_tag_argument" /> instead of printing a receipt with a
-									hole in it, and a slow one holds the request up. The fetch is guarded — {schemeClause(allowPlainHttp)}
-									, {seconds(remoteTimeoutMs)} for the whole of it including redirects,{" "}
+									hole in it, and a slow one holds the request up. The fetch is guarded, {schemeClause(allowPlainHttp)},{" "}
+									{seconds(remoteTimeoutMs)} for the whole of it including redirects,{" "}
 									{describeBytes(MAX_REMOTE_IMAGE_BYTES)} of body, and the hostname must resolve to a public address
 									{allowedHostsClause(allowedHosts)}, so a receipt cannot use this server to read something inside your
 									network. {remoteLimitLead(remoteLimit)} <ErrorRef code="too_many_remote_images" />
@@ -432,7 +432,7 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									One name is not an asset at all. <Mono>fenpos</Mono> is the application&apos;s own logo, which ships
-									with the software rather than being stored here — so it cannot be uploaded under that name, and it
+									with the software rather than being stored here, so it cannot be uploaded under that name, and it
 									cannot be deleted out from under the device test page. It is bundled at{" "}
 									{BUNDLED_LOGO_WIDTHS.join(", ")} dots, which is the full width of a 32, 42 or 48 column printer;
 									asking for it at any other width is <ErrorRef code="unbundled_logo_width" />, because the logo is
@@ -441,7 +441,7 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									<Mono>&lt;drawer&gt;</Mono> is the exception. It pulses a solenoid rather than laying down dots, so it
-									costs the paper nothing and may sit beside text — the line that prints the total can open the till.
+									costs the paper nothing and may sit beside text, the line that prints the total can open the till.
 								</P>
 
 								<P>
@@ -469,12 +469,12 @@ export default async function MarkupDocsPage() {
 								</P>
 
 								<Aside>
-									<Mono>maxOutputLines</Mono> counts paper, not elements. A symbol costs the height it really prints —
-									seven lines for a default-size QR code of a short URL, five for any linear barcode — and an image
-									costs the lines its dots cover, rounded up to a whole one, which at the paper's full width is the
-									picture's own proportions applied to the paper: a square logo on 32-column paper is 384 dots each way,
-									or sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of text, and can
-									come back <ErrorRef code="too_many_output_lines" />. A <Mono>&lt;hr&gt;</Mono> costs the one line it
+									<Mono>maxOutputLines</Mono> counts paper, not elements. A symbol costs the height it really prints ,
+									seven lines for a default-size QR code of a short URL, five for any linear barcode, and an image costs
+									the lines its dots cover, rounded up to a whole one, which at the paper's full width is the picture's
+									own proportions applied to the paper: a square logo on 32-column paper is 384 dots each way, or
+									sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of text, and can come
+									back <ErrorRef code="too_many_output_lines" />. A <Mono>&lt;hr&gt;</Mono> costs the one line it
 									prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and <Mono>&lt;drawer&gt;</Mono> cost
 									nothing, since none of them lays dots on the paper as text. The Tools tab shows what a job would spend
 									against the limit before it is sent.

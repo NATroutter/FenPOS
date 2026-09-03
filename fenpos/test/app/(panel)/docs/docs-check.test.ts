@@ -299,13 +299,13 @@ function securitySample(label: string): string {
  */
 describe("the security page's audit:verify samples", () => {
 	it("prints an intact chain exactly as the command does", () => {
-		expect(securitySample("pnpm audit:verify — chain intact")).toBe(
+		expect(securitySample("pnpm audit:verify, chain intact")).toBe(
 			describeVerification({ ok: true, checked: 4218, archived: 3800, live: 418, firstSeq: 1, lastSeq: 4218 }),
 		);
 	});
 
 	it("prints an incomplete chain exactly as the command does", () => {
-		expect(securitySample("pnpm audit:verify — intact as far back as the record goes")).toBe(
+		expect(securitySample("pnpm audit:verify, intact as far back as the record goes")).toBe(
 			describeVerification({
 				ok: "incomplete",
 				checked: 2817,
@@ -319,7 +319,7 @@ describe("the security page's audit:verify samples", () => {
 	});
 
 	it("prints a broken chain exactly as the command does", () => {
-		expect(securitySample("pnpm audit:verify — chain broken")).toBe(
+		expect(securitySample("pnpm audit:verify, chain broken")).toBe(
 			describeVerification({ ok: false, checked: 2090, brokenAt: 2091, reason: "hash-mismatch" }),
 		);
 	});

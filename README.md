@@ -2,7 +2,7 @@
 
 # FenPOS
 
-**Thermal receipt printing for shops and restaurants — where the printers are in different
+**Thermal receipt printing for shops and restaurants, where the printers are in different
 rooms from each other, and from the machine that talks to them.**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/NATroutter/FenPOS/images.yml?branch=master&label=build&style=for-the-badge&logo=github)](https://github.com/NATroutter/FenPOS/actions/workflows/images.yml)
@@ -59,13 +59,13 @@ the printer.
 
 > [!IMPORTANT]
 > **`BETTER_AUTH_SECRET` is required and has no default.** Both compose files below read it from
-> your environment and refuse to start without it — `docker compose` fails immediately with a
+> your environment and refuse to start without it. `docker compose` fails immediately with a
 > message telling you what to set, rather than crash-looping the container. Generate one and
 > export it before the first `up`:
 > ```sh
 > export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 > ```
-> Or put `BETTER_AUTH_SECRET=...` in a `.env` file next to the compose file you're using — Docker
+> Or put `BETTER_AUTH_SECRET=...` in a `.env` file next to the compose file you're using. Docker
 > Compose loads that automatically. Either way, never commit the real value. See
 > [Configuration](#configuration).
 
@@ -95,7 +95,7 @@ Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
 At each site, on the machine the printers are plugged into. Generate a pairing code first in
 the panel under **Agents**.
 
-**[`compose.agent.yaml`](compose.agent.yaml)** — set `FENPOS_SERVER` and `FENPOS_PAIR_CODE`, and
+**[`compose.agent.yaml`](compose.agent.yaml)**: set `FENPOS_SERVER` and `FENPOS_PAIR_CODE`, and
 map your printer under `devices:`.
 
 The container runs as uid 10001 and its directories are bind mounts, so they keep whatever
@@ -111,7 +111,7 @@ docker compose -f compose.agent.yaml up -d
 ```
 
 > [!NOTE]
-> On a Raspberry Pi, Docker warns that it discarded `mem_limit` — Raspberry Pi OS ships with
+> On a Raspberry Pi, Docker warns that it discarded `mem_limit`. Raspberry Pi OS ships with
 > the cgroup memory controller off. The agent still runs, just uncapped. To enforce the
 > limit, append `cgroup_enable=memory cgroup_memory=1` to the single line in
 > `/boot/firmware/cmdline.txt` and reboot.
@@ -123,7 +123,7 @@ docker compose -f compose.agent.yaml up -d
 
 ### 3 · Both on one machine
 
-A single-box install — one shop, printers attached to the same machine that runs the server.
+A single-box install: one shop, printers attached to the same machine that runs the server.
 
 The agent shares the server's network namespace so it can dial `127.0.0.1`. Plain HTTP is
 accepted only to loopback, so `http://fenpos:3000` over a Docker network would be refused. If
@@ -160,20 +160,20 @@ framed, to the log:
 docker compose logs fenpos
 ```
 
-Open the panel — a fresh install redirects `/` straight to `/setup` — enter the key, and fill
+Open the panel (a fresh install redirects `/` straight to `/setup`), enter the key, and fill
 in the name, email and password for the first account. Submitting signs you straight in and
 lands you on the dashboard.
 
 **The key is reissued on every restart** until the install is claimed, and this is deliberate:
 nothing is bound to it, so replacing it costs nothing. An operator who scrolled past the log or
 restarted before claiming just restarts again for a fresh key, and a key someone else glimpsed
-stops working at the same moment. Only the current key's hash is stored — never the plaintext —
+stops working at the same moment. Only the current key's hash is stored, never the plaintext,
 so there is nothing to reprint later the way the password this replaces had to be.
 
 **Setup cannot be reopened once an account exists.** `/setup` then redirects to `/login`, and no
 key is minted or printed on later starts. There is currently **no recovery path** for a lost
 password. In development, `pnpm db:reset` recreates the database from its migrations (see
-**Development** below) and setup runs again — but that discards everything else too, not just
+**Development** below) and setup runs again, but that discards everything else too, not just
 the account, and there is no equivalent for a production install short of clearing its data
 volume by hand. A dedicated `auth:recover` CLI is planned for a later phase but does not exist
 yet.
@@ -201,15 +201,15 @@ pair https://fenpos.example.com AG7K-2M9P-X4TR
 
 Both take the same path through the agent. Once an identity is stored the agent uses it and
 logs that it ignored the variable, so a spent code left in a committed `compose.yaml` is
-harmless — codes are single-use and consumed when redeemed.
+harmless, since codes are single-use and consumed when redeemed.
 
 > [!NOTE]
 > `https` is required for anything but loopback. The reply to a pairing request carries the
 > agent's credential, and over plain HTTP anyone on the path can read it. There is no flag to
 > turn this off.
 
-Once paired, add a printer under **Devices** — the serial port is chosen from a list the agent
-scans, not typed — and print a test page from its card.
+Once paired, add a printer under **Devices** (the serial port is chosen from a list the agent
+scans, not typed) and print a test page from its card.
 
 ---
 
@@ -243,7 +243,7 @@ curl -X POST https://fenpos.example.com/api/v1/print/kitchen/receipt-printer \
 The status is `202`: the job is queued, and the paper has not moved yet.
 
 `<fill>` pads to the paper's width, so the amounts sit at the right margin on a 42-column and a
-32-column printer alike — which hand-counted spaces cannot do.
+32-column printer alike, which hand-counted spaces cannot do.
 
 **Markup:** `bold` · `underline` · `invert` · `size` · `font` · `align` · `wrap` · `nowrap` ·
 `fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut`
@@ -253,7 +253,7 @@ The status is `202`: the job is queued, and the paper has not moved yet.
 
 A key without a grant for the device gets `404` rather than `403`, so the endpoint does not
 confirm that a device exists to someone who cannot use it. Raw ESC/POS writes need `devices:raw`
-**and** the install's `Allow raw API writes` setting, which ships off — the permission alone grants
+**and** the install's `Allow raw API writes` setting, which ships off. The permission alone grants
 nothing until an administrator turns it on.
 
 The **Docs** tab carries the full reference, generated from the running install.
@@ -267,8 +267,8 @@ The **Docs** tab carries the full reference, generated from the running install.
 | Variable | Default | What it does |
 |---|---|---|
 | `DATABASE_URL` | `file:/app/data/fenpos.db` | SQLite file. Must point at a mounted volume. |
-| `BETTER_AUTH_SECRET` | — **(required)** | Signs session cookies and tokens. No default and no generated fallback — the server refuses to start without it, and the bundled compose files refuse even earlier, at `docker compose up`, before a container is created. Generate one with `openssl rand -base64 32` and keep it stable: changing it invalidates every existing session and signs everyone out at once. |
-| `BETTER_AUTH_URL` | derived from the request | Absolute origin the panel is reached on, e.g. `https://pos.example.com`. Only needed behind a proxy that rewrites the host — a wrong value makes sign-in silently fail to set its cookie. |
+| `BETTER_AUTH_SECRET` | none **(required)** | Signs session cookies and tokens. No default and no generated fallback: the server refuses to start without it, and the bundled compose files refuse even earlier, at `docker compose up`, before a container is created. Generate one with `openssl rand -base64 32` and keep it stable: changing it invalidates every existing session and signs everyone out at once. |
+| `BETTER_AUTH_URL` | derived from the request | Absolute origin the panel is reached on, e.g. `https://pos.example.com`. Only needed behind a proxy that rewrites the host. A wrong value makes sign-in silently fail to set its cookie. |
 | `PORT` | `3000` | Panel, print API and agent link share it. |
 | `FENPOS_HOST` | `0.0.0.0` | Interface to bind. Rarely changed. |
 | `TZ` | UTC | Job and log timestamps are user-facing. |
@@ -277,12 +277,12 @@ The **Docs** tab carries the full reference, generated from the running install.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `FENPOS_SERVER` | — | Server address. `https` unless loopback. |
-| `FENPOS_PAIR_CODE` | — | Single-use pairing code. Read only when no identity is stored. |
+| `FENPOS_SERVER` | none | Server address. `https` unless loopback. |
+| `FENPOS_PAIR_CODE` | none | Single-use pairing code. Read only when no identity is stored. |
 | `TZ` | UTC | Job timestamps are user-facing. |
 | `FENPOS_DEBUG` | false | Verbose logging: a stack trace on every error, each link attempt and frame, and each HTTP request with the status it got. For when the log says what failed but not why. |
 
-Everything else — the public address, limits, retention, per-printer settings — lives in the
+Everything else (the public address, limits, retention, per-printer settings) lives in the
 panel under **Settings** and **Devices**, not in environment variables. The public address
 agents dial is under **Settings → General**: leave it empty to derive the address from the
 request that reached the panel, or set it explicitly when the panel is reached on a different
@@ -294,9 +294,9 @@ address than agents should use.
 
 Back up the server's `data/` volume. It holds the agents and their credentials, every device,
 the API keys and the hashed account credential. `BETTER_AUTH_SECRET` lives outside it, in your
-own environment configuration, not in the volume — back it up too, since a lost or changed
+own environment configuration, not in the volume. Back it up too, since a lost or changed
 secret signs every session out at once even though the account itself is unaffected (the
-password hash does not depend on it). The agent's `data/` holds only its identity; if you lose
+password hash does not depend on it). The agent's `data/` holds only its identity. If you lose
 it, unpair and pair again with a fresh code.
 
 Upgrades apply their own migrations at container start:
@@ -311,7 +311,7 @@ or as tightly as you want.
 If **Settings → Print limits → Printed lines per job** was ever set above 1000, an upgrade past
 this release silently reverts it to its default: the setting's cap now derives from the same bound
 the dispatch frame enforces, and a stored value above the new cap is treated the same as any other
-out-of-range value — ignored rather than clamped. Check that setting after upgrading if you had
+out-of-range value, ignored rather than clamped. Check that setting after upgrading if you had
 raised it.
 
 ---
@@ -365,8 +365,8 @@ mvn package
 
 | Command | What it does |
 |---|---|
-| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account — the next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but there is no lighter-weight way to do it: there is currently no command that resets only the credential and leaves agents, devices, keys and history alone. |
-| `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone; run this only after changing the logo or the widths, and commit what it produces. |
+| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account. The next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but there is no lighter-weight way to do it: there is currently no command that resets only the credential and leaves agents, devices, keys and history alone. |
+| `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone. Run this only after changing the logo or the widths, and commit what it produces. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 
 If a page in `pnpm dev` renders but never becomes interactive (dead buttons, live values stuck

@@ -20,7 +20,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # uid 10001 owns the data inside the container; a bind mount keeps the host owner.
+      # uid 10001 owns the data inside the container. A bind mount keeps the host owner.
       #   mkdir -p server-data agent-data agent-logs
       #   sudo chown -R 10001:10001 server-data agent-data agent-logs
       - ./server-data:/app/data
@@ -28,9 +28,10 @@ services:
       # Required, no default: signs session cookies and tokens. Generate with:
       #   openssl rand -base64 32
       # Set it in the shell that runs `docker compose`, or in a .env file next to this one
-      # (docker compose loads that automatically) — never commit the real value. Changing it
-      # signs everyone out; it is not stored in the server-data/ volume above.
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?not set - generate one with 'openssl rand -base64 32' and export it before running compose}"
+      # (docker compose loads that automatically). Never commit the real value. Changing it
+      # signs everyone out. It is not stored in the server-data/ volume above.
+      BETTER_AUTH_SECRET: "GENERATE_NEW_SECRET"
+      BETTER_AUTH_URL: "https://fenpos.example.com"
       TZ: "Europe/Helsinki"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]

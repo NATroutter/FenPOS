@@ -797,7 +797,7 @@ export function describeVerification(result: ChainVerification): string {
 				`(${result.archived} from archives, ${result.live} live).`,
 			"",
 			`Events before seq ${result.verifiedFrom} were removed by retention before archiving was in use.`,
-			"They cannot be verified, and nothing here suggests they were altered — they are simply gone.",
+			"They cannot be verified, and nothing here suggests they were altered. They are simply gone.",
 		].join("\n");
 	}
 	if (result.ok === true) {

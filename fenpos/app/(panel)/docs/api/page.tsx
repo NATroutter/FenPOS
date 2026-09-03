@@ -119,11 +119,11 @@ const SECTIONS = [
 /**
  * The permissions an endpoint on this API actually checks.
  *
- * `PERMISSIONS` is the whole vocabulary; this is the subset of it with an endpoint behind it today.
- * A permission can enter that vocabulary before the endpoint that checks it exists — device, status,
- * asset and raw-write grants each did, and each remained an exception — a capability the panel had
- * and the API did not expose — until the endpoints documented below closed the gap for it, raw
- * writes last — so this list can run behind `PERMISSIONS` without either one being wrong. Named
+ * `PERMISSIONS` is the whole vocabulary. This is the subset of it with an endpoint behind it today.
+ * A permission can enter that vocabulary before the endpoint that checks it exists, device, status,
+ * asset and raw-write grants each did, and each remained an exception, a capability the panel had
+ * and the API did not expose, until the endpoints documented below closed the gap for it, raw
+ * writes last, so this list can run behind `PERMISSIONS` without either one being wrong. Named
  * here rather than derived, because nothing in the code registers "which permissions a route
  * requires"; the test beside this page reads the routes and fails if this list stops matching them.
  */
@@ -143,7 +143,7 @@ const ENFORCED: readonly Permission[] = [
  * {@link ENFORCED} as a readable list inside a sentence.
  *
  * Rendered from the constant rather than typed into the prose, so the paragraph cannot name a
- * permission the constant above it does not — which is the whole failure this fix is about.
+ * permission the constant above it does not, which is the whole failure this fix is about.
  */
 function EnforcedList() {
 	return (
@@ -168,7 +168,7 @@ function EnforcedList() {
  *
  * **Laid out for someone whose request is failing right now.** The opening paragraph carries the
  * address and points at Authentication, so the two facts every call needs are settled before any
- * section is read; the contents rail exists so "Errors" is one click away rather than a scroll;
+ * section is read. The contents rail exists so "Errors" is one click away rather than a scroll;
  * and each explanation sits beside the call, table or list it describes rather than above it.
  */
 export default async function ApiDocsPage() {
@@ -190,7 +190,7 @@ export default async function ApiDocsPage() {
 	return (
 		// One grid for the whole page, so the opening card is a column-mate of the sections rather
 		// than a band above them. Outside it, the card stretched under the contents rail and its
-		// right edge sat 174px past every section below — the kind of misalignment that reads as a
+		// right edge sat 174px past every section below, the kind of misalignment that reads as a
 		// mistake even when nobody can say what is wrong.
 		<div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1fr)_210px] xl:items-start">
 			<div className="flex min-w-0 flex-col gap-3">
@@ -223,7 +223,7 @@ export default async function ApiDocsPage() {
 					</div>
 
 					{/* Held to a readable measure. These paragraphs used to sit outside the page's two-column
-				    grid, which is the one place nothing constrained their width — so on a desktop window
+				    grid, which is the one place nothing constrained their width, so on a desktop window
 				    they ran to about a hundred and eighty characters a line, the exact thing `P` exists
 				    to prevent for the prose inside the sections. */}
 					<div className="flex max-w-[82ch] flex-col gap-3 px-5 py-4 text-[12.5px] leading-[1.65]">
@@ -258,34 +258,34 @@ export default async function ApiDocsPage() {
 							<P>
 								Every request carries <Mono>Authorization: Bearer fpk_…</Mono>, where the token is a key created on the{" "}
 								<Mono>API keys</Mono> tab. A key is shown once, at the moment it is created, and stored here only as a
-								hash — so a lost key is replaced rather than recovered, and this panel cannot tell you what an existing
+								hash, so a lost key is replaced rather than recovered, and this panel cannot tell you what an existing
 								one is.
 							</P>
 
 							<P>
-								A key does nothing until it is granted a permission — a device or print grant also needs at least one
+								A key does nothing until it is granted a permission, a device or print grant also needs at least one
 								printer, but the asset grants are install-wide and need no printer to do anything.
 							</P>
 
 							<P>
-								<EnforcedList /> gate an endpoint today — not the full set of permissions this panel can grant, but
-								every one an endpoint currently checks. A permission can be added ahead of its endpoint: the asset
-								grants were, until the assets endpoint below closed the gap for <Mono>assets:read</Mono> and{" "}
-								<Mono>assets:write</Mono>. Whatever appears in that list unlocks a request; anything granted here but
+								<EnforcedList /> gate an endpoint today, not the full set of permissions this panel can grant, but every
+								one an endpoint currently checks. A permission can be added ahead of its endpoint: the asset grants
+								were, until the assets endpoint below closed the gap for <Mono>assets:read</Mono> and{" "}
+								<Mono>assets:write</Mono>. Whatever appears in that list unlocks a request. Anything granted here but
 								missing from it is waiting on an endpoint of its own.
 							</P>
 
 							<P>
 								<Mono>devices:raw</Mono> is the one grant in that list that is not enough on its own. It hands bytes
 								straight to a printer, bypassing every content check this API applies elsewhere, so the install has to
-								allow raw writes as well — a switch on the Settings tab that ships off. Until an administrator turns it
+								allow raw writes as well, a switch on the Settings tab that ships off. Until an administrator turns it
 								on, a key holding the permission can do nothing with it and every caller gets the same{" "}
 								<ErrorRef code="raw_writes_disabled" />, whatever printers they are granted. Writing raw bytes, below,
 								is the endpoint it gates.
 							</P>
 
 							<Aside>
-								A key addressing a printer it has no grant for gets <ErrorRef code="unknown_device" /> — the same answer
+								A key addressing a printer it has no grant for gets <ErrorRef code="unknown_device" />, the same answer
 								as a printer that does not exist. That is intentional: distinguishing the two would let a caller
 								enumerate every printer in the install by probing names.
 							</Aside>
@@ -294,7 +294,7 @@ export default async function ApiDocsPage() {
 								Listing devices, reading one, status, listing jobs, listing assets and previewing a receipt are
 								throttled per key by <Mono>api.readsPerMinute</Mono>, a limit an operator sets on the Settings tab. A
 								key over budget gets <ErrorRef code="rate_limited" /> carrying <Mono>retryAfterSeconds</Mono> in the
-								body — there is no <Mono>Retry-After</Mono> header, so the wait lives in the same JSON envelope every
+								body, there is no <Mono>Retry-After</Mono> header, so the wait lives in the same JSON envelope every
 								other refusal uses rather than a second place to look. Submitting a job is deliberately not counted
 								here: a receipt already costs a compile and a device round trip, and throttling a till is an operator's
 								decision rather than a default this API makes for them. Previewing one carries only the compile, with no
@@ -302,16 +302,16 @@ export default async function ApiDocsPage() {
 							</P>
 
 							<P>
-								Every request to a keyed endpoint here leaves one line on the panel's <strong>Logs</strong> tab —
+								Every request to a keyed endpoint here leaves one line on the panel's <strong>Logs</strong> tab ,
 								returned, refused and failed alike, with the one exception the setting below carves out. The level is
 								the outcome: <Mono>INFO</Mono> for a request that returned, and <Mono>WARN</Mono> for one an access
-								control refused — <strong>every</strong> <Status>401</Status>, <Status>403</Status> and{" "}
+								control refused, <strong>every</strong> <Status>401</Status>, <Status>403</Status> and{" "}
 								<Status>429</Status>, which is a missing or unusable key, a permission the key does not hold,{" "}
 								<ErrorRef code="raw_writes_disabled" /> and <ErrorRef code="rate_limited" /> alike, plus{" "}
 								<ErrorRef code="unknown_device" /> and <ErrorRef code="unknown_job" />, which are refusals wearing a
 								404's clothes. <Mono>ERROR</Mono> is everything else. The line is attributed to the key that made the
-								request — a request refused before its key was identified has none to name — and carries that key's{" "}
-								<em>name</em> in its own text, so it still says who once the key is deleted; the Logs tab filters by
+								request, a request refused before its key was identified has none to name, and carries that key's{" "}
+								<em>name</em> in its own text, so it still says who once the key is deleted. The Logs tab filters by
 								key.
 							</P>
 
@@ -327,22 +327,21 @@ export default async function ApiDocsPage() {
 								<Mono>logs.recordApiReads</Mono>, on the Settings tab, ships <strong>off</strong> and governs exactly
 								one thing: whether a <strong>successful</strong> read is kept. A till polling status once a second
 								writes 86,400 lines a day that say nothing. A read that was <strong>refused</strong> is recorded
-								whatever it is set to, and anything that changes something — a print, a cancel, a device action, an
-								asset write, a raw write — is recorded either way. What counts as a read is what the endpoint does
-								rather than which method it takes: previewing a receipt is a <Mono>POST</Mono> and is a read.
+								whatever it is set to, and anything that changes something, a print, a cancel, a device action, an asset
+								write, a raw write, is recorded either way. What counts as a read is what the endpoint does rather than
+								which method it takes: previewing a receipt is a <Mono>POST</Mono> and is a read.
 							</P>
 
 							<P>
-								A request that never gets past authentication is recorded like every other one — a <Status>401</Status>{" "}
+								A request that never gets past authentication is recorded like every other one, a <Status>401</Status>{" "}
 								at <Mono>WARN</Mono>, attributed to <strong>nobody</strong>, because there is no key to name. Nothing
 								rate-limits those: <Mono>api.readsPerMinute</Mono> is charged against a key, and a request that
 								presented none never reaches the check. So an unauthenticated caller can write one row per request, and
-								only time removes them — log retention is by age with no row cap, so a flood evicts nothing that was
+								only time removes them, log retention is by age with no row cap, so a flood evicts nothing that was
 								already there. Those rows leave the live database after <Mono>logs.retentionDays</Mono>, and while{" "}
 								<Mono>logs.archiveEnabled</Mono> is on they are then compressed into that month's archive and kept for{" "}
-								<Mono>logs.archiveRetentionDays</Mono> — a year by default, on the volume the audit record's own
-								archives sit on. An install reachable from the internet should set those retention windows with that in
-								mind.
+								<Mono>logs.archiveRetentionDays</Mono>, a year by default, on the volume the audit record's own archives
+								sit on. An install reachable from the internet should set those retention windows with that in mind.
 							</P>
 
 							<Aside>
@@ -381,19 +380,19 @@ export default async function ApiDocsPage() {
 
 							<Aside>
 								A key that could register its own callback could redirect another integrator's notifications somewhere
-								else if it ever leaked — the URL and secret live with the operator who grants the key, not with the key
+								else if it ever leaked, the URL and secret live with the operator who grants the key, not with the key
 								itself.
 							</Aside>
 
 							<P>
-								One delivery is queued for every job that reaches a terminal state — <Mono>COMPLETED</Mono>,{" "}
-								<Mono>FAILED</Mono> or <Mono>CANCELLED</Mono> — for a key with an enabled subscription. Exactly one: a
+								One delivery is queued for every job that reaches a terminal state, <Mono>COMPLETED</Mono>,{" "}
+								<Mono>FAILED</Mono> or <Mono>CANCELLED</Mono>, for a key with an enabled subscription. Exactly one: a
 								job reported settled twice, e.g. by an agent reconnecting, still queues a single delivery for it.
 							</P>
 
 							<P>
-								The payload is a signed <Mono>POST</Mono> of JSON, frozen at the moment the job settled — a retry
-								minutes later still describes the job as it was then, not whatever it might read now.
+								The payload is a signed <Mono>POST</Mono> of JSON, frozen at the moment the job settled, a retry minutes
+								later still describes the job as it was then, not whatever it might read now.
 							</P>
 
 							<P>
@@ -402,7 +401,7 @@ export default async function ApiDocsPage() {
 								<Mono>
 									${"{"}t{"}"}.${"{"}body{"}"}
 								</Mono>{" "}
-								— the timestamp, a literal dot, then the request body exactly as sent. Verify by recomputing that digest
+								the timestamp, a literal dot, then the request body exactly as sent. Verify by recomputing that digest
 								with the secret, comparing it to <Mono>v1</Mono> in constant time, and rejecting a <Mono>t</Mono> too
 								far from the receiver's own clock. The timestamp is part of the signed material rather than merely sent
 								alongside it, deliberately: a delivery captured once cannot be replayed later, because replaying it
@@ -411,7 +410,7 @@ export default async function ApiDocsPage() {
 
 							<P>
 								A <Mono>2xx</Mono> settles the delivery. Anything else is retried with exponential backoff, doubling
-								each time, up to <Mono>webhooks.maxAttempts</Mono> — except a <Mono>4xx</Mono> other than{" "}
+								each time, up to <Mono>webhooks.maxAttempts</Mono>, except a <Mono>4xx</Mono> other than{" "}
 								<Status>408</Status> or <Status>429</Status>, which is given up on immediately, since a target rejecting
 								the shape of a delivery will reject the same bytes again.
 							</P>
@@ -419,7 +418,7 @@ export default async function ApiDocsPage() {
 							<Aside>
 								Be idempotent on <Mono>jobId</Mono>. A delivery whose <Mono>2xx</Mono> never made it back to this server
 								is retried even though the receiver already acted on it, so the same notification can arrive more than
-								once — one settled job queues exactly one delivery, not one guaranteed-once request.
+								once, one settled job queues exactly one delivery, not one guaranteed-once request.
 							</Aside>
 						</Col>
 
@@ -478,7 +477,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								The status groups codes by what you have to do about them, and is a summary of the code rather than a
-								second contract beside it. A <Status>400</Status> means the request could not be read — the envelope is
+								second contract beside it. A <Status>400</Status> means the request could not be read, the envelope is
 								wrong, nothing was interpreted as a receipt, and nothing in that group carries a position because there
 								is none to name. A <Status>422</Status> means the request was read and the receipt it describes cannot
 								be printed: those are the codes that carry a <Mono>line</Mono>, and you fix the markup rather than the
@@ -488,19 +487,19 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								Most failures are settled before the response. A job can still fail after its <Status>202</Status> — the
-								agent re-checks every dispatch against its own device set and renders it itself — and when one does, the
+								Most failures are settled before the response. A job can still fail after its <Status>202</Status>, the
+								agent re-checks every dispatch against its own device set and renders it itself, and when one does, the
 								reason reaches you the same way as anything else here: a code in <Mono>error</Mono>, with{" "}
 								<Mono>errorMessage</Mono> beside it, on the job's own <Mono>GET</Mono>. That is what makes these codes
-								worth branching on. An image the agent was never sent is one such reason; see{" "}
+								worth branching on. An image the agent was never sent is one such reason. See{" "}
 								<DocLink href="/docs/markup#blocks">Blocks</DocLink>.
 							</P>
 						</Col>
 
 						<Col>
 							{/* The status is read from the registry rather than written here. It was written here
-								    once, and said 422 while the table directly below it — which has always been
-								    generated — said 400. An example that contradicts the table beside it is worse than
+								    once, and said 422 while the table directly below it, which has always been
+								    generated, said 400. An example that contradicts the table beside it is worse than
 								    no example. */}
 							<CodeBlock label={`${API_ERROR_STATUS.unsupported_character} Unprocessable Content`}>{`{
   "error": "unsupported_character",
@@ -563,15 +562,15 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								The other endpoint on this API that takes no key, alongside <Mono>/api/health</Mono> below. A spec
-								describes the shape of the API rather than the contents of this install — it names no agent, device, job
-								or asset — so a generator reading it should not need a credential to do so. One field is an exception:{" "}
+								describes the shape of the API rather than the contents of this install, it names no agent, device, job
+								or asset, so a generator reading it should not need a credential to do so. One field is an exception:{" "}
 								<Mono>servers[0].url</Mono> is this install's own address, configured or inferred from the request, so
 								an unauthenticated caller does learn that much.
 							</P>
 
 							<P>
 								<Mono>components.schemas.Error</Mono> is the same envelope described in Errors above, and every
-								enumerated value in the document — job statuses, connection states, device actions, permission ids — is
+								enumerated value in the document, job statuses, connection states, device actions, permission ids, is
 								the closed set this server actually uses, not a hand-copied guess of it.
 							</P>
 						</Col>
@@ -592,7 +591,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								A <Status>202</Status> means the job was compiled, recorded and handed to the agent. It has not printed
-								yet — the response carries the job id to follow it with.
+								yet, the response carries the job id to follow it with.
 							</P>
 
 							<P>
@@ -603,14 +602,14 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								<Mono>variables</Mono> supplies values for this job's own <Mono>{"{name}"}</Mono> references — see{" "}
+								<Mono>variables</Mono> supplies values for this job's own <Mono>{"{name}"}</Mono> references, see{" "}
 								<DocLink href="/docs/markup#variables">Variables</DocLink> for the language and the three layers a value
 								can come from. Every name must be slug-shaped, or the whole request is{" "}
 								<ErrorRef code="invalid_variable_name" />; a value over the install's configured length is{" "}
 								<ErrorRef code="variable_too_long" />, and one holding a control character is{" "}
 								<ErrorRef code="invalid_variable_value" />. Those three are checked before anything is written, exactly
-								like any other malformed field. An install that does not accept values from a request at all —{" "}
-								<Mono>variables.allowRequestValues</Mono>, on the Settings tab — refuses the field outright with{" "}
+								like any other malformed field. An install that does not accept values from a request at all,{" "}
+								<Mono>variables.allowRequestValues</Mono>, on the Settings tab, refuses the field outright with{" "}
 								<ErrorRef code="variables_not_allowed" />, past <Mono>variables.maxPerRequest</Mono> names is{" "}
 								<ErrorRef code="too_many_variables" />, and a name that is defined here and not marked overridable is{" "}
 								<ErrorRef code="variable_not_overridable" />.
@@ -618,53 +617,53 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								A value is normally a string, substituted exactly as sent. It may instead be an object describing a date
-								for <em>this</em> server to compute — anything else, an array or a number among them, is{" "}
+								for <em>this</em> server to compute, anything else, an array or a number among them, is{" "}
 								<ErrorRef code="invalid_type" />:{" "}
 								<Mono>{'{ "pattern": "dd.MM.yyyy", "offset": { "amount": 14, "unit": "DAYS" } }'}</Mono>. The pattern
-								and the offset are yours; the <strong>time zone and locale are this install's</strong>, and there is no
-								way to send your own. That is the point of it — a caller in another zone, or one that formats{" "}
+								and the offset are yours. The <strong>time zone and locale are this install's</strong>, and there is no
+								way to send your own. That is the point of it, a caller in another zone, or one that formats{" "}
 								<Mono>MM/dd</Mono>, would otherwise print a date that disagrees with every other date on the same
 								receipt. Omit <Mono>offset</Mono> for the instant the job compiles at; <Mono>MINUTES</Mono> and{" "}
 								<Mono>HOURS</Mono> are elapsed real time while <Mono>DAYS</Mono>, <Mono>WEEKS</Mono> and{" "}
 								<Mono>MONTHS</Mono> are calendar arithmetic done in the install's zone, exactly as for a variable
 								defined in the panel. An object whose shape or bounds are wrong, or whose pattern this server cannot
-								format, is <ErrorRef code="invalid_variable" /> — and it refuses that request only. What it renders to
-								is measured against the same <Mono>variables.maxValueChars</Mono> a string value obeys, so a long enough
+								format, is <ErrorRef code="invalid_variable" />, and it refuses that request only. What it renders to is
+								measured against the same <Mono>variables.maxValueChars</Mono> a string value obeys, so a long enough
 								result is still <ErrorRef code="variable_too_long" />.
 							</P>
 
 							<Aside>
 								<ErrorRef code="unknown_variable" /> and <ErrorRef code="too_many_variable_references" /> are different
-								from the ones above: they come from compiling the markup itself rather than from reading the field, so —
-								like <Mono>unknown_tag</Mono> or <Mono>unclosed_tag</Mono> — they are only found once this job's row
-								already exists. The response is exactly the same synchronous refusal either way; the only difference is
+								from the ones above: they come from compiling the markup itself rather than from reading the field, so ,
+								like <Mono>unknown_tag</Mono> or <Mono>unclosed_tag</Mono>, they are only found once this job's row
+								already exists. The response is exactly the same synchronous refusal either way. The only difference is
 								that a receipt naming an undefined <Mono>{"{typo}"}</Mono> leaves a <Mono>FAILED</Mono> row behind
 								rather than never having been recorded at all, which is what decides whether an{" "}
-								<Mono>Idempotency-Key</Mono> stays free for a corrected retry — see below.
+								<Mono>Idempotency-Key</Mono> stays free for a corrected retry, see below.
 							</Aside>
 
 							<P>
 								An optional <Mono>Idempotency-Key</Mono> header makes a retry safe. Omit it and nothing here changes.
-								Send it, and the first request records the key against the job it creates; a retry presenting the{" "}
+								Send it, and the first request records the key against the job it creates. A retry presenting the{" "}
 								<strong>same</strong> key, the same device and a byte-identical body gets back the original{" "}
-								<Status>202</Status> — with an <Mono>Idempotent-Replay: true</Mono> header — and prints nothing a second
+								<Status>202</Status>, with an <Mono>Idempotent-Replay: true</Mono> header, and prints nothing a second
 								time. The same key with a different body, or the same key and body aimed at a different device, is
 								refused as <ErrorRef code="idempotency_conflict" />: reusing a key for two different receipts is a
 								caller error, not something to silently paper over.
 							</P>
 
 							<Aside>
-								This server does not currently sweep the jobs table — <Mono>jobs.retentionMinutes</Mono> and{" "}
+								This server does not currently sweep the jobs table, <Mono>jobs.retentionMinutes</Mono> and{" "}
 								<Mono>jobs.maxRecords</Mono> bound only what is pushed to each agent's own local job store, not the
 								history kept here. In practice that means a key is retained forever: it is never freed on its own. Use
-								an identifier that is unique for all time — a UUID, not an order number or another value that could
-								recur — and never reuse a key across two different receipts.
+								an identifier that is unique for all time, a UUID, not an order number or another value that could
+								recur, and never reuse a key across two different receipts.
 							</Aside>
 
 							<P>
 								Only a request that actually reached <Status>202</Status> <Mono>QUEUED</Mono> is replayable. One that
 								failed validation before any job existed, or was accepted and then failed to compile or reach the agent,
-								never recorded a key — nothing was queued to record it against, so the key is free and a corrected retry
+								never recorded a key, nothing was queued to record it against, so the key is free and a corrected retry
 								is just a new request.
 							</P>
 						</Col>
@@ -698,13 +697,13 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 { "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
 
-							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict — different body, same key`}>{`{
+							<CodeBlock label={`${API_ERROR_STATUS.idempotency_conflict} Conflict: different body, same key`}>{`{
   "jobId": "clx…",
   "error": "idempotency_conflict",
   "message": "Idempotency-Key '5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d' was already used with a different request body. Use a new key for a different receipt."
 }`}</CodeBlock>
 
-							<CodeBlock label="Request — supplying a variable">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+							<CodeBlock label="Request: supplying a variable">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -712,7 +711,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
     "variables": { "order_id": "1041" }
   }'`}</CodeBlock>
 
-							<CodeBlock label="Request — a date this server computes">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
+							<CodeBlock label="Request: a date this server computes">{`curl -X POST ${base}${API_BASE}/print/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -737,15 +736,15 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								Same body a submit takes — <Mono>data</Mono>, an optional <Mono>linefeed</Mono> and an optional{" "}
-								<Mono>variables</Mono> object — compiled against the named device and reported back rather than sent
+								Same body a submit takes, <Mono>data</Mono>, an optional <Mono>linefeed</Mono> and an optional{" "}
+								<Mono>variables</Mono> object, compiled against the named device and reported back rather than sent
 								anywhere. No job is created, nothing is queued, and the agent is never contacted: this works even while
 								the agent is offline, since only the device's stored configuration is needed.
 							</P>
 
 							<P>
 								Always <Status>200</Status>. Markup that does not compile comes back with <Mono>lines</Mono>{" "}
-								<Mono>null</Mono> and the fault in <Mono>errors</Mono> — the request succeeded, and "it would not print"
+								<Mono>null</Mono> and the fault in <Mono>errors</Mono>, the request succeeded, and "it would not print"
 								is a complete answer to what was asked. Only the credential, the grant and the envelope can produce a
 								non-2xx here. There is no job row for a variable error to settle either way, unlike a submit:{" "}
 								<ErrorRef code="unknown_variable" /> here is simply one more entry in <Mono>errors</Mono>.
@@ -753,7 +752,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								A fault's own <Mono>status</Mono>, seen inside a <Status>200</Status> response, is not the status of
-								that response — it is the status <Mono>{`POST ${API_BASE}/print/{agent}/{device}`}</Mono> would have
+								that response, it is the status <Mono>{`POST ${API_BASE}/print/{agent}/{device}`}</Mono> would have
 								answered with had this same body been submitted rather than previewed.
 							</P>
 
@@ -789,7 +788,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   "errors": []
 }`}</CodeBlock>
 
-							<CodeBlock label="200 OK — markup that does not compile">{`{
+							<CodeBlock label="200 OK: markup that does not compile">{`{
   "agent": "${agentName}",
   "device": "${deviceName}",
   "columns": 42,
@@ -830,7 +829,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								Needs <Mono>jobs:read</Mono>. The caller's own job history, newest first — what recovers a{" "}
+								Needs <Mono>jobs:read</Mono>. The caller's own job history, newest first, what recovers a{" "}
 								<Mono>jobId</Mono> a dropped connection lost: a submit that never returned its <Status>202</Status>{" "}
 								still left a job behind, and this is how a caller finds it again without ever learning about anyone
 								else's.
@@ -839,14 +838,14 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							<P>
 								Cursor-paginated with <Mono>limit</Mono> and <Mono>cursor</Mono>. A response carries{" "}
 								<Mono>nextCursor</Mono>, which is <Mono>null</Mono> on the last page and otherwise the value to send
-								back as <Mono>cursor</Mono> for the next one — never an offset, so a job removed between two requests
+								back as <Mono>cursor</Mono> for the next one, never an offset, so a job removed between two requests
 								(its device or agent deleted, say) cannot shift the page boundary under a caller still walking it.
 							</P>
 
 							<P>
 								<Mono>status</Mono>, <Mono>agent</Mono> and <Mono>device</Mono> narrow by name; <Mono>since</Mono> (an
 								ISO 8601 timestamp) narrows to jobs submitted at or after it. Every filter composes with the key's own
-								scope rather than replacing it — a filter can only narrow what a key already sees, never widen it.
+								scope rather than replacing it, a filter can only narrow what a key already sees, never widen it.
 							</P>
 
 							<P>
@@ -886,7 +885,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								Needs <Mono>devices:read</Mono>. Returns every device this key is granted —{" "}
+								Needs <Mono>devices:read</Mono>. Returns every device this key is granted,{" "}
 								<strong>the list is the key's grants, not the install</strong>: a key confined to one site sees that
 								site's printers and learns nothing about the rest.
 							</P>
@@ -898,7 +897,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								<Mono>observed</Mono> is <Mono>null</Mono> until the agent has reported at least once since this server
-								started; the rest of the body is this server's own configuration and is always present.
+								started. The rest of the body is this server's own configuration and is always present.
 							</P>
 						</Col>
 
@@ -928,7 +927,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								Needs <Mono>devices:read</Mono>. One device, in the same shape as an entry in the list above — bare
+								Needs <Mono>devices:read</Mono>. One device, in the same shape as an entry in the list above, bare
 								rather than wrapped, since the path already names which one.
 							</P>
 
@@ -977,7 +976,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								There is no <Mono>test</Mono> action. Printing a diagnostic page is a print, and belongs behind{" "}
-								<Mono>print</Mono> — a key granted control of a printer it may not print to must not be able to make it
+								<Mono>print</Mono>, a key granted control of a printer it may not print to must not be able to make it
 								print by another name.
 							</P>
 
@@ -1051,27 +1050,27 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes — the
+								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes, the
 								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
-								one namespace, not a slice scoped to its own devices. Ordered by name ascending — unlike the jobs
-								history above, an image library is browsed alphabetically rather than newest first.
+								one namespace, not a slice scoped to its own devices. Ordered by name ascending, unlike the jobs history
+								above, an image library is browsed alphabetically rather than newest first.
 							</P>
 
 							<P>
 								<Mono>POST</Mono> needs <Mono>assets:write</Mono> and stores one, the same two ways the Assets tab
 								offers: <Mono>data</Mono>, the file as base64, or <Mono>url</Mono>, a location to import it from.
-								Exactly one of the two — a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
+								Exactly one of the two, a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
 								or <ErrorRef code="missing_field" /> respectively.
 							</P>
 
 							<P>
-								Cursor-paginated the same way the jobs listing is — see <Mono>{`GET ${API_BASE}/jobs`}</Mono> above for
+								Cursor-paginated the same way the jobs listing is, see <Mono>{`GET ${API_BASE}/jobs`}</Mono> above for
 								what <Mono>limit</Mono>, <Mono>cursor</Mono> and <Mono>nextCursor</Mono> mean.
 							</P>
 
 							<P>
 								An upload over the configured size, or bytes that are not an image this pipeline prints, is refused
-								before it is stored — the same gate the panel's own Assets tab goes through. The name the bundled logo
+								before it is stored, the same gate the panel's own Assets tab goes through. The name the bundled logo
 								uses is reserved and cannot be written here either.
 							</P>
 						</Col>
@@ -1094,7 +1093,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   "nextCursor": null
 }`}</CodeBlock>
 
-							<CodeBlock label="Request — upload">{`curl -X POST ${base}${API_BASE}/assets \\
+							<CodeBlock label="Request: upload">{`curl -X POST ${base}${API_BASE}/assets \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{ "name": "shop-logo", "data": "iVBORw0KGgo…" }'`}</CodeBlock>
@@ -1116,22 +1115,22 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								Needs <Mono>assets:write</Mono> — the same permission a create or replace goes through, since a delete
-								is also a write. Answers <Status>204</Status> with no body: the asset is gone, and a body restating the
+								Needs <Mono>assets:write</Mono>, the same permission a create or replace goes through, since a delete is
+								also a write. Answers <Status>204</Status> with no body: the asset is gone, and a body restating the
 								name the caller just sent would be ceremony.
 							</P>
 
 							<P>
 								A name that names no stored asset is <ErrorRef code="unknown_asset" />. The bundled logo's own name is
-								refused as <ErrorRef code="invalid_type" /> instead — the same code the create path answers for it —
+								refused as <ErrorRef code="invalid_type" /> instead, the same code the create path answers for it ,
 								because it is not a missing asset and not a taken name, it is not an asset at all, and{" "}
 								<Mono>unknown_asset</Mono> here would invite a caller to conclude it simply has not been uploaded yet.
 							</P>
 
 							<P>
 								Nothing here checks whether markup still names this asset. A receipt that does now fails to compile with{" "}
-								<ErrorRef code="unknown_asset" /> — the same consequence deleting it from the panel's Assets tab has,
-								and it belongs to whoever deletes.
+								<ErrorRef code="unknown_asset" />, the same consequence deleting it from the panel's Assets tab has, and
+								it belongs to whoever deletes.
 							</P>
 						</Col>
 
@@ -1148,9 +1147,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								One of two endpoints on this API that take no key — the OpenAPI document, above, is the other. A
+								One of two endpoints on this API that take no key, the OpenAPI document, above, is the other. A
 								healthcheck runs before anyone has signed in, and a probe that needed a credential would need one stored
-								somewhere to use it — so this is what a container runtime or a load balancer calls, and it is
+								somewhere to use it, so this is what a container runtime or a load balancer calls, and it is
 								deliberately the only thing they can call.
 							</P>
 
@@ -1183,13 +1182,13 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 						<Col>
 							<P>
 								Needs <Mono>devices:raw</Mono> <strong>and</strong> the install's <Mono>Allow raw API writes</Mono>{" "}
-								setting, which ships off. The body carries <Mono>bytes</Mono>, base64, and nothing else; they reach the
-								printer exactly as sent — no wrapping, no codepage check, no width calculation, none of the limits every
+								setting, which ships off. The body carries <Mono>bytes</Mono>, base64, and nothing else. They reach the
+								printer exactly as sent, no wrapping, no codepage check, no width calculation, none of the limits every
 								other endpoint here applies.
 							</P>
 
 							<Aside>
-								While the setting is off, every caller gets <ErrorRef code="raw_writes_disabled" /> — checked before the
+								While the setting is off, every caller gets <ErrorRef code="raw_writes_disabled" />, checked before the
 								device grant, so the refusal is identical whatever printers the key holds and cannot be used to work out
 								which exist. A key that lacks the permission gets <ErrorRef code="insufficient_permission" /> instead:
 								the two are separate codes because the remedies are different, one a decision about a key and the other
@@ -1197,8 +1196,8 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</Aside>
 
 							<P>
-								<Mono>link.maxRawWriteBytes</Mono>, on the Settings tab, is the only bound on a write — none of the
-								print limits apply to one. A payload decoding to more than it is refused with{" "}
+								<Mono>link.maxRawWriteBytes</Mono>, on the Settings tab, is the only bound on a write, none of the print
+								limits apply to one. A payload decoding to more than it is refused with{" "}
 								<ErrorRef code="body_too_large" /> naming both numbers, and a <Mono>bytes</Mono> that is not valid
 								base64 with <ErrorRef code="invalid_type" /> rather than being silently written as whatever it decoded
 								to.
@@ -1207,10 +1206,10 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							<P>
 								<Mono>message</Mono> is the agent's own, or <Mono>null</Mono>. Nothing here can tell you what was
 								printed: the bytes are never read, and the printer does not report back. A write that times out says so
-								plainly — the bytes may or may not have been written, and only the paper settles it. The Logs tab is the
+								plainly, the bytes may or may not have been written, and only the paper settles it. The Logs tab is the
 								only record that any of it happened, and this endpoint writes there itself rather than leaving it to the
 								line every endpoint leaves. One line goes down <em>before</em> the bytes are handed off, so a send
-								interrupted halfway still leaves a trace, and one for a request that returns no write — which says
+								interrupted halfway still leaves a trace, and one for a request that returns no write, which says
 								whether anything left this server at all, the one thing the other line cannot know. A refusal decided
 								before the send leaves only the second of those, and it says plainly that nothing was sent.
 							</P>
@@ -1219,7 +1218,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 								A refusal decided <em>before this endpoint runs at all</em> leaves <strong>neither</strong> of those
 								two. A missing or unusable key, and a key without <Mono>devices:raw</Mono>, are turned away by the same
 								envelope every endpoint here sits behind, so nothing specific to raw writes is ever reached. That
-								attempt is still recorded — one line, at <Mono>WARN</Mono>, carrying the key's name when there was a key
+								attempt is still recorded, one line, at <Mono>WARN</Mono>, carrying the key's name when there was a key
 								to name, exactly as for any other refused request. Reconciling the two trails means knowing which
 								answers which: these rows are the writes this endpoint was actually asked to attempt, and the envelope's
 								line is every request that named it.
@@ -1234,9 +1233,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<CodeBlock label="200 OK">{`{ "agent": "${agentName}", "device": "${deviceName}", "bytes": 7, "message": "wrote 7 bytes" }`}</CodeBlock>
 
-							<CodeBlock
-								label={`${API_ERROR_STATUS.raw_writes_disabled} Forbidden — the install has raw writes off`}
-							>{`{
+							<CodeBlock label={`${API_ERROR_STATUS.raw_writes_disabled} Forbidden: the install has raw writes off`}>{`{
   "error": "raw_writes_disabled",
   "message": "Raw writes are switched off for this install. An administrator can enable them under Settings → Security."
 }`}</CodeBlock>

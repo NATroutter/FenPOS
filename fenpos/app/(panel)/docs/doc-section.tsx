@@ -9,7 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
  *
  * The hash on its own is not enough to drive this. `hashchange` does not fire when a link sets the
  * hash to what it already is, so clicking a rail entry, collapsing that section, then clicking the
- * same entry again would leave it shut — which is exactly the sequence someone follows after
+ * same entry again would leave it shut, which is exactly the sequence someone follows after
  * closing a section by mistake.
  */
 export const DOC_REVEAL_EVENT = "fenpos:docs-reveal";
@@ -73,7 +73,7 @@ export function DocSection({
 	const [open, setOpen] = useState(false);
 
 	// Being linked to opens the section. Jumping to a heading that stays shut lands the reader on
-	// the one thing they asked not to be given — the title they already read in the rail.
+	// the one thing they asked not to be given, the title they already read in the rail.
 	useEffect(() => {
 		const revealIfTargeted = (event?: Event): void => {
 			const targeted = event instanceof CustomEvent ? event.detail === id : window.location.hash.slice(1) === id;

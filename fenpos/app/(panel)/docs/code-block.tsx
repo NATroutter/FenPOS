@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  * curl invocation off a screen and retyping it is how a header ends up misspelled, so the
  * sample is copyable rather than merely legible.
  *
- * A client component only for the clipboard; the samples themselves are rendered on the server
+ * A client component only for the clipboard. The samples themselves are rendered on the server
  * with this install's own address and printer names in them.
  */
 export function CodeBlock({ children, label }: { children: string; label?: string }) {
@@ -56,7 +56,7 @@ export function CodeBlock({ children, label }: { children: string; label?: strin
 	return (
 		<div className="group/code relative overflow-hidden rounded-lg border border-border bg-[#0f0f0f]">
 			{/* In the label row rather than floated over it. Absolutely positioned at `top-2`, a 28px
-			    button hung nearly 6px below a 30px strip and read as having escaped it — and the row
+			    button hung nearly 6px below a 30px strip and read as having escaped it, and the row
 			    was already a `justify-between` with one child, which is a row asking for the second. */}
 			{label ? (
 				<div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/30 py-1 pr-1.5 pl-3">

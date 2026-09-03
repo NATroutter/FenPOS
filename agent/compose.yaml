@@ -2,10 +2,10 @@
 #
 # Linux hosts only. Docker Desktop on Windows and macOS runs containers inside a
 # VM with no USB or serial passthrough, so a COM port cannot be reached from a
-# container at all; run the jar directly on the JVM there.
+# container at all. Run the jar directly on the JVM there.
 #
 # The agent has no inbound network surface. It dials the server and holds the
-# connection open, so nothing here publishes a port — there is nothing to reach
+# connection open, so nothing here publishes a port. There is nothing to reach
 # it on, which is the point.
 
 services:
@@ -28,7 +28,7 @@ services:
 
     volumes:
       # The agent's identity lives here: the server address and the credential it
-      # was issued at pairing. Lose this volume and the agent is unpaired — it
+      # was issued at pairing. Lose this volume and the agent is unpaired. It
       # will need a new code, and the old one is already spent.
       #
       # The container runs as uid 10001 and a bind mount keeps the host directory
@@ -55,7 +55,7 @@ services:
       # Set to "true" when the log says something failed but not why. Every
       # error then carries its stack trace, the link reports each connection
       # attempt and each frame, and the HTTP client logs every request with the
-      # status it got back — which is what shows a proxy answering in the
+      # status it got back, which is what shows a proxy answering in the
       # server's place. Off by default: the output is several times the size.
       FENPOS_DEBUG: "false"
 
@@ -64,7 +64,7 @@ services:
     # Required for the console via `docker attach fenpos-agent`, which is where
     # `pair`, `link`, `devices` and `test` live. Without them the container runs
     # headless and is managed entirely from the panel, which is a perfectly good
-    # mode; the console detects the missing TTY and stays off.
-    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would signal the JVM and shut it down.
+    # mode. The console detects the missing TTY and stays off.
+    # Detach with Ctrl-P Ctrl-Q. Ctrl-C would signal the JVM and shut it down.
     stdin_open: true
     tty: true

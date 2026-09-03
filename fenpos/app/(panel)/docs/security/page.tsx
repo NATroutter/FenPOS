@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * The sections, declared once.
  *
  * The contents rail and the sections themselves both read this, so a heading cannot be renamed
- * into a rail entry that no longer matches it or an anchor that goes nowhere — the same reasoning
+ * into a rail entry that no longer matches it or an anchor that goes nowhere, the same reasoning
  * the API and markup pages give for the same pattern.
  */
 const SECTIONS = [
@@ -49,7 +49,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 /**
  * A bordered list of {@link Fact} rows.
  *
- * The same shape the API page uses for its permission list — a reader comparing two reference
+ * The same shape the API page uses for its permission list, a reader comparing two reference
  * pages should not have to learn a second layout for "here is a short list of labelled facts".
  */
 function Facts({ children }: { children: ReactNode }) {
@@ -69,7 +69,7 @@ function Facts({ children }: { children: ReactNode }) {
  * **Every claim here has to be true of the code as it stands.** This page exists because an
  * operator locked out of their own install is reading it under pressure, and a sentence that was
  * true when it was written and false by the time anyone needed it is worse than no sentence at
- * all — the same discipline the API and markup pages hold their own claims to.
+ * all, the same discipline the API and markup pages hold their own claims to.
  */
 export default async function SecurityDocsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
@@ -107,7 +107,7 @@ export default async function SecurityDocsPage() {
 						<Col>
 							<P>
 								Every sign-in starts with a password. An account with an authenticator enrolled is then asked for a
-								six-digit code from it, or one of its recovery codes, on the same field — the two are told apart by
+								six-digit code from it, or one of its recovery codes, on the same field, the two are told apart by
 								shape, not by asking which kind is coming.
 							</P>
 
@@ -115,13 +115,13 @@ export default async function SecurityDocsPage() {
 								<Mono>auth.lockoutAfterFailures</Mono> and <Mono>auth.lockoutMinutes</Mono> govern the password step:{" "}
 								{lockoutAfterFailures === 0 ? (
 									<>
-										this install does not lock an account for wrong passwords — <Mono>auth.lockoutAfterFailures</Mono>{" "}
-										is currently 0, which turns that lock off entirely.
+										this install does not lock an account for wrong passwords, <Mono>auth.lockoutAfterFailures</Mono> is
+										currently 0, which turns that lock off entirely.
 									</>
 								) : (
 									<>
 										on this install, <strong>{lockoutAfterFailures}</strong> consecutive wrong passwords lock the
-										account for <strong>{lockoutMinutes}</strong> minutes. The lock clears itself; nobody has to undo
+										account for <strong>{lockoutMinutes}</strong> minutes. The lock clears itself. Nobody has to undo
 										it, though <Mono>pnpm auth:recover --unlock</Mono>, below, ends it early.
 									</>
 								)}{" "}
@@ -132,7 +132,7 @@ export default async function SecurityDocsPage() {
 							<Aside>
 								An account with an authenticator carries a second lock that no setting on this install controls: five
 								wrong codes on one challenge require a fresh one to be requested, and ten consecutive wrong
-								verifications lock the account for fifteen minutes — better-auth's own default, unrelated to{" "}
+								verifications lock the account for fifteen minutes, better-auth's own default, unrelated to{" "}
 								<Mono>auth.lockoutAfterFailures</Mono> and <Mono>auth.lockoutMinutes</Mono> above, which govern the
 								password step only.
 							</Aside>
@@ -140,7 +140,7 @@ export default async function SecurityDocsPage() {
 
 						<Facts>
 							<Fact label="auth.lockoutAfterFailures">
-								{lockoutAfterFailures === 0 ? "0 — never locks this way" : `${lockoutAfterFailures} attempts`}
+								{lockoutAfterFailures === 0 ? "0: never locks this way" : `${lockoutAfterFailures} attempts`}
 							</Fact>
 							<Fact label="auth.lockoutMinutes">{lockoutMinutes} minutes</Fact>
 							<Fact label="Two-factor lockout (built in)">10 consecutive failures, 15 minutes</Fact>
@@ -159,22 +159,22 @@ export default async function SecurityDocsPage() {
 
 							<P>
 								Ten recovery codes are shown once, at the moment enrolment is confirmed, and never again after that
-								screen closes. They are stored <strong>encrypted</strong>, not hashed — a hash could never be turned
-								back into a code to display, and this panel has no screen that decrypts one either, which is the honest
+								screen closes. They are stored <strong>encrypted</strong>, not hashed, a hash could never be turned back
+								into a code to display, and this panel has no screen that decrypts one either, which is the honest
 								reason a lost set cannot be recovered by looking rather than a limitation nobody got around to lifting.
 							</P>
 
 							<P>
 								Losing both the phone and the codes leaves one way back in: another administrator holding{" "}
-								<Mono>users:disable-2fa</Mono> clears the enrolment from the Users tab, or — on a server nobody can
-								reach the panel from at all — <Mono>pnpm auth:recover --clear-2fa &lt;email&gt;</Mono> does the same
-								thing outside it. Either way the account signs in on its password alone afterward and can enrol again.
+								<Mono>users:disable-2fa</Mono> clears the enrolment from the Users tab, or, on a server nobody can reach
+								the panel from at all, <Mono>pnpm auth:recover --clear-2fa &lt;email&gt;</Mono> does the same thing
+								outside it. Either way the account signs in on its password alone afterward and can enrol again.
 							</P>
 						</Col>
 
 						<Facts>
 							<Fact label="Recovery codes">10, shown once, at confirmation</Fact>
-							<Fact label="Storage">Encrypted — no screen decrypts them again</Fact>
+							<Fact label="Storage">Encrypted: no screen decrypts them again</Fact>
 							<Fact label="Lost both factors">An administrator, or the recovery CLI</Fact>
 						</Facts>
 					</Split>
@@ -200,8 +200,8 @@ export default async function SecurityDocsPage() {
 								<strong>The one real risk this setting carries:</strong> on an install with a single administrator, that
 								account losing both its phone and its recovery codes while this is on needs server access to recover.
 								There is no second administrator to clear the enrolment from the Users tab, and no panel screen reaches
-								an account this stuck — only <Mono>pnpm auth:recover --clear-2fa</Mono> or <Mono>--reset-password</Mono>
-								, run by whoever can already open the database directly. Turning this on for a single-administrator
+								an account this stuck, only <Mono>pnpm auth:recover --clear-2fa</Mono> or <Mono>--reset-password</Mono>,
+								run by whoever can already open the database directly. Turning this on for a single-administrator
 								install is a decision to keep server access available, not just a panel setting.
 							</Aside>
 						</Col>
@@ -219,7 +219,7 @@ export default async function SecurityDocsPage() {
 						<Col>
 							<P>
 								<Mono>auth.sessionHours</Mono>, set to <strong>{sessionHours}</strong> hours on this install, is an{" "}
-								<strong>absolute</strong> lifetime. The clock starts at sign-in and is not extended by use — a session
+								<strong>absolute</strong> lifetime. The clock starts at sign-in and is not extended by use, a session
 								created just before its deadline ends there however busy it was in between, and nothing short of signing
 								in again moves that deadline out.
 							</P>
@@ -240,7 +240,7 @@ export default async function SecurityDocsPage() {
 								<Mono>auth.maxConcurrentSessions</Mono> (
 								{maxConcurrentSessions === 0 ? "unlimited on this install" : `${maxConcurrentSessions} on this install`}
 								) bounds how many places one account may be signed in at once. Reaching it retires the account's{" "}
-								<strong>least recently used</strong> session rather than refusing the new sign-in — a browser that
+								<strong>least recently used</strong> session rather than refusing the new sign-in, a browser that
 								crashed loses its place instead of locking its owner out of a fresh one.
 							</P>
 						</Col>
@@ -248,10 +248,10 @@ export default async function SecurityDocsPage() {
 						<Facts>
 							<Fact label="auth.sessionHours">{sessionHours} hours, absolute</Fact>
 							<Fact label="auth.idleTimeoutMinutes">
-								{idleTimeoutMinutes === 0 ? "0 — never ends one this way" : `${idleTimeoutMinutes} minutes`}
+								{idleTimeoutMinutes === 0 ? "0: never ends one this way" : `${idleTimeoutMinutes} minutes`}
 							</Fact>
 							<Fact label="auth.maxConcurrentSessions">
-								{maxConcurrentSessions === 0 ? "0 — unlimited" : `${maxConcurrentSessions}, oldest use evicted first`}
+								{maxConcurrentSessions === 0 ? "0: unlimited" : `${maxConcurrentSessions}, oldest use evicted first`}
 							</Fact>
 						</Facts>
 					</Split>
@@ -267,21 +267,21 @@ export default async function SecurityDocsPage() {
 								) : (
 									<>configured on this install.</>
 								)}{" "}
-								It is checked at sign-in, and again on <strong>every</strong> panel request afterward — tightening it
+								It is checked at sign-in, and again on <strong>every</strong> panel request afterward, tightening it
 								ends a session that no longer qualifies rather than waiting for that account's next sign-in.
 							</P>
 
 							<Aside>
 								A wrong entry locks out its own author along with everyone else outside the range it names, and there is
 								no panel screen left to fix it from once that happens. <Mono>pnpm auth:recover --clear-allowlist</Mono>{" "}
-								empties it from a shell on the server — the same way <Mono>--clear-2fa</Mono> and{" "}
+								empties it from a shell on the server, the same way <Mono>--clear-2fa</Mono> and{" "}
 								<Mono>--reset-password</Mono>, above, recover the other two ways an install can lock itself out.
 							</Aside>
 						</Col>
 
 						<Facts>
 							<Fact label="auth.ipAllowlist">
-								{ipAllowlist.trim() === "" ? "Empty — unrestricted" : "Configured on this install"}
+								{ipAllowlist.trim() === "" ? "Empty: unrestricted" : "Configured on this install"}
 							</Fact>
 							<Fact label="Checked">At sign-in, and again on every request</Fact>
 							<Fact label="Wrong entry, no way in">pnpm auth:recover --clear-allowlist</Fact>
@@ -297,7 +297,7 @@ export default async function SecurityDocsPage() {
 								that picks a row out to delete, and each row's hash chains to the one before it, so an edited or removed
 								row breaks the chain rather than vanishing invisibly. The Audit tab carries no edit or delete control at
 								all, not for a superuser either. What can leave the live database is a whole calendar month at a time,
-								into an archive; what can leave the record altogether is one of those archives, deleted on purpose.
+								into an archive. What can leave the record altogether is one of those archives, deleted on purpose.
 								Archived history, below, is both.
 							</P>
 
@@ -307,23 +307,23 @@ export default async function SecurityDocsPage() {
 								pauses a device leaves nothing here, and neither does a key refused for a permission it does not hold.
 								Those requests are recorded on the Logs tab instead: every refusal, everything that changed something,
 								and successful reads too where <Mono>logs.recordApiReads</Mono> is on. Each line names the key that made
-								it, unless the request was turned away before any key was resolved — a bad token names nobody. So what
-								an API key did is answerable there rather than here.
+								it, unless the request was turned away before any key was resolved, a bad token names nobody. So what an
+								API key did is answerable there rather than here.
 							</P>
 
 							<P>
-								The one removal that happens on its own — as against an archive somebody deletes — is retention,
-								governed by <Mono>audit.retentionDays</Mono> (<strong>{auditRetentionDays}</strong> days on this
-								install), and it never deletes an event that has not been archived first. A whole calendar month is
-								copied into an archive file, the copy is checked — its row count against what was read, and its hash
-								chain walked end to end — and only then are those rows removed from the live database and the chain
-								re-anchored behind them. Because an archive is named for a month, only a month that has fully aged out
-								may go, so up to a month more than the window is kept.
+								The one removal that happens on its own, as against an archive somebody deletes, is retention, governed
+								by <Mono>audit.retentionDays</Mono> (<strong>{auditRetentionDays}</strong> days on this install), and it
+								never deletes an event that has not been archived first. A whole calendar month is copied into an
+								archive file, the copy is checked, its row count against what was read, and its hash chain walked end to
+								end, and only then are those rows removed from the live database and the chain re-anchored behind them.
+								Because an archive is named for a month, only a month that has fully aged out may go, so up to a month
+								more than the window is kept.
 							</P>
 
 							<P>
-								<Mono>pnpm audit:verify</Mono> walks the whole record from a shell on the server — the archives first,
-								then the rows still live — and answers one of three ways. It cannot repair anything: a tool that offered
+								<Mono>pnpm audit:verify</Mono> walks the whole record from a shell on the server, the archives first,
+								then the rows still live, and answers one of three ways. It cannot repair anything: a tool that offered
 								to fix the chain would be a tool that offered to finish the job for whoever broke it.
 							</P>
 
@@ -334,7 +334,7 @@ export default async function SecurityDocsPage() {
 								row that no longer matches its own hash, a row whose link no longer matches the row before it, an anchor
 								that disagrees with the oldest row left, archives and the live database disagreeing about where the
 								archived history ends, or an archive that should be on disk and is not. That <Mono>seq</Mono> is where
-								an investigation starts. Only a break is reported as a failure — the other two answers exit 0 — so a
+								an investigation starts. Only a break is reported as a failure, the other two answers exit 0, so a
 								monitoring check can run this unattended.
 							</P>
 
@@ -345,18 +345,18 @@ export default async function SecurityDocsPage() {
 						</Col>
 
 						<Col>
-							<CodeBlock label="pnpm audit:verify — chain intact">
+							<CodeBlock label="pnpm audit:verify, chain intact">
 								{`The audit chain is intact: 4218 events verified, seq 1 through 4218 (3800 from archives, 418 live).`}
 							</CodeBlock>
 
-							<CodeBlock label="pnpm audit:verify — intact as far back as the record goes">
+							<CodeBlock label="pnpm audit:verify, intact as far back as the record goes">
 								{`The audit chain is intact from seq 1402: 2817 events verified (2399 from archives, 418 live).
 
 Events before seq 1402 were removed by retention before archiving was in use.
-They cannot be verified, and nothing here suggests they were altered — they are simply gone.`}
+They cannot be verified, and nothing here suggests they were altered. They are simply gone.`}
 							</CodeBlock>
 
-							<CodeBlock label="pnpm audit:verify — chain broken">{`THE AUDIT CHAIN IS BROKEN at seq 2091 (hash-mismatch).
+							<CodeBlock label="pnpm audit:verify, chain broken">{`THE AUDIT CHAIN IS BROKEN at seq 2091 (hash-mismatch).
 2090 events before it verified.
 
 This means the record was changed after it was written. Nothing here can repair it, and
@@ -369,8 +369,8 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 					<Split>
 						<Col>
 							<P>
-								An archived month is the same rows in a compressed SQLite file — <Mono>audit-2026-01.db.gz</Mono> — in
-								an <Mono>archives</Mono> directory beside the databases themselves, on whatever volume they are on. The{" "}
+								An archived month is the same rows in a compressed SQLite file, <Mono>audit-2026-01.db.gz</Mono>, in an{" "}
+								<Mono>archives</Mono> directory beside the databases themselves, on whatever volume they are on. The{" "}
 								<strong>Archives</strong> tab lists what is there and searches inside one: an audit month needs{" "}
 								<Mono>audit:read</Mono> and a log month <Mono>logs:read</Mono>, and either one on its own opens the tab
 								and shows that source's months. A range on the Logs tab that reaches back before the live window says so
@@ -389,7 +389,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 								<strong>That answer is a correctly configured install, not an incident.</strong> Everything from that{" "}
 								<Mono>seq</Mono> on is proved, nothing suggests the rows before it were altered, and they are simply
 								gone. <Mono>pnpm audit:verify</Mono> exits <strong>0</strong> on it and the Audit tab draws it as a note
-								rather than a warning — the alternative is paging somebody hourly, for the life of the install, about a
+								rather than a warning, the alternative is paging somebody hourly, for the life of the install, about a
 								retention setting doing its job.
 							</Aside>
 
@@ -402,7 +402,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 
 							<P>
 								An operator who needs the space deletes one from the Archives tab, which needs{" "}
-								<Mono>audit:archive-delete</Mono> — held apart from <Mono>audit:read</Mono> because this destroys
+								<Mono>audit:archive-delete</Mono>, held apart from <Mono>audit:read</Mono> because this destroys
 								evidence rather than reading it. Only the oldest archived month may go, and never the last one on disk.
 								The record's own note of where archived history begins moves to the month that becomes the oldest in the
 								same operation, so the next verification says the record begins later instead of reporting a file as
@@ -420,7 +420,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 						<Facts>
 							<Fact label="audit.retentionDays">{auditRetentionDays} days, and the month that cutoff falls in</Fact>
 							<Fact label="logs.archiveEnabled">
-								{logArchiveEnabled ? "On — aged-out lines are archived first" : "Off — aged-out lines are deleted"}
+								{logArchiveEnabled ? "On: aged-out lines are archived first" : "Off: aged-out lines are deleted"}
 							</Fact>
 							<Fact label="logs.archiveRetentionDays">
 								{logArchiveRetentionDays} days past the month it covers, then the file goes
@@ -434,8 +434,8 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 					<Split>
 						<Col>
 							<P>
-								An avatar lives in this install's own database — the upload as received, the crop rectangle chosen
-								against it, and a <strong>512px square</strong> render baked from the two — and nothing about a picture
+								An avatar lives in this install's own database, the upload as received, the crop rectangle chosen
+								against it, and a <strong>512px square</strong> render baked from the two, and nothing about a picture
 								is ever fetched from anywhere else. There is no Gravatar lookup left in this codebase: an account's
 								email address is never hashed and sent to a third party to find a picture for it, which also means a
 								picture can be set on an install with no outbound internet access at all. An account with nothing set
@@ -444,7 +444,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 
 							<P>
 								The render is served from <Mono>GET /api/avatar/&lt;userId&gt;</Mono>, which requires a session and no
-								permission beyond it — any signed-in account may fetch any other account's avatar, because the Users tab
+								permission beyond it, any signed-in account may fetch any other account's avatar, because the Users tab
 								already shows every operator's name and address to anyone who can open it, and gating the image
 								separately would just draw broken pictures beside names the viewer is already allowed to read. "A
 								session" means one that passes every gate a panel page applies, the address allowlist and the inactivity
@@ -454,7 +454,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 
 							<P>
 								Setting or removing your <strong>own</strong> avatar, from Profile settings in the account menu, is
-								ungated the way changing your own name or password is — every signed-in account may do it. Changing{" "}
+								ungated the way changing your own name or password is, every signed-in account may do it. Changing{" "}
 								<strong>another</strong> account's avatar is different: it needs <Mono>users:update</Mono>, the same
 								permission that governs that account's name and email, and it is reachable only from the Users tab. The
 								original is kept rather than discarded once a render is baked, so that a later re-crop can start from
@@ -466,7 +466,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 							<Aside>
 								Setting and removing an avatar are each audited separately, on success and on refusal alike, and there
 								is a distinct entry for the ungated pair on your own account and the <Mono>users:update</Mono>-gated
-								pair on someone else's — so a row says both what happened and whether it was done to the acting account
+								pair on someone else's, so a row says both what happened and whether it was done to the acting account
 								or another one. The row never carries the image bytes themselves: an avatar is megabytes and an audit
 								row is a permanent, hash-chained record, so what it keeps is the crop and, for the administrator pair,
 								which account was changed.
@@ -474,12 +474,12 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 						</Col>
 
 						<Facts>
-							<Fact label="Storage">This install's own database — original, crop, and 512px render</Fact>
-							<Fact label="Third-party lookups">None — Gravatar is gone</Fact>
-							<Fact label={"GET /api/avatar/<userId>"}>Every session gate applies; no permission gate</Fact>
+							<Fact label="Storage">This install's own database: original, crop, and 512px render</Fact>
+							<Fact label="Third-party lookups">None: Gravatar is gone</Fact>
+							<Fact label={"GET /api/avatar/<userId>"}>Every session gate applies. No permission gate</Fact>
 							<Fact label="Your own avatar">Ungated, like your own name and password</Fact>
 							<Fact label="Another account's avatar">users:update, from the Users tab</Fact>
-							<Fact label="Audited">Every set and remove, on both accounts — success and refusal alike</Fact>
+							<Fact label="Audited">Every set and remove, on both accounts: success and refusal alike</Fact>
 						</Facts>
 					</Split>
 				</DocSection>
@@ -489,7 +489,7 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 						<Col>
 							<P>
 								With no email and first-run setup permanently sealed, a forgotten superuser password would otherwise
-								brick the install for good — and <Mono>auth.require2fa</Mono> can do the same to an administrator who
+								brick the install for good, and <Mono>auth.require2fa</Mono> can do the same to an administrator who
 								loses both a phone and its recovery codes. <Mono>pnpm auth:recover</Mono> exists for exactly that: a
 								shell command that reads five actions from the flag it is given.
 							</P>
@@ -503,31 +503,31 @@ nothing should: seq 2091 is where an investigation starts.`}</CodeBlock>
 
 							<P>
 								<Mono>--reset-password &lt;email&gt;</Mono> mints a password nobody chose, prints it once, forces the
-								account to set a new one at its very next sign-in, and ends every session it currently holds — a printed
+								account to set a new one at its very next sign-in, and ends every session it currently holds, a printed
 								password cannot be typed in behind a session that is still live on someone else's screen.
 							</P>
 
 							<P>
 								<Mono>--clear-2fa &lt;email&gt;</Mono> and <Mono>--unlock &lt;email&gt;</Mono> clear an enrolment or a
 								lockout the same way the Users tab and the lockout's own <strong>{lockoutMinutes}</strong>-minute clock
-								would, respectively — outside the panel, for the install where nobody can reach the panel at all.{" "}
+								would, respectively, outside the panel, for the install where nobody can reach the panel at all.{" "}
 								<Mono>--clear-allowlist</Mono> empties <Mono>auth.ipAllowlist</Mono>, the third way this install can
 								lock everyone out of itself.
 							</P>
 
 							<P>
 								<Mono>--unlock</Mono> ends the <strong>password</strong> lockout and only that one. The second, built-in
-								two-factor lock described under Signing in — ten wrong codes, fifteen minutes, governed by no setting on
-								this install — is untouched by it. An administrator locked out that way is reached only by{" "}
+								two-factor lock described under Signing in, ten wrong codes, fifteen minutes, governed by no setting on
+								this install, is untouched by it. An administrator locked out that way is reached only by{" "}
 								<Mono>--clear-2fa</Mono>, which ends the lock by destroying the enrolment behind it.
 							</P>
 
 							<Aside>
-								Running any of this needs a shell on the server — reading <Mono>DATABASE_URL</Mono> and opening the
+								Running any of this needs a shell on the server, reading <Mono>DATABASE_URL</Mono> and opening the
 								database file directly, access strictly stronger than anything the panel itself checks. That is the
 								whole safety argument: it grants nothing to anyone who could not already read the database with a SQL
 								client and do the same thing by hand. Every operation but <Mono>--list</Mono> writes an audit row,
-								success or refusal alike — a refusal run against a box nobody can sign in to is more interesting than a
+								success or refusal alike, a refusal run against a box nobody can sign in to is more interesting than a
 								success, since a human stands behind a success and can be asked what they did.
 							</Aside>
 						</Col>
@@ -540,7 +540,7 @@ pnpm auth:recover --unlock <email>
 pnpm auth:recover --clear-allowlist`}</CodeBlock>
 
 							<CodeBlock label="pnpm auth:recover --reset-password admin@example.com">{`Xk9m_2vQ… (171 characters, shown once)
-This password is shown once and cannot be recovered; the account must set a new one at its next sign-in.`}</CodeBlock>
+This password is shown once and cannot be recovered. The account must set a new one at its next sign-in.`}</CodeBlock>
 						</Col>
 					</Split>
 				</DocSection>

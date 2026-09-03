@@ -159,7 +159,7 @@ describe("describeVerification", () => {
 		// the bare number stays green when this shape falls through to it — `"incomplete"` is truthy.
 		expect(text).toContain("intact from seq 61");
 		expect(text).toContain("30 from archives");
-		expect(text).toContain("they are simply gone");
+		expect(text).toContain("They are simply gone");
 		// The whole reason the third state exists. This text is read by an operator whose retention
 		// setting did exactly what it was configured to do, and the failure vocabulary would tell them
 		// somebody had altered their record.

@@ -14,11 +14,11 @@ services:
     container_name: fenpos-agent
     restart: unless-stopped
 
-    # No ports. The agent dials out and never listens — there is nothing to publish.
+    # No ports. The agent dials out and never listens. There is nothing to publish.
 
     devices:
       # One per printer. Find the stable name with:  ls -l /dev/serial/by-id/
-      # ttyUSB numbering changes across reboots; a udev rule is worth setting up.
+      # ttyUSB numbering changes across reboots. A udev rule is worth setting up.
       - "/dev/ttyUSB0:/dev/ttyUSB0"
 
     group_add:
@@ -50,6 +50,6 @@ services:
     mem_limit: 512m
 
     # Optional: enables the console via `docker attach fenpos-agent`.
-    # Detach with Ctrl-P Ctrl-Q — Ctrl-C would stop the JVM.
+    # Detach with Ctrl-P Ctrl-Q. Ctrl-C would stop the JVM.
     stdin_open: true
     tty: true

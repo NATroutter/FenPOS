@@ -27,15 +27,15 @@ export function seconds(ms: number): string {
  *
  * Zero is not a small limit. `resolve-images.ts`'s `requireWithinRemoteLimit` treats it as the
  * switch that turns outbound image fetching off entirely, so this says that rather than naming a
- * limit of zero — "one request may name at most 0 distinct URLs" reads as a broken install, not as
+ * limit of zero, "one request may name at most 0 distinct URLs" reads as a broken install, not as
  * a choice an operator made, which is exactly the wording the refusal message itself was corrected
  * to avoid.
  *
  * Returned as a plain string rather than JSX, on purpose: `docs-check.test.ts` cannot render the
- * page it checks — this project's tests run in a Node environment, not a browser — so the sentence
+ * page it checks, this project's tests run in a Node environment, not a browser, so the sentence
  * that changes shape at the boundary has to be checkable without rendering anything.
  * `<ErrorRef code="too_many_remote_images" />` still belongs after whichever sentence this returns,
- * since that error still fires in both cases; the page places it itself, immediately after this.
+ * since that error still fires in both cases. The page places it itself, immediately after this.
  *
  * @param limit the configured `images.maxRemoteReferences`
  * @returns the sentence, ending just before the page's own `<ErrorRef>`
@@ -75,7 +75,7 @@ export function schemeClause(allowPlainHttp: boolean): string {
  * The clause naming a non-empty `images.allowedRemoteHosts`, appended to the same sentence as
  * {@link schemeClause}.
  *
- * Empty means "any host" and is the default — a reader whose install has not touched this setting
+ * Empty means "any host" and is the default, a reader whose install has not touched this setting
  * should not be told about a restriction that is not there, so this returns nothing rather than a
  * clause that would read as "restricted to (nothing)".
  *
@@ -101,7 +101,7 @@ export function acceptedImageFormatsClause(formats: "png+jpeg" | "png"): string 
  * Groups the error codes by the status they map to.
  *
  * Read from the error module rather than restated, so a code added there appears here without
- * anyone remembering to update the docs — the failure mode that makes documentation untrustworthy.
+ * anyone remembering to update the docs, the failure mode that makes documentation untrustworthy.
  */
 export function groupByStatus(): [number, string[]][] {
 	const grouped = new Map<number, string[]>();
@@ -131,8 +131,8 @@ export function statusStyle(status: number): string {
  * Explanation beside the thing being explained.
  *
  * A reference laid out as one column is either unreadably wide prose or a narrow ribbon of text
- * with an empty half-page beside it. Putting the prose left and the artifact it describes — the
- * call, the tag table, the permission list — on the right spends the width on something worth
+ * with an empty half-page beside it. Putting the prose left and the artifact it describes, the
+ * call, the tag table, the permission list, on the right spends the width on something worth
  * reading instead of on margin, and keeps the example in view while the paragraph about it is
  * being read. Stacks below `lg`, where there is only room for one column.
  */
@@ -149,7 +149,7 @@ export function Col({ children }: { children: ReactNode }) {
  * A paragraph of reference prose.
  *
  * Held to about seventy characters. The page used to set prose to the full width of a desktop
- * window, which is roughly a hundred and eighty characters a line — far past the point where the
+ * window, which is roughly a hundred and eighty characters a line, far past the point where the
  * eye reliably finds the start of the next one.
  */
 export function P({ children }: { children: ReactNode }) {
@@ -182,7 +182,7 @@ export function Status({ children }: { children: ReactNode }) {
  * An error code, and the status it currently maps to.
  *
  * The status is read from the registry rather than written here. It was written here once, in six
- * places, and every one of them said `400` after the codes moved to `413` and `422` — which is the
+ * places, and every one of them said `400` after the codes moved to `413` and `422`, which is the
  * failure mode that makes documentation untrustworthy: prose that was true when it was typed and
  * that nothing makes false out loud. Typed as `ApiErrorCode`, so a code renamed in `lib/errors.ts`
  * stops this page compiling rather than leaving it describing something that no longer exists.
