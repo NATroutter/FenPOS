@@ -186,7 +186,7 @@ export async function submitJob(
 		// the row existed is the body's shape and limits and the image fetches — not its markup. The
 		// row is settled rather than deleted so the failure is visible in the panel, with the code the
 		// caller was given.
-		await fail(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
+		await failJob(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
 		throw error;
 	}
 
@@ -204,7 +204,7 @@ export async function submitJob(
 		// one. Both are properties of the request, both left the caller with a 500 and the job
 		// queued forever. So the job is failed for *anything* thrown, and the shape of the error
 		// only decides what the caller is told.
-		await fail(job.id, sendFailureCode(error), await message(error, "Could not send."));
+		await failJob(job.id, sendFailureCode(error), await message(error, "Could not send."));
 		if (!(error instanceof FrameTooLargeError) && !(error instanceof ApiError)) {
 			// Not a shape anyone anticipated. The job is settled either way — that is the invariant —
 			// but this is how the next one gets a message written for a caller instead of a stack.
@@ -228,7 +228,7 @@ export async function submitJob(
 	if (!sent) {
 		// The socket closed between the registry lookup and the write. Ordinary on a link to a
 		// shop network, and the job must not be left claiming to be queued.
-		await fail(job.id, "agent_offline", "The agent disconnected before the job was sent.");
+		await failJob(job.id, "agent_offline", "The agent disconnected before the job was sent.");
 		throw new ApiError("agent_offline", "That agent disconnected. Try again once it reconnects.");
 	}
 
@@ -263,11 +263,15 @@ export async function submitJob(
  * `idempotency_conflict` for a job that never happened, and a caller who retries the identical
  * body unmodified gets a replayed `202 QUEUED` for a job that will never print.
  *
+ * Exported for the one other place that records a job before an agent has it — the Devices tab's
+ * test page, which is composed on the agent but recorded here — so a command the agent refuses
+ * settles its row by the same rules rather than a second copy of them.
+ *
  * @param jobId the job to settle
  * @param errorCode stable code recorded on the row
  * @param errorMessage what to show the operator
  */
-async function fail(jobId: string, errorCode: string, errorMessage: string): Promise<void> {
+export async function failJob(jobId: string, errorCode: string, errorMessage: string): Promise<void> {
 	try {
 		await prisma.job.update({
 			where: { id: jobId },

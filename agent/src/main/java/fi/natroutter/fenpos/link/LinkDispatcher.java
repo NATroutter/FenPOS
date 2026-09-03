@@ -6,9 +6,11 @@ import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.device.DeviceRegistry;
 import fi.natroutter.fenpos.enums.JobState;
+import fi.natroutter.fenpos.markup.ImageResolver;
 import fi.natroutter.fenpos.print.CompiledJob;
 import fi.natroutter.fenpos.print.JobListener;
 import fi.natroutter.fenpos.print.JobSettings;
+import fi.natroutter.fenpos.print.PrintCompiler;
 import fi.natroutter.fenpos.print.PrintJob;
 import fi.natroutter.fenpos.print.PrintImages;
 import fi.natroutter.fenpos.print.PrintQueue;
@@ -368,14 +370,52 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * The page exists to prove what this printer does with the settings this agent holds.
      * Compiling it from the server's copy would still pass if the two had diverged, which is
      * exactly the fault someone reaches for a test page to find.
+     * <p>
+     * Composed here, but recorded there: a command carrying a job id names the row the server
+     * created for this page, and the page is queued under that id exactly as a dispatched job
+     * is, so the same state reports reach the panel and the page shows in the Jobs tab with its
+     * lines and bytes. A command with no id — an older server — prints an unrecorded page as
+     * before.
      */
     private void test(Frames.DeviceCommand command, String name) {
         Device device = devices.device(name).orElseThrow();
+        ImageResolver images = PrintImages.forDevice(device, devices);
+        String body = TestPage.bodyFor(device, images);
+        String jobId = command.jobId();
+
         try {
-            PrintJob job = printing.submit(device,
-                    TestPage.bodyFor(device, PrintImages.forDevice(device, devices)));
-            answer(command, true, "Queued test page " + job.id());
-        } catch (PrintRequestException | QueueRejectedException e) {
+            if (jobId == null) {
+                PrintJob job = printing.submit(device, body);
+                answer(command, true, "Queued test page " + job.id());
+                return;
+            }
+
+            CompiledJob compiled = PrintCompiler.compile(body, device, images);
+            // Registered before submission, as in onDispatch: the queue can fire a state change the
+            // instant it accepts the job, and that change must already count as reportable.
+            dispatched.add(jobId);
+            try {
+                if (printing.accept(device, jobId, compiled).isEmpty()) {
+                    answer(command, true, "Test page " + jobId + " was already queued");
+                    return;
+                }
+            } catch (QueueRejectedException e) {
+                // Failed by the print service through the listener, so the server has been told;
+                // only the command's answer is left.
+                answer(command, false, e.getMessage());
+                return;
+            }
+            answer(command, true, "Queued test page " + jobId + " (" + compiled.lines() + " lines, "
+                    + compiled.bytes() + " bytes)");
+        } catch (PrintRequestException e) {
+            // The page never became a job here, so nothing will report it; the row the server holds
+            // must still be settled, or it sits QUEUED forever.
+            if (jobId != null) {
+                dispatched.remove(jobId);
+                report(jobId, JobState.FAILED, null, null, UNRENDERABLE, e.getMessage());
+            }
+            answer(command, false, e.getMessage());
+        } catch (QueueRejectedException e) {
             answer(command, false, e.getMessage());
         }
     }

@@ -319,6 +319,38 @@ class LinkDispatcherTest {
         assertTrue(awaitFrame(Frames.CommandResult.class).ok());
     }
 
+    /**
+     * The page is composed here, but the server records it, so it must report under the server's
+     * id like any dispatched job — that report is what puts it in the Jobs tab. A test page that
+     * printed and reported nothing left an operator looking at an empty tab.
+     */
+    @Test
+    void printsATestPageUnderTheJobTheServerRecorded() throws Exception {
+        FakePrinterPort port = configure("kitchen");
+
+        dispatcher.accept(new Frames.DeviceCommand("device.test", "req-1", "kitchen", "job-test"));
+
+        assertTrue(port.awaitWrites(5000));
+        assertTrue(awaitFrame(Frames.CommandResult.class).ok());
+        Frames.JobUpdate completed = awaitUpdate("job-test", JobState.COMPLETED);
+        assertNotNull(completed.lines());
+        assertNotNull(completed.bytes());
+    }
+
+    @Test
+    void printsARecordedTestPageOnlyOnce() throws Exception {
+        FakePrinterPort port = configure("kitchen");
+
+        dispatcher.accept(new Frames.DeviceCommand("device.test", "req-1", "kitchen", "job-test"));
+        assertTrue(port.awaitWrites(5000));
+        dispatcher.accept(new Frames.DeviceCommand("device.test", "req-2", "kitchen", "job-test"));
+
+        Frames.CommandResult repeat = awaitFrame(Frames.CommandResult.class);
+        assertEquals("req-2", repeat.requestId());
+        assertTrue(repeat.ok());
+        assertEquals(1, port.writes().size());
+    }
+
     @Test
     void refusesACommandForADeviceItDoesNotHave() {
         configure("kitchen");
@@ -421,7 +453,7 @@ class LinkDispatcherTest {
     // -------------------------------------------------------------------------
 
     private static Frames.DeviceCommand command(String type, String requestId, String device) {
-        return new Frames.DeviceCommand(type, requestId, device);
+        return new Frames.DeviceCommand(type, requestId, device, null);
     }
 
     /** Waits for the most recent frame of a kind, failing the test if none arrives. */

@@ -520,11 +520,19 @@ export const DEVICE_COMMANDS = [
 
 export type DeviceCommand = (typeof DEVICE_COMMANDS)[number];
 
-/** Server to agent: act on one printer. */
+/**
+ * Server to agent: act on one printer.
+ *
+ * `jobId` accompanies `device.test` only. The test page is composed on the agent, but the server
+ * records it as a job first and hands the id over, so the page reports through the same
+ * `job.update` frames as a dispatched job and appears in the Jobs tab like one. Optional on the
+ * wire so an older server's command, which carries no id, still prints — as an unrecorded page.
+ */
 export const deviceCommandSchema = z.object({
 	type: z.enum(DEVICE_COMMANDS),
 	requestId: requestIdSchema,
 	device: deviceNameSchema,
+	jobId: idSchema.optional(),
 });
 
 /**

@@ -83,6 +83,8 @@ export async function scanPorts(agentId: string): Promise<SerialPortInfo[]> {
  * @param agentId the agent holding the printer
  * @param command what to do
  * @param deviceName the printer to act on
+ * @param options `jobId`, for `device.test` only: the job row the agent should report the page
+ *                under, so the page it composes shows in the Jobs tab like a dispatched job
  * @returns the agent's message, when it sent one
  * @throws ApiError when the agent is not connected, does not answer, or refuses
  */
@@ -90,6 +92,7 @@ export async function sendDeviceCommand(
 	agentId: string,
 	command: DeviceCommand,
 	deviceName: string,
+	options: { jobId?: string } = {},
 ): Promise<string | undefined> {
 	const link = getLink(agentId);
 	if (!link) {
@@ -99,7 +102,10 @@ export async function sendDeviceCommand(
 	const requestId = newRequestId();
 	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
 
-	if (!link.send({ type: command, requestId, device: deviceName })) {
+	const frame = options.jobId
+		? { type: command, requestId, device: deviceName, jobId: options.jobId }
+		: { type: command, requestId, device: deviceName };
+	if (!link.send(frame)) {
 		throw new ApiError("agent_offline", "That agent disconnected before the command was sent.");
 	}
 

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
 import { panelAction, panelQuery } from "@/lib/auth/panel-action";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
+import { prisma } from "@/lib/db";
 import {
 	createDevice as createDeviceRecord,
 	type DeviceInput,
@@ -13,6 +14,8 @@ import {
 	updateDevice as updateDeviceRecord,
 } from "@/lib/devices/device-service";
 import { ApiError } from "@/lib/errors";
+import { publish } from "@/lib/events/bus";
+import { failJob } from "@/lib/jobs/dispatch";
 import { scanPorts, sendDeviceCommand } from "@/lib/link/commands";
 import type { SerialPortInfo } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
@@ -149,6 +152,14 @@ export async function clearQueue(deviceId: string): Promise<ActionState> {
  * printer does with the settings the agent actually holds, and compiling it from this side's
  * copy would still pass if the two had diverged.
  *
+ * Recorded as a job all the same. The row is created here and its id travels with the command,
+ * so the agent queues the page under it and reports it through the same `job.update` frames as
+ * anything dispatched — which is what puts it in the Jobs tab with its lines, bytes and outcome.
+ * Before this the page printed and left no record, and an operator who had just pressed the
+ * button found the Jobs tab empty. A command the agent refuses, or one that never reaches it,
+ * settles the row as failed with the reason, by the same rule every other pre-agent failure
+ * follows: a job recorded as queued that will never print is the one state worth never producing.
+ *
  * @param deviceId the printer
  * @returns the state to render
  */
@@ -157,7 +168,31 @@ export async function printTestPage(deviceId: string): Promise<ActionState> {
 		"devices:test-page",
 		async () => {
 			const device = await requireDevice(deviceId);
-			await sendDeviceCommand(device.agentId, "device.test", device.name);
+
+			const job = await prisma.job.create({
+				data: { agentId: device.agentId, deviceId: device.id, status: "QUEUED", queuedAt: new Date() },
+				select: { id: true },
+			});
+
+			try {
+				await sendDeviceCommand(device.agentId, "device.test", device.name, { jobId: job.id });
+			} catch (error) {
+				await failJob(
+					job.id,
+					error instanceof ApiError ? error.code : "device_unavailable",
+					error instanceof Error ? error.message : "The agent could not print the test page.",
+				);
+				throw error;
+			}
+
+			publish({
+				kind: "job",
+				jobId: job.id,
+				status: "QUEUED",
+				agentId: device.agentId,
+				deviceName: device.name,
+				at: new Date().toISOString(),
+			});
 		},
 		{ revalidate, target: { kind: "device", id: deviceId } },
 	);

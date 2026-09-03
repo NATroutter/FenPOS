@@ -624,6 +624,28 @@ class FrameCodecTest {
     }
 
     @Test
+    void readsTheJobIdATestPageCommandCarries() {
+        Frames.ServerFrame frame = assertDoesNotThrow(() -> codec.read(
+                "{\"type\":\"device.test\",\"requestId\":\"r\",\"device\":\"kitchen\",\"jobId\":\"job-7\"}"));
+
+        assertEquals("job-7", assertInstanceOf(Frames.DeviceCommand.class, frame).jobId());
+    }
+
+    @Test
+    void readsACommandWithoutAJobIdAsCarryingNone() {
+        Frames.ServerFrame frame = assertDoesNotThrow(() -> codec.read(
+                "{\"type\":\"device.test\",\"requestId\":\"r\",\"device\":\"kitchen\"}"));
+
+        assertEquals(null, assertInstanceOf(Frames.DeviceCommand.class, frame).jobId());
+    }
+
+    @Test
+    void refusesAJobIdThatIsNotAString() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"device.test\",\"requestId\":\"r\",\"device\":\"kitchen\",\"jobId\":7}"));
+    }
+
+    @Test
     void refusesADeviceCommandWithNoDevice() {
         assertThrows(ProtocolException.class, () ->
                 codec.read("{\"type\":\"device.pause\",\"requestId\":\"r\"}"));

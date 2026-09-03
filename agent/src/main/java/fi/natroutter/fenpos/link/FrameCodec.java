@@ -162,7 +162,8 @@ public final class FrameCodec {
                  "device.clearQueue", "device.test" -> new DeviceCommand(
                     type,
                     requireString(root, "requestId"),
-                    requireString(root, "device"));
+                    requireString(root, "device"),
+                    optionalString(root, "jobId"));
             // An unknown type is not an error to crash on: a newer server may send frames this
             // agent has no need to understand. The caller logs and ignores it.
             default -> throw new ProtocolException("unknown frame type '" + type + "'");
@@ -536,6 +537,20 @@ public final class FrameCodec {
             throw new ProtocolException("field '" + field + "' must be a string");
         }
         return element.getAsString();
+    }
+
+    /**
+     * Reads a string the frame may leave out.
+     *
+     * <p>Absent and JSON null both read as null; a value of any other type is still refused, so
+     * an optional field cannot become a way to slip a wrong-typed value past the codec.
+     */
+    private static String optionalString(JsonObject parent, String field) throws ProtocolException {
+        JsonElement element = parent.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        return requireString(parent, field);
     }
 
     private static boolean requireBoolean(JsonObject parent, String field) throws ProtocolException {

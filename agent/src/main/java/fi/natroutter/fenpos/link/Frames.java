@@ -262,8 +262,10 @@ public final class Frames {
      * @param type      which action, one of the {@code device.*} types
      * @param requestId correlates the answer with this request
      * @param device    the device to act on
+     * @param jobId     for {@code device.test}, the job the server recorded the page under, so it
+     *                  is reported like a dispatched job; null from a server that records none
      */
-    public record DeviceCommand(String type, String requestId, String device)
+    public record DeviceCommand(String type, String requestId, String device, String jobId)
             implements ServerFrame {
     }
 
