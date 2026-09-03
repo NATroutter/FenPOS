@@ -4,6 +4,7 @@ import { AGENT_LINK_PATH } from "./lib/link/link-path";
 // Type-only and constant imports: neither pulls a `server-only` module into this process.
 import type { LinkUpgradeHandler } from "./lib/link/link-server";
 import { publishHttpServer } from "./lib/link/server-handle";
+import { ownUpgrades } from "./lib/link/upgrade-owner";
 
 /**
  * Process entry point.
@@ -119,9 +120,14 @@ async function main(): Promise<void> {
 	// anything that is not the agent link must be handed back to it. Consuming every upgrade
 	// here breaks hot reload in a way that surfaces as pages rendering but never hydrating,
 	// with no error in the browser to point at the cause.
+	//
+	// Registered through ownUpgrades rather than server.on, because Next later adds an upgrade
+	// listener of its own to this same server and ends any agent's socket before the link can
+	// answer it. See lib/link/upgrade-owner.ts for the whole story; the short version is that a
+	// production build with that listener in place refuses every agent, silently.
 	const upgradeToNext = app.getUpgradeHandler();
 
-	server.on("upgrade", (request, socket, head) => {
+	ownUpgrades(server, (request, socket, head) => {
 		const path = new URL(request.url ?? "/", "http://localhost").pathname;
 
 		if (path === AGENT_LINK_PATH) {
