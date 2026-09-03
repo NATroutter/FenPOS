@@ -83,6 +83,7 @@ public class PairingClient {
                     HttpRequest.newBuilder(endpoint)
                             .timeout(TIMEOUT)
                             .header("Content-Type", "application/json")
+                            .header("User-Agent", info.userAgent())
                             .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build(),
                     HttpResponse.BodyHandlers.ofString());

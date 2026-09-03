@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.link;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.AgentSettings;
+import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.device.DeviceRegistry;
 import fi.natroutter.fenpos.enums.JobState;
@@ -209,7 +210,8 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
             // system produces. The reason reported is deliberately generic: an internal exception
             // message is not written for whoever wrote the markup, and the stack that explains it
             // belongs in this agent's log rather than in a job row on someone's screen.
-            logger.error("Could not render job " + job.jobId() + " for device '" + job.device() + "'", e);
+            logger.error("Could not render job " + job.jobId() + " for device '" + job.device() + "': "
+                    + Diagnostics.describe(e));
             log.error("Job " + job.jobId() + " failed while being rendered; see the agent log", job.device());
             report(job.jobId(), JobState.FAILED, null, null, UNRENDERABLE,
                     "This agent could not render that job.");

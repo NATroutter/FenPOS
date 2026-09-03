@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.console;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.Diagnostics;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -260,7 +261,7 @@ public class ConsoleManager {
             command.get().execute(args);
         } catch (RuntimeException e) {
             // A broken command must not take the console down with it.
-            logger.error("Command '" + name + "' failed", e);
+            logger.error("Command '" + name + "' failed: " + Diagnostics.describe(e));
             output.println("Command failed: " + e.getMessage());
         }
     }
@@ -314,7 +315,7 @@ public class ConsoleManager {
             try {
                 terminal.close();
             } catch (IOException e) {
-                logger.warn("Could not close the terminal: " + e.getMessage());
+                logger.warn("Could not close the terminal: " + Diagnostics.describe(e));
             }
             terminal = null;
         }

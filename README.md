@@ -280,6 +280,7 @@ The **Docs** tab carries the full reference, generated from the running install.
 | `FENPOS_SERVER` | — | Server address. `https` unless loopback. |
 | `FENPOS_PAIR_CODE` | — | Single-use pairing code. Read only when no identity is stored. |
 | `TZ` | UTC | Job timestamps are user-facing. |
+| `FENPOS_DEBUG` | false | Verbose logging: a stack trace on every error, each link attempt and frame, and each HTTP request with the status it got. For when the log says what failed but not why. |
 
 Everything else — the public address, limits, retention, per-printer settings — lives in the
 panel under **Settings** and **Devices**, not in environment variables. The public address

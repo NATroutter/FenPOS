@@ -41,6 +41,7 @@ services:
       FENPOS_SERVER: "https://fenpos.example.com"
       FENPOS_PAIR_CODE: "AG7K-2M9P-X4TR"     # single-use, read only on first boot
       TZ: "Europe/Helsinki"
+      FENPOS_DEBUG: "false"                  # "true": stack traces and per-request detail
 
     # Raspberry Pi OS disables the cgroup memory controller, so Docker discards this with
     # "Your kernel does not support memory limit capabilities" and the container runs

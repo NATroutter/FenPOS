@@ -52,6 +52,13 @@ services:
       # Job timestamps are user-facing, so the container's zone matters.
       TZ: "Europe/Helsinki"
 
+      # Set to "true" when the log says something failed but not why. Every
+      # error then carries its stack trace, the link reports each connection
+      # attempt and each frame, and the HTTP client logs every request with the
+      # status it got back — which is what shows a proxy answering in the
+      # server's place. Off by default: the output is several times the size.
+      FENPOS_DEBUG: "false"
+
     mem_limit: 512m
 
     # Required for the console via `docker attach fenpos-agent`, which is where

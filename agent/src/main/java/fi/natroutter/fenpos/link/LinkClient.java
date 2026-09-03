@@ -1,12 +1,15 @@
 package fi.natroutter.fenpos.link;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
 
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
+import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
+import java.net.http.WebSocketHandshakeException;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
@@ -174,9 +177,10 @@ public class LinkClient {
         }
         try {
             open.sendText(codec.write(frame), true);
+            Diagnostics.debug(logger, "Sent " + frame.type());
             return true;
         } catch (RuntimeException e) {
-            logger.warn("Could not send " + frame.type() + ": " + e.getMessage());
+            logger.warn("Could not send " + frame.type() + ": " + Diagnostics.describe(e));
             return false;
         }
     }
@@ -205,8 +209,11 @@ public class LinkClient {
         }
 
         state = LinkState.CONNECTING;
+        Diagnostics.debug(logger, "Connecting to " + endpoint + " (attempt " + (backoff.attempts() + 1)
+                + " since the last success)");
         http.newWebSocketBuilder()
                 .header("Authorization", "Bearer " + current.token())
+                .header("User-Agent", info.userAgent())
                 .connectTimeout(CONNECT_TIMEOUT)
                 .buildAsync(endpoint, new Handler())
                 .whenComplete((ws, error) -> {
@@ -227,8 +234,7 @@ public class LinkClient {
 
     /** Reports a failed attempt at a volume that suits how long it has been failing. */
     private void onConnectFailure(URI endpoint, Throwable error) {
-        Throwable cause = error.getCause() == null ? error : error.getCause();
-        String detail = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+        String detail = describeFailure(error);
 
         long attempts = backoff.attempts();
         if (attempts < QUIET_AFTER_ATTEMPTS) {
@@ -242,6 +248,33 @@ public class LinkClient {
         }
 
         scheduleReconnect();
+    }
+
+    /**
+     * Turns a failed connection attempt into one line someone can act on.
+     * <p>
+     * A refused handshake arrives as a {@link WebSocketHandshakeException} whose message is null:
+     * the status the server (or a proxy in front of it) actually answered with is on the response
+     * it carries, and the reason is one cause further down. Printing the exception's own text gave
+     * a log full of the class name and nothing else, which is what made a proxy returning 502 look
+     * identical to a server refusing the token.
+     *
+     * @param error the failure, as delivered by the HTTP client
+     * @return a description naming the HTTP status when there was one, with the stack trace
+     *         appended when verbose logging is on
+     */
+    private static String describeFailure(Throwable error) {
+        Throwable cause = error.getCause() == null ? error : error.getCause();
+
+        if (cause instanceof WebSocketHandshakeException handshake) {
+            HttpResponse<?> response = handshake.getResponse();
+            String status = response == null ? "no response" : "HTTP " + response.statusCode();
+            Throwable reason = handshake.getCause();
+            String why = reason == null || reason.getMessage() == null ? "" : " (" + reason.getMessage() + ")";
+            return "handshake refused with " + status + why + Diagnostics.stackTrace(cause);
+        }
+
+        return Diagnostics.describe(cause);
     }
 
     /** Called when an established connection ends, for any reason. */
@@ -351,7 +384,7 @@ public class LinkClient {
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            onDisconnected(error.getMessage() == null ? error.toString() : error.getMessage());
+            onDisconnected(Diagnostics.describe(error));
         }
 
         /**
@@ -366,16 +399,17 @@ public class LinkClient {
             try {
                 frame = codec.read(raw);
             } catch (ProtocolException e) {
-                logger.warn("Ignored a frame from the server: " + e.getMessage());
+                logger.warn("Ignored a frame from the server: " + Diagnostics.describe(e));
                 return;
             }
 
+            Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
             try {
                 handler.accept(frame);
             } catch (RuntimeException e) {
                 // A handler failure is a bug in this agent, not a reason to drop the link and
                 // stop every other frame behind it.
-                logger.error("Failed to handle a " + frame.type() + " frame", e);
+                logger.error("Failed to handle a " + frame.type() + " frame: " + Diagnostics.describe(e));
             }
         }
     }

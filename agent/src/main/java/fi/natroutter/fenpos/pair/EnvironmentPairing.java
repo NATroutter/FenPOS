@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.pair;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
 
 import java.util.Objects;
@@ -70,7 +71,7 @@ public final class EnvironmentPairing {
         try {
             stored = pairing.identity();
         } catch (PairingException e) {
-            logger.error("Could not read the stored credential: " + e.getMessage());
+            logger.error("Could not read the stored credential: " + Diagnostics.describe(e));
             return Optional.empty();
         }
 
@@ -103,7 +104,7 @@ public final class EnvironmentPairing {
         } catch (PairingException e) {
             // Reported plainly enough to act on: regenerate in the panel, update the value,
             // restart. Not fatal, for the reason in the class documentation.
-            logger.error("Pairing from the environment failed: " + e.getMessage());
+            logger.error("Pairing from the environment failed: " + Diagnostics.describe(e));
             return Optional.empty();
         }
     }

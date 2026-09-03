@@ -20,6 +20,23 @@ public record AgentInfo(String agentVersion, String platform, String hostname) {
     /** What is reported when the host name cannot be determined. */
     private static final String UNKNOWN_HOST = "unknown";
 
+    /** Product name this agent identifies itself with on the wire. */
+    private static final String USER_AGENT_PRODUCT = "FENPos-Agent";
+
+    /**
+     * The {@code User-Agent} this agent sends on every request, pairing and link alike.
+     * <p>
+     * The JDK's default names the HTTP client and the Java version, which tells a proxy log
+     * nothing about what was calling and makes an agent indistinguishable from any other Java
+     * program. Naming the product and its version means the line in a reverse proxy's access
+     * log says what it was, and which release, without anyone opening the agent's own logs.
+     *
+     * @return the header value, in the {@code product/version} form
+     */
+    public String userAgent() {
+        return USER_AGENT_PRODUCT + "/" + agentVersion;
+    }
+
     /**
      * Describes the machine this process is running on.
      *

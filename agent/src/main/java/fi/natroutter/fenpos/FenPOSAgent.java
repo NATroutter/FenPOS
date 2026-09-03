@@ -142,7 +142,7 @@ public class FenPOSAgent extends FoxLib {
         // the operator is typing.
         consoleOutput = new ConsoleOutput();
         logger = new FoxLogger.Builder()
-                .setDebug(false)
+                .setDebug(Diagnostics.enabled())
                 .setPruneOlderThanDays(35)
                 .setSaveIntervalSeconds(300)
                 .setLoggerName("FenPOS")
@@ -150,6 +150,8 @@ public class FenPOSAgent extends FoxLib {
                 .build();
 
         printBanner();
+        // Before any HTTP client exists, or the JDK's request logging never switches on.
+        Diagnostics.configureProcess(logger);
 
         if (!openStore()) {
             return;
@@ -235,7 +237,7 @@ public class FenPOSAgent extends FoxLib {
         } catch (StoreException e) {
             // Without the store the agent cannot know who it is paired to, and pairing again
             // would not survive a restart. Starting anyway would look like it worked.
-            logger.error("Local store is unusable, refusing to start: " + e.getMessage());
+            logger.error("Local store is unusable, refusing to start: " + Diagnostics.describe(e));
             return false;
         }
     }
@@ -288,7 +290,7 @@ public class FenPOSAgent extends FoxLib {
             } catch (RuntimeException e) {
                 // A failed report must not kill the scheduled task, which would stop all
                 // future reports and leave the panel frozen on the last one.
-                logger.error("Status report failed", e);
+                logger.error("Status report failed: " + Diagnostics.describe(e));
             }
         };
         rescheduleStatusReports(interval);
@@ -329,7 +331,7 @@ public class FenPOSAgent extends FoxLib {
             } catch (RuntimeException e) {
                 // A sweep failure must not kill the scheduled task, which would
                 // silently stop all future eviction and leak job records.
-                logger.error("Job eviction failed", e);
+                logger.error("Job eviction failed: " + Diagnostics.describe(e));
             }
         };
         rescheduleJanitor(interval);
