@@ -1,4 +1,5 @@
 import { apiRoute } from "@/lib/api/api-route";
+import { readBoundedJson } from "@/lib/api/bounded-body";
 import { type ApiDeviceAction, apiActionSchema, commandFor, PERSISTS_PAUSE } from "@/lib/api/device-actions";
 import { setDevicePaused } from "@/lib/devices/device-service";
 import { ApiError } from "@/lib/errors";
@@ -66,9 +67,9 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 /**
  * Reads the requested action from the body.
  *
- * Size is checked on the raw text before parsing, the same discipline `readBody` in the print route
- * uses and for the same reason: parsing is the work an oversized body is trying to provoke, so the
- * check has to happen before `JSON.parse` ever sees the bytes.
+ * Size is enforced on the way in, before parsing, the same discipline `readBoundedJson` applies for
+ * the print route and for the same two reasons: parsing is the work an oversized body is trying to
+ * provoke, and a body this is going to refuse must not first be held in full to be measured.
  *
  * @param request the incoming request
  * @returns the validated action
@@ -76,18 +77,7 @@ export const POST = apiRoute<{ agent: string; device: string }>(
  *   API does not define
  */
 async function readAction(request: Request): Promise<ApiDeviceAction> {
-	const raw = await request.text();
-
-	if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
-		throw new ApiError("body_too_large", `Request body must be under ${MAX_BODY_BYTES} bytes.`);
-	}
-
-	let body: unknown;
-	try {
-		body = JSON.parse(raw);
-	} catch {
-		throw new ApiError("invalid_json", "Body is not valid JSON");
-	}
+	const { body } = await readBoundedJson(request, MAX_BODY_BYTES);
 
 	const action = (body as { action?: unknown })?.action;
 	if (action === undefined || action === null) {

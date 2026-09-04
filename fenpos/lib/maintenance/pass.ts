@@ -112,6 +112,12 @@ export async function runMaintenancePass(): Promise<void> {
 	}
 
 	try {
+		await publishAuditAnchor();
+	} catch (error) {
+		logger.error("Could not publish the audit chain's tail", error);
+	}
+
+	try {
 		const stats = await globalStatsSettings();
 		if (stats.enabled) {
 			const { rolledHours } = await runMetricsRollup({ db: prisma, metricsDb, auditDb });
@@ -127,4 +133,33 @@ export async function runMaintenancePass(): Promise<void> {
 	} catch (error) {
 		logger.error("A metrics rollup pass could not run", error);
 	}
+}
+
+/**
+ * Writes the chain's current tail to the process log.
+ *
+ * The chain proves that no row in the middle of it was altered: change one and every hash after it
+ * stops matching. It cannot prove that nothing was removed from the *end*, because a chain with its
+ * last rows deleted is a shorter chain that verifies perfectly — the schema's own comment says so.
+ * And the hash is unkeyed, so anybody holding the database and this application's code (which is
+ * public) can recompute a chain of their choosing from any point.
+ *
+ * Both of those are the same problem in different clothes: every input to the verification lives in
+ * one place, so somebody who holds that place holds the verification too. Publishing the tail is the
+ * cheapest way out — this line goes to stdout, which on a container install is the runtime's log and
+ * not the volume the record sits on. An operator shipping those logs anywhere has a witness: the
+ * chain must still contain a row with this hash at this sequence, and a record that no longer does
+ * has been truncated no matter how well it verifies against itself.
+ *
+ * Hourly rather than per-event, because the value of the line is that somebody kept it, and a
+ * witness written 86,400 times a day is a witness nobody reads. The bound it buys is an hour of
+ * events, which is the right shape for the thing it detects: a tail truncation is not undone by
+ * noticing it sooner.
+ */
+async function publishAuditAnchor(): Promise<void> {
+	const tail = await auditDb.auditEvent.findFirst({ orderBy: { seq: "desc" }, select: { seq: true, hash: true } });
+	if (!tail) {
+		return;
+	}
+	logger.info("Audit chain anchor", { seq: tail.seq, hash: tail.hash });
 }

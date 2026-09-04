@@ -5,8 +5,8 @@ import { prisma } from "@/lib/db";
  * The four grant tables, and the deletions they do and do not survive.
  *
  * The cascades are asserted against the database rather than read off the schema, because a
- * migration that dropped one would leave every other test in this phase passing and a deleted
- * account's grants sitting in a table waiting for its id to be reused.
+ * migration that dropped one would leave every other test around it passing and a deleted account's
+ * grants sitting in a table waiting for its id to be reused.
  */
 describe("grant schema", () => {
 	beforeEach(async () => {

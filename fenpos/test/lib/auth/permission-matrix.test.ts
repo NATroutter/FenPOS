@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Every gated action, held to the same three answers.
  *
- * The fourth of the spec's load-bearing tests. `registry-coverage.test.ts` proves nothing escapes
- * the registry; this proves the registry is worth escaping — that an entry's permission is actually
+ * `registry-coverage.test.ts` proves nothing escapes the registry; this proves the registry is
+ * worth escaping — that an entry's permission is actually
  * consulted, for every entry, rather than for the handful anybody wrote a test for.
  *
  * It drives `panelAction` with a spy body rather than calling each real action. Sixty real bodies
@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * gate, and a spy body is what makes the gate the only variable.
  *
  * A fresh account id per case, because `effectivePermissions` memoises per id for the life of the
- * process — see the Global Constraints. The counter below is what guarantees that.
+ * process. The counter below is what guarantees that.
  */
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/lib/request-context", () => ({

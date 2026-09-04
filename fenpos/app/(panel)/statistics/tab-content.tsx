@@ -17,7 +17,7 @@ export interface StatisticsFilter {
 
 /**
  * Renders the body for the active tab: one of the eight tab server components, each fetching its
- * own `*TabData` shape and laying out `ChartCard`s per the spec's chart-to-primitive mapping.
+ * own `*TabData` shape and laying out its own `ChartCard`s.
  */
 export function TabContent({ tab, range, filter }: { tab: TabId; range: ResolvedRange; filter: StatisticsFilter }) {
 	switch (tab) {

@@ -1,8 +1,14 @@
 import "server-only";
 import { ApiError } from "@/lib/errors";
-import type { CommandResultFrame, DeviceCommand, PortsResultFrame, SerialPortInfo } from "@/lib/link/protocol";
-import { getLink } from "@/lib/link/registry";
-import { awaitReply, newRequestId, RequestTimeoutError } from "@/lib/link/requests";
+import type {
+	CommandResultFrame,
+	DeviceCommand,
+	PortsResultFrame,
+	SerialPortInfo,
+	ServerFrame,
+} from "@/lib/link/protocol";
+import { type AgentLink, getLink } from "@/lib/link/registry";
+import { awaitReply, cancelReply, newRequestId, RequestTimeoutError } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { integerSetting } from "@/lib/settings/settings-service";
 
@@ -39,6 +45,39 @@ async function commandTimeoutMs(): Promise<number> {
 }
 
 /**
+ * Sends a frame, giving up the reply slot when it does not go out.
+ *
+ * The slot has to be registered before the frame leaves, or a reply on a fast link arrives before
+ * anybody is waiting for it. That ordering is what makes this function necessary: between the
+ * registration and a successful send there are two ways to fail, and both used to leave the slot
+ * behind. `send` returns false when the socket closed in between; it *throws* when
+ * `serialiseServerFrame` refuses the payload, which a caller can provoke deliberately — and a slot
+ * per provocation, each held until its timeout, is the per-agent pending map filling up with
+ * requests that were never sent. The abandoned promise is the second cost: nothing awaits it, so its
+ * eventual timeout rejection has nowhere to go.
+ *
+ * @param link the connection to send on
+ * @param requestId the reply slot already registered for this frame
+ * @param frame the frame to send
+ * @param offlineMessage what to report when the socket had already closed
+ * @throws ApiError when the socket had closed; whatever `send` threw otherwise
+ */
+function dispatch(link: AgentLink, requestId: string, frame: ServerFrame, offlineMessage: string): void {
+	let sent: boolean;
+	try {
+		sent = link.send(frame);
+	} catch (error) {
+		cancelReply(requestId);
+		throw error;
+	}
+
+	if (!sent) {
+		cancelReply(requestId);
+		throw new ApiError("agent_offline", offlineMessage);
+	}
+}
+
+/**
  * Asks an agent what serial ports it can see.
  *
  * The panel's port picker is filled from this rather than from a text field. An operator
@@ -59,9 +98,7 @@ export async function scanPorts(agentId: string): Promise<SerialPortInfo[]> {
 	const requestId = newRequestId();
 	const waiting = awaitReply<PortsResultFrame>(requestId, await scanTimeoutMs());
 
-	if (!link.send({ type: "ports.scan", requestId })) {
-		throw new ApiError("agent_offline", "That agent disconnected before the scan was sent.");
-	}
+	dispatch(link, requestId, { type: "ports.scan", requestId }, "That agent disconnected before the scan was sent.");
 
 	try {
 		const result = await waiting;
@@ -105,9 +142,7 @@ export async function sendDeviceCommand(
 	const frame = options.jobId
 		? { type: command, requestId, device: deviceName, jobId: options.jobId }
 		: { type: command, requestId, device: deviceName };
-	if (!link.send(frame)) {
-		throw new ApiError("agent_offline", "That agent disconnected before the command was sent.");
-	}
+	dispatch(link, requestId, frame, "That agent disconnected before the command was sent.");
 
 	let result: CommandResultFrame;
 	try {
@@ -163,9 +198,12 @@ export async function sendRawWrite(agentId: string, deviceName: string, bytes: s
 	const requestId = newRequestId();
 	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
 
-	if (!link.send({ type: "raw.write", requestId, device: deviceName, bytes })) {
-		throw new ApiError("agent_offline", "That agent disconnected before the bytes were sent.");
-	}
+	dispatch(
+		link,
+		requestId,
+		{ type: "raw.write", requestId, device: deviceName, bytes },
+		"That agent disconnected before the bytes were sent.",
+	);
 
 	let result: CommandResultFrame;
 	try {

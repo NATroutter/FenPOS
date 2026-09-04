@@ -307,6 +307,9 @@ describe("the gates before the credential", () => {
 		});
 
 		it("counts nothing while the setting is zero", async () => {
+			// Set explicitly rather than leaning on the default, which is now 10 — an install that turns
+			// the lockout off must still be able to, and that is what this pins.
+			await setSetting("auth.lockoutAfterFailures", 0);
 			const email = await account("li5");
 			signInEmail.mockRejectedValue(new Error("INVALID_EMAIL_OR_PASSWORD"));
 

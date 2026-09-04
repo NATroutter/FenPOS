@@ -170,13 +170,20 @@ restarted before claiming just restarts again for a fresh key, and a key someone
 stops working at the same moment. Only the current key's hash is stored, never the plaintext,
 so there is nothing to reprint later the way the password this replaces had to be.
 
+**Anyone who can read the log can claim the install**, for exactly as long as it is unclaimed.
+That is what makes reading the log the way to get the key, and it cuts both ways: a shipped log
+stream, a shared terminal, or a CI job that captures container output all carry it. Claim a new
+install promptly, and treat its first boot log as a credential until you have. Once an account
+exists nothing further is printed and the window is closed.
+
 **Setup cannot be reopened once an account exists.** `/setup` then redirects to `/login`, and no
-key is minted or printed on later starts. There is currently **no recovery path** for a lost
-password. In development, `pnpm db:reset` recreates the database from its migrations (see
+key is minted or printed on later starts. The recovery path is `pnpm auth:recover`, run on the host
+with access to the data volume. It resets a named account's password, clears its two-factor
+enrolment, lifts a lockout, or empties the address allowlist, writing an audit row for whichever it
+did and leaving agents, devices, keys and history alone. In development, `pnpm db:reset` recreates
+the database from its migrations (see
 **Development** below) and setup runs again, but that discards everything else too, not just
-the account, and there is no equivalent for a production install short of clearing its data
-volume by hand. A dedicated `auth:recover` CLI is planned for a later phase but does not exist
-yet.
+the account.
 
 ---
 
@@ -324,9 +331,15 @@ raised it.
 - **SPKI pinning from pairing onward**, so a mis-issued certificate or a MITM proxy is
   refused even when the certificate chain validates.
 - **Pairing codes** are single-use, consumed atomically at redemption, expire in 15 minutes,
-  and are rate-limited per IP.
+  and are rate-limited per address.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
-  five attempts per minute.
+  five attempts per minute per address, and an account locks after ten consecutive failures.
+- **The caller's address is the connection, not a header.** Everything keyed on an address — the
+  sign-in limit above, the pairing limit, the optional address allowlist, every audit row — uses the
+  peer that opened the connection. A forwarding header such as `X-Forwarded-For` is read only from
+  the addresses listed under **Settings → Security → Trusted proxies**, which is empty by default.
+  Behind a reverse proxy, put its address there, or every visitor arriving through it is counted and
+  recorded as the proxy. The Settings page shows what your own request resolved to.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
   frames are refused without dropping the connection, and job dispatch is deduplicated by id.
 - **Passwords** are argon2id, minimum 12 characters. Any character is accepted, including
@@ -365,7 +378,8 @@ mvn package
 
 | Command | What it does |
 |---|---|
-| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account. The next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but there is no lighter-weight way to do it: there is currently no command that resets only the credential and leaves agents, devices, keys and history alone. |
+| `pnpm auth:recover` | Acts on an account from the host, outside the panel, for when nobody can sign in. `--list` names the accounts, `--reset-password <email>` replaces a credential, `--clear-2fa <email>` drops an enrolment, `--unlock <email>` lifts a lockout, and `--clear-allowlist` empties the address allowlist. One command at a time, each writing an audit row. |
+| `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account. The next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but it is the heavy option: `auth:recover` above is what fixes a locked-out install without discarding agents, devices, keys and history. |
 | `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone. Run this only after changing the logo or the widths, and commit what it produces. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |
 

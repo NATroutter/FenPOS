@@ -62,7 +62,7 @@ describe("log ingestion", () => {
 		await prisma.agent.delete({ where: { id: agentId } });
 
 		// Goes red if `agentName` is not written onto the row at ingest time — the dominant path an
-		// agent-attributed line is written through, and the one the spec's survival claim is actually
+		// agent-attributed line is written through, and the one the survival guarantee is actually
 		// about. Once the agent is gone there is no relation left to read a name from, so a line
 		// holding only `agentId` would have no way to report where it came from.
 		expect((await listLogs()).lines[0].agentName).toBe("site-a");

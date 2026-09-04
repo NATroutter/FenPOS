@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
  * The two ways an install can be locked out of itself.
  *
  * Deleting or banning the only superuser leaves nobody who can undo it, and there is no email loop
- * and no re-openable setup to recover through — the only route back would be the phase 8 recovery
+ * and no re-openable setup to recover through — the only route back would be the `auth:recover`
  * CLI, which needs filesystem access. Banning yourself is the same failure with one extra step.
  * Both are checked here rather than in the dialog, because a dialog is not a boundary.
  */

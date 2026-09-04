@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 /**
@@ -38,6 +39,7 @@ const KINDS: EventKind[] = ["job", "log", "agent", "device"];
 
 export function EventStreamProvider({ children }: { children: ReactNode }) {
 	const [live, setLive] = useState(true);
+	const router = useRouter();
 
 	// Handlers are held in a ref rather than state because a component subscribing must not
 	// reopen the connection — the listeners below read this map at dispatch time, so a late
@@ -73,8 +75,15 @@ export function EventStreamProvider({ children }: { children: ReactNode }) {
 			});
 		}
 
+		// The server drops events rather than queue them without limit for a connection that has
+		// stopped being read — a suspended laptop, a proxy that wedged, a tab the browser froze. When
+		// reading resumes it says so, and the only honest repair for a gap in a live view is to read
+		// the pages again: every consumer of this stream renders server state, so a refresh is exactly
+		// what the missed events would have produced.
+		source.addEventListener("resync", () => router.refresh());
+
 		return () => source.close();
-	}, [live]);
+	}, [live, router]);
 
 	const value = useMemo<EventStream>(() => ({ live, setLive, subscribe }), [live, subscribe]);
 

@@ -41,7 +41,7 @@ class PrintQueueTest {
 
     private final JobStore store =
             new JobStore(new JobSettings(Duration.ofMinutes(10), 500, Duration.ofSeconds(5)),
-                    Clock.systemUTC());
+                    Clock.systemUTC(), logger);
 
     private FakePrinterPort port;
     private PrintQueue queue;

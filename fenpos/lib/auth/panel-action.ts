@@ -2,6 +2,7 @@ import "server-only";
 import { recordAudit, userActor } from "@/lib/audit/audit-log";
 import { requestProvenance } from "@/lib/audit/provenance";
 import { describeTarget } from "@/lib/audit/target-label";
+import { isProtectedSuperuserTarget } from "@/lib/auth/account-guards";
 import { userHolds } from "@/lib/auth/effective-permissions";
 import { type PanelActionId, panelActionEntry } from "@/lib/auth/panel-actions";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
@@ -12,8 +13,9 @@ import type { ActionState } from "@/lib/panel/action-state";
 /**
  * The one place that decides whether a panel action may proceed.
  *
- * In order: resolve the session, check the registry's permission, run the body, write the audit
- * row. Three properties fall out of there being exactly one such place — a denied action is
+ * In order: resolve the session, check the registry's permission, check the target is one this
+ * caller may touch, run the body, write the audit row. Three properties fall out of there being
+ * exactly one such place — a denied action is
  * recorded before it returns, so permission probing is visible; a thrown action is recorded as a
  * failure, so an attempt that did not work is as much a part of the record as one that did; and a
  * superuser bypasses the check while being audited identically, because a superuser's actions are
@@ -40,8 +42,17 @@ export interface PanelActionOptions {
 	detail?: Record<string, unknown>;
 }
 
-/** What the gate decided. */
-type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: PanelUser; permission: string };
+/**
+ * What the gate decided.
+ *
+ * A refusal carries the fields that go into its `DENIED` row rather than a bare permission string,
+ * because there are two ways to be refused and an investigator has to be able to tell them apart:
+ * `{ permission }` for "you do not hold this", `{ reason: "protected-target" }` for "you hold it,
+ * but not against that account". They read identically to the caller — see {@link REFUSAL_MESSAGE}.
+ */
+type GateResult =
+	| { allowed: true; user: PanelUser }
+	| { allowed: false; user: PanelUser; refusal: Record<string, unknown> };
 
 /**
  * The two actions that are how enrolling a second factor happens.
@@ -62,32 +73,47 @@ type GateResult = { allowed: true; user: PanelUser } | { allowed: false; user: P
 const ENROLMENT_ACTION_IDS: ReadonlySet<PanelActionId> = new Set(["self:begin-2fa", "self:confirm-2fa"]);
 
 /**
- * Resolves the session and checks the registry's permission.
+ * Resolves the session, checks the registry's permission, and checks the target.
  *
  * Must be called outside any `try` that catches broadly: `requireSession` redirects by throwing.
  *
+ * **Two questions, not one.** "May you run this action" is the registry's, answered by the
+ * permission. "May you run it against *that account*" is {@link isProtectedSuperuserTarget}'s, and
+ * it is asked here rather than in the eleven `users:*` action bodies that need it, for one reason:
+ * asked here it is true of every action carrying a user target, including the ones not written yet.
+ * The permission comes first, so an operator holding neither learns nothing about the target from
+ * the order of the checks.
+ *
  * @param id the action's registry id
+ * @param options the caller's options, read for the target
  * @returns who is calling, and whether they may
  */
-async function gate(id: PanelActionId): Promise<GateResult> {
+async function gate(id: PanelActionId, options: PanelActionOptions): Promise<GateResult> {
 	const entry = panelActionEntry(id);
 	const user = await requireSession({ skipEnrolmentGate: ENROLMENT_ACTION_IDS.has(id) });
 
-	if (entry.kind !== "command" && entry.kind !== "query") {
-		// `custom`, `self` and `unauthenticated` carry no permission by construction, and the
-		// registry's own test holds them to it.
-		return { allowed: true, user };
+	// `custom`, `self` and `unauthenticated` carry no permission by construction, and the registry's
+	// own test holds them to it. They still face the target check below — a kind is a statement about
+	// where the permission check lives, not a licence to skip the account it acts on.
+	if (entry.kind === "command" || entry.kind === "query") {
+		if (entry.permission === null) {
+			// Unreachable while `panel-actions.test.ts` passes. Treated as a refusal rather than as a
+			// pass, because the one safe answer to "the rule is missing" is no.
+			return { allowed: false, user, refusal: { permission: id } };
+		}
+		if (!(await userHolds(user, entry.permission))) {
+			return { allowed: false, user, refusal: { permission: entry.permission } };
+		}
 	}
 
-	if (entry.permission === null) {
-		// Unreachable while `panel-actions.test.ts` passes. Treated as a refusal rather than as a
-		// pass, because the one safe answer to "the rule is missing" is no.
-		return { allowed: false, user, permission: id };
+	const target = options.target;
+	if (target?.kind === "user" && typeof target.id === "string" && target.id !== "") {
+		if (await isProtectedSuperuserTarget(user, target.id)) {
+			return { allowed: false, user, refusal: { reason: "protected-target" } };
+		}
 	}
 
-	return (await userHolds(user, entry.permission))
-		? { allowed: true, user }
-		: { allowed: false, user, permission: entry.permission };
+	return { allowed: true, user };
 }
 
 /**
@@ -166,11 +192,11 @@ export async function panelAction(
 	options: PanelActionOptions = {},
 ): Promise<ActionState> {
 	// Outside the try: an absent session redirects, and `redirect` signals by throwing.
-	const gated = await gate(id);
+	const gated = await gate(id, options);
 	options = await withTargetLabel(options);
 
 	if (!gated.allowed) {
-		await record(id, gated.user, "DENIED", options, { permission: gated.permission });
+		await record(id, gated.user, "DENIED", options, gated.refusal);
 		return { error: REFUSAL_MESSAGE };
 	}
 
@@ -211,11 +237,11 @@ export async function panelQuery<T>(
 	work: (user: PanelUser) => Promise<T>,
 	options: { refused: () => T; failed: (error: unknown) => T } & PanelActionOptions,
 ): Promise<T> {
-	const gated = await gate(id);
+	const gated = await gate(id, options);
 	options = await withTargetLabel(options);
 
 	if (!gated.allowed) {
-		await record(id, gated.user, "DENIED", options, { permission: gated.permission });
+		await record(id, gated.user, "DENIED", options, gated.refusal);
 		return options.refused();
 	}
 

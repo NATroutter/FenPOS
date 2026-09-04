@@ -230,7 +230,7 @@ export const CATEGORIES: readonly {
 				// people — which is why this group carries a live readout of what the panel currently
 				// resolves the reader's own address to.
 				label: "Client address",
-				keys: ["server.trustedProxyHeaders", "server.proxyIpPriority"],
+				keys: ["server.trustedProxies", "server.trustedProxyHeaders", "server.proxyIpPriority"],
 				showsClientAddress: true,
 			},
 			{
@@ -523,6 +523,7 @@ function rawWriteByteCeiling(): number {
 /** Keys of every setting. Persisted verbatim, so these strings are a stored contract. */
 export const SETTING_KEYS = [
 	"server.publicUrl",
+	"server.trustedProxies",
 	"server.trustedProxyHeaders",
 	"server.proxyIpPriority",
 	"limits.maxLines",
@@ -635,14 +636,36 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		fallback: "",
 	},
 	{
+		key: "server.trustedProxies",
+		label: "Trusted proxies",
+		description:
+			"Which peers may name the caller through the headers below, as addresses or IPv4 ranges — typically your " +
+			"reverse proxy, such as 127.0.0.1 or 172.16.0.0/12 for a container network. Empty is the default and means " +
+			"no header is ever believed: the caller is whoever opened the connection. Set this only for addresses you " +
+			"run, because anything listed here can choose its own identity for the sign-in throttle, the allowlist and " +
+			"every audit row.",
+		category: "security",
+		type: "list",
+		maxLength: 512,
+		// An address, or an address with a prefix length. Deliberately not a hostname: this is compared
+		// against a socket's peer address on every request, and a name would mean a lookup there.
+		itemPattern: "^[0-9A-Fa-f.:]+(/\\d{1,3})?$",
+		// Loopback covers the common single-host arrangement (nginx or Caddy in front, on the same
+		// machine); the private ranges cover a container network. Offered, never applied by default.
+		suggestions: ["127.0.0.1", "::1", "172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"],
+		// Empty: an install reached directly must not believe a header its caller wrote, and there is
+		// no way to tell from the request alone which install this is.
+		fallback: "",
+	},
+	{
 		key: "server.trustedProxyHeaders",
 		label: "Trusted address headers",
 		description:
 			"Which request headers may say who the caller is, in the order they are tried — the first one present wins. " +
 			"Behind Cloudflare and nginx together, use CF-Connecting-IP: X-Forwarded-For then ends at nginx's view of " +
-			"Cloudflare rather than the visitor. Empty means nothing is trusted and every caller reads as unknown, " +
-			"which is right only when nothing proxies this install. Anything listed here must be a header your proxy " +
-			"overwrites on every request, or a caller can simply send it themselves.",
+			"Cloudflare rather than the visitor. Read only from the peers named above, so this list on its own changes " +
+			"nothing. Anything listed here must be a header your proxy overwrites on every request, or a caller behind " +
+			"it can simply send it themselves.",
 		category: "security",
 		type: "list",
 		maxLength: 256,
@@ -1147,7 +1170,14 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		type: "integer",
 		min: 0,
 		max: 100,
-		fallback: 0,
+		// On by default, and generously, at a count no human reaches by mistyping. Off was the earlier
+		// default, on the reasoning that a lockout is a denial-of-service primitive handed to anyone who
+		// knows an email address. That is true and it is still the smaller risk: off left the per-address
+		// throttle as the only guard on password guessing, and a throttle keyed on an address is only
+		// ever as good as the answer to "whose address" — somebody sharing a NAT with the victim spends
+		// the victim's budget rather than their own. Ten is a second line that does not depend on that
+		// question having been answered correctly.
+		fallback: 10,
 		unit: "attempts",
 	},
 	{
@@ -1944,8 +1974,10 @@ export async function globalLogIngestSettings(): Promise<GlobalLogIngestSettings
 	};
 }
 
-/** Which headers may name the caller, and which entry of a list to believe. */
+/** Who may name the caller, through which headers, and which entry of a list to believe. */
 export interface GlobalProxyTrust {
+	/** Peer addresses and IPv4 ranges whose headers are believed. Empty trusts no peer. */
+	proxies: string[];
 	/** Header names in the order they are tried, lowercased for lookup. Empty trusts nothing. */
 	headers: string[];
 	/** Which entry to take from a header carrying a list. */
@@ -1953,20 +1985,22 @@ export interface GlobalProxyTrust {
 }
 
 /**
- * How the caller's address is to be derived from request headers.
+ * How the caller's address is to be derived.
  *
- * One read for both settings, the same shape as {@link globalLimits} and {@link globalSignInPolicy}
- * and for the same reason: this is on the path of every audited action and every sign-in, and two
- * separate accessors would be two queries where one does.
+ * One read for all three settings, the same shape as {@link globalLimits} and
+ * {@link globalSignInPolicy} and for the same reason: this is on the path of every audited action
+ * and every sign-in, and three separate accessors would be three queries where one does.
  *
- * @returns the headers to trust and which entry of a list to take
+ * @returns the peers to trust, the headers to read from them, and which entry of a list to take
  */
 export async function globalProxyTrust(): Promise<GlobalProxyTrust> {
 	const settings = await listSettings();
+	const proxies = narrow(settings, "server.trustedProxies", "list") as string;
 	const raw = narrow(settings, "server.trustedProxyHeaders", "list") as string;
 	const priority = narrow(settings, "server.proxyIpPriority", "enum") as string;
 
 	return {
+		proxies: parseList(proxies),
 		// Lowercased because both `Headers` and Node's `IncomingMessage.headers` key on the lowercase
 		// name, and an operator typing the conventional `X-Forwarded-For` must not miss because of it.
 		headers: parseList(raw).map((name) => name.toLowerCase()),

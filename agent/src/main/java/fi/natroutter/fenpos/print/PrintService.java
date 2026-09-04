@@ -77,7 +77,7 @@ public class PrintService {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.ports = Objects.requireNonNull(ports, "ports");
         this.logger = Objects.requireNonNull(logger, "logger");
-        this.jobs = new JobStore(settings, Objects.requireNonNull(clock, "clock"));
+        this.jobs = new JobStore(settings, Objects.requireNonNull(clock, "clock"), this.logger);
     }
 
     /**

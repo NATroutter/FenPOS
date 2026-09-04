@@ -9,9 +9,9 @@ import { MAX_OFFSET_AMOUNT, MAX_PATTERN_CHARS, OffsetUnit } from "@/lib/variable
  * The machine-readable description of this API, checked against the API.
  *
  * Hand-written documents rot. This is the same technique `docs-check.test.ts` uses on the prose
- * pages, pointed at the spec instead: the route tree is walked and every endpoint must appear, so an
- * endpoint added without a path entry fails the suite rather than shipping a spec that quietly omits
- * it. What the entry *says* is still a human's responsibility; that it exists is not.
+ * pages, pointed at the OpenAPI document instead: the route tree is walked and every endpoint must
+ * appear, so an endpoint added without a path entry fails the suite rather than shipping a document
+ * that quietly omits it. What the entry *says* is still a human's responsibility; that it exists is not.
  */
 
 const DOCUMENT = openApiDocument("https://fenpos.example.com") as {

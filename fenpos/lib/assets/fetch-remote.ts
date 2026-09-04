@@ -689,10 +689,15 @@ const systemResolver: HostResolver = async (hostname) => {
  * every address in the list has already been through {@link blockedReason}. The guard's promise is
  * that this list contains nothing private; it was never that the list has one entry.
  *
+ * Exported because the same gap exists wherever an address is checked and a hostname is then
+ * connected to, and there must not be a second implementation of the closing of it. Webhook
+ * delivery is the other such place: it checks a registered target's resolved addresses before every
+ * attempt and then has to POST a signed body to that host.
+ *
  * @param approved the addresses that passed the guard, in resolver order
  * @returns a lookup function for `node:http`
  */
-function pinnedLookup(approved: PinnedAddress[]): LookupFunction {
+export function pinnedLookup(approved: PinnedAddress[]): LookupFunction {
 	return (_hostname, options, callback) => {
 		// Node asks with `all: true` when it is prepared to try several addresses and without it
 		// otherwise, in which case only the first can be offered.

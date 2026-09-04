@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * The Users tab's avatar actions: `setUserAvatar` and `removeUserAvatar`.
  *
- * Unlike Task 8's `self:*` pair, these are gated. Setting somebody *else's* avatar is not on the
- * spec's "not gated, deliberately" list, so this pair gets the same care as every other `users:*`
+ * Unlike the `self:*` pair, these are gated. Setting somebody *else's* avatar is not one of the
+ * ungated actions on your own account, so this pair gets the same care as every other `users:*`
  * action beside it: a real permission check, a `DENIED` row when refused, and the crop — never the
  * picture — recorded in `detail` alongside the account it was set on.
  *

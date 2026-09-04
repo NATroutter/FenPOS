@@ -441,10 +441,10 @@ export const PANEL_ACTIONS = [
 		description: "Changed an account's name or email",
 	},
 	{
-		// The one place this plan goes beyond the spec: the "not gated, deliberately" list covers only
-		// actions on your *own* account, and setting somebody else's avatar is not on it. So this pair
-		// gets a real permission — `users:update`, the same one that governs the name and email beside
-		// it — rather than the free pass `self:set-avatar`/`self:remove-avatar` get.
+		// The "not gated, deliberately" actions are the ones acting on your *own* account, and setting
+		// somebody else's avatar is not one of those. So this pair gets a real permission —
+		// `users:update`, the same one that governs the name and email beside it — rather than the free
+		// pass `self:set-avatar`/`self:remove-avatar` get.
 		id: "users:set-avatar",
 		kind: "command",
 		permission: "users:update",

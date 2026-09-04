@@ -2,6 +2,7 @@ import "server-only";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
+import { RateLimiter } from "@/lib/auth/rate-limit";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { type AuthenticatedAgent, handleAgentConnection } from "@/lib/link/agent-connection";
@@ -32,6 +33,20 @@ export { AGENT_LINK_PATH };
  * being buffered into memory for the application to measure.
  */
 const MAX_PAYLOAD_BYTES = 256 * 1024;
+
+/**
+ * How many upgrade attempts one address may make per minute.
+ *
+ * Every attempt costs a settings read and an indexed lookup before it can be refused, on a request
+ * that carries no credential — so the work is done first and the refusal comes second, which is the
+ * wrong way round for anything unauthenticated. An agent needs a handful: one on start, and one per
+ * reconnect while a flaky link settles, which the agent's own backoff already spaces out. Twenty a
+ * minute is far more than that and far less than a flood.
+ *
+ * Keyed by address, which is now the peer that opened the connection rather than a header the caller
+ * wrote — the reason this bound is worth having at all.
+ */
+const upgradeLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
 
 /**
  * Handles one upgrade request destined for the link endpoint.
@@ -92,6 +107,15 @@ async function routeUpgrade(
 	const address = await clientAddress(request);
 
 	try {
+		// Before the token is read, and so before the database is touched: the point of a limiter on an
+		// unauthenticated path is that a caller over it costs nothing to turn away.
+		const attempt = upgradeLimiter.consume(address);
+		if (!attempt.allowed) {
+			refuse(socket, 429, "Too Many Requests");
+			logger.warn("Link upgrade rate limit engaged", { address, retryAfterMs: attempt.retryAfterMs });
+			return;
+		}
+
 		const token = bearerToken(request.headers.authorization);
 		if (!token) {
 			refuse(socket, 401, "Unauthorized");
@@ -107,6 +131,10 @@ async function routeUpgrade(
 			logger.warn("Link upgrade with an unrecognised token", { address });
 			return;
 		}
+
+		// A credential that works is not a flood, whatever else it is: an agent reconnecting through a
+		// bad link must not spend itself out of the budget a hostile caller filled.
+		upgradeLimiter.reset(address);
 
 		wss.handleUpgrade(request, socket, head, (ws) => {
 			handleAgentConnection(ws, agent, address);
@@ -168,9 +196,10 @@ function refuse(socket: Duplex, status: number, message: string): void {
  * Reads the caller's address from an upgrade request.
  *
  * Shares `resolveAddress` with the HTTP path rather than repeating its rules, so an agent's address
- * in the link log means the same thing as an operator's in the audit record. Falls back to the
- * socket's own peer address, which this side has and a server action does not — so an install that
- * trusts no header still logs something real for an agent.
+ * in the link log means the same thing as an operator's in the audit record. This side hands it the
+ * socket's peer directly, where the HTTP path has to read the copy `server.ts` stamped — the same
+ * value either way, and the same rule applied to it: a forwarding header is read only when that
+ * peer is a configured trusted proxy.
  *
  * **Never throws.** It is called before the try in {@link routeUpgrade} and reads settings to do its
  * job; a database hiccup must cost an agent its address in the log, not its connection.
@@ -179,7 +208,7 @@ function refuse(socket: Duplex, status: number, message: string): void {
  * @returns the caller's address
  */
 async function clientAddress(request: IncomingMessage): Promise<string> {
-	const peer = request.socket.remoteAddress ?? UNKNOWN_ADDRESS;
+	const peer = request.socket.remoteAddress;
 
 	try {
 		const { address } = resolveAddress(
@@ -188,14 +217,15 @@ async function clientAddress(request: IncomingMessage): Promise<string> {
 				return Array.isArray(value) ? value.join(",") : value;
 			},
 			await globalProxyTrust(),
+			peer,
 		);
 
-		return address === UNKNOWN_ADDRESS ? peer : address;
+		return address;
 	} catch (error) {
-		logger.warn("Could not read the trusted address headers; using the socket's peer address", {
+		logger.warn("Could not read the trusted address settings; using the socket's peer address", {
 			reason: error instanceof Error ? error.message : String(error),
 		});
-		return peer;
+		return peer ?? UNKNOWN_ADDRESS;
 	}
 }
 

@@ -170,10 +170,24 @@ export const auth = betterAuth({
 			// the base URL, which on a LAN install is an IP address — three of those on one phone are
 			// indistinguishable.
 			issuer: "FenPOS",
+			// The plugin's own defaults, written down rather than inherited. These two numbers are the
+			// only ceiling on guessing a second factor: `verifyTwoFactor` is deliberately not throttled
+			// by address, because a caller who has reached it already holds a valid password, so what is
+			// worth counting is codes against an account rather than requests from an address. That
+			// reasoning holds only while the counting does, and inherited it existed at the library's
+			// discretion — a minor upgrade that softened either default would have moved a security
+			// boundary of this install with nothing in this repository changing. They are also the
+			// numbers `/docs/security` quotes to an operator, which cannot honestly be said of a value
+			// this file does not set.
+			accountLockout: {
+				enabled: true,
+				maxFailedAttempts: 10,
+				durationSeconds: 900,
+			},
 			backupCodeOptions: {
-				// The plugin's own default, named here rather than left implicit. Ten codes are a full
-				// second-factor bypass each, so this line is the one place an upgrade that ever changed
-				// that default would be caught by a reviewer instead of by an attacker.
+				// The same reasoning on a different field. Ten codes are a full second-factor bypass
+				// each, so this line is the one place an upgrade that ever changed that default would be
+				// caught by a reviewer instead of by an attacker.
 				storeBackupCodes: "encrypted",
 			},
 		}),

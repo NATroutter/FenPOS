@@ -203,7 +203,7 @@ class CharsetValidatorTest {
     }
 
     /**
-     * The spec's other half: "the remaining fills absorb its slack" needs a fill still standing to
+     * The other half of the rule: "the remaining fills absorb its slack" needs a fill still standing to
      * absorb it, so every test above — one fill each — leaves it unpinned. Only the character is
      * unprintable here; no span is dropped, so {@code afterSpans} is untouched and the surviving
      * fill's position is the thing this checks.

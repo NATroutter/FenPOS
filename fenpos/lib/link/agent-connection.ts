@@ -1,6 +1,7 @@
 import "server-only";
 import type { WebSocket } from "ws";
 import { prisma } from "@/lib/db";
+import { isTerminalJobStatus, TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import { rastersFor } from "@/lib/link/asset-sync";
 import { clearAgentStatus, recordStatus } from "@/lib/link/device-status";
@@ -16,6 +17,7 @@ import {
 	serialiseServerFrame,
 } from "@/lib/link/protocol";
 import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { plausibleTime } from "@/lib/link/reported-time";
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
@@ -88,6 +90,7 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 		agentId: agent.id,
 		agentName: agent.name,
 		connectedAt: new Date(),
+		address,
 		send(frame: ServerFrame): boolean {
 			if (socket.readyState !== socket.OPEN) {
 				return false;
@@ -282,8 +285,19 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 
 		const displaced = registerLink(link);
 		if (displaced) {
-			// The previous socket is stale, otherwise the agent would not be reconnecting.
-			logger.info("Displaced an earlier connection for this agent", { agentId: agent.id });
+			// Usually the previous socket is stale, otherwise the agent would not be reconnecting — and
+			// that is the case this displacement exists for. But it is also what a stolen token looks
+			// like: whoever holds the credential can knock the real agent offline every time it comes
+			// back, indefinitely and from anywhere. Nothing here can tell the two apart, so both
+			// addresses go in the record and at WARN, because a run of these from an address that is not
+			// the shop's is the shape of the second case and there is nowhere else it would show.
+			logger.warn("Displaced an earlier connection for this agent", {
+				agentId: agent.id,
+				agentName: agent.name,
+				address,
+				displacedAddress: displaced.address,
+				displacedConnectedAt: displaced.connectedAt.toISOString(),
+			});
 			displaced.close("replaced by a newer connection");
 		}
 
@@ -340,22 +354,33 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 	 * not match is ignored rather than treated as an error, because it is also what a stale
 	 * report from before a job was deleted looks like.
 	 *
+	 * **A terminal job stays terminal.** The `status` predicate below is the second half of the same
+	 * authorisation: an agent may report on its own jobs, but "how did this receipt end" is answered
+	 * once. Without it an agent could walk a job COMPLETED → QUEUED → PRINTING at will, which is not
+	 * a state any printer can be in and which rewrites the job history the panel and the API both
+	 * read. It also makes a repeated report idempotent, which is what a retry after a dropped
+	 * acknowledgement looks like.
+	 *
+	 * **The reported time is clamped.** `at` comes off the wire, so it is the agent's clock at best
+	 * and its choice at worst — and it lands in `startedAt`/`finishedAt`, which the statistics read
+	 * as durations. See {@link plausibleTime}.
+	 *
 	 * @param frame the reported state change
 	 */
 	async function onJobUpdate(frame: JobUpdateFrame): Promise<void> {
 		const timestamps: Record<string, Date> = {};
-		const reportedAt = new Date(frame.at);
+		const reportedAt = plausibleTime(frame.at, "job update", { jobId: frame.jobId });
 
 		if (frame.status === "PRINTING") {
 			timestamps.startedAt = reportedAt;
 		}
-		if (frame.status === "COMPLETED" || frame.status === "FAILED" || frame.status === "CANCELLED") {
+		if (isTerminalJobStatus(frame.status)) {
 			timestamps.finishedAt = reportedAt;
 		}
 
 		try {
 			const updated = await prisma.job.updateMany({
-				where: { id: frame.jobId, agentId: agent.id },
+				where: { id: frame.jobId, agentId: agent.id, status: { notIn: [...TERMINAL_JOB_STATUSES] } },
 				data: {
 					status: frame.status,
 					...timestamps,
@@ -367,7 +392,13 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			});
 
 			if (updated.count === 0) {
-				logger.warn("Job update for an unknown job", { agentId: agent.id, jobId: frame.jobId });
+				// Three cases share this branch and none is an error: the job belongs to another agent,
+				// the job is gone, or it has already settled and this is a repeat or a rewrite attempt.
+				logger.warn("Job update ignored: no matching job that can still change", {
+					agentId: agent.id,
+					jobId: frame.jobId,
+					reportedStatus: frame.status,
+				});
 				return;
 			}
 
@@ -384,7 +415,9 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 				status: frame.status,
 				agentId: agent.id,
 				deviceName: job?.device.name ?? "",
-				at: frame.at,
+				// The clamped time, not the raw one, so the live view and the row it will be reconciled
+				// against agree about when this happened.
+				at: reportedAt.toISOString(),
 			});
 
 			// After the write and after the panel's event, so a subscriber that reacts by reading the

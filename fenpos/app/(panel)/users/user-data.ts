@@ -62,3 +62,23 @@ export interface UserPermits {
 	disableTwoFactor: boolean;
 	setSuperuser: boolean;
 }
+
+/**
+ * Every permit withheld.
+ *
+ * Written out rather than derived, so that adding a field to {@link UserPermits} is a compile error
+ * here rather than a control that quietly stays offered.
+ */
+export const NO_PERMITS: UserPermits = {
+	create: false,
+	update: false,
+	setPassword: false,
+	forceReset: false,
+	ban: false,
+	unban: false,
+	revokeSessions: false,
+	remove: false,
+	grant: false,
+	disableTwoFactor: false,
+	setSuperuser: false,
+};

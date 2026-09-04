@@ -123,8 +123,8 @@ export interface SignedInAccount {
  * `account-service.ts:152` writes `role: "user"` for every panel-made account, and only
  * `setAccountSuperuser` ever writes `"admin"`. A caller needing an administrator asks for one.
  *
- * It defaulted to `"admin"` until this was flipped, and that default is how the `/set-password`
- * defect this phase found stayed hidden: every fixture account held the one role better-auth's admin
+ * It defaulted to `"admin"` until this was flipped, and that default is how a `/set-password`
+ * defect stayed hidden: every fixture account held the one role better-auth's admin
  * plugin treats specially, so a call gated on that plugin passed in the suite and refused in
  * production. A fixture whose default differs from production's cannot see that class of bug at all,
  * and the next admin-plugin-gated call added anywhere in the panel would have been hidden the same

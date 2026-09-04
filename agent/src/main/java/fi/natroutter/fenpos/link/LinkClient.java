@@ -30,7 +30,12 @@ import java.util.function.Consumer;
  * <p>
  * The connection is expected to drop. A shop's internet goes out, a server restarts, a router
  * reboots overnight — none of those are faults to report and stop on, so this reconnects
- * indefinitely with {@link Backoff} and says so at a volume that does not fill the log.
+ * indefinitely with {@link Backoff}.
+ * <p>
+ * <strong>Every attempt is reported.</strong> Not a summary, not a sample: each failure names the
+ * attempt and the reason, each wait names how long it is, and each frame that could not be sent
+ * says so. A log that thins itself out during an outage is unreadable exactly when it is being
+ * read, because the reader cannot tell throttling apart from an agent that stopped trying.
  * <p>
  * <strong>Threading.</strong> Frames arrive on the HTTP client's threads and are handed
  * straight to the handler. {@link #send} may be called from anywhere — a queue worker reporting
@@ -57,30 +62,13 @@ public class LinkClient {
      */
     static final int CLOSE_UNPAIRED = 4003;
 
-    /**
-     * Attempts after which failures stop being reported every time.
-     * <p>
-     * A agent whose server is down for a day would otherwise write tens of thousands of identical
-     * error lines and bury whatever else went wrong that day.
-     */
-    private static final int QUIET_AFTER_ATTEMPTS = 5;
-
-    /**
-     * How often a failure is still reported once quiet.
-     * <p>
-     * Not silence. At the sixty-second ceiling this is roughly half-hourly, which is enough for
-     * someone reading the log a day later to see that the agent was trying the whole time rather
-     * than having given up.
-     */
-    private static final int QUIET_REMINDER_EVERY = 30;
-
     private final FoxLogger logger;
     private final FrameCodec codec = new FrameCodec();
     private final AgentInfo info;
     private final Consumer<Frames.ServerFrame> handler;
     private final HttpClient http;
     private final ScheduledExecutorService scheduler;
-    private final Backoff backoff = new Backoff();
+    private final Backoff backoff;
 
     private final AtomicReference<WebSocket> socket = new AtomicReference<>();
     private volatile LinkState state = LinkState.IDLE;
@@ -94,6 +82,17 @@ public class LinkClient {
      * @param logger  where connection lifecycle is reported
      */
     public LinkClient(AgentInfo info, Consumer<Frames.ServerFrame> handler, FoxLogger logger) {
+        this(info, handler, logger, new Backoff());
+    }
+
+    /**
+     * @param info    how this agent describes itself in {@code hello}
+     * @param handler receives every valid frame the server sends
+     * @param logger  where connection lifecycle is reported
+     * @param backoff the retry sequence; package-private so a test can run one that does not wait
+     */
+    LinkClient(AgentInfo info, Consumer<Frames.ServerFrame> handler, FoxLogger logger, Backoff backoff) {
+        this.backoff = Objects.requireNonNull(backoff, "backoff");
         this.info = Objects.requireNonNull(info, "info");
         this.handler = Objects.requireNonNull(handler, "handler");
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -190,6 +189,11 @@ public class LinkClient {
      * reporting a job it has already printed. There is nothing useful for it to do about a
      * closed socket — the server reconciles on reconnect — and an exception there would fail a
      * job that actually succeeded.
+     * <p>
+     * A frame that cannot go is still written to the local log. Dropping it is the right handling
+     * and reconciliation does make the server whole again, but "the right handling" is not the same
+     * as "nothing happened": an operator comparing the panel against the printer during an outage
+     * needs to see which updates never left the building.
      *
      * @param frame the frame to send
      * @return whether it was handed to the socket
@@ -197,6 +201,8 @@ public class LinkClient {
     public boolean send(Frames.AgentFrame frame) {
         WebSocket open = socket.get();
         if (open == null || open.isOutputClosed()) {
+            logger.warn("Dropped " + frame.type() + ": the link is down. The server reconciles on"
+                    + " reconnect.");
             return false;
         }
         try {
@@ -256,21 +262,19 @@ public class LinkClient {
                 });
     }
 
-    /** Reports a failed attempt at a volume that suits how long it has been failing. */
+    /**
+     * Reports a failed attempt.
+     * <p>
+     * Every one of them, however long it has been failing. An earlier version went quiet after the
+     * fifth attempt and reported roughly half-hourly after that, on the theory that a server down
+     * for a day would otherwise bury the rest of the log. The theory was wrong about which problem
+     * is worse: a log that stops mid-outage reads like an agent that gave up, and the one thing an
+     * operator wants at that moment is the confirmation that it is still trying and the reason the
+     * last attempt failed. A repeated line is easy to skim past. An absent one cannot be recovered.
+     */
     private void onConnectFailure(URI endpoint, Throwable error) {
-        String detail = describeFailure(error);
-
-        long attempts = backoff.attempts();
-        if (attempts < QUIET_AFTER_ATTEMPTS) {
-            logger.warn("Could not connect to " + endpoint + ": " + detail);
-        } else if (attempts == QUIET_AFTER_ATTEMPTS) {
-            logger.warn("Still cannot connect to " + endpoint + ": " + detail
-                    + ". Retrying quietly until one succeeds.");
-        } else if (attempts % QUIET_REMINDER_EVERY == 0) {
-            logger.warn("Still not connected to " + endpoint + " after " + attempts
-                    + " attempts: " + detail);
-        }
-
+        logger.warn("Could not connect to " + endpoint + " (attempt " + (backoff.attempts() + 1)
+                + " since the last success): " + describeFailure(error));
         scheduleReconnect();
     }
 
@@ -314,20 +318,36 @@ public class LinkClient {
         scheduleReconnect();
     }
 
-    /** Waits out the backoff, then tries again. */
+    /**
+     * Waits out the backoff, then tries again, saying when that will be.
+     * <p>
+     * The delay is worth a line of its own: it grows to a minute, so the gap between two failure
+     * lines is otherwise unexplained, and an operator watching a log go quiet for sixty seconds has
+     * no way to tell a long backoff from an agent that stopped.
+     */
     private void scheduleReconnect() {
         if (stopped) {
+            logger.info("Not reconnecting: the link was stopped");
             return;
         }
         state = LinkState.CONNECTING;
         Duration delay = backoff.next();
         try {
             scheduler.schedule(this::connect, delay.toMillis(), TimeUnit.MILLISECONDS);
+            logger.info("Next connection attempt in " + describeDelay(delay));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             // The scheduler was shut down between the check and the schedule, which only
-            // happens during shutdown. Nothing to retry into.
+            // happens during shutdown. Nothing to retry into, but saying so is what tells an
+            // operator reading the log why the attempts stop here.
             state = LinkState.STOPPED;
+            logger.warn("Not reconnecting: the agent is shutting down");
         }
+    }
+
+    /** Renders a retry delay the way someone reading a log would say it. */
+    private static String describeDelay(Duration delay) {
+        long millis = delay.toMillis();
+        return millis < 1000 ? millis + "ms" : (millis / 1000) + "s";
     }
 
     /**

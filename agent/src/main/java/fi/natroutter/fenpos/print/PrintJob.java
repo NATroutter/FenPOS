@@ -1,5 +1,7 @@
 package fi.natroutter.fenpos.print;
 
+import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.enums.JobState;
 
 import java.time.Clock;
@@ -26,6 +28,7 @@ public final class PrintJob {
     private final Instant queuedAt;
     private final Clock clock;
     private final JobListener listener;
+    private final FoxLogger logger;
 
     private JobState state = JobState.QUEUED;
     private Instant startedAt;
@@ -37,9 +40,10 @@ public final class PrintJob {
      * @param deviceName the device this job prints on
      * @param compiled   the compiled payload
      * @param clock      time source; injected so tests need not sleep
+     * @param logger     where a listener that breaks its contract is reported
      */
-    public PrintJob(String id, String deviceName, CompiledJob compiled, Clock clock) {
-        this(id, deviceName, compiled, clock, JobListener.NONE);
+    public PrintJob(String id, String deviceName, CompiledJob compiled, Clock clock, FoxLogger logger) {
+        this(id, deviceName, compiled, clock, JobListener.NONE, logger);
     }
 
     /**
@@ -48,18 +52,21 @@ public final class PrintJob {
      * @param compiled   the compiled payload
      * @param clock      time source; injected so tests need not sleep
      * @param listener   notified after every state change
+     * @param logger     where a listener that breaks its contract is reported
      */
     public PrintJob(String id,
                     String deviceName,
                     CompiledJob compiled,
                     Clock clock,
-                    JobListener listener) {
+                    JobListener listener,
+                    FoxLogger logger) {
         this.id = Objects.requireNonNull(id, "id");
         this.deviceName = Objects.requireNonNull(deviceName, "deviceName");
         this.payload = Objects.requireNonNull(compiled, "compiled").payload();
         this.lines = compiled.lines();
         this.clock = Objects.requireNonNull(clock, "clock");
         this.listener = Objects.requireNonNull(listener, "listener");
+        this.logger = Objects.requireNonNull(logger, "logger");
         this.queuedAt = clock.instant();
     }
 
@@ -199,12 +206,18 @@ public final class PrintJob {
      * job locked across that would block every status read behind the network. A listener that
      * throws is swallowed: the transition has already happened and there is nothing to undo, so
      * propagating would only take down the queue worker that reported it.
+     * <p>
+     * Swallowed is not the same as unrecorded. {@link JobListener} says an implementation must not
+     * throw, so reaching this catch means one broke its contract — a bug, and the kind that is
+     * invisible from the outside because the job state it was reporting on changed correctly
+     * anyway. It is logged as an error for that reason: nothing else will ever mention it.
      */
     private void announce(JobState reached) {
         try {
             listener.onStateChange(this, reached);
-        } catch (RuntimeException ignored) {
-            // Reporting is best-effort; the server reconciles on reconnect.
+        } catch (RuntimeException e) {
+            logger.error("Job listener failed for " + id + " reaching " + reached + ": "
+                    + Diagnostics.describe(e));
         }
     }
 

@@ -6,7 +6,7 @@ import { auditDb } from "@/lib/db";
 /**
  * Proving the record has not been edited.
  *
- * The threat is named in the spec: an attacker who has obtained superuser credentials, has direct
+ * The threat this guards against: an attacker who has obtained superuser credentials, has direct
  * database access, and wants to erase what they did. Each test below is one of the three edits such
  * a person would make, and asserts the exact `seq` at which the chain gives them away.
  */

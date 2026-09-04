@@ -157,7 +157,7 @@ const BARCODE_MODULE_WIDTH_DOTS = 2;
  * Printed height of a linear barcode, fixed regardless of symbology or content.
  *
  * Unlike a QR code or PDF417, a 1D barcode's height carries no data — it is purely a device
- * setting (ESC/POS's `GS h`). 100 dots is the spec's stated default, `ceil(100 / 24)` = 5
+ * setting (ESC/POS's `GS h`). 100 dots is the ESC/POS default, `ceil(100 / 24)` = 5
  * printed lines.
  */
 const BARCODE_HEIGHT_DOTS = 100;

@@ -3,8 +3,8 @@
  *
  * Signing in, signing out, replacing a password under a forced reset, and claiming an install are
  * all things that happen at the edge of authentication rather than inside it — there is no session
- * to check a permission against, which is why none of them is a panel action and why phase 3's
- * action registry will not absorb them.
+ * to check a permission against, which is why none of them is a panel action and why the panel
+ * action registry does not absorb them.
  *
  * Declared as constants rather than written at the call sites because these strings are what a
  * later filter matches on, and a row that says `auth:signin` because somebody typed it that way

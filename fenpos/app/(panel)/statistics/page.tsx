@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
  * range picker, the agent/device filter — act by rewriting the URL instead of holding client state.
  * `TabContent` dispatches `tab` to one of eight data-backed tab Server Components (overview, jobs,
  * reliability, latency, fleet, webhooks, api, security — see `tabs.ts`), each fetching its own metrics
- * and laying out charts per the spec's chart-to-primitive mapping.
+ * and laying out its charts itself.
  *
  * Collection being off (`stats.enabled`) removes the page: the section names that setting as its
  * switch in `lib/navigation.ts`, so `requirePagePermission` sends the caller to `/no-access` with a

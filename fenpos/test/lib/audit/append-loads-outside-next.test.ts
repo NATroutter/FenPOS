@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
  * actual runtime rather than by a substitute vitest provides for convenience.
  */
 /**
- * This one spec's own timeout, well past the suite-wide `testTimeout` of 10s in `vitest.config.mts`.
+ * This one file's own timeout, well past the suite-wide `testTimeout` of 10s in `vitest.config.mts`.
  *
  * Everything else in the suite runs in-process; this spawns `npx tsx`, which resolves a binary, boots
  * a second Node, and type-strips an import graph that reaches the generated Prisma client. On an

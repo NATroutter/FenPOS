@@ -281,7 +281,7 @@ describe("resolveImages", () => {
 
 	/**
 	 * The limit is about the network, not about images. A stored asset is a read of two integer
-	 * columns with no socket, no buffer and no timeout to wait out, and the spec makes stored assets
+	 * columns with no socket, no buffer and no timeout to wait out, and stored assets are
 	 * the documented default with URLs as the escape hatch — so counting them here would cap the
 	 * thing this system wants people to use.
 	 */

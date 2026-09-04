@@ -247,18 +247,30 @@ public class SerialHandler implements PrinterPort {
                 .start(() -> reconnectUntilConnected(delayMillis));
     }
 
+    /**
+     * Retries until the device answers, saying what each attempt found.
+     * <p>
+     * The attempt that finds no port at all used to skip in silence, which made an unplugged
+     * printer produce one line at the start and then nothing for as long as it stayed unplugged —
+     * indistinguishable in the log from a retry loop that had died. {@link #connect()} already
+     * reports the attempts where the port exists but will not open, so this only had to cover the
+     * case where it is not there.
+     */
     private void reconnectUntilConnected(long delayMillis) {
         while (!shuttingDown && !status.isUsable()) {
             try {
                 Thread.sleep(delayMillis);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                logger.info("[" + deviceName() + "] Stopped retrying: the agent is shutting down");
                 return;
             }
             if (shuttingDown || status.isUsable()) {
                 return;
             }
             if (!isExpectedDevice()) {
+                // Both reasons for refusing are reported by isExpectedDevice itself, which is the
+                // only place that knows which of the two it was.
                 continue;
             }
             connect();
@@ -273,6 +285,10 @@ public class SerialHandler implements PrinterPort {
      * after a reboot, and reconnecting blindly would send receipts to whatever hardware
      * happens to answer. Returns {@code true} when nothing has been connected yet, since
      * there is then no identity to contradict.
+     * <p>
+     * Both ways of saying no are logged here, because this is the only place that knows which one
+     * it was, and a caller that skips an attempt without a reason leaves a retry loop looking
+     * identical to a stopped one.
      */
     private boolean isExpectedDevice() {
         String portName = serial.port();
@@ -292,6 +308,7 @@ public class SerialHandler implements PrinterPort {
                     + " is now a different device; not reconnecting");
             return false;
         }
+        logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still retrying");
         return false;
     }
 

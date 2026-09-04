@@ -1,10 +1,12 @@
 import "server-only";
 import type { ApiRouteEntry } from "@/lib/api/api-routes";
+import { claimKeylessLogRow } from "@/lib/api/keyless-log-budget";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import type { AuthenticatedKey } from "@/lib/keys/authenticate";
 import { logger } from "@/lib/logger";
 import { recordServerLog } from "@/lib/logs/log-service";
+import { getClientAddress, UNKNOWN_ADDRESS } from "@/lib/request-context";
 import { booleanSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -68,20 +70,22 @@ export type ApiRequestOutcome =
  * reader to wonder which of the two is load-bearing. The *settings read* above it is a different
  * matter and is guarded — see {@link recordsSuccessfulReads}.
  *
- * **An unauthenticated request still leaves a line, and nothing bounds how many.** The gate above tests
- * `outcome.status === "returned"` first, so a refusal is recorded whatever `logs.recordApiReads` says;
- * and `requireApiRead` takes a key id and runs inside the handlers, which is past the point a `401`
- * gets to, so a caller with no credential is not rate-limited at all and can write one row per request.
- * The row names no key, because there is no key to name.
+ * **An unauthenticated request still leaves a line, and how many is bounded by address.** The gate
+ * above tests `outcome.status === "returned"` first, so a refusal is recorded whatever
+ * `logs.recordApiReads` says; and `requireApiRead` takes a key id and runs inside the handlers,
+ * which is past the point a `401` gets to, so a caller with no credential meets no throttle on the
+ * request itself. What it meets is a budget on the *rows*: {@link claimKeylessLogRow} gives an
+ * address a few per minute and then counts the rest, and the next row it does write says how many it
+ * stands for. The row still names no key, because there is no key to name.
  *
- * **The ceiling on that is longer than a first reading of retention suggests.** `sweepLogsNow` is
- * purely time-based with no row cap, so a flood evicts nothing already stored — it grows `logs.db` for
- * `logs.retentionDays`. Then, because `logs.archiveEnabled` ships **on**, those rows are compressed into
- * `logs-<period>.db.gz` rather than deleted, and kept for `logs.archiveRetentionDays`, which defaults to
- * 365. So the practical bound on unauthenticated flooding is about a year of compressed junk, on the
- * volume the audit archives share. That is a real cost, taken knowingly: a `401` that leaves no trace is
- * exactly the request an operator asked "why has this till stopped printing" cannot diagnose. `/docs/api`
- * says the same to an operator, beside the settings that are the only levers on it.
+ * **Why the rows needed a bound at all.** `sweepLogsNow` is purely time-based with no row cap, so a
+ * flood evicts nothing already stored — it grows `logs.db` for `logs.retentionDays`. Then, because
+ * `logs.archiveEnabled` ships **on**, those rows are compressed into `logs-<period>.db.gz` rather
+ * than deleted, and kept for `logs.archiveRetentionDays`, which defaults to 365. Unbounded, that was
+ * about a year of compressed junk per flood, on the volume the audit archives share — and the audit
+ * database is the one whose writes fail quietly when the disk fills. Coalescing keeps the evidence
+ * and drops the repetition. `/docs/api` says the same to an operator, beside the settings that are
+ * the levers on it.
  *
  * @param entry the route's registry entry
  * @param key the authenticated caller, or null when authentication itself is what failed
@@ -96,10 +100,43 @@ export async function recordApiRequest(
 		return;
 	}
 
-	await recordServerLog(levelFor(outcome), messageFor(entry, key, outcome), {
+	const level = levelFor(outcome);
+	let message = messageFor(entry, key, outcome);
+
+	// Only the keyless refusals are budgeted. A row attributable to a key is already bounded — the key
+	// had to be minted — and a server fault is the one row nobody may throw away.
+	if (key === null && level === "WARN") {
+		const verdict = claimKeylessLogRow(await keylessAddress());
+		if (!verdict.record) {
+			return;
+		}
+		if (verdict.coalesced > 0) {
+			message += ` (and ${verdict.coalesced} more like it from this address)`;
+		}
+	}
+
+	await recordServerLog(level, message, {
 		...(outcome.status === "returned" ? outcome.target : {}),
 		...(key ? { apiKeyId: key.id } : {}),
 	});
+}
+
+/**
+ * The address a keyless refusal is budgeted against.
+ *
+ * Guarded for the reason {@link recordsSuccessfulReads} is: this runs inside `apiRoute`'s own `try`,
+ * so a throw here would turn a settled request into a `500` from the code that only describes it.
+ * A failure resolves to one shared bucket, which is the cautious direction — it spends one budget
+ * rather than handing every caller their own.
+ *
+ * @returns the caller's address
+ */
+async function keylessAddress(): Promise<string> {
+	try {
+		return await getClientAddress();
+	} catch {
+		return UNKNOWN_ADDRESS;
+	}
 }
 
 /**

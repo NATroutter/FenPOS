@@ -1,5 +1,6 @@
 import * as dns from "node:dns/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PinnedAddress } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { setSetting } from "@/lib/settings/settings-service";
@@ -86,7 +87,7 @@ describe("deliverDue", () => {
 	it("signs what it sends, verifiably", async () => {
 		await queue({ payload: '{"event":"job.settled","jobId":"job-9"}' });
 		const seen: { body: string; signature: string }[] = [];
-		const send = vi.fn(async (_url: string, body: string, signature: string) => {
+		const send = vi.fn(async (_url: string, _approved: PinnedAddress[], body: string, signature: string) => {
 			seen.push({ body, signature });
 			return { status: 200 };
 		});

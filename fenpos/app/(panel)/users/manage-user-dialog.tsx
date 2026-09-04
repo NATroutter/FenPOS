@@ -21,7 +21,7 @@ import {
 	unbanUser,
 	updateUser,
 } from "@/app/(panel)/users/actions";
-import type { GrantableRole, UserPermits, UserRowData } from "@/app/(panel)/users/user-data";
+import { type GrantableRole, NO_PERMITS, type UserPermits, type UserRowData } from "@/app/(panel)/users/user-data";
 import { AvatarCropDialog } from "@/components/panel/avatar-crop-dialog";
 import type { CropperValue } from "@/components/panel/avatar-cropper";
 import { DirtyDot } from "@/components/panel/dirty-dot";
@@ -94,7 +94,7 @@ export function ManageUserDialog({
 	roles,
 	editorHolds,
 	isSelf,
-	permits,
+	permits: granted,
 	trigger,
 }: {
 	account: UserRowData;
@@ -104,6 +104,21 @@ export function ManageUserDialog({
 	permits: UserPermits;
 	trigger: ReactElement;
 }) {
+	/**
+	 * A superuser's account, seen by somebody who is not one.
+	 *
+	 * Every control below would be refused by `panel-action.ts`'s target check, so offering them is
+	 * offering eleven buttons that all report the same refusal. `permits.setSuperuser` is the viewer's
+	 * own superuser status written the long way — the permission behind it is never grantable, so
+	 * holding it and being one are the same statement (`users/page.tsx` sets it from `isSuperuser`).
+	 *
+	 * **This hides controls; it does not withhold anything.** The boundary is the server gate: each of
+	 * these actions is a POST endpoint reachable without ever rendering this file. The dialog still
+	 * opens, so the account stays inspectable.
+	 */
+	const protectedTarget = account.isSuperuser && !granted.setSuperuser && !isSelf;
+	const permits = protectedTarget ? NO_PERMITS : granted;
+
 	const [open, setOpen] = useState(false);
 	const [permissionsOpen, setPermissionsOpen] = useState(false);
 
@@ -479,6 +494,13 @@ export function ManageUserDialog({
 					</DialogHeader>
 
 					<DialogBody className="gap-6">
+						{protectedTarget ? (
+							<div className="rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-[12px] text-amber-300">
+								Read-only. A superuser's account can only be changed by another superuser, because replacing its
+								password, address or second factor is a way of signing in as it.
+							</div>
+						) : null}
+
 						<div className="grid gap-6 md:grid-cols-2">
 							<div className="flex min-w-0 flex-col gap-4">
 								<SectionLabel>Account</SectionLabel>

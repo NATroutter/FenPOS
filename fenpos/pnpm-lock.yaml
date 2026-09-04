@@ -107,9 +107,6 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
-      shadcn:
-        specifier: ^4.18.0
-        version: 4.18.0(typescript@5.9.3)
       sonner:
         specifier: ^2.0.8
         version: 2.0.8(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -150,6 +147,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      shadcn:
+        specifier: ^4.18.0
+        version: 4.18.0(typescript@5.9.3)
       tailwindcss:
         specifier: ^4
         version: 4.3.3

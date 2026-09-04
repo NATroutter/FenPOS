@@ -182,8 +182,8 @@ describe("compilePreview with variables", () => {
 /**
  * **The property the whole preview endpoint sells: a preview is a print, stopped one step short.**
  *
- * The spec's Testing section asks for exactly this test and it did not exist. It is written around
- * an `API_KEY_NAME` variable on purpose, because that is where the two paths had genuinely diverged:
+ * Written around an `API_KEY_NAME` variable on purpose, because that is where the two paths had
+ * genuinely diverged:
  * `submitJob` looked the submitting key's name up, `compilePreview` hardcoded `apiKeyName: null`, and
  * the preview route authenticated a key and then did not pass it on. So a receipt using one previewed
  * blank and printed the key's name — and since the substituted span is a different length, the
@@ -209,6 +209,7 @@ describe("a preview and a print of the same markup", () => {
 			agentId: device.agentId,
 			agentName: "helsinki",
 			connectedAt: new Date(),
+			address: "203.0.113.10",
 			send(frame) {
 				if (frame.type === "job.dispatch") {
 					lastJob = frame.job;

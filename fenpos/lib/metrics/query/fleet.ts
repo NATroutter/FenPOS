@@ -7,9 +7,9 @@ import { displayBucket, displayBuckets, type ResolvedRange } from "@/lib/metrics
 /**
  * The Fleet tab: agent/device availability, queue depth, and the fleet's current shape.
  *
- * `agentAvailability` (spec §5 #35) is deliberately absent — see task-11-brief.md's note. Fleet
- * samples are fleet-wide totals; there is no per-agent sample to build a per-agent history from, so
- * rather than fake one from job activity the metric is dropped from this tab entirely.
+ * A per-agent availability series is deliberately absent. Fleet samples are fleet-wide totals; there
+ * is no per-agent sample to build a per-agent history from, so rather than fake one from job
+ * activity the metric is dropped from this tab entirely.
  *
  * `statusNow` starts from the stored `Agent.status` column but overrides it with the live registry:
  * an agent actually holding a connection counts ONLINE regardless of what the column says, and a

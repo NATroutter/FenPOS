@@ -129,8 +129,8 @@ describe("currentSessionId", () => {
 });
 
 /**
- * The two gates phase 6a adds, both of which apply to a session that was perfectly good when it was
- * created and may not be any more.
+ * The two gates re-checked per request, both of which apply to a session that was perfectly good
+ * when it was created and may not be any more.
  */
 describe("the allowlist, re-checked on every request", () => {
 	beforeEach(async () => {

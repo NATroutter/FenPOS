@@ -8,7 +8,7 @@ import { requestProvenance } from "@/lib/audit/provenance";
 import { auth } from "@/lib/auth/auth";
 import { addressAllowed } from "@/lib/auth/ip-allowlist";
 import { clearFailedSignIns, lockedOutFor, recordFailedSignIn } from "@/lib/auth/lockout";
-import { consumeSignInAttempt, signInLimiter } from "@/lib/auth/rate-limit";
+import { consumeSignInAttempt } from "@/lib/auth/rate-limit";
 import { enforceSessionCap } from "@/lib/auth/session-policy";
 import { TURNSTILE_FIELD, turnstileConfig, verifyTurnstile } from "@/lib/auth/turnstile";
 import { prisma } from "@/lib/db";
@@ -327,10 +327,22 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 		return { error: REJECTION_MESSAGE, twoFactorRequired: false };
 	}
 
-	// The password was right either way, so the throttle and the failure count are cleared before the
-	// branch: an operator who then fumbles a TOTP code has not mistyped their password, and counting
-	// it against them would lock accounts for having a slow phone.
-	signInLimiter.reset(address);
+	// The per-account failure count is cleared on each arm below, once the account is known. The
+	// per-address throttle is deliberately **not** cleared here.
+	//
+	// It used to be, on the reasoning that an operator who goes on to fumble a TOTP code has not
+	// mistyped their password. That reasoning was sound and the mechanism was not: the throttle is
+	// keyed on an address, so clearing it on an accepted password hands the whole bucket back to
+	// everybody sharing that address. Anyone holding one valid credential — their own — could
+	// interleave a sign-in with guesses at another account and never run out; interleaving two guesses
+	// with one valid sign-in got 40 guesses examined against a limit of three. On an account with a
+	// second factor no session was created and nothing was recorded as a success either, so it was
+	// quiet as well as unbounded.
+	//
+	// Nothing is lost by letting the window expire instead. `verifyTwoFactor` is not throttled by
+	// address at all, so a fumbled code never spends from this budget in the first place; the codes
+	// are counted per challenge and per account by the plugin, which is the right thing to count once
+	// a password has been proved.
 
 	// Better Auth defers instead of returning a session when the account carries a second factor. It
 	// has already set its own challenge cookie by this point; nothing here has to carry state.
@@ -413,19 +425,19 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
  * Both refusals return the same message, deliberately — one that said which kind of code was
  * expected would tell a password-holder whether the account still had recovery codes left.
  *
- * Deliberately **not** rate-limited by address the way the password step is: the throttle was
- * already cleared when the password was accepted, and an attacker who has reached this step holds a
- * valid password, so the thing worth counting is codes against this challenge rather than requests
- * from this address. That counting already exists and this action does not need to add it: the
+ * Deliberately **not** rate-limited by address the way the password step is: an attacker who has
+ * reached this step holds a valid password, so the thing worth counting is codes against this
+ * challenge rather than requests from this address. That counting already exists and this action
+ * does not need to add it: the
  * plugin caps attempts *per challenge* at five (`beginAttempt(5)` in
  * `two-factor/{totp,backup-codes}/index.mjs`), destroying the challenge cookie once they are spent,
  * and separately caps them *per account, across challenges* at ten consecutive failures
  * (`accountLockout`, `two-factor/verify-two-factor.mjs`) — a budget `lib/auth/auth.ts` leaves at the
  * plugin's default rather than overriding, so this reasoning depends on it staying that way. Those
  * are the numbers an operator actually gets only because one submission reaches one endpoint. The
- * challenge cookie's own short life is not what bounds this: `signInLimiter.reset(address)` above
- * fires on every accepted password, so a password-holder can mint a fresh ten-minute challenge
- * indefinitely without ever tripping the address throttle. The account lockout is the real ceiling.
+ * challenge cookie's own short life is not what bounds this either: a password-holder can mint a
+ * fresh ten-minute challenge whenever the address throttle's window has turned over. The account
+ * lockout is the real ceiling.
  *
  * @param _previous the prior form state, required by useActionState and unused
  * @param formData the submitted form

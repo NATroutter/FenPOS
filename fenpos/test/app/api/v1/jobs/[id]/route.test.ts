@@ -97,6 +97,7 @@ beforeEach(async () => {
 		agentId: agent.id,
 		agentName: agent.name,
 		connectedAt: new Date(),
+		address: "203.0.113.10",
 		send: () => true,
 		close() {},
 	};

@@ -245,7 +245,11 @@ public class PrintQueue {
      */
     private void print(PrintJob job) {
         if (!job.beginPrinting()) {
-            // Cancelled between submission and now; skip it silently.
+            // Cancelled between submission and now. Not a fault, but a job that reached the front
+            // of the queue and never printed is exactly the thing someone works backwards from
+            // when a receipt is missing, so it says so rather than vanishing.
+            logger.info("[" + port.deviceName() + "] Skipped job " + job.id() + ": it was "
+                    + job.state() + " before printing started");
             return;
         }
         inFlight = job;

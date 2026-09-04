@@ -4,7 +4,7 @@
  * Pure — no database, no request — so the matching rules can be pinned by tests. That matters more
  * here than in most modules: an allowlist that is wrong in the permissive direction protects nothing,
  * and one that is wrong in the restrictive direction locks every administrator out of a LAN appliance
- * with no remedy until phase 8's `pnpm auth:recover` exists.
+ * with no remedy but `pnpm auth:recover` at the console.
  *
  * **Every uncertainty resolves to "not allowed".** A malformed entry, an address that cannot be
  * parsed, an IPv6 range — none of them match. The single exception is the empty list, which allows
@@ -47,8 +47,43 @@ export function addressAllowed(address: string, raw: string): boolean {
 		return true;
 	}
 
-	const candidate = ipv4ToInteger(address);
-	return entries.some((entry) => matches(candidate, address, entry));
+	return addressMatchesAny(address, entries);
+}
+
+/**
+ * Whether an address matches any of a list of addresses or IPv4 ranges.
+ *
+ * The matching half of {@link addressAllowed}, without its "an empty list allows everything" rule —
+ * because that rule is right for an allowlist and exactly wrong for the other caller. The trusted
+ * proxy list in `request-context.ts` means "these peers may tell me who the client is", and an
+ * empty one there has to trust nobody, not everybody.
+ *
+ * @param address the address to test, as written
+ * @param entries addresses or IPv4 CIDR ranges
+ * @returns true when at least one entry admits it; false for an empty list
+ */
+export function addressMatchesAny(address: string, entries: readonly string[]): boolean {
+	const normalised = normaliseAddress(address);
+	const candidate = ipv4ToInteger(normalised);
+	return entries.some((entry) => matches(candidate, normalised, normaliseAddress(entry)));
+}
+
+/**
+ * Reduces an IPv4-mapped IPv6 address to the IPv4 address it carries.
+ *
+ * Node reports the peer of a connection accepted on a dual-stack socket as `::ffff:10.0.0.5`, so
+ * without this a trusted-proxy entry an operator wrote as `10.0.0.5` — the address every other tool
+ * shows them — would match nothing, and the failure would be silent in the permissive direction's
+ * opposite: headers never trusted, every caller collapsing onto the proxy's address.
+ *
+ * Anything else is returned unchanged, including plain IPv6, which is still matched only exactly.
+ *
+ * @param value an address as written or as a socket reported it
+ * @returns the dotted-quad form where there is one, otherwise the input
+ */
+export function normaliseAddress(value: string): string {
+	const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value.trim());
+	return mapped ? mapped[1] : value.trim();
 }
 
 /**

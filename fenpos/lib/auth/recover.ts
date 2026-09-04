@@ -12,9 +12,9 @@ import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
  * What `pnpm auth:recover` does to an install nobody can currently sign in to.
  *
  * **No `import "server-only"` here, and none may be added.** A shell script imports this module
- * directly, outside Next entirely — that is the one property phase 8 exists to add, since with no
- * email and first-run setup permanently sealed, a forgotten superuser password would otherwise brick
- * the install for good. `test/lib/audit/append-loads-outside-next.test.ts` spawns a real `tsx`
+ * directly, outside Next entirely — that is the whole point of this module, since with no email and
+ * first-run setup permanently sealed, a forgotten superuser password would otherwise brick the
+ * install for good. `test/lib/audit/append-loads-outside-next.test.ts` spawns a real `tsx`
  * process against this module for exactly that reason: an in-process vitest import would keep
  * passing even if a `server-only` dependency crept in tomorrow, because `vitest.config.mts` aliases
  * that package away for the rest of the suite.

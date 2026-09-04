@@ -183,8 +183,8 @@ async function rollJobsHour(clients: RollupClients, bucket: Date): Promise<void>
  * trailing window this function replays every pass, so an hour this function already rolled correctly
  * can, on a later pass, find zero raw rows for a bucket it has real rolled data for. Rolling that as
  * "zero deliveries" and deleting the existing `MetricWebhookHourly` rows would erase real history
- * under the same count-capped sweep that rollups exist to survive — the spec's promise is that a
- * rollup, once written, is permanent. So: three empty raw queries plus an existing rolled row for the
+ * under the same count-capped sweep that rollups exist to survive, and a rollup, once written, is
+ * meant to be permanent. So: three empty raw queries plus an existing rolled row for the
  * bucket means "already rolled, raw rows since swept," and the existing rows are left untouched rather
  * than replaced with nothing. Three empty raw queries with *no* existing rolled row is the ordinary
  * "genuinely nothing happened this hour" case, and still rolls (to an empty transaction, same as

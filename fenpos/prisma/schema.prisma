@@ -2,8 +2,7 @@
 //
 // FenPOS is the source of truth for all centrally managed state: agent identities,
 // device configuration, API credentials, and job records. Agents hold only a cached copy of
-// what the server pushed them. See
-// docs/superpowers/specs/2026-08-18-fenpos-agent-design.md.
+// what the server pushed them.
 //
 // SQLite does not support Prisma enums, so every closed value set is stored as TEXT and
 // validated at the application boundary. The TypeScript unions in lib/domain/ are the
@@ -58,7 +57,7 @@ model User {
 
   // --- admin plugin ---
   /// Better Auth's own role string, read only by the admin plugin's endpoints. FenPOS
-  /// authorisation reads `isSuperuser` and, from Phase 3, the permission tables. The two must not
+  /// authorisation reads `isSuperuser` and the permission tables. The two must not
   /// be mistaken for one another.
   role             String?
   banned           Boolean?    @default(false)
@@ -234,9 +233,8 @@ model Verification {
 
 /// One user's TOTP enrolment, their recovery codes, and the lockout state guarding both.
 ///
-/// Wired in Phase 6. The table ships now so that adding the two-factor plugin later needs no second
-/// migration touching the user table — which is also why the columns Phase 6 will use are present
-/// in full rather than trimmed to the two that look essential today.
+/// The columns the two-factor plugin owns are present in full rather than trimmed to the two that
+/// look essential, so that turning any of them on needs no second migration touching the user table.
 model TwoFactor {
   id                      String    @id
   secret                  String

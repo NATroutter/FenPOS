@@ -79,8 +79,8 @@ export const RESOLVE_WINDOW = 6;
  * out.
  *
  * Twelve is the fallback, for three reasons. It is two whole windows, so the bound divides evenly and
- * raising it by six is visibly another window's wait. It is far above any real receipt — the spec
- * makes stored assets the default and URLs the escape hatch, and a repeated logo is one reference
+ * raising it by six is visibly another window's wait. It is far above any real receipt — stored
+ * assets are the default and URLs the escape hatch, and a repeated logo is one reference
  * after deduplication — so nothing legitimate meets it. And it is deliberately *above*
  * {@link RESOLVE_WINDOW} rather than equal to it: were the two the same, every permitted receipt
  * would fit in one window and there would be no observable difference between windowing and not,

@@ -130,8 +130,8 @@ describe("startMaintenance", () => {
 		startMaintenance();
 		await until(() => watcher.entered() === 1);
 
-		// Goes red if the startup pass is dropped in favour of the bare `setInterval` the plan's Step 4
-		// showed: the first sweep would then land an hour after boot, and an install that restarts more
+		// Goes red if the startup pass is dropped in favour of a bare `setInterval`: the first sweep
+		// would then land an hour after boot, and an install that restarts more
 		// often than that — which `restart: unless-stopped` makes ordinary — would never sweep at all.
 		expect(watcher.entered()).toBe(1);
 

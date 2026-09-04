@@ -192,8 +192,8 @@ export const METRICS_DATABASE_URL: string =
  * with `import "server-only"`, and that script runs outside Next), so it repeats this same one-line
  * derivation from its own resolved audit URL rather than sharing this constant; keeping the *rule* —
  * sibling `archives` next to the audit database's resolved URL, never `DATABASE_URL` directly — the
- * same in both places is what matters. The storage plan's own history is why this is spelled out
- * rather than assumed: a CLI that once derived an archive path from `DATABASE_URL` while the running
+ * same in both places is what matters. It is spelled out rather than assumed because it has already
+ * gone wrong once: a CLI that derived an archive path from `DATABASE_URL` while the running
  * server honoured `AUDIT_DATABASE_URL` diverged silently, and its only symptom was a report claiming
  * the chain was intact with `0 from archives`.
  */

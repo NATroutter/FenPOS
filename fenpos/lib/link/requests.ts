@@ -98,6 +98,32 @@ export function awaitReply<T>(requestId: string, timeoutMs: number): Promise<T> 
 }
 
 /**
+ * Gives up a wait whose request never went out.
+ *
+ * {@link awaitReply} has to be called before `link.send`, so that a reply arriving on a fast link
+ * finds somebody waiting for it. That ordering leaves a slot registered for a request that may then
+ * fail to leave: `send` returns false on a socket that closed in between, and it throws outright
+ * when the frame schema refuses the payload. Without this the slot stays in the map until its
+ * timeout — a caller repeating the refused request fills the map with entries for requests that were
+ * never sent — and the promise nobody is awaiting rejects into an unhandled rejection when the timer
+ * eventually fires.
+ *
+ * The promise is deliberately left unsettled rather than rejected. Its only reference is the local
+ * the caller is about to abandon; rejecting it would produce exactly the unhandled rejection this
+ * exists to prevent.
+ *
+ * @param requestId the request that was never sent
+ */
+export function cancelReply(requestId: string): void {
+	const waiter = pending.get(requestId);
+	if (!waiter) {
+		return;
+	}
+	pending.delete(requestId);
+	clearTimeout(waiter.timer);
+}
+
+/**
  * Delivers a reply to whoever is waiting for it.
  *
  * A reply with no waiter is dropped without complaint. That is what a reply arriving after its

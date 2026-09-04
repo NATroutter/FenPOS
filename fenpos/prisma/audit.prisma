@@ -78,8 +78,8 @@ model AuditEvent {
   actorEmail  String?  @map("actor_email")
   apiKeyId    String?  @map("api_key_id")
   apiKeyName  String?  @map("api_key_name")
-  /// Registry id, e.g. `devices:delete`. Free text at this phase; phase 3's action registry becomes
-  /// the authority for panel-action ids.
+  /// Registry id, e.g. `devices:delete`. Free text in the column; the action registry is the
+  /// authority for panel-action ids.
   action      String
   targetKind  String?  @map("target_kind")
   targetId    String?  @map("target_id")
@@ -119,9 +119,9 @@ model AuditEvent {
 /// without this the oldest surviving row would have a `prevHash` pointing at something that no
 /// longer exists and verification could not tell that from tampering. This records what was there.
 ///
-/// Written by the retention sweep, which arrives in phase 5. Until then no row exists, and
-/// `verifyAuditChain` reads its absence as "the chain still starts at genesis" — which, on an
-/// install that has never swept, is exactly true.
+/// Written by the retention sweep. Until it has run no row exists, and `verifyAuditChain` reads its
+/// absence as "the chain still starts at genesis" — which, on an install that has never swept, is
+/// exactly true.
 model AuditAnchor {
   id        Int      @id @default(1)
   /// `seq` of the last swept event.

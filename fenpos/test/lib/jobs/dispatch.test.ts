@@ -68,6 +68,7 @@ describe("submitJob", () => {
 			agentId: agent.id,
 			agentName: "kitchen",
 			connectedAt: new Date(),
+			address: "203.0.113.10",
 			send(frame) {
 				sent.push(serialiseServerFrame(frame).length);
 				return true;
@@ -270,6 +271,7 @@ describe("dispatch with variables", () => {
 			agentId: agent.id,
 			agentName: "kitchen",
 			connectedAt: new Date(),
+			address: "203.0.113.10",
 			send(frame) {
 				if (frame.type === "job.dispatch") {
 					lastJob = frame.job;

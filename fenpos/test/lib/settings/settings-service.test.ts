@@ -228,11 +228,11 @@ describe("setting definitions", () => {
 	});
 
 	/**
-	 * Pins down the rail's order (spec §3), which drifted once already: each earlier task inserted
-	 * its category relative to the previous one, but `logs` was already present, so every
-	 * insertion landed in front of it rather than where the spec puts it.
+	 * Pins down the rail's order, which drifted once already: each category was inserted relative to
+	 * the previous one, but `logs` was already present, so every insertion landed in front of it
+	 * rather than where it belongs.
 	 */
-	it("lists categories in the order the spec's §3 table specifies", () => {
+	it("lists categories in the intended order", () => {
 		expect(CATEGORIES.map((category) => category.id)).toEqual([
 			"general",
 			"limits",
@@ -259,13 +259,16 @@ describe("setting definitions", () => {
 		expect(policy.requireSymbol).toBe(false);
 	});
 
-	it("locks nobody out and restricts no address by default", async () => {
-		// A lockout is a denial-of-service primitive handed to anyone who knows an email address, and a
-		// misconfigured allowlist locks every administrator out of a LAN appliance with no offline
-		// remedy until phase 8.
+	it("locks out generously and restricts no address by default", async () => {
+		// Two settings that used to ship together at "off", for the same reason and with different
+		// verdicts. A misconfigured allowlist locks every administrator out of a LAN appliance with no
+		// offline remedy but the recovery CLI, so it stays empty. A lockout is also a denial-of-service
+		// primitive handed to anyone who knows an email address — but shipping it off left the
+		// per-address throttle as the only guard on password guessing, and that throttle is only ever as
+		// good as the answer to "whose address", so it ships on at a count no human reaches by mistyping.
 		const policy = await globalSignInPolicy();
 
-		expect(policy.lockoutAfterFailures).toBe(0);
+		expect(policy.lockoutAfterFailures).toBe(10);
 		expect(policy.ipAllowlist).toBe("");
 	});
 
@@ -297,7 +300,7 @@ describe("setting definitions", () => {
 	});
 
 	it("defaults page-view recording to off", async () => {
-		// Not the reading the spec's phrasing implies, and deliberately so. `router.refresh()` re-runs a
+		// Off rather than on, and deliberately so. `router.refresh()` re-runs a
 		// route's server component, so a live tab produces page views at event rate rather than at
 		// navigation rate — and every audit append serialises on `prev_hash`'s unique constraint with
 		// five retries. On by default would make real actions lose that race to page views.
@@ -406,6 +409,7 @@ describe("setting definitions", () => {
 		// tests, not a check on the declared type itself — this is that check.
 		const expectedTypes: Record<SettingKey, SettingType> = {
 			"server.publicUrl": "string",
+			"server.trustedProxies": "list",
 			"server.trustedProxyHeaders": "list",
 			"server.proxyIpPriority": "enum",
 			"limits.maxLines": "integer",
@@ -1072,7 +1076,7 @@ describe("pairing.enabled", () => {
 });
 
 /**
- * `images.allowedRemoteHosts` — the plan's first `string` setting with a `pattern`, now that
+ * `images.allowedRemoteHosts` — the only `string` setting with a `pattern`, now that
  * `panel.timezone` became an enum. Its pattern carries no `g` or `y` flag, which matters: either
  * flag makes a `RegExp` stateful through `lastIndex`, so `pattern.test()` would alternate between
  * matching and not matching the *same* input across successive calls — and `fits()` calls

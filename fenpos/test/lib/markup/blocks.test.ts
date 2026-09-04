@@ -190,7 +190,7 @@ describe("symbolGeometry", () => {
 		}
 	});
 
-	it("measures an EAN13 barcode at the spec's fixed 100-dot height", () => {
+	it("measures an EAN13 barcode at the fixed 100-dot height", () => {
 		const geometry = symbolGeometry({ kind: "BARCODE", content: "5901234123457", system: "EAN13" });
 		expect(geometry.heightLines).toBe(5);
 	});

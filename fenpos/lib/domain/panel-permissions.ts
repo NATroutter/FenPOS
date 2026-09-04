@@ -35,8 +35,7 @@ export interface PanelPermissionGroup {
  * derive from one declaration and cannot fall out of step — the pattern
  * `lib/domain/permissions.ts` already uses.
  *
- * **The set is complete, including permissions nothing checks yet.** `users:*`, `roles:*`,
- * `audit:*` and `docs:read` gate surfaces that arrive in later phases. They are declared now for
+ * **The set is complete, including permissions nothing checks yet.** They are declared up front for
  * the same reason `ActorKind` declared `CLI` before anything wrote one: these strings are a stored
  * contract, and adding a member after grants exist is a migration-shaped decision rather than an
  * edit to a list.

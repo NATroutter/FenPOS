@@ -3,6 +3,7 @@ import { logsDb, prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
 import type { LogFrame } from "@/lib/link/protocol";
+import { plausibleTime } from "@/lib/link/reported-time";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
 import { globalLogIngestSettings } from "@/lib/settings/settings-service";
@@ -141,9 +142,12 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 				agentName: agent?.name ?? null,
 				deviceId: device?.id ?? null,
 				deviceName,
-				// The agent's clock, kept because it is what the agent saw. Ordering across agents uses
-				// the row's own sequence, since agent clocks are not synchronised with each other.
-				ts: new Date(frame.at),
+				// The agent's clock, kept because it is what the agent saw — but only within an hour of
+				// this server's, because this column is what retention sweeps on: a line dated last year
+				// is archived and deleted on the next pass, and one dated next year is never swept at
+				// all. Ordering across agents uses the row's own sequence, since agent clocks are not
+				// synchronised with each other.
+				ts: plausibleTime(frame.at, "log line", { agentId }),
 			},
 			select: { id: true, ts: true, level: true, message: true },
 		});

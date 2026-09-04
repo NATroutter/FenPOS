@@ -1,5 +1,9 @@
 import "server-only";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import { urlToHttpOptions } from "node:url";
+import { type PinnedAddress, pinnedLookup } from "@/lib/assets/fetch-remote";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
@@ -18,18 +22,18 @@ import { signPayload } from "@/lib/webhooks/signature";
  *
  * On the SSRF question: the target is registered by an administrator through the panel, not chosen
  * by an API caller, which is a materially weaker threat model than `<image>` URLs face. The address
- * check still runs before every attempt — a hostname's answer can change between registration and
- * delivery — but this deliberately stops short of the connection pinning `fetchRemoteImage` does.
+ * check still runs before every attempt, because a hostname's answer can change between
+ * registration and delivery.
  *
- * **The residual is bigger than "a DNS answer changing between this check and the connection"
- * sounds.** `targetRefusal`'s resolution and the `fetch` that follows it are two independent
- * lookups, not one pinned to the other, so an attacker holding a low-TTL record that alternates
- * between a safe and an unsafe address is not threading a narrow race — each attempt is roughly a
- * coin flip, and a delivery that fails is retried up to `webhooks.maxAttempts` times, each its own
- * flip. It is also not a read the way `fetchRemoteImage`'s target is: this is a `POST` carrying a
- * signed body to whatever the second lookup answered. What actually bounds this is the
- * precondition, not the odds once it holds — reaching it requires already controlling both an
- * operator's webhook URL and the DNS answering for it.
+ * **And the connection goes to the address that check approved**, through the same
+ * {@link pinnedLookup} `fetchRemoteImage` uses. This used to resolve the hostname, approve what came
+ * back, and then hand the *hostname* to `fetch` — two independent lookups with nothing obliging the
+ * second to agree with the first. Against a low-TTL record alternating between a safe and an unsafe
+ * address that is not a narrow race but roughly a coin flip per attempt, retried up to
+ * `webhooks.maxAttempts` times, each its own flip; and unlike an image fetch, what arrives at the
+ * winner is a `POST` carrying a signed body. The precondition is still steep — it needs control of
+ * both an operator's webhook URL and the DNS answering for it — but the gap was avoidable and the
+ * fix is one already written.
  *
  * **Overlapping passes must not send the same delivery twice.** Task 11 calls {@link deliverDue} on
  * a timer, so a pass that is still working through a slow batch can still be running when the next
@@ -58,8 +62,20 @@ import { signPayload } from "@/lib/webhooks/signature";
  * being a timer, has nobody to catch it either.
  */
 
-/** How one delivery reaches its target. A seam: tests pass their own, production passes none. */
-export type Sender = (url: string, body: string, signature: string, timeoutMs: number) => Promise<{ status: number }>;
+/**
+ * How one delivery reaches its target. A seam: tests pass their own, production passes none.
+ *
+ * `approved` is separate from `url` for the same reason it is in `RemoteTransport`: the caller has
+ * already decided which addresses may be connected to, and the transport must not go and get a
+ * second opinion from DNS.
+ */
+export type Sender = (
+	url: string,
+	approved: PinnedAddress[],
+	body: string,
+	signature: string,
+	timeoutMs: number,
+) => Promise<{ status: number }>;
 
 /** How many deliveries one pass will attempt, so a large backlog cannot occupy the process. */
 const BATCH = 20;
@@ -237,8 +253,9 @@ async function processDelivery(
 			return false;
 		}
 
+		let approved: PinnedAddress[];
 		try {
-			await assertDeliverable(delivery.webhook.url);
+			approved = await assertDeliverable(delivery.webhook.url);
 		} catch (error) {
 			// Most refusals are permanent — the target is wrong rather than unavailable, and no number
 			// of attempts will make an address this server must not reach into one it may. The one
@@ -255,6 +272,7 @@ async function processDelivery(
 		try {
 			const { status } = await send(
 				delivery.webhook.url,
+				approved,
 				delivery.payload,
 				signPayload(delivery.webhook.secret, delivery.payload, now),
 				settings.timeoutMs,
@@ -332,17 +350,19 @@ async function processDelivery(
  * no retry loop to feed the distinction into.
  *
  * @param url the candidate target
+ * @returns the addresses that passed, for the caller to connect to and nothing else
  * @throws ApiError with code `webhook_unreachable` when the target must not be delivered to
  */
-export async function assertDeliverable(url: string): Promise<void> {
+export async function assertDeliverable(url: string): Promise<PinnedAddress[]> {
 	const [allowPlainHttp, timeoutMs] = await Promise.all([
 		booleanSetting("webhooks.allowPlainHttp"),
 		integerSetting("webhooks.timeoutMs"),
 	]);
-	const refusal = await targetRefusal(url, allowPlainHttp, timeoutMs);
-	if (refusal !== null) {
-		throw new ApiError("webhook_unreachable", refusal.reason, { permanent: refusal.permanent });
+	const verdict = await targetVerdict(url, allowPlainHttp, timeoutMs);
+	if (verdict.refusal !== null) {
+		throw new ApiError("webhook_unreachable", verdict.refusal.reason, { permanent: verdict.refusal.permanent });
 	}
+	return verdict.approved;
 }
 
 /** Why a target must not be delivered to, and whether that is ever going to change. */
@@ -357,62 +377,80 @@ interface Refusal {
 	permanent: boolean;
 }
 
+/** Either why this target was refused, or the addresses it may be reached at. */
+interface TargetVerdict {
+	refusal: Refusal | null;
+	/** Every address that passed the checks. Empty when `refusal` is set. */
+	approved: PinnedAddress[];
+}
+
 /**
- * Why this target must not be delivered to, if it must not be.
+ * Whether this target may be delivered to, and if so where.
+ *
+ * The addresses come back rather than being thrown away, which is what closes the gap between the
+ * check and the connection — see the module comment.
  *
  * @param url the registered target
  * @param allowPlainHttp whether the install permits http
  * @param timeoutMs how long address resolution may take — see {@link resolveHostname}
- * @returns the refusal, or null when the target is acceptable
+ * @returns the refusal, or the approved addresses
  */
-async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: number): Promise<Refusal | null> {
+async function targetVerdict(url: string, allowPlainHttp: boolean, timeoutMs: number): Promise<TargetVerdict> {
+	const refuse = (reason: string, permanent = true): TargetVerdict => ({
+		refusal: { reason, permanent },
+		approved: [],
+	});
+
 	let target: URL;
 	try {
 		target = new URL(url);
 	} catch {
-		return { reason: "the URL could not be parsed", permanent: true };
+		return refuse("the URL could not be parsed");
 	}
 
 	if (target.protocol !== "https:" && target.protocol !== "http:") {
-		return { reason: `${target.protocol} is not a scheme this server delivers over`, permanent: true };
+		return refuse(`${target.protocol} is not a scheme this server delivers over`);
 	}
 	if (target.protocol === "http:" && !allowPlainHttp) {
-		return { reason: "this install only delivers webhooks over https", permanent: true };
+		return refuse("this install only delivers webhooks over https");
 	}
 
 	const hostname = target.hostname.replace(/^\[|\]$/g, "");
 	if (hostname === "") {
-		return { reason: "the URL names no host", permanent: true };
+		return refuse("the URL names no host");
 	}
 
 	// A literal address needs no resolver; a hostname does. Both end at the same judgement, except a
 	// resolver that timed out: resolveHostname throws ResolutionTimeoutError for that case instead of
 	// folding it into its ordinary null return, precisely so this can tell "slow" from "no answer"
 	// apart and refuse the former as non-permanent.
-	let resolved: string[] | null;
+	let resolved: PinnedAddress[] | null;
 	try {
 		resolved = await resolveHostname(hostname, timeoutMs);
 	} catch (error) {
 		if (!(error instanceof ResolutionTimeoutError)) {
 			throw error;
 		}
-		return { reason: `resolving ${hostname} timed out`, permanent: false };
+		return refuse(`resolving ${hostname} timed out`, false);
 	}
 	if (resolved === null) {
-		return { reason: `the hostname ${hostname} has no address`, permanent: true };
+		return refuse(`the hostname ${hostname} has no address`);
 	}
 	if (resolved.length === 0) {
-		return { reason: `the hostname ${hostname} did not resolve to any address`, permanent: true };
+		return refuse(`the hostname ${hostname} did not resolve to any address`);
 	}
 
-	for (const address of resolved) {
+	for (const { address } of resolved) {
 		const why = blockedReason(address);
 		if (why !== null) {
-			return { reason: `${hostname} resolves to ${address}, which is ${why}`, permanent: true };
+			return refuse(`${hostname} resolves to ${address}, which is ${why}`);
 		}
 	}
 
-	return null;
+	// All of them, not just the first, for the reason `guardAddress` gives: every entry has been
+	// checked, and offering the whole set is what lets a dual-stack host still be reached on a
+	// network that can only route one of the families.
+	return { refusal: null, approved: resolved };
 }
 
 /**
@@ -441,15 +479,19 @@ async function targetRefusal(url: string, allowPlainHttp: boolean, timeoutMs: nu
  * @returns every address it resolves to, or null when it does not resolve
  * @throws ResolutionTimeoutError when the timer wins the race before the resolver answers
  */
-async function resolveHostname(hostname: string, timeoutMs: number): Promise<string[] | null> {
-	if (isIP(hostname) !== 0) {
-		return [hostname];
+async function resolveHostname(hostname: string, timeoutMs: number): Promise<PinnedAddress[] | null> {
+	const literal = isIP(hostname);
+	if (literal !== 0) {
+		return [{ address: hostname, family: literal === 4 ? 4 : 6 }];
 	}
 	const timeout = rejectAfter(timeoutMs);
 	try {
 		const { lookup } = await import("node:dns/promises");
 		const entries = await Promise.race([lookup(hostname, { all: true }), timeout.promise]);
-		return entries.map((entry) => entry.address);
+		// The family comes back with the address because the connection is pinned to both: `node:http`
+		// needs to be told which family it is being handed, and guessing from the string is a second
+		// parser nobody needs.
+		return entries.map((entry) => ({ address: entry.address, family: entry.family === 6 ? 6 : 4 }));
 	} catch (error) {
 		if (error instanceof ResolutionTimeoutError) {
 			throw error;
@@ -673,34 +715,71 @@ export async function sweepDeliveriesNow(maxRecords: number): Promise<void> {
 /**
  * The real sender.
  *
+ * `node:http` rather than `fetch`, for one reason: it takes a `lookup`, and `fetch` does not. The
+ * addresses this connects to are the ones {@link assertDeliverable} approved moments earlier, handed
+ * over through {@link pinnedLookup}, so DNS is asked once and the answer that was checked is the
+ * answer that is used. The hostname still goes in the `Host` header and still validates the
+ * certificate, so pinning changes where the socket goes and nothing else.
+ *
+ * Redirects are not followed, which needs no flag here — `node:http` has never followed one on its
+ * own, where `fetch` needed `redirect: "manual"` to be told not to. A 3xx is reported as the status
+ * it is, and `processDelivery` treats it as permanent.
+ *
+ * Exported for the same reason {@link sweepDeliveriesNow} is: it is the production default, so every
+ * other test in this module passes its own `send` and never touches it. That left the one function
+ * here that actually opens a socket as the only untested part of the module, which is the wrong part
+ * to leave untested.
+ *
  * @param url the target
+ * @param approved the addresses the guard passed, in resolver order
  * @param body the signed payload text
  * @param signature the `X-FenPOS-Signature` value
  * @param timeoutMs how long the attempt may take
  * @returns the response status
  */
-const httpSender: Sender = async (url, body, signature, timeoutMs) => {
-	const response = await fetch(url, {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			"x-fenpos-signature": signature,
-			"user-agent": "FenPOS-Webhook/1",
-		},
-		body,
-		signal: AbortSignal.timeout(timeoutMs),
-		redirect: "manual",
+export const httpSender: Sender = (url, approved, body, signature, timeoutMs) => {
+	const target = new URL(url);
+	const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+
+	return new Promise<{ status: number }>((resolve, reject) => {
+		const request = send(
+			{
+				...urlToHttpOptions(target),
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"content-length": Buffer.byteLength(body, "utf8"),
+					"x-fenpos-signature": signature,
+					"user-agent": "FenPOS-Webhook/1",
+				},
+				lookup: pinnedLookup(approved),
+				timeout: timeoutMs,
+			},
+			(response) => {
+				// The status is read; the body never is. Left alone, an unread body holds its socket open
+				// — and this runs on a timer forever, against up to twenty targets a pass, some of which
+				// are hostile by construction. Destroying the response discards it and releases the
+				// connection.
+				response.destroy();
+				resolve({ status: response.statusCode ?? 0 });
+			},
+		);
+
+		// `timeout` above only fires on an idle socket; this bounds the whole attempt, including a
+		// receiver that dribbles headers out indefinitely.
+		const deadline = setTimeout(
+			() => request.destroy(new Error(`the receiver did not answer within ${timeoutMs}ms`)),
+			timeoutMs,
+		);
+		deadline.unref?.();
+
+		request.on("timeout", () => request.destroy(new Error(`the connection to ${target.host} went idle`)));
+		request.on("error", (error) => {
+			clearTimeout(deadline);
+			reject(error);
+		});
+		request.on("close", () => clearTimeout(deadline));
+
+		request.end(body);
 	});
-	// The status is read; the body never is. Left alone, an unconsumed body holds its connection open
-	// under undici until the Response is garbage collected — and this runs on a timer forever, against
-	// up to twenty targets a pass, some of which are hostile by construction (a refused address, a
-	// receiver that never finishes a response). Cancelling discards it and releases the connection.
-	// Its own try/catch: a body that already errored (the connection dropping mid-response, say)
-	// rejects on cancel, and that must not overwrite the status this function already has to report.
-	try {
-		await response.body?.cancel();
-	} catch {
-		// See above — deliberately ignored.
-	}
-	return { status: response.status };
 };

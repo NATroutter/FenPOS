@@ -251,7 +251,15 @@ public class PairingClient {
         return new PairingGrant(agentId, agentName, token);
     }
 
-    /** Extracts the server's own explanation from an error body, when it gave one. */
+    /**
+     * Extracts the server's own explanation from an error body.
+     * <p>
+     * A body that is not the server's JSON is usually a proxy answering in its place, and its text
+     * is the only thing that says so — an HTML error page names the proxy, a gateway timeout names
+     * the upstream it gave up on. Discarding it left pairing failures reading as a bare status code
+     * with no hint that the server was never reached at all, so an unparseable body is quoted
+     * instead, trimmed to one line's worth.
+     */
     private static String serverMessage(String body) {
         try {
             var parsed = JsonParser.parseString(body);
@@ -261,11 +269,21 @@ public class PairingClient {
                     return ": " + message;
                 }
             }
-        } catch (JsonParseException ignored) {
-            // A non-JSON error body is common from a proxy in front of the server; the status
-            // code alone is still worth reporting.
+        } catch (JsonParseException e) {
+            // Fall through to quoting the body, which is what a proxy's reply needs.
         }
-        return "";
+        return body == null || body.isBlank() ? "" : ": " + summarise(body);
+    }
+
+    /** Longest error body quoted back into a failure message. */
+    private static final int BODY_EXCERPT = 200;
+
+    /** Flattens a body to one line and caps it, so a whole HTML page cannot become the message. */
+    private static String summarise(String body) {
+        String flattened = body.strip().replaceAll("\\s+", " ");
+        return flattened.length() <= BODY_EXCERPT
+                ? flattened
+                : flattened.substring(0, BODY_EXCERPT) + "…";
     }
 
     private static String string(JsonObject json, String field) {

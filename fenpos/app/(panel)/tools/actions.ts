@@ -15,7 +15,7 @@ import { dotWidth, LINE_HEIGHT_DOTS, type SymbolSpec, symbolSvg } from "@/lib/ma
 import { type CompileSettings, layOut } from "@/lib/markup/compiler";
 import { imageGeometry } from "@/lib/markup/images";
 import type { Directive, Line as ModelLine } from "@/lib/markup/model";
-import { booleanSetting } from "@/lib/settings/settings-service";
+import { booleanSetting, integerSetting } from "@/lib/settings/settings-service";
 import type { VariableKind } from "@/lib/variables/definition";
 import { evaluateVariable, type Formatting, type PrintContext } from "@/lib/variables/evaluate";
 import { PANEL_PRINT_CONTEXT, printedFormatting } from "@/lib/variables/formatting";
@@ -458,6 +458,18 @@ export async function writeRaw(deviceId: string, bytes: number[]): Promise<SendR
 			}
 			if (bytes.length === 0) {
 				throw new ApiError("missing_field", "There are no bytes to send.");
+			}
+
+			// Counted before anything is allocated from it. The argument is a JSON array of numbers, so
+			// a caller posting a few million of them costs two allocations — the array, then a base64
+			// string of it — before the frame schema's own bound refuses the result. The same ceiling the
+			// API's raw route enforces, checked in the same order: length first, work second.
+			const cap = await integerSetting("link.maxRawWriteBytes");
+			if (bytes.length > cap) {
+				throw new ApiError(
+					"body_too_large",
+					`A raw write may carry at most ${cap} bytes; this one has ${bytes.length}.`,
+				);
 			}
 
 			const encoded = Buffer.from(Uint8Array.from(bytes)).toString("base64");

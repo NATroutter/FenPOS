@@ -17,9 +17,9 @@ import {
  * silently revokes them, because an unrecognised identifier is dropped on read.
  */
 describe("panel permissions", () => {
-	it("declares the complete set the spec names", () => {
-		// Seventy-nine: seventy-five derived by walking every `"use server"` export that exists plus
-		// every action phases 4 through 8 add, `settings:write:audit`, which that derivation could not
+	it("declares the complete set", () => {
+		// Seventy-nine: seventy-five derived by walking every `"use server"` export in the panel, plus
+		// `settings:write:audit`, which that derivation could not
 		// have counted because the `audit` settings category did not exist yet, and
 		// `audit:archive-delete`, which nothing could have derived at all — deleting an archived audit
 		// period is not a read of anything, and no existing permission could be widened to cover it
@@ -37,8 +37,8 @@ describe("panel permissions", () => {
 	it("groups every identifier exactly once", () => {
 		const grouped = PANEL_PERMISSION_GROUPS.flatMap((group) => group.permissions.map((entry) => entry.id));
 
-		// Both directions: a permission missing from the groups is one phase 4's checkbox list cannot
-		// grant, and a permission listed twice is one an operator sees twice.
+		// Both directions: a permission missing from the groups is one the checkbox list cannot grant,
+		// and a permission listed twice is one an operator sees twice.
 		expect(new Set(grouped).size).toBe(grouped.length);
 		expect([...grouped].sort()).toEqual([...PANEL_PERMISSION_IDS].sort());
 	});

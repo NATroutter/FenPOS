@@ -1,6 +1,8 @@
 package fi.natroutter.fenpos.print;
 
 
+import fi.natroutter.foxlib.logger.FoxLogger;
+
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
@@ -37,6 +39,9 @@ public class JobStore {
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
 
+    /** Handed to every job it creates, so a listener that throws is reported rather than lost. */
+    private final FoxLogger logger;
+
     /**
      * Notified on every state change. Volatile because it is set once the link exists, which is
      * after the store has been constructed and while queue workers may already be running.
@@ -53,10 +58,12 @@ public class JobStore {
     /**
      * @param settings retention and cap settings
      * @param clock    time source; injected so retention can be tested without waiting
+     * @param logger   passed to every job created here
      */
-    public JobStore(JobSettings settings, Clock clock) {
+    public JobStore(JobSettings settings, Clock clock, FoxLogger logger) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.logger = Objects.requireNonNull(logger, "logger");
     }
 
     /**
@@ -92,7 +99,7 @@ public class JobStore {
      * @return the registered job, in {@link fi.natroutter.fenpos.enums.JobState#QUEUED}
      */
     public PrintJob create(String deviceName, CompiledJob compiled) {
-        return register(new PrintJob(nextId(), deviceName, compiled, clock, listener));
+        return register(new PrintJob(nextId(), deviceName, compiled, clock, listener, logger));
     }
 
     /**
@@ -111,7 +118,7 @@ public class JobStore {
      */
     public Optional<PrintJob> adopt(String id, String deviceName, CompiledJob compiled) {
         Objects.requireNonNull(id, "id");
-        PrintJob job = new PrintJob(id, deviceName, compiled, clock, listener);
+        PrintJob job = new PrintJob(id, deviceName, compiled, clock, listener, logger);
         if (jobs.putIfAbsent(id, job) != null) {
             return Optional.empty();
         }

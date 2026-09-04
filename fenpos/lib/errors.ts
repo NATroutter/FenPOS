@@ -257,7 +257,7 @@ export const API_ERROR_STATUS = {
 	 * new code for a case that already answers `422 too_many_variables` in the field. Note that
 	 * `too_many_variable_references`, which counts `{name}` references inside one element, is
 	 * deliberately *not* one of these: that is a fact about the markup rather than about how many
-	 * values exist, and the spec calls out that the two must not share a code.
+	 * values exist, and the two must not share a code.
 	 */
 	too_many_variables: 422,
 	/**

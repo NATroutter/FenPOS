@@ -517,22 +517,37 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * <p>
      * Reporting is best effort by design. If the link is down when a job finishes, the update is
      * lost and the server reconciles when the agent reconnects — which is the right trade for a
-     * printer that must keep printing through an outage rather than block on telling anyone.
+     * printer that must keep printing through an outage rather than block on telling anyone. The
+     * loss itself is not silent: {@code LinkClient.send} logs every frame it could not hand over.
+     * <p>
+     * Failures here are caught and logged rather than allowed out. {@code PrintJob} swallows a
+     * throwing listener to protect the queue worker that called it, and a swallow is only safe
+     * when the thing being swallowed has already been written down somewhere.
      */
     private JobListener reporter() {
         return (job, state) -> {
-            if (!dispatched.contains(job.id())) {
-                return;
-            }
-            if (state.isTerminal()) {
-                dispatched.remove(job.id());
-            }
-            report(job.id(), state, job.lines(), job.bytes(), errorCode(state), job.failureReason());
+            try {
+                if (!dispatched.contains(job.id())) {
+                    // A job this agent printed for itself — a console test page, say. The server
+                    // never asked for it and has no row to update, so there is nothing to send.
+                    Diagnostics.debug(logger, "Not reporting job " + job.id() + " reaching " + state
+                            + ": the server did not dispatch it");
+                    return;
+                }
+                if (state.isTerminal()) {
+                    dispatched.remove(job.id());
+                }
+                report(job.id(), state, job.lines(), job.bytes(), errorCode(state),
+                        job.failureReason());
 
-            // The queue depth just changed, and the panel's picture of a printer is only ever as
-            // fresh as the last report. Sending one here is what keeps a draining queue visibly
-            // draining rather than jumping when the slow timer next fires.
-            reportStatus();
+                // The queue depth just changed, and the panel's picture of a printer is only ever
+                // as fresh as the last report. Sending one here is what keeps a draining queue
+                // visibly draining rather than jumping when the slow timer next fires.
+                reportStatus();
+            } catch (RuntimeException e) {
+                logger.error("Could not report job " + job.id() + " reaching " + state + ": "
+                        + Diagnostics.describe(e));
+            }
         };
     }
 

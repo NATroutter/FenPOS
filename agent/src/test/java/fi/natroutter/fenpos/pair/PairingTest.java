@@ -24,6 +24,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -183,6 +184,39 @@ class PairingTest {
                 pairing.pair(baseUrl(), "AG7K-2M9P"));
 
         assertTrue(thrown.getMessage().contains("rate limiting"), thrown.getMessage());
+    }
+
+    /**
+     * A 502 from a proxy is the failure that started all of this: the agent never reached the
+     * server at all, and the proxy's own page is the only thing that says so. Quoting it is the
+     * difference between "HTTP 502" and knowing which hop answered.
+     */
+    @Test
+    void quotesAnErrorBodyThatIsNotTheServersJson() {
+        status = 502;
+        responseBody = "<html><head><title>502 Bad Gateway</title></head>\n"
+                + "<body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body>"
+                + "</html>";
+
+        PairingException thrown = assertThrows(PairingException.class, () ->
+                pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().contains("502"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("nginx"), thrown.getMessage());
+        // Flattened to one line, so a whole error page cannot wrap the console prompt.
+        assertFalse(thrown.getMessage().contains("\n"), thrown.getMessage());
+    }
+
+    @Test
+    void trimsALongErrorBodyRatherThanPrintingTheWholePage() {
+        status = 503;
+        responseBody = "x".repeat(5_000);
+
+        PairingException thrown = assertThrows(PairingException.class, () ->
+                pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().length() < 400, "message was " + thrown.getMessage().length());
+        assertTrue(thrown.getMessage().endsWith("…"), thrown.getMessage());
     }
 
     @Test

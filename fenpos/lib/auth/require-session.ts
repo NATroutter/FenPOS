@@ -43,8 +43,8 @@ export interface PanelUser {
 	 *
 	 * Carried on the user rather than fetched again, because every caller that wants it already has
 	 * this object and a second `getSession` would be a second read of the same cookie. It is what
-	 * lets an audit row say which session did something — `RequestProvenance.sessionId` has had a
-	 * field for it since phase 2 and, until now, no caller able to supply one.
+	 * lets an audit row say which session did something, which is what
+	 * `RequestProvenance.sessionId` is for.
 	 */
 	sessionId: string;
 	/** Whether the account has a confirmed authenticator. Read by the enrolment gate. */

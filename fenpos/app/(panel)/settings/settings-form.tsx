@@ -369,8 +369,6 @@ export function SettingsForm({
  * is their own address, and the header name is configuration rather than a secret.
  */
 function ClientAddressReadout({ resolved }: { resolved: ResolvedAddress }) {
-	const found = resolved.header !== null;
-
 	return (
 		<div className="mb-4 rounded-md border border-border bg-background px-3 py-2.5">
 			<div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -378,15 +376,30 @@ function ClientAddressReadout({ resolved }: { resolved: ResolvedAddress }) {
 				<span className="font-mono text-[12.5px] font-medium">{resolved.address}</span>
 			</div>
 			<p className="mt-1 text-[11px] leading-relaxed text-subtle-foreground">
-				{found ? (
+				{/*
+				 * Three states, and the middle one is the one worth spelling out: a proxy is in front of
+				 * this install, its address is not on the trusted list, so every visitor arriving through
+				 * it is being counted, allowed and audited as the proxy. That reads as "working" on the
+				 * line above, because the address shown is a real one — it is just not the caller's.
+				 */}
+				{resolved.header !== null ? (
 					<>
-						Read from <span className="font-mono">{resolved.header}</span>. If that is not the address you are browsing
-						from, the header below is naming a proxy rather than you.
+						Read from <span className="font-mono">{resolved.header}</span>, sent by{" "}
+						<span className="font-mono">{resolved.peer}</span>, which is on the trusted proxy list. If that is not the
+						address you are browsing from, the header is naming another hop rather than you.
+					</>
+				) : resolved.peer === null ? (
+					<>
+						This request carried no peer address, which means the panel is not being served by the FenPOS server
+						process. Everything that keys on an address — the sign-in throttle, the allowlist, every audit row — treats
+						all callers as one until it is.
 					</>
 				) : (
 					<>
-						No trusted header carried one. Everything that keys on an address — the sign-in throttle, the allowlist,
-						every audit row — treats all callers as one until this is set.
+						This is the address that opened the connection. No forwarding header was read, because{" "}
+						<span className="font-mono">{resolved.peer}</span> is not on the trusted proxy list. If a proxy sits in
+						front of this install, add its address below — until then every visitor arriving through it is counted,
+						allowed and audited as the proxy.
 					</>
 				)}
 			</p>

@@ -4,15 +4,77 @@ import { ApiError } from "@/lib/errors";
  * Reading a request body bounded before it is parsed.
  *
  * Parsing is the work an oversized body is trying to provoke — `JSON.parse` over megabytes, or
- * worse, a base64 decode of them — so the size is checked against the caller's own ceiling first,
- * on the raw text, and only a body that passes is handed to the parser. A body refused for its
- * size costs one `Buffer.byteLength` call; nothing here reads it twice.
+ * worse, a base64 decode of them — so the size is enforced first and only a body that passes is
+ * handed to the parser.
+ *
+ * **Enforced on the way in, not after.** This used to `await request.text()` and then measure what
+ * came back, which refused the right requests and paid the whole cost of the wrong ones first: a
+ * 64 MiB body was received in full and materialised as a string before the comparison that rejected
+ * it, so the refusal cost the server 64 MiB and the caller one request. Four of those concurrently
+ * moved the process's resident memory by a quarter of a gigabyte, against a container limited to
+ * 1 GiB. Now the declared length is checked before a byte is read, and the read itself stops at the
+ * cap — so a refusal costs at most `maxBytes` however the body was framed, and usually nothing at
+ * all.
  *
  * Every route on this API that reads a JSON body from an untrusted caller goes through
  * {@link readBoundedJson} rather than restating the check: print, preview, asset creation, and
  * the raw write. One place for the bound and its wording means none of them can drift out of step
  * with the others.
  */
+
+/**
+ * Reads a request's body as text, refusing one over `maxBytes` without buffering it.
+ *
+ * Two gates, because a body arrives two ways. A declared `Content-Length` is checked before the
+ * stream is touched, which is the common case and costs nothing. A body framed without one —
+ * `Transfer-Encoding: chunked` — has no length to check, so the read counts as it goes and abandons
+ * the stream the moment the cap is passed; the caller may still have more to send, but this side
+ * has stopped holding it.
+ *
+ * @param request the incoming request
+ * @param maxBytes the caller's own ceiling, in bytes
+ * @param message what to say when it is exceeded, in the caller's own words
+ * @returns the body as text
+ * @throws ApiError `body_too_large` when the body is over `maxBytes`
+ */
+export async function readBoundedText(request: Request, maxBytes: number, message: string): Promise<string> {
+	const declared = request.headers.get("content-length");
+	if (declared !== null) {
+		const length = Number(declared);
+		// A malformed header is treated as no header rather than as a refusal: the streaming count
+		// below is the real bound, and this one is an optimisation that happens to also be a defence.
+		if (Number.isFinite(length) && length > maxBytes) {
+			throw new ApiError("body_too_large", message);
+		}
+	}
+
+	const body = request.body;
+	if (body === null) {
+		return "";
+	}
+
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) {
+			break;
+		}
+
+		total += value.byteLength;
+		if (total > maxBytes) {
+			// Cancelled rather than left to drain: the point of stopping here is that the rest of the
+			// body is never held, and a reader that stays open goes on being fed.
+			await reader.cancel().catch(() => undefined);
+			throw new ApiError("body_too_large", message);
+		}
+		chunks.push(value);
+	}
+
+	return Buffer.concat(chunks).toString("utf8");
+}
 
 /**
  * Reads and parses a request's JSON body, refusing one over `maxBytes` before parsing it.
@@ -29,11 +91,7 @@ import { ApiError } from "@/lib/errors";
  *   parse
  */
 export async function readBoundedJson(request: Request, maxBytes: number): Promise<{ body: unknown; raw: string }> {
-	const raw = await request.text();
-
-	if (Buffer.byteLength(raw, "utf8") > maxBytes) {
-		throw new ApiError("body_too_large", `Request body must be under ${maxBytes} bytes.`);
-	}
+	const raw = await readBoundedText(request, maxBytes, `Request body must be under ${maxBytes} bytes.`);
 
 	try {
 		return { body: JSON.parse(raw), raw };

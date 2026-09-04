@@ -314,6 +314,124 @@ describe("panelSelf", () => {
 });
 
 /**
+ * The gate's second question: not "may you run this action" but "may you run it against *that*
+ * account". Holding `users:set-password` for helpdesk duty must not be a way to replace the
+ * superuser's password and then sign in as it, which is every permission at once.
+ *
+ * Written against the gate rather than against the five exploitable `users:*` actions on purpose.
+ * The property worth holding is "any action carrying a user target", including the ones not written
+ * yet, and a per-action test would go green while the next action added stayed open.
+ */
+describe("the protected-target guard", () => {
+	beforeEach(reset);
+
+	/** An action the caller is fully permitted to run, aimed at `targetId`. */
+	async function aimAt(targetId: string) {
+		const body = vi.fn().mockResolvedValue(undefined);
+		const state = await panelAction("users:set-password", body, {
+			target: { kind: "user", id: targetId },
+		});
+		return { body, state };
+	}
+
+	it("refuses a permitted non-superuser aiming at a superuser, without running the body", async () => {
+		const user = await account("guard-operator");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:set-password" } });
+		await account("guard-owner", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		const { body, state } = await aimAt("guard-owner");
+
+		expect(state).toEqual({ error: REFUSAL_MESSAGE });
+		expect(body).not.toHaveBeenCalled();
+	});
+
+	it("records the refusal as a target refusal, distinguishable from a missing permission", async () => {
+		const user = await account("guard-recorded");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:set-password" } });
+		await account("guard-owner2", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		await aimAt("guard-owner2");
+
+		const row = await lastEvent();
+		expect(row.outcome).toBe("DENIED");
+		// Probing a superuser's account is as visible in the record as any other refusal, and an
+		// investigator can tell the two kinds apart.
+		expect(JSON.parse(row.detail as string)).toMatchObject({ reason: "protected-target" });
+	});
+
+	it("lets a superuser act on another superuser, which is how demotion happens", async () => {
+		const user = await account("guard-super", true);
+		await account("guard-peer", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		const { body, state } = await aimAt("guard-peer");
+
+		expect(state).toEqual({ error: null });
+		expect(body).toHaveBeenCalled();
+	});
+
+	it("lets an ordinary target through untouched", async () => {
+		const user = await account("guard-helpdesk");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:set-password" } });
+		await account("guard-ordinary");
+		currentSessionUser.mockResolvedValue(user);
+
+		const { body, state } = await aimAt("guard-ordinary");
+
+		expect(state).toEqual({ error: null });
+		expect(body).toHaveBeenCalled();
+	});
+
+	/**
+	 * An unknown id is reported by the action's own body, not here. Refusing at the gate would answer
+	 * "does this account exist" on a different code path, and with different timing, than every other
+	 * id a caller could name.
+	 */
+	it("does not treat an unknown account as protected", async () => {
+		const user = await account("guard-unknown-caller");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:set-password" } });
+		currentSessionUser.mockResolvedValue(user);
+
+		const { body } = await aimAt("no-such-account");
+
+		expect(body).toHaveBeenCalled();
+	});
+
+	/**
+	 * A superuser reaching its own account through the Users tab is the ordinary case, and the guard
+	 * has to leave it alone — otherwise the last superuser could not change its own password from the
+	 * page that offers the field.
+	 */
+	it("leaves a caller acting on their own account alone", async () => {
+		const user = await account("guard-self", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		const { body, state } = await aimAt("guard-self");
+
+		expect(state).toEqual({ error: null });
+		expect(body).toHaveBeenCalled();
+	});
+
+	it("covers a read too, so listing a superuser's sessions is refused the same way", async () => {
+		const user = await account("guard-reader");
+		await prisma.userPermission.create({ data: { userId: user.id, permission: "users:list-sessions" } });
+		await account("guard-owner3", true);
+		currentSessionUser.mockResolvedValue(user);
+
+		const result = await panelQuery<string[]>("users:list-sessions", async () => ["a-session"], {
+			refused: () => [],
+			failed: () => [],
+			target: { kind: "user", id: "guard-owner3" },
+		});
+
+		expect(result).toEqual([]);
+		expect((await lastEvent()).outcome).toBe("DENIED");
+	});
+});
+
+/**
  * `gate` passes `requireSession` a `skipEnrolmentGate` flag that is true for exactly the two
  * actions enrolling a second factor happens through, and false for everything else — including
  * `self:end-2fa`, a `self`-kind action of its own, so the flag is tied to specific ids and not to

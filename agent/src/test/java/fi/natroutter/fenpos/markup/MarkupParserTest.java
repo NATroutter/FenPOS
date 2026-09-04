@@ -183,7 +183,7 @@ class MarkupParserTest {
     /**
      * Deliberate, not incidental: the line-owning rule that governs {@code <wrap>}/{@code <nowrap>}
      * also governs {@code <align>}, so a line-owning tag opened inside a styling tag is refused
-     * regardless of which one it is. See "Changes by component" in the wrap-tags design spec.
+     * regardless of which one it is.
      */
     @Test
     void rejectsAlignmentOpenedInsideAStylingTagSameAsWrap() {

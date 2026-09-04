@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
+import { safeUrl } from "@/lib/assets/fetch-remote";
 import { panelAction, panelQuery } from "@/lib/auth/panel-action";
 import { REFUSAL_MESSAGE } from "@/lib/auth/require-permission";
 import { prisma } from "@/lib/db";
@@ -213,8 +214,11 @@ export async function setWebhook(apiKeyId: string, url: string): Promise<MintedK
 			revalidate,
 			target: { kind: "api-key", id: apiKeyId },
 			// The destination is recorded — a URL this install now talks to is exactly what an incident
-			// is read to find. The signing secret is not.
-			detail: { url },
+			// is read to find. The signing secret is not, and neither is a credential embedded in the
+			// URL: `https://user:token@host/hook` is a legitimate thing to register, and an audit row is
+			// permanent, hash-chained and has no delete path. `safeUrl` is what `deliver.ts` already puts
+			// every logged URL through, so the two records now agree about what a destination is.
+			detail: { url: safeUrl(url) },
 		},
 	);
 }

@@ -202,8 +202,8 @@ export async function revokeAccountSessions(userId: string): Promise<void> {
  * present the account a challenge it has nothing to answer with, which is a lockout rather than a
  * reset — and clearing enrolment is what somebody who has lost their authenticator needs.
  *
- * Enrolling is phase 6's; this half is here because it is a thing done *to* another account and
- * belongs with the rest of them.
+ * Enrolling lives on the account's own panel; clearing lives here because it is a thing done *to*
+ * another account and belongs with the rest of them.
  *
  * @param userId the account to clear
  */

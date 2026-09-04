@@ -20,6 +20,15 @@ export interface AgentLink {
 	/** When the agent connected. */
 	readonly connectedAt: Date;
 	/**
+	 * Where it connected from.
+	 *
+	 * Carried so a displacement can name both sides. A bearer token knocks the holder of the previous
+	 * connection offline every time it is used, which is inherent to bearer tokens and is also exactly
+	 * what a stolen one looks like — and the difference between the two is visible only if the record
+	 * says which address each connection came from.
+	 */
+	readonly address: string;
+	/**
 	 * Sends a frame to the agent.
 	 *
 	 * @param frame the frame to send

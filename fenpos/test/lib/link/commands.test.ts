@@ -24,6 +24,7 @@ function unresponsiveLink(agentId: string): AgentLink {
 		agentId,
 		agentName: "agent",
 		connectedAt: new Date(),
+		address: "203.0.113.10",
 		send: () => true,
 		close: () => {},
 	};

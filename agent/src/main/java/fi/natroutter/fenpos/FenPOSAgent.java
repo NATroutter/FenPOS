@@ -77,14 +77,21 @@ public class FenPOSAgent extends FoxLib {
     @Getter
     private static String VERSION;
 
+    /** Why the version could not be read, reported by {@link #main} once a logger exists. */
+    private static IOException versionFailure;
+
     static {
         Properties props = new Properties();
         try (InputStream is = FenPOSAgent.class.getResourceAsStream("/build.properties")) {
             if (is != null) {
                 props.load(is);
             }
-        } catch (IOException ignored) {
-            // Version is cosmetic; a missing build.properties must not stop the agent.
+        } catch (IOException e) {
+            // Version is cosmetic; a missing build.properties must not stop the agent. The reason
+            // is held rather than dropped: the logger does not exist during class initialisation,
+            // so it is reported by main() the moment one does. Without this an agent reporting its
+            // version as "unknown" gave no hint whether the file was absent or unreadable.
+            versionFailure = e;
         }
         VERSION = props.getProperty("version", "unknown");
     }
@@ -153,6 +160,11 @@ public class FenPOSAgent extends FoxLib {
         printBanner();
         // Before any HTTP client exists, or the JDK's request logging never switches on.
         Diagnostics.configureProcess(logger);
+
+        if (versionFailure != null) {
+            logger.warn("Could not read build.properties, so the version reads as unknown: "
+                    + Diagnostics.describe(versionFailure));
+        }
 
         if (!openStore()) {
             return;

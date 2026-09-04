@@ -27,7 +27,7 @@ import type { ActionState } from "@/lib/panel/action-state";
  * Every one goes through the shared gate, which resolves the session, checks the permission its
  * registry entry names, runs the body, and records the attempt. The bodies themselves are thin: the
  * rules live in `lib/auth/account-service.ts`, `account-security.ts` and `grant-service.ts`, because
- * they have to hold whether they are reached from here, from a test, or from the phase 8 recovery
+ * they have to hold whether they are reached from here, from a test, or from the `auth:recover`
  * CLI — an action is a place a rule is called, not a place it lives.
  *
  * **No password ever reaches `detail`.** Not its length, not a hint, not the field it arrived in.
@@ -141,10 +141,9 @@ export async function updateUser(userId: string, name: string, email: string): P
  * Sets another account's avatar.
  *
  * Gated on `users:update`, deliberately, unlike `setOwnAvatar` in `(panel)/settings/actions.ts`. The
- * spec's "not gated" list covers only actions on your *own* account, and setting somebody else's
- * picture is not on it — this is the plan's one deliberate widening beyond the spec, and it gets the
- * same care as every other `users:*` action beside it: a real permission, and a `DENIED` row when
- * refused.
+ * ungated actions are the ones acting on your *own* account, and setting somebody else's picture is
+ * not one of those, so it gets the same care as every other `users:*` action beside it: a real
+ * permission, and a `DENIED` row when refused.
  *
  * The form is parsed *inside* the gated body, not before it, for the reason `setOwnAvatar` gives:
  * `readAvatarForm` can throw (a missing file, a non-integer coordinate, too many bytes), and a throw

@@ -4,12 +4,26 @@ import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
+/**
+ * Width a sparkline assumes for the one render before its container has been measured.
+ *
+ * A `ResponsiveContainer` only learns its real size from a `ResizeObserver`, which fires after
+ * mount, so the first render always uses `initialDimension`. Recharts defaults that to -1x-1 and
+ * then warns that the chart is too small to draw, which on the server (where no observer ever runs)
+ * is the only thing a sparkline produces, and the warning ends up in the container logs. Giving it a
+ * plausible width instead both silences the false alarm and renders something close to the final
+ * size, so the correction on mount is not a visible jump. `ChartContainer` does the same for the
+ * full-size charts. The value is a middle ground between a stat card and a narrower table cell, and
+ * only ever shows for that single pre-measurement frame.
+ */
+const SPARK_INITIAL_WIDTH = 200;
+
 /** A tiny, axis-free trend line — a stat card's own sparkline, or a table's sparkline cell. */
 export function Sparkline(props: { data: { t: string; v: number | null }[]; height?: number; className?: string }) {
 	const { data, height = 40, className } = props;
 	return (
 		<div className={className} style={{ height, width: "100%" }}>
-			<ResponsiveContainer width="100%" height="100%">
+			<ResponsiveContainer width="100%" height="100%" initialDimension={{ width: SPARK_INITIAL_WIDTH, height }}>
 				<LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
 					<Line
 						type="monotone"

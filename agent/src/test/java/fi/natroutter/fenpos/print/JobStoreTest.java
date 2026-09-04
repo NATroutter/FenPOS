@@ -1,12 +1,16 @@
 package fi.natroutter.fenpos.print;
 
+import fi.natroutter.foxlib.logger.FoxLogger;
+import fi.natroutter.fenpos.enums.JobState;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,6 +26,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class JobStoreTest {
 
     private final MovableClock clock = new MovableClock(Instant.parse("2026-08-17T10:00:00Z"));
+
+    private final FoxLogger logger = new FoxLogger.Builder()
+            .setLoggerName("test")
+            .setSaveLogs(false)
+            .setConsoleLog(false)
+            .build();
 
     @Test
     void storesAndFindsAJob() {
@@ -132,7 +142,8 @@ class JobStoreTest {
      */
     @Test
     void appliesANewRecordCapToJobsAlreadyHeld() {
-        JobStore store = new JobStore(new JobSettings(Duration.ofHours(1), 100, Duration.ofSeconds(10)), clock);
+        JobStore store = new JobStore(
+                new JobSettings(Duration.ofHours(1), 100, Duration.ofSeconds(10)), clock, logger);
         for (int index = 0; index < 20; index++) {
             store.create("printer", compiled()).complete();
         }
@@ -159,8 +170,45 @@ class JobStoreTest {
         assertEquals(first.id(), kitchen.get(1).id());
     }
 
+    /**
+     * A listener that throws is a bug in the listener, and the state change it was reporting on
+     * still happened, so the job carries on. Carrying on quietly was the problem: nothing else in
+     * the system ever mentions that reporting broke, which is how a panel stuck on {@code QUEUED}
+     * came to have no explanation anywhere in the log.
+     */
+    @Test
+    void reportsAListenerThatThrowsInsteadOfSwallowingIt() {
+        List<String> logged = new ArrayList<>();
+        JobStore store = new JobStore(
+                new JobSettings(Duration.ofMinutes(10), 500, Duration.ofSeconds(10)),
+                clock,
+                capturing(logged));
+        store.listener((job, state) -> {
+            throw new IllegalStateException("reporting is broken");
+        });
+
+        PrintJob job = store.create("kitchen", compiled());
+        job.complete();
+
+        assertEquals(JobState.COMPLETED, job.state(), "the transition still happened");
+        assertEquals(1, logged.size(), logged.toString());
+        assertTrue(logged.get(0).contains("reporting is broken"), logged.get(0));
+        assertTrue(logged.get(0).contains(job.id()), logged.get(0));
+    }
+
+    /** A logger whose output lands in a list rather than a console. */
+    private static FoxLogger capturing(List<String> sink) {
+        return new FoxLogger.Builder()
+                .setLoggerName("test")
+                .setSaveLogs(false)
+                .setConsoleLog(true)
+                .setPrintter(sink::add)
+                .build();
+    }
+
     private JobStore store(Duration retention, int maxRecords) {
-        return new JobStore(new JobSettings(retention, maxRecords, Duration.ofSeconds(10)), clock);
+        return new JobStore(
+                new JobSettings(retention, maxRecords, Duration.ofSeconds(10)), clock, logger);
     }
 
     private static CompiledJob compiled() {

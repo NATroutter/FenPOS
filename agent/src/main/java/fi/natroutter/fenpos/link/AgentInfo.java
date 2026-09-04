@@ -21,7 +21,7 @@ public record AgentInfo(String agentVersion, String platform, String hostname) {
     private static final String UNKNOWN_HOST = "unknown";
 
     /** Product name this agent identifies itself with on the wire. */
-    private static final String USER_AGENT_PRODUCT = "FENPos-Agent";
+    private static final String USER_AGENT_PRODUCT = "FenPOS-Agent";
 
     /**
      * The {@code User-Agent} this agent sends on every request, pairing and link alike.

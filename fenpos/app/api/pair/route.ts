@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { redeemPairingCode } from "@/lib/agents/pairing";
+import { readBoundedText } from "@/lib/api/bounded-body";
 import { pairingLimiter } from "@/lib/auth/rate-limit";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { PROTOCOL_VERSION } from "@/lib/link/protocol";
@@ -70,10 +71,11 @@ export async function POST(request: Request): Promise<Response> {
 			return Response.json(REJECTION, { status: 401 });
 		}
 
-		const raw = await request.text();
-		if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
-			throw new ApiError("body_too_large", "Pairing request is too large.");
-		}
+		// Bounded on the way in rather than measured afterwards. This is the one unauthenticated write
+		// in the system, so a body it is going to refuse must never be a body it first holds — reading
+		// the text and then comparing its length answered 413 only after every byte had been received
+		// and stringified, which made the refusal cost far more than the request.
+		const raw = await readBoundedText(request, MAX_BODY_BYTES, "Pairing request is too large.");
 
 		let decoded: unknown;
 		try {

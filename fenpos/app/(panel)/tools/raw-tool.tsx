@@ -152,15 +152,16 @@ const SNIPPET_GROUPS: { group: string; snippets: Snippet[] }[] = [
 /**
  * The raw byte editor.
  *
- * **This hands arbitrary bytes to hardware.** It answers to the panel session alone: `writeRaw`
- * checks no permission and no install setting, only that a session is open. That is only as strong
- * as "there is only one account" — true of every install today, since `setup.ts` is the only place
- * a user is created — and it stops being true the moment a later phase adds a second one; `tools:raw`
- * is already reserved in Phase 3's permission set against that day. A machine client reaches the
- * same act through `POST /devices/{agent}/{device}/raw`, which is gated twice over — a key must hold
- * `devices:raw` *and* the install must have `link.allowRawApiWrites` switched on, which it does not
- * by default. Every write is logged twice — here and on the agent — because two records on two
- * machines is what makes it auditable if either is later in question.
+ * **This hands arbitrary bytes to hardware.** `writeRaw` is gated on `tools:raw`, held by the acting
+ * account, and bounded by `link.maxRawWriteBytes`. It answered to the panel session alone once,
+ * which was only as strong as "there is only one account" — true while `setup.ts` was the sole place
+ * a user was created, and not something to rest on now that accounts are created and granted
+ * separately. A machine client reaches the same act through
+ * `POST /devices/{agent}/{device}/raw`, which is gated twice over — a key must hold `devices:raw`
+ * *and* the install must have `link.allowRawApiWrites` switched on, which it does not by default.
+ * Every write is recorded three times — here, on the agent, and in the audit chain — because
+ * records on two machines, one of them tamper-evident, is what makes it auditable if either is
+ * later in question.
  *
  * Bytes are written in hexadecimal rather than as text. A text field would invite pasting a
  * receipt into it, and the difference between "print this" and "execute this" is the difference
