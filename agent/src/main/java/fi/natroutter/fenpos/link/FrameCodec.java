@@ -350,12 +350,8 @@ public final class FrameCodec {
         List<WireSpan> spans = new ArrayList<>(spanArray.size());
         for (JsonElement element : spanArray) {
             JsonObject span = asObject(element, "span");
-            String text = requireString(span, "text");
-            if (text.length() > MAX_SPAN_CHARS) {
-                throw new ProtocolException("span of " + text.length() + " characters exceeds " + MAX_SPAN_CHARS);
-            }
             spans.add(new WireSpan(
-                    text,
+                    requirePrintable(span, "text", MAX_SPAN_CHARS),
                     requireBoolean(span, "bold"),
                     requireBoundedInt(span, "underline", 0, 2),
                     requireBoolean(span, "invert"),
@@ -567,6 +563,41 @@ public final class FrameCodec {
                     + " characters, got " + value.length());
         }
         return value;
+    }
+
+    /**
+     * Reads text that will be written to a printer, refusing anything it would read as a command.
+     *
+     * <p>The renderer writes span text through {@code String.getBytes(charset)}, and every codepage
+     * here maps U+001B to 0x1B, so a control character in a span is an ESC/POS command by the time
+     * it reaches the port. The markup parsers on both sides already refuse control characters in
+     * text, which is why no legitimate job carries one; this is the same rule stated at the wire,
+     * where a compromised server is the one writing the text.
+     */
+    private static String requirePrintable(JsonObject parent, String field, int max)
+            throws ProtocolException {
+        String value = requireString(parent, field);
+        if (value.length() > max) {
+            throw new ProtocolException("field '" + field + "' of " + value.length()
+                    + " characters exceeds " + max);
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (isControl(character)) {
+                throw new ProtocolException(String.format(
+                        "field '%s' holds U+%04X at index %d, which a printer reads as a command",
+                        field, (int) character, index));
+            }
+        }
+        return value;
+    }
+
+    /**
+     * Whether a character would be consumed by a printer as a command rather than printed.
+     * Covers C0 including tab, DEL, and C1. Mirrors {@code MarkupParser.isControl}.
+     */
+    private static boolean isControl(char value) {
+        return value < 0x20 || value == 0x7F || (value >= 0x80 && value <= 0x9F);
     }
 
     /** Reads an identifier: 1..64 characters, the bound every id on this protocol shares. */

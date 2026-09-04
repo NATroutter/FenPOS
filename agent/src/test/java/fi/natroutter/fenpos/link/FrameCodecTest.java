@@ -621,6 +621,25 @@ class FrameCodecTest {
     }
 
     @Test
+    void refusesSpanTextCarryingBytesThePrinterWouldReadAsACommand() {
+        // The markup parser on both sides refuses control characters, so no legitimate job
+        // carries one. Without this check the link path bypasses that rule entirely: the
+        // renderer writes span text to the port verbatim, so an ESC in a span is a command,
+        // outside the size cap and the warning line that wrap a raw write.
+        for (String escaped : new String[] {"\\u001b", "\\u001d", "\\u0000", "\\u0009",
+                "\\u007f", "\\u009b"}) {
+            String span = span("").replace("Kahvi", "ab" + escaped + "cd");
+            assertThrows(ProtocolException.class, () -> codec.read(dispatch(span, "")), escaped);
+        }
+    }
+
+    @Test
+    void acceptsTheCharactersAReceiptActuallyContains() {
+        String span = span("").replace("Kahvi", "Kahvi 2,50 EUR - Aamiainen");
+        assertDoesNotThrow(() -> codec.read(dispatch(span, "")));
+    }
+
+    @Test
     void refusesAFeedBeyondOneByte() {
         assertThrows(ProtocolException.class, () -> codec.read(dispatch("", "{\"type\":\"FEED\",\"lines\":256}")));
     }
