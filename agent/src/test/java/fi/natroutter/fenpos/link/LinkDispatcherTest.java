@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -61,8 +62,18 @@ class LinkDispatcherTest {
             Clock.systemUTC(),
             logger);
 
+    // Overridden so that a raw write, which reaches its port through connections.port() rather
+    // than the printing.queue() path, lands on the same FakePrinterPort a test registered in
+    // ports rather than on a real, unopened SerialHandler. Delegates to the real lookup for any
+    // device nothing has faked, so every other use of this field is untouched.
     private final DeviceConnectionManager connections =
-            new DeviceConnectionManager(registry, logger);
+            new DeviceConnectionManager(registry, logger) {
+                @Override
+                public synchronized Optional<PrinterPort> port(String deviceName) {
+                    PrinterPort fake = ports.get(deviceName);
+                    return fake != null ? Optional.of(fake) : super.port(deviceName);
+                }
+            };
 
     private final LinkDispatcher dispatcher =
             new LinkDispatcher(registry, printing, connections, this::applyConfig, logger);
@@ -315,11 +326,24 @@ class LinkDispatcherTest {
         assertEquals(0, port.writes().size());
     }
 
-    // A successful raw write is not exercised here: onRawWrite reaches the printer through
-    // connections.port(device), which this fixture backs with a real, unopened SerialHandler
-    // rather than the FakePrinterPort that ports.put() and configure() hand to PrintService.
-    // The write therefore always fails with "Port is not open" before reaching a port whose
-    // writes() a test could assert on.
+    @Test
+    void writesAValidRawPayloadToThePortAndSaysSo() {
+        FakePrinterPort port = configure("kitchen");
+
+        // "ABC" base64. Logged at warning level even on success, because this is the one thing
+        // in the system worth noticing in a log nobody was reading closely.
+        dispatcher.accept(new Frames.RawWrite("req-1", "kitchen", "QUJD"));
+
+        assertArrayEquals(new byte[] {'A', 'B', 'C'}, port.writes().getFirst());
+
+        Frames.CommandResult result = lastFrameOfType(Frames.CommandResult.class);
+        assertTrue(result.ok());
+        assertTrue(result.message().contains("3 bytes"), result.message());
+
+        Frames.LogLine logged = lastFrameOfType(Frames.LogLine.class);
+        assertEquals(fi.natroutter.fenpos.enums.LogLevel.WARN, logged.level());
+        assertTrue(logged.message().contains("3 bytes"), logged.message());
+    }
 
     // -------------------------------------------------------------------------
     // Device control

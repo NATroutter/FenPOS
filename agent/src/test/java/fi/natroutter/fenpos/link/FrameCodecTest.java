@@ -939,7 +939,7 @@ class FrameCodecTest {
 
     @Test
     void refusesARawWriteLongerThanTheLimit() {
-        // The only frame that hands arbitrary bytes to hardware, and the cap on it had no test.
+        // The only frame that hands arbitrary bytes to hardware.
         assertThrows(ProtocolException.class, () -> codec.read(
                 "{\"type\":\"raw.write\",\"requestId\":\"r\",\"device\":\"kitchen\",\"bytes\":\""
                         + "A".repeat(16_385) + "\"}"));
