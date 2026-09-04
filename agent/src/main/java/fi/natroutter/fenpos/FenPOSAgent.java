@@ -49,6 +49,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -116,6 +117,12 @@ public class FenPOSAgent extends FoxLib {
 
     @Getter
     private static LinkClient link;
+
+    /**
+     * Kept so {@link #applyConfig} can tell it which device names dropped out, whichever of its
+     * three callers triggered the replacement.
+     */
+    private static LinkDispatcher dispatcher;
 
     /** Runs both the status report sweep and the job eviction sweep. */
     private static ScheduledExecutorService janitor;
@@ -185,7 +192,7 @@ public class FenPOSAgent extends FoxLib {
         AgentInfo info = AgentInfo.of(VERSION);
         pairing = new PairingService(store, new PairingClient(), info);
 
-        LinkDispatcher dispatcher =
+        dispatcher =
                 new LinkDispatcher(devices, printService, connections, FenPOSAgent::applyConfig, logger);
         link = new LinkClient(info, dispatcher, logger);
         dispatcher.attach(link::send);
@@ -219,6 +226,11 @@ public class FenPOSAgent extends FoxLib {
      * poll interval needs no such ceremony: {@link PrintQueue#setPollInterval} only writes a
      * volatile field that every queue's worker loop already re-reads each time it loops.
      *
+     * <p>This is also the one place, across all three callers, where the device set actually
+     * changes, so it is where a name that drops out is reported to {@link LinkDispatcher#forgetDevice}.
+     * Doing that diff here rather than in each caller is what keeps a fourth caller, whenever one
+     * is added, from having to remember to repeat it.
+     *
      * @param wire  the devices as the server described them
      * @param jobs  retention and shutdown settings as the server has them configured
      * @param agent status, eviction and queue-poll timing as the server has them configured
@@ -227,10 +239,17 @@ public class FenPOSAgent extends FoxLib {
         if (shuttingDown) {
             return;
         }
+        Set<String> before = devices.names();
         List<String> collapsed = devices.apply(wire);
         if (!collapsed.isEmpty()) {
             logger.warn("The server sent more than one device called " + String.join(", ", collapsed)
                     + "; only the last of each is configured");
+        }
+        Set<String> after = devices.names();
+        for (String name : before) {
+            if (!after.contains(name)) {
+                dispatcher.forgetDevice(name);
+            }
         }
         connections.applyDevices();
         printService.applyDevices();

@@ -198,22 +198,32 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * them: adopting devices reopens ports and rebuilds queues, while adopting images is a map
      * swap.
      *
-     * <p>A device name that drops out of the new snapshot has its raw write bucket forgotten,
-     * so a server that keeps renaming devices cannot grow {@link RawWriteLimit} forever. A name
-     * that survives the update keeps its bucket exactly as it was — this is what stops a
-     * hammered device from buying itself a fresh burst just by appearing again in the next
-     * snapshot.
+     * <p>This is one of three callers of {@code applyConfig}, alongside a local {@code unpair}
+     * and the server unpairing this agent, so anything that must happen on every device set
+     * replacement — such as {@link #forgetDevice}, which {@code applyConfig}'s implementation
+     * calls for a name that drops out — is the implementation's job, not this method's.
      */
     private void onConfigSync(Frames.ConfigSync sync) {
         devices.applyRasters(sync.assets());
-        Set<String> before = Set.copyOf(devices.names());
         applyConfig.accept(sync.devices(), sync.jobs(), sync.agent());
-        for (String name : before) {
-            if (!devices.names().contains(name)) {
-                rawWrites.forget(name);
-            }
-        }
         reportStatus();
+    }
+
+    /**
+     * Drops the raw write budget held for a device that is no longer configured.
+     *
+     * <p>{@code applyConfig}'s implementation calls this once for each name that drops out of a
+     * device set replacement, wherever that replacement happens — this class's own
+     * {@code config.sync} handling, a local {@code unpair}, and the server unpairing this agent
+     * all replace the device set through the same {@link ConfigListener}, and this is what keeps
+     * {@link RawWriteLimit} bounded across all three rather than only the one that happens to be
+     * a frame arriving over the link. A name that stays configured is never touched here, which
+     * is what stops a device from buying itself a fresh burst just by surviving an update.
+     *
+     * @param device the device name that is no longer configured
+     */
+    public void forgetDevice(String device) {
+        rawWrites.forget(device);
     }
 
     /**

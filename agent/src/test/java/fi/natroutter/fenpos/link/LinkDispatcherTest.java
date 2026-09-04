@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -345,6 +346,13 @@ class LinkDispatcherTest {
         assertTrue(logged.message().contains("3 bytes"), logged.message());
     }
 
+    // These three raw write budget tests exhaust an eleven-write burst on the dispatcher's real
+    // Instant::now() clock rather than an injected one. LinkDispatcher builds its RawWriteLimit
+    // itself with no seam to hand it a fake clock, and adding one here would mean widening
+    // LinkDispatcher's constructor for every caller, not just this test. It stays safe because
+    // eleven synchronous, in-process calls finish in well under a millisecond, far inside the
+    // ~200ms it would take the limiter to refill even one token at five a second.
+
     @Test
     void forgetsARawWriteBudgetWhenADeviceIsRemoved() {
         configure("kitchen");
@@ -386,6 +394,35 @@ class LinkDispatcherTest {
         // a device that actually left must lose its bucket.
         assertFalse(lastFrameOfType(Frames.CommandResult.class).ok(),
                 "a device that was never removed must not get a fresh burst just by reappearing in a snapshot");
+    }
+
+    /**
+     * Unpairing does not go through {@code config.sync} at all: both {@code UnpairCommand} and
+     * {@code FenPOSAgent.forgetPairing} call {@code applyConfig.accept(List.of(), ...)} directly,
+     * the same reference this test's {@link #applyConfig} stands in for. This is the path that
+     * used to leave a device's bucket stranded, because only {@code onConfigSync} used to know
+     * how to forget one.
+     */
+    @Test
+    void forgetsRawWriteBudgetsWhenUnpairingClearsTheDeviceSet() {
+        configure("kitchen");
+        for (int write = 1; write <= 10; write++) {
+            dispatcher.accept(new Frames.RawWrite("req-" + write, "kitchen", "QUJD"));
+        }
+        dispatcher.accept(new Frames.RawWrite("req-11", "kitchen", "QUJD"));
+        assertFalse(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "the eleventh write should have exhausted kitchen's burst");
+
+        // Exactly what UnpairCommand and FenPOSAgent.forgetPairing do: call applyConfig with an
+        // empty device set directly, never touching dispatcher.accept or a ConfigSync frame.
+        applyConfig(List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS);
+
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS));
+
+        dispatcher.accept(new Frames.RawWrite("req-12", "kitchen", "QUJD"));
+
+        assertTrue(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "unpairing should have forgotten kitchen's exhausted bucket along with the device");
     }
 
     // -------------------------------------------------------------------------
@@ -635,10 +672,22 @@ class LinkDispatcherTest {
         throw new AssertionError("no " + kind.getSimpleName() + "; saw " + sent);
     }
 
-    /** Mirrors the bootstrap: registry first, then the serial layer, then the queues and settings. */
+    /**
+     * Mirrors the bootstrap: registry first, then the serial layer, then the queues and
+     * settings. Also mirrors {@code FenPOSAgent.applyConfig} in telling the dispatcher which
+     * device names dropped out, since this method stands in for it here and is, like it, the
+     * one place both a {@code config.sync} and a direct unpairing call through.
+     */
     private void applyConfig(List<Frames.DeviceConfig> wire, JobSettings jobs, AgentSettings agent) {
         applied.add(wire);
+        Set<String> before = registry.names();
         registry.apply(wire);
+        Set<String> after = registry.names();
+        for (String name : before) {
+            if (!after.contains(name)) {
+                dispatcher.forgetDevice(name);
+            }
+        }
         connections.applyDevices();
         printing.applyDevices();
         printing.settings(jobs);
