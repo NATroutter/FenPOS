@@ -11,8 +11,9 @@ import java.util.Objects;
 /**
  * One accepted print job and everything known about it.
  * <p>
- * A job is created only after its content has been fully compiled, so it always carries a
- * ready-to-write payload. From that point the only thing that can change is its state.
+ * A job is created only after its content has been fully compiled, so it always starts out
+ * carrying a ready-to-write payload. From that point its state can change, and once it reaches
+ * a terminal one the payload is released along with it.
  * <p>
  * <strong>Threading.</strong> A job is created on an HTTP thread, transitioned by its
  * device's queue worker, read by other HTTP threads polling {@code /jobs/<id>} and by the
@@ -23,12 +24,26 @@ public final class PrintJob {
 
     private final String id;
     private final String deviceName;
-    private final byte[] payload;
+    private final int byteCount;
     private final int lines;
     private final Instant queuedAt;
     private final Clock clock;
     private final JobListener listener;
     private final FoxLogger logger;
+
+    /**
+     * The rendered payload, released once the job is terminal.
+     *
+     * <p>Held only while it may still be written. A finished job used to keep it until its record
+     * was evicted, which is a retention and a record cap the server sets, so a server could choose
+     * how much of this process's memory a day's printing occupied. Nothing reads it after the
+     * write, so nothing is lost by letting it go, and {@link #byteCount} is captured at
+     * construction so the size still reports.
+     *
+     * <p>Volatile because it is read by {@link #payload()} outside this object's monitor, on the
+     * queue worker that is about to write it, and cleared under the monitor by the transitions.
+     */
+    private volatile byte[] payload;
 
     private JobState state = JobState.QUEUED;
     private Instant startedAt;
@@ -63,6 +78,7 @@ public final class PrintJob {
         this.id = Objects.requireNonNull(id, "id");
         this.deviceName = Objects.requireNonNull(deviceName, "deviceName");
         this.payload = Objects.requireNonNull(compiled, "compiled").payload();
+        this.byteCount = this.payload.length;
         this.lines = compiled.lines();
         this.clock = Objects.requireNonNull(clock, "clock");
         this.listener = Objects.requireNonNull(listener, "listener");
@@ -85,9 +101,16 @@ public final class PrintJob {
      * <p>
      * Returned directly rather than copied: this is the hot path to the printer and the
      * array is never modified after compilation.
+     *
+     * @throws IllegalStateException if the job has finished, which released it. Reaching this is
+     *                               a bug: nothing reads a payload after the write that ends it.
      */
     public byte[] payload() {
-        return payload;
+        byte[] current = payload;
+        if (current == null) {
+            throw new IllegalStateException("Job " + id + " has finished; its payload was released");
+        }
+        return current;
     }
 
     /** Returns the number of text lines after wrapping. */
@@ -95,9 +118,9 @@ public final class PrintJob {
         return lines;
     }
 
-    /** Returns the payload size in bytes. */
+    /** Returns the payload size in bytes, which survives the payload itself. */
     public int bytes() {
-        return payload.length;
+        return byteCount;
     }
 
     /** Returns when the job was accepted. */
@@ -163,6 +186,7 @@ public final class PrintJob {
         synchronized (this) {
             state = JobState.COMPLETED;
             finishedAt = clock.instant();
+            payload = null;
         }
         announce(JobState.COMPLETED);
     }
@@ -177,6 +201,7 @@ public final class PrintJob {
             state = JobState.FAILED;
             failureReason = reason;
             finishedAt = clock.instant();
+            payload = null;
         }
         announce(JobState.FAILED);
     }
@@ -194,6 +219,7 @@ public final class PrintJob {
             }
             state = JobState.CANCELLED;
             finishedAt = clock.instant();
+            payload = null;
         }
         announce(JobState.CANCELLED);
         return true;
