@@ -221,10 +221,10 @@ public final class FrameCodec {
                     requireName(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
         }
 
-        JsonObject jobsObject = root.getAsJsonObject("jobs");
+        JsonObject jobsObject = optionalObject(root, "jobs");
         JobSettings jobs = jobsObject == null ? JobSettings.DEFAULTS : readJobSettings(jobsObject);
 
-        JsonObject agentObject = root.getAsJsonObject("agent");
+        JsonObject agentObject = optionalObject(root, "agent");
         AgentSettings agent = agentObject == null ? AgentSettings.DEFAULTS : readAgentSettings(agentObject);
 
         return new ConfigSync(devices, assets, jobs, agent);
@@ -509,6 +509,24 @@ public final class FrameCodec {
             throw new ProtocolException("field '" + field + "' must be an object");
         }
         return element.getAsJsonObject();
+    }
+
+    /**
+     * Reads an object the frame may leave out.
+     *
+     * <p>Absent and JSON null both read as null; a value of any other type is refused, so an
+     * optional field cannot become a way to slip a wrong-typed value past the codec. Written
+     * because {@code JsonObject.getAsJsonObject(String)} is an unchecked cast: it threw a
+     * {@code ClassCastException} straight past this class's contract, and the caller on the
+     * receive path only catches {@link ProtocolException}, so one bad optional field closed
+     * the socket.
+     */
+    private static JsonObject optionalObject(JsonObject parent, String field) throws ProtocolException {
+        JsonElement element = parent.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        return requireObject(parent, field);
     }
 
     private static JsonObject asObject(JsonElement element, String what) throws ProtocolException {

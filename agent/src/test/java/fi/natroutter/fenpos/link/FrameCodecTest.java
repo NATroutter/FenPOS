@@ -377,6 +377,18 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read(json));
     }
 
+    @Test
+    void refusesAConfigSyncWhoseJobSettingsAreNotAnObject() {
+        // A ClassCastException here would escape LinkClient's ProtocolException catch and
+        // close the socket, taking every printer behind this agent offline for one bad field.
+        // JSON null is excluded here: it reads the same as an absent field, not a wrong type.
+        for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
+            assertThrows(ProtocolException.class, () -> codec.read(
+                    "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"jobs\":" + value + "}"),
+                    "jobs:" + value);
+        }
+    }
+
     // -----------------------------------------------------------------
     // Reading: agent settings
     // -----------------------------------------------------------------
@@ -414,6 +426,16 @@ class FrameCodecTest {
                 """;
 
         assertThrows(ProtocolException.class, () -> codec.read(json));
+    }
+
+    @Test
+    void refusesAConfigSyncWhoseAgentSettingsAreNotAnObject() {
+        // JSON null is excluded here: it reads the same as an absent field, not a wrong type.
+        for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
+            assertThrows(ProtocolException.class, () -> codec.read(
+                    "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"agent\":" + value + "}"),
+                    "agent:" + value);
+        }
     }
 
     @Test

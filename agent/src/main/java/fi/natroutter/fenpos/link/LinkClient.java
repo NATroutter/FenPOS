@@ -467,6 +467,14 @@ public class LinkClient {
             } catch (ProtocolException e) {
                 logger.warn("Ignored a frame from the server: " + Diagnostics.describe(e));
                 return;
+            } catch (RuntimeException e) {
+                // A codec fault is a bug in this agent, not a reason to drop the link and take every
+                // printer behind it offline. The codec's contract is that every malformed frame is a
+                // ProtocolException; reaching here means that contract was broken, which nothing else
+                // would ever mention, so it is logged at error level.
+                logger.error("Could not parse a frame from the server, which is a bug in this agent: "
+                        + Diagnostics.describe(e));
+                return;
             }
 
             Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
