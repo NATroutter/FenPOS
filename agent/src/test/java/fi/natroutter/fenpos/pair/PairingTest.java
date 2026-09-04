@@ -58,6 +58,9 @@ class PairingTest {
     private volatile int status = 200;
     private volatile String responseBody = "";
 
+    /** A {@code Location} header to send, or {@code null} to send none. */
+    private volatile String locationHeader = null;
+
     @BeforeEach
     void startServer(@TempDir Path directory) throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -245,6 +248,18 @@ class PairingTest {
 
         assertTrue(thrown.getMessage().length() < 400, "message was " + thrown.getMessage().length());
         assertTrue(thrown.getMessage().endsWith("…"), thrown.getMessage());
+    }
+
+    @Test
+    void doesNotFollowARedirectToAnotherOrigin() {
+        // A redirect on this request would move the credential exchange to a host the operator
+        // never named, so the client is built with Redirect.NEVER and the status is surfaced.
+        respondWithRedirect(307, "https://elsewhere.invalid/api/pair");
+
+        PairingException thrown = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().contains("307"), thrown.getMessage());
     }
 
     @Test
@@ -448,6 +463,12 @@ class PairingTest {
         this.responseBody = body;
     }
 
+    private void respondWithRedirect(int status, String location) {
+        this.status = status;
+        this.responseBody = "";
+        this.locationHeader = location;
+    }
+
     private String baseUrl() {
         return "http://127.0.0.1:" + server.getAddress().getPort();
     }
@@ -459,6 +480,9 @@ class PairingTest {
 
             byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
+            if (locationHeader != null) {
+                exchange.getResponseHeaders().add("Location", locationHeader);
+            }
             exchange.sendResponseHeaders(status, body.length);
             exchange.getResponseBody().write(body);
         }

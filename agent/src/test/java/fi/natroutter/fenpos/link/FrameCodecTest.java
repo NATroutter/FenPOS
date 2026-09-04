@@ -953,4 +953,30 @@ class FrameCodecTest {
 
         assertEquals(16_384, assertInstanceOf(Frames.RawWrite.class, frame).bytes().length());
     }
+
+    @Test
+    void saturatesRatherThanWrappingOnANumberTooLargeForAnInt() {
+        // A double cast saturates at Integer.MAX_VALUE rather than wrapping, so an absurd number
+        // lands outside every bound rather than inside a small one. Worth pinning, because a cast
+        // that wrapped would make 4294967296 read as 0 and pass a bound that starts at 1.
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"config.sync","devices":[{"name":"kitchen","port":"/dev/ttyUSB0",\
+                "baudRate":1e18,"dataBits":8,"stopBits":1,"parity":"NONE","flowControl":"NONE",\
+                "writeTimeoutMs":1000,"autoConnect":false,"autoReconnect":false,\
+                "reconnectDelaySeconds":5,"columns":42,"codepage":"CP858","paused":false,\
+                "maxQueueDepth":100}],"assets":[]}"""));
+    }
+
+    @Test
+    void survivesDeeplyNestedJsonWithinTheFrameCap() {
+        // Gson's element adapter is iterative rather than recursive, so nesting this deep parses
+        // and is refused rather than overflowing the stack. Pinned because a Gson upgrade that
+        // reverted to recursion would turn one frame into a crash, and nothing else would notice.
+        int depth = 60_000;
+        String nested = "{\"type\":\"job.dispatch\",\"job\":"
+                + "[".repeat(depth) + "]".repeat(depth) + "}";
+        assertTrue(nested.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 256 * 1024);
+
+        assertThrows(ProtocolException.class, () -> codec.read(nested));
+    }
 }
