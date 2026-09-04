@@ -327,9 +327,10 @@ raised it.
 
 - **Agents have no inbound surface.** They dial out and never listen, so there is no port to
   scan and no endpoint to post to.
-- **Strict TLS.** There is no "trust all certificates" option, in any form.
-- **SPKI pinning from pairing onward**, so a mis-issued certificate or a MITM proxy is
-  refused even when the certificate chain validates.
+- **Strict TLS.** The agent validates the server's certificate against the system trust
+  store, and there is no "trust all certificates" option in any form. There is no certificate
+  pinning: an agent accepts any certificate a CA in its trust store has issued for the
+  server's name, so a TLS-inspecting proxy on the path can read and alter the link.
 - **Pairing codes** are single-use, consumed atomically at redemption, expire in 15 minutes,
   and are rate-limited per address.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
