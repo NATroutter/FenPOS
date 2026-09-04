@@ -2,7 +2,10 @@ package fi.natroutter.fenpos.util;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * What happens to text this agent did not choose before it reaches a log file or a terminal.
@@ -25,9 +28,16 @@ class TextTest {
     }
 
     @Test
-    void doublesABraceSoAColourTokenCannotBeForged() {
-        assertEquals("{{RED}", Text.safe("{RED}"));
-        assertEquals("2 {{ 3", Text.safe("2 { 3"));
+    void escapesABraceSoAColourTokenCannotBeForged() {
+        assertEquals("\\u007BRED}", Text.safe("{RED}"));
+        assertEquals("2 \\u007B 3", Text.safe("2 { 3"));
+    }
+
+    @Test
+    void leavesNoColourTokenForASubstringReplaceToFind() {
+        for (String token : List.of("{RED}", "{GREEN}", "{RESET}", "a {YELLOW} b")) {
+            assertFalse(Text.safe(token).contains("{"), token);
+        }
     }
 
     @Test

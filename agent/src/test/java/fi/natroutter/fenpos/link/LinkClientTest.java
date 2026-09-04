@@ -170,6 +170,10 @@ class LinkClientTest {
         // the sequence right after "forged" can never be mistaken for the start of another entry.
         assertFalse(lost.get(0).contains("forged\n"), lost.get(0));
         assertTrue(lost.get(0).contains(Text.safe("forged\nline")), lost.get(0));
+        // The colour pass runs over the line on its way to the terminal and substitutes {RED}
+        // wherever it appears. Finding the escaped form intact on the other side is what proves
+        // it found nothing to substitute: a match would have consumed the readable RED} with it.
+        assertTrue(lost.get(0).contains(Text.safe("{RED}")), lost.get(0));
     }
 
     @Test
