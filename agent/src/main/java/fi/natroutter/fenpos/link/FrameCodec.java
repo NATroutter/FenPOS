@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Reads and writes link frames.
@@ -111,8 +112,7 @@ public final class FrameCodec {
      * an operator's terminal, and cannot be refused by the server when it comes back on a status
      * report.
      */
-    private static final java.util.regex.Pattern SLUG =
-            java.util.regex.Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
+    private static final Pattern SLUG = Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
 
     /** Serialises outgoing frames. Nulls are omitted so optional fields are simply absent. */
     private final Gson gson = new GsonBuilder().create();

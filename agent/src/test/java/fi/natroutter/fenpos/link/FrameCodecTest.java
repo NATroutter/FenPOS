@@ -795,6 +795,12 @@ class FrameCodecTest {
     }
 
     @Test
+    void acceptsAPortAtItsMaximumLength() {
+        assertDoesNotThrow(() ->
+                codec.read(deviceSnapshot("\"kitchen\"", "\"" + "x".repeat(256) + "\"")));
+    }
+
+    @Test
     void refusesAnIdentifierOutsideItsLengthBound() {
         assertThrows(ProtocolException.class, () -> codec.read(
                 "{\"type\":\"job.cancel\",\"jobId\":\"" + "j".repeat(65) + "\"}"));
@@ -814,5 +820,12 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read("""
                 {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
                 "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(129))));
+    }
+
+    @Test
+    void acceptsAWelcomeAgentNameAtItsMaximumLength() {
+        assertDoesNotThrow(() -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(128))));
     }
 }
