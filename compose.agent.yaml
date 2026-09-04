@@ -26,6 +26,13 @@ services:
       # Find it with:  stat -c '%g' /dev/ttyUSB0
       - "20"                      # dialout on Debian/Ubuntu
 
+    # The agent needs no capability at all. Device access comes from the group above, which is
+    # a group membership rather than a capability.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
     volumes:
       # The agent's identity: server address and the credential issued at pairing.
       # Lose this and the agent is unpaired and needs a fresh code.
