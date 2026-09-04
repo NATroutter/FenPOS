@@ -159,5 +159,76 @@ export async function verifyTurnstile(token: string, address: string): Promise<T
 	// `invalid-input-secret` is a wrong secret key, `timeout-or-duplicate` is a token reused or gone
 	// stale — and none of them is shown to whoever is signing in.
 	const codes = Array.isArray(payload["error-codes"]) ? payload["error-codes"].map(String) : [];
+
+	// A secret Cloudflare will not accept is a fact about this install's configuration, not a verdict
+	// about whoever is signing in — the same class of failure as Cloudflare being unreachable, and
+	// treated the same way for the same reason. Left as a refusal it locks out every account at once,
+	// including the one an operator would use to reach Settings and correct the key.
+	//
+	// **Safe to fail open on precisely because nothing the caller sends can produce these two codes.**
+	// They are decided by the stored secret alone: no token, no address and no header changes the
+	// answer, so this branch cannot be reached on demand the way an absent token can. That asymmetry
+	// is the whole argument, and it is why the `missing` verdict above is not treated this way.
+	if (codes.includes("invalid-input-secret") || codes.includes("missing-input-secret")) {
+		logger.error(
+			"Cloudflare does not accept this install's Turnstile secret key, so sign-in is proceeding without the challenge",
+			{
+				codes,
+			},
+		);
+		return { ok: true };
+	}
+
 	return { ok: false, reason: "rejected", codes };
+}
+
+/** What {@link checkTurnstileSecret} could tell about a secret key. */
+export type SecretVerdict =
+	/** Cloudflare accepted the key itself, whatever it thought of the token sent with it. */
+	| "ok"
+	/** Cloudflare rejected the key. */
+	| "invalid"
+	/** Cloudflare could not be asked. Says nothing about the key either way. */
+	| "unknown";
+
+/**
+ * Asks Cloudflare whether a secret key is one it will accept, without a real token.
+ *
+ * Redemption is the only endpoint Cloudflare offers, and it has to look at the secret before it can
+ * judge the token — so redeeming a token that cannot possibly be real turns an answer about the
+ * token into an answer about the key. `invalid-input-secret` means the key is wrong;
+ * `invalid-input-response` means the key was accepted and Cloudflare got as far as the token, which
+ * is the outcome being fished for.
+ *
+ * **There is no equivalent for the site key, and there cannot be.** Siteverify takes a secret and a
+ * token and nothing else; the site key is a client-side artifact Cloudflare never sees from here. A
+ * site key this install cannot use is only discoverable in a browser, which is why the widget
+ * reports its own failure and why `recover --disable-challenge` exists.
+ *
+ * @param secret the key to ask about
+ * @returns whether Cloudflare accepts it, or `unknown` when Cloudflare could not be asked
+ */
+export async function checkTurnstileSecret(secret: string): Promise<SecretVerdict> {
+	const body = new FormData();
+	body.set("secret", secret);
+	// Deliberately not a token. Its rejection is the point: what matters is which of the two things
+	// Cloudflare objects to.
+	body.set("response", "this-is-not-a-token");
+
+	try {
+		const response = await fetch(VERIFY_URL, {
+			method: "POST",
+			body,
+			signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+			cache: "no-store",
+		});
+		if (!response.ok) {
+			return "unknown";
+		}
+		const payload = (await response.json()) as { "error-codes"?: unknown };
+		const codes = Array.isArray(payload["error-codes"]) ? payload["error-codes"].map(String) : [];
+		return codes.includes("invalid-input-secret") || codes.includes("missing-input-secret") ? "invalid" : "ok";
+	} catch {
+		return "unknown";
+	}
 }

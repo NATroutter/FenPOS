@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { turnstileConfig, verifyTurnstile } from "@/lib/auth/turnstile";
+import { checkTurnstileSecret, turnstileConfig, verifyTurnstile } from "@/lib/auth/turnstile";
 import { prisma } from "@/lib/db";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -162,6 +162,86 @@ describe("the sign-in bot challenge", () => {
 
 			expect(verdict.ok).toBe(false);
 			expect(called).not.toHaveBeenCalled();
+		});
+
+		it.each(["invalid-input-secret", "missing-input-secret"])(
+			"lets the sign-in through when Cloudflare answers '%s'",
+			async (code) => {
+				await configure();
+				cloudflareAnswers({ success: false, "error-codes": [code] });
+
+				// A secret Cloudflare will not take is this install's misconfiguration, not a verdict about
+				// the caller, and refusing on it locks out every account at once — including the one needed
+				// to reach Settings and fix the key.
+				expect(await verifyTurnstile("a-token", "203.0.113.4")).toEqual({ ok: true });
+			},
+		);
+
+		it("still refuses when a secret complaint arrives beside a real verdict about the token", async () => {
+			await configure();
+			cloudflareAnswers({ success: false, "error-codes": ["invalid-input-response"] });
+
+			// The guard above keys on the secret codes specifically rather than on "any failure", which is
+			// what keeps a genuine refusal a refusal.
+			expect((await verifyTurnstile("a-forged-token", "203.0.113.4")).ok).toBe(false);
+		});
+	});
+
+	/**
+	 * The check the Settings page runs before it stores a secret key.
+	 *
+	 * Redemption is the only endpoint Cloudflare offers, so a key is tested by redeeming a token that
+	 * cannot be real and reading which half of the pair it objected to. There is no equivalent for the
+	 * site key: siteverify never sees one.
+	 */
+	describe("checkTurnstileSecret", () => {
+		it("calls a key Cloudflare rejects invalid", async () => {
+			cloudflareAnswers({ success: false, "error-codes": ["invalid-input-secret"] });
+
+			expect(await checkTurnstileSecret("0xWRONG")).toBe("invalid");
+		});
+
+		it("calls a key good when Cloudflare gets as far as objecting to the token", async () => {
+			cloudflareAnswers({ success: false, "error-codes": ["invalid-input-response"] });
+
+			// Cloudflare has to accept the secret before it can judge the token, so a complaint about the
+			// token is the evidence being fished for.
+			expect(await checkTurnstileSecret("0xRIGHT")).toBe("ok");
+		});
+
+		it.each([
+			["a server error", 503],
+			["a gateway error", 502],
+		])("says nothing either way when Cloudflare answers with %s", async (_label, status) => {
+			cloudflareAnswers({}, { status });
+
+			// Not "invalid": Cloudflare being down is not evidence about the key, and refusing the save on
+			// it would make a third party's outage stop an operator configuring their own install.
+			expect(await checkTurnstileSecret("0xRIGHT")).toBe("unknown");
+		});
+
+		it("says nothing either way when Cloudflare cannot be reached", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => {
+					throw new Error("connect ETIMEDOUT");
+				}),
+			);
+
+			expect(await checkTurnstileSecret("0xRIGHT")).toBe("unknown");
+		});
+
+		it("sends the key it was given, with a token that cannot be a real one", async () => {
+			cloudflareAnswers({ success: false, "error-codes": ["invalid-input-response"] });
+
+			await checkTurnstileSecret("0xTHEKEYBEINGTESTED");
+
+			const [, options] = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+			const body = options.body as FormData;
+			// The key under test rather than the stored one: this runs before the save, so the stored key
+			// is still the old one and testing that would pass a wrong key straight into the settings.
+			expect(body.get("secret")).toBe("0xTHEKEYBEINGTESTED");
+			expect(body.get("response")).not.toBe("");
 		});
 	});
 });

@@ -16,12 +16,19 @@ import { hashPassword, passwordSchema } from "@/lib/auth/password";
 import { assertNotReused, recordPasswordChange } from "@/lib/auth/password-history";
 import { MAXIMUM_DISPLAY_NAME_LENGTH } from "@/lib/auth/password-policy";
 import { PermissionDeniedError } from "@/lib/auth/require-permission";
+import { checkTurnstileSecret } from "@/lib/auth/turnstile";
 import { beginEnrolment, confirmEnrolment, type Enrolment, endEnrolment } from "@/lib/auth/two-factor";
 import { prisma } from "@/lib/db";
 import type { PanelPermission } from "@/lib/domain/panel-permissions";
 import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { clearSetting, globalPasswordPolicy, SETTINGS, setSetting } from "@/lib/settings/settings-service";
+import {
+	clearSetting,
+	globalPasswordPolicy,
+	SETTINGS,
+	secretSetting,
+	setSetting,
+} from "@/lib/settings/settings-service";
 
 /**
  * Server actions behind the Settings tab.
@@ -70,6 +77,46 @@ export interface SaveSettingsResult {
 	errors: Record<string, string>;
 }
 
+/** The two settings {@link refusesTurnstileSecret} guards. Literals, matching `SETTINGS`' own keys. */
+const TURNSTILE_SECRET_KEY = "auth.turnstileSecretKey";
+const TURNSTILE_ENABLED_KEY = "auth.turnstileEnabled";
+
+/**
+ * Whether this change would store a secret key Cloudflare will not accept.
+ *
+ * A wrong secret used to be discovered at the first sign-in after it was saved, and what it looked
+ * like there was every account on the install being refused at once. It is checked here instead,
+ * against the one field the operator is looking at, at the moment they are looking at it.
+ *
+ * Both settings are guarded, because either alone is enough to arm the problem: saving a key, and
+ * switching the challenge on over a key saved earlier. The site key cannot be checked this way and is
+ * deliberately not guarded — see {@link checkTurnstileSecret}.
+ *
+ * **`unknown` allows the save.** Cloudflare being unreachable is not evidence about the key, and a
+ * settings page that refused edits whenever a third party was down would be its own kind of lockout —
+ * the same judgement `verifyTurnstile` makes about a sign-in for the same reason.
+ *
+ * @param change the staged change about to be applied
+ * @param pendingSecret the secret this batch is heading towards, or null when it changes no key
+ * @returns whether to refuse this change
+ */
+async function refusesTurnstileSecret(change: SettingChange, pendingSecret: string | null): Promise<boolean> {
+	const savingSecret = change.key === TURNSTILE_SECRET_KEY && change.kind === "set";
+	const switchingOn = change.key === TURNSTILE_ENABLED_KEY && change.kind === "set" && change.value === true;
+	if (!savingSecret && !switchingOn) {
+		return false;
+	}
+
+	// An empty key is how the challenge is configured off, and `turnstileConfig` already treats it as
+	// no challenge rather than as a broken one, so there is nothing to check and nothing to refuse.
+	const secret = savingSecret ? pendingSecret : (pendingSecret ?? (await secretSetting(TURNSTILE_SECRET_KEY)).trim());
+	if (secret === null || secret === "") {
+		return false;
+	}
+
+	return (await checkTurnstileSecret(secret)) === "invalid";
+}
+
 /**
  * Applies a batch of staged changes.
  *
@@ -102,8 +149,27 @@ export async function saveSettings(changes: SettingChange[]): Promise<SaveSettin
 	const applied: string[] = [];
 	const refused: string[] = [];
 
+	// The secret the batch is heading towards, which is not necessarily the one stored now: a batch
+	// that fills in the key and switches the challenge on in one press has to be judged on the key it
+	// is about to store. Resolved once, before anything is applied, so the order the page happens to
+	// send its changes in cannot change the answer.
+	const secretChange = changes.find((change) => change.key === TURNSTILE_SECRET_KEY && change.kind === "set");
+	const pendingSecret =
+		secretChange && secretChange.kind === "set" && typeof secretChange.value === "string"
+			? secretChange.value.trim()
+			: null;
+
 	for (const change of changes) {
 		try {
+			if (await refusesTurnstileSecret(change, pendingSecret)) {
+				// Thrown rather than recorded directly so it takes the same path as a rejected value:
+				// named against its own field, with the rest of the batch still applied.
+				throw new ApiError(
+					"invalid_type",
+					"Cloudflare does not accept this secret key. Check it against the Turnstile section of the " +
+						"Cloudflare dashboard.",
+				);
+			}
 			const permission = permissionForSetting(change.key);
 			if (permission === null || !(await userHolds(user, permission))) {
 				// Refused per change rather than per batch, matching how a rejected value already

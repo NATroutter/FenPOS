@@ -62,6 +62,16 @@ export function LoginForm({ turnstileSiteKey }: { turnstileSiteKey: string | nul
 		}
 	}, [signInState]);
 
+	/**
+	 * Cloudflare's own code for why the challenge could not run, once it has said so.
+	 *
+	 * Without this the page is at its least helpful exactly when it matters most. A site key
+	 * Cloudflare refuses means no widget, so no token, so every sign-in on the install comes back
+	 * "That challenge could not be verified" — which reads as *you* failed a challenge, when the truth
+	 * is nobody can pass one and no password will help. The code is the one thing that says which.
+	 */
+	const [challengeFailure, setChallengeFailure] = useState<string | null>(null);
+
 	// Once the password has been accepted the challenge is the only thing left to do, and it stays on
 	// screen through a refused code — `signInState` is what decides this, and nothing in
 	// `verifyTwoFactor`'s own failure path touches it (`verifyState.twoFactorRequired` is never read
@@ -202,7 +212,27 @@ export function LoginForm({ turnstileSiteKey }: { turnstileSiteKey: string | nul
 
 					{/* Above the messages and the button, which is where it is solved: the challenge is
 					    something to finish before submitting, not a result of having submitted. */}
-					{turnstileSiteKey ? <TurnstileWidget siteKey={turnstileSiteKey} resetKey={refusals} /> : null}
+					{turnstileSiteKey ? (
+						<TurnstileWidget siteKey={turnstileSiteKey} resetKey={refusals} onUnavailable={setChallengeFailure} />
+					) : null}
+
+					{/* Above the refusal below it, because it explains that refusal. Whoever is reading this
+					    cannot act on it themselves — the point is to stop them retyping a password that was
+					    never the problem, and to name the command for whoever administers the install. */}
+					{challengeFailure ? (
+						<Alert variant="destructive">
+							<AlertDescription className="flex flex-col gap-1">
+								<span>
+									The bot challenge on this page could not load, so no sign-in here can succeed. This is a problem with
+									the install, not with your password.
+								</span>
+								<span className="text-xs">
+									Cloudflare reported <span className="font-mono">{challengeFailure}</span>. An administrator can clear
+									it with <span className="font-mono">recover --disable-challenge</span> on the server.
+								</span>
+							</AlertDescription>
+						</Alert>
+					) : null}
 
 					{signInState.ban ? (
 						<Alert variant="destructive">
