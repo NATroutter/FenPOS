@@ -9,6 +9,7 @@ import fi.natroutter.fenpos.link.AgentInfo;
 import fi.natroutter.fenpos.link.Frames;
 import fi.natroutter.fenpos.store.AgentIdentity;
 import fi.natroutter.fenpos.store.AgentStore;
+import fi.natroutter.fenpos.util.Text;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -204,6 +205,30 @@ class PairingTest {
         // an oracle. The agent reflects that honestly instead of asserting a reason.
         assertTrue(thrown.getMessage().contains("mistyped"), thrown.getMessage());
         assertTrue(thrown.getMessage().contains("expired"), thrown.getMessage());
+    }
+
+    /**
+     * The server answers this request before the code is even checked, so its {@code message}
+     * field is exactly as foreign as any other reply body. A newline in it could forge a second
+     * log line and a brace could drive the colour codes the console substitutes into a message,
+     * the same hazard the branch already escapes for a pairing reply's {@code agentName}.
+     * <p>
+     * Compared against {@link Text#safe} on the flattened text rather than searched for the raw
+     * brace, because doubling the opening brace does not remove the five characters {@code {RED}}
+     * from the result — it only stops the parser reading them as one token. A real newline has no
+     * such overlap, so its absence is checked directly.
+     */
+    @Test
+    void escapesControlCharactersAndBracesInTheServersErrorMessage() {
+        status = 400;
+        responseBody = "{\"message\":\"forged\\nline {RED}\"}";
+
+        PairingException thrown = assertThrows(PairingException.class, () ->
+                pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        // summarise() collapses the whitespace run first, the same as it does for a proxy's body.
+        assertTrue(thrown.getMessage().contains(Text.safe("forged line {RED}")), thrown.getMessage());
+        assertFalse(thrown.getMessage().contains("\n"), thrown.getMessage());
     }
 
     @Test

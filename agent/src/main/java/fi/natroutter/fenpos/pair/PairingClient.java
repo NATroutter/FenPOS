@@ -5,6 +5,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import fi.natroutter.fenpos.link.AgentInfo;
 import fi.natroutter.fenpos.link.Frames;
+import fi.natroutter.fenpos.util.Text;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -344,6 +345,12 @@ public class PairingClient {
      * the upstream it gave up on. Discarding it left pairing failures reading as a bare status code
      * with no hint that the server was never reached at all, so an unparseable body is quoted
      * instead, trimmed to one line's worth.
+     * <p>
+     * Both branches read as untrusted as the body they come from: a proxy chooses what an
+     * unparseable body says, and this endpoint answers before the code is checked, so a
+     * {@code message} field is exactly as foreign as the raw body it was extracted from. Both go
+     * through {@link #summarise} and {@link Text#safe}, the same as any other string this agent did
+     * not choose that ends up on an operator's terminal.
      */
     private static String serverMessage(String body) {
         try {
@@ -351,13 +358,13 @@ public class PairingClient {
             if (parsed.isJsonObject()) {
                 String message = string(parsed.getAsJsonObject(), "message");
                 if (message != null) {
-                    return ": " + message;
+                    return ": " + Text.safe(summarise(message));
                 }
             }
         } catch (JsonParseException e) {
             // Fall through to quoting the body, which is what a proxy's reply needs.
         }
-        return body == null || body.isBlank() ? "" : ": " + summarise(body);
+        return body == null || body.isBlank() ? "" : ": " + Text.safe(summarise(body));
     }
 
     /** Longest error body quoted back into a failure message. */
@@ -374,7 +381,7 @@ public class PairingClient {
     /** Reads a required string from a grant, refusing an absent, empty or over-long one. */
     private static String bounded(JsonObject json, String field, int max) throws PairingException {
         String value = string(json, field);
-        if (value == null) {
+        if (value == null || value.isEmpty()) {
             throw new PairingException("The server's reply was missing the credential");
         }
         if (value.length() > max) {
