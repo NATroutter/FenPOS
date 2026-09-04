@@ -6,6 +6,7 @@ import fi.natroutter.fenpos.link.LinkClient;
 import fi.natroutter.fenpos.pair.PairingException;
 import fi.natroutter.fenpos.pair.PairingService;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -70,7 +71,7 @@ public class PairCommand implements Command {
             // Refused rather than silently replaced. Re-pairing discards a working credential,
             // and a pairing code is single use, so getting this wrong costs a trip back to the
             // panel for a new one.
-            out.println("Already paired as '" + existing.get().agentName() + "' to "
+            out.println("Already paired as '" + Text.safe(existing.get().agentName()) + "' to "
                     + existing.get().serverUrl() + ".");
             out.println("Run 'unpair' first if you mean to pair with a different server.");
             return;
@@ -78,7 +79,7 @@ public class PairCommand implements Command {
 
         try {
             AgentIdentity identity = pairing.pair(args[0], args[1]);
-            out.println("Paired as '" + identity.agentName() + "' to " + identity.serverUrl() + ".");
+            out.println("Paired as '" + Text.safe(identity.agentName()) + "' to " + identity.serverUrl() + ".");
             link.start(identity);
             out.println("Connecting; run 'link' to see the connection state.");
         } catch (PairingException e) {

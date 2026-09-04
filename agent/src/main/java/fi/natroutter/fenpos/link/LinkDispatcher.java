@@ -22,6 +22,7 @@ import fi.natroutter.fenpos.serial.DeviceConnectionManager;
 import fi.natroutter.fenpos.serial.PrinterPort;
 import fi.natroutter.fenpos.serial.PrinterWriteException;
 import fi.natroutter.fenpos.serial.SerialHandler;
+import fi.natroutter.fenpos.util.Text;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -304,7 +305,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         List<Frames.SerialPort> ports = new ArrayList<>();
         for (com.fazecast.jSerialComm.SerialPort port : SerialHandler.availablePorts()) {
             ports.add(new Frames.SerialPort(
-                    port.getSystemPortName(),
+                    text(port.getSystemPortName()),
                     text(port.getPortDescription()),
                     port.getVendorID(),
                     port.getProductID(),
@@ -529,9 +530,9 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         sender.send(new Frames.StatusReport(statuses));
     }
 
-    /** Normalises an operating system string, which may be null or absent. */
+    /** Normalises an operating system string, which may be null, and makes it safe to log. */
     private static String text(String value) {
-        return value == null ? "" : value;
+        return Text.safe(value);
     }
 
     /**
