@@ -39,7 +39,21 @@ public class SerialHandler implements PrinterPort {
     private volatile boolean shuttingDown;
 
     private SerialPort port;
-    private Thread reconnectThread;
+    private volatile Thread reconnectThread;
+
+    /**
+     * How many absent-port attempts pass between warnings.
+     *
+     * <p>Every attempt used to warn. At the protocol's minimum reconnect delay of one second that
+     * is a line a second for as long as a printer stays unplugged, which fills the log volume and
+     * buries everything else in it. Going silent is worse, though: a retry loop that says nothing
+     * reads exactly like one that died, which is the reason the first version reported every
+     * attempt. So the first is reported, and then one in sixty, each carrying the count.
+     */
+    private static final int ABSENT_PORT_LOG_INTERVAL = 60;
+
+    /** Attempts since this device's port was last seen, for the log interval above. */
+    private int absentAttempts;
 
     /**
      * Identity of the device this handler last opened successfully, captured rather than
@@ -124,6 +138,7 @@ public class SerialHandler implements PrinterPort {
             port = candidate;
             knownIdentity = DeviceIdentity.of(candidate);
             status = ConnectionStatus.CONNECTED;
+            absentAttempts = 0;
             logger.info("[" + deviceName() + "] Connected to " + serial.port());
         } finally {
             lock.unlock();
@@ -245,17 +260,24 @@ public class SerialHandler implements PrinterPort {
         if (shuttingDown || !serial.autoReconnect()) {
             return;
         }
-        if (reconnectThread != null && reconnectThread.isAlive()) {
-            return;
+        // The lock is reentrant, so the call from handleLostDevice, which already holds it, is
+        // safe. Without it two callers could both see a dead thread and start one each: the
+        // duplicate does no harm beyond a leaked thread and doubled log lines, but nothing about
+        // this field was safe to read from three threads.
+        lock.lock();
+        try {
+            if (reconnectThread != null && reconnectThread.isAlive()) {
+                return;
+            }
+            long delayMillis = serial.reconnectDelay().toMillis();
+            logger.info("[" + deviceName() + "] Retrying every "
+                    + serial.reconnectDelay().toSeconds() + "s until the device returns");
+            reconnectThread = Thread.ofVirtual()
+                    .name("fenpos-agent-reconnect-" + deviceName())
+                    .start(() -> reconnectUntilConnected(delayMillis));
+        } finally {
+            lock.unlock();
         }
-
-        long delayMillis = serial.reconnectDelay().toMillis();
-        logger.info("[" + deviceName() + "] Retrying every "
-                + serial.reconnectDelay().toSeconds() + "s until the device returns");
-
-        reconnectThread = Thread.ofVirtual()
-                .name("fenpos-agent-reconnect-" + deviceName())
-                .start(() -> reconnectUntilConnected(delayMillis));
     }
 
     /**
@@ -319,7 +341,11 @@ public class SerialHandler implements PrinterPort {
                     + " is now a different device; not reconnecting");
             return false;
         }
-        logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still retrying");
+        absentAttempts++;
+        if (absentAttempts == 1 || absentAttempts % ABSENT_PORT_LOG_INTERVAL == 0) {
+            logger.warn("[" + deviceName() + "] Port " + serial.port() + " is not present; still "
+                    + "retrying (attempt " + absentAttempts + ")");
+        }
         return false;
     }
 
