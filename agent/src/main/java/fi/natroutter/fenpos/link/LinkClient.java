@@ -3,6 +3,7 @@ package fi.natroutter.fenpos.link;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -10,6 +11,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
@@ -63,6 +65,15 @@ public class LinkClient {
      * fresh {@code FENPOS_PAIR_CODE}.
      */
     static final int CLOSE_UNPAIRED = 4003;
+
+    /**
+     * Longest close reason kept, in UTF-8 bytes.
+     * <p>
+     * A close frame's control payload is capped at 125 bytes by the WebSocket protocol and two of
+     * those are the status code, so a reason can never legitimately carry more than this. Nothing
+     * local enforces that on the way in, so it is enforced here rather than assumed.
+     */
+    private static final int MAX_CLOSE_REASON_BYTES = 123;
 
     private final FoxLogger logger;
     private final FrameCodec codec = new FrameCodec();
@@ -392,6 +403,20 @@ public class LinkClient {
     }
 
     /**
+     * Truncates to at most {@code maxBytes} of UTF-8, counting bytes rather than characters so a
+     * reason packed with multi-byte characters cannot smuggle in several times its stated budget.
+     * A cut that lands inside a multi-byte character decodes back with a replacement character at
+     * the end rather than a garbled tail, which is fine for a value that only ever goes into a log
+     * line.
+     */
+    private static String truncateUtf8(String value, int maxBytes) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        return bytes.length <= maxBytes
+                ? value
+                : new String(bytes, 0, maxBytes, StandardCharsets.UTF_8);
+    }
+
+    /**
      * Reads frames off one socket.
      * <p>
      * A new instance per connection, so a message half-received when a socket dies cannot leak
@@ -452,7 +477,9 @@ public class LinkClient {
                 return null;
             }
             onDisconnected("closed by the server (" + statusCode
-                    + (reason == null || reason.isBlank() ? "" : ": " + reason) + ")");
+                    + (reason == null || reason.isBlank()
+                            ? "" : ": " + Text.safe(truncateUtf8(reason, MAX_CLOSE_REASON_BYTES)))
+                    + ")");
             return null;
         }
 

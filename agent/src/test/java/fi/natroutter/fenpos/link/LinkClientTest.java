@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.link;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -142,6 +143,33 @@ class LinkClientTest {
         assertTrue(server.awaitPong(Duration.ofSeconds(10)),
                 "no pong while a handler was busy: the receive thread is blocked");
         release.countDown();
+    }
+
+    /**
+     * The close reason comes from the far end of the socket, which past the handshake is only as
+     * trustworthy as whatever answered on it. Unescaped, a newline in one lets the reason forge
+     * what reads as a second, unrelated entry: the logger rewrites every real newline it is given
+     * into a line break followed by the level's own colour marker, which is indistinguishable from
+     * a fresh entry starting once the terminal renders it. {@link Text#safe} closes that off by
+     * leaving no real newline character in the string for the logger to find.
+     */
+    @Test
+    void escapesTheServersCloseReasonBeforeLoggingIt() throws Exception {
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+        }, logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE), "no hello arrived");
+
+        String reason = "forged\nline {RED}";
+        server.close(4000, reason);
+
+        awaitLines("Link lost", 1);
+        List<String> lost = matching("Link lost");
+        // The whole point of escaping is that no real newline survives into the logged line, so
+        // the sequence right after "forged" can never be mistaken for the start of another entry.
+        assertFalse(lost.get(0).contains("forged\n"), lost.get(0));
+        assertTrue(lost.get(0).contains(Text.safe("forged\nline")), lost.get(0));
     }
 
     @Test
