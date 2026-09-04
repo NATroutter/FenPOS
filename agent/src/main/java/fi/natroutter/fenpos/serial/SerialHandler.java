@@ -92,6 +92,17 @@ public class SerialHandler implements PrinterPort {
             if (status.isUsable()) {
                 return;
             }
+            if (!isReportedByTheSystem(serial.port())) {
+                // The path comes from the server, and jSerialComm opens whatever it is given.
+                // On Linux that includes a tty: /dev/tty is the process's own terminal, which
+                // both compose files provide, so an unchecked path is a way for a config.sync
+                // to write ESC/POS bytes at whoever is attached. The panel builds its picker
+                // from a scan, so a real configuration always names something in this list, and
+                // isExpectedDevice already walks it on every reconnect.
+                status = ConnectionStatus.NO_DEVICE;
+                logger.error("[" + deviceName() + "] No such port: " + serial.port());
+                return;
+            }
             SerialPort candidate;
             try {
                 candidate = SerialPort.getCommPort(serial.port());
@@ -309,6 +320,16 @@ public class SerialHandler implements PrinterPort {
             return false;
         }
         logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still retrying");
+        return false;
+    }
+
+    /** Whether the operating system currently reports a serial port under this name. */
+    private static boolean isReportedByTheSystem(String portName) {
+        for (SerialPort candidate : SerialPort.getCommPorts()) {
+            if (portName.equals(candidate.getSystemPortName())) {
+                return true;
+            }
+        }
         return false;
     }
 

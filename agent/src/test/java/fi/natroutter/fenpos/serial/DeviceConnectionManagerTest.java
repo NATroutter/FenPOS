@@ -2,13 +2,16 @@ package fi.natroutter.fenpos.serial;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.device.DeviceRegistry;
+import fi.natroutter.fenpos.device.SerialSettings;
 import fi.natroutter.fenpos.enums.Codepage;
+import fi.natroutter.fenpos.enums.ConnectionStatus;
 import fi.natroutter.fenpos.enums.FlowControl;
 import fi.natroutter.fenpos.enums.Parity;
 import fi.natroutter.fenpos.link.Frames;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -106,6 +109,25 @@ class DeviceConnectionManagerTest {
         apply();
 
         assertTrue(connections.deviceNames().isEmpty());
+    }
+
+    @Test
+    void refusesAPortTheMachineDoesNotReport() {
+        // The path arrives from the server. Opening whatever it names is how a config.sync could
+        // reach /dev/tty, which is present in both compose files, and write ESC/POS bytes to the
+        // operator's own terminal. The panel populates its picker from a scan, so a legitimate
+        // configuration always names something this enumeration contains.
+        SerialHandler handler = new SerialHandler("kitchen",
+                settings("/definitely/not/a/serial/port"), logger);
+
+        handler.connect();
+
+        assertEquals(ConnectionStatus.NO_DEVICE, handler.status());
+    }
+
+    private static SerialSettings settings(String port) {
+        return new SerialSettings(port, 9600, 8, 1, Parity.NONE, FlowControl.NONE,
+                false, false, Duration.ofSeconds(5), Duration.ofMillis(1000));
     }
 
     private void apply(Frames.DeviceConfig... devices) {
