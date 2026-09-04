@@ -108,12 +108,6 @@ public class DeviceRegistry {
         return rasters.size();
     }
 
-    /** Empties the device set and the images with it, as when the agent is unpaired. */
-    public void clear() {
-        devices = Map.of();
-        rasters = Map.of();
-    }
-
     /** The key a raster is held under: a name is a slug, so it cannot contain the separator. */
     private static String key(String name, int widthDots) {
         return name + "@" + widthDots;

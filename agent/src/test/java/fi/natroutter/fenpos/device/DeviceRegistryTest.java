@@ -102,11 +102,11 @@ class DeviceRegistryTest {
     }
 
     @Test
-    void clearingLeavesNoDevices() {
+    void anEmptySnapshotLeavesNoDevices() {
         DeviceRegistry registry = new DeviceRegistry();
         registry.apply(List.of(wire("kitchen", "COM3", 5, 5000)));
 
-        registry.clear();
+        registry.apply(List.of());
 
         assertEquals(0, registry.size());
     }
@@ -152,11 +152,13 @@ class DeviceRegistryTest {
 
     /** Unpairing releases the printers; the pictures they were going to print go with them. */
     @Test
-    void clearingLeavesNoImagesEither() {
+    void anEmptySnapshotLeavesNoImagesEither() {
         DeviceRegistry registry = new DeviceRegistry();
+        registry.apply(List.of(wire("kitchen", "COM3", 5, 5000)));
         registry.applyRasters(List.of(raster("logo", 384)));
 
-        registry.clear();
+        registry.apply(List.of());
+        registry.applyRasters(List.of());
 
         assertEquals(0, registry.rasterCount());
         assertTrue(registry.raster("logo", 384).isEmpty());
