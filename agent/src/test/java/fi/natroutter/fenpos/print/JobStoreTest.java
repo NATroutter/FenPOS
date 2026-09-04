@@ -196,6 +196,50 @@ class JobStoreTest {
         assertTrue(logged.get(0).contains(job.id()), logged.get(0));
     }
 
+    @Test
+    void refusesARepeatOfAnIdWhoseRecordHasBeenEvicted() {
+        // The README promises dispatch is deduplicated by id. Tying that to the record made it a
+        // promise about a window the server chooses: retentionMinutes goes as low as 1.
+        JobStore store = store(Duration.ofMinutes(10), 500);
+        store.adopt("srv-job-1", "kitchen", compiled()).orElseThrow().complete();
+
+        clock.advance(Duration.ofDays(1));
+        store.evictExpired();
+        assertTrue(store.find("srv-job-1").isEmpty(), "the record should have been evicted");
+
+        assertTrue(store.adopt("srv-job-1", "kitchen", compiled()).isEmpty(),
+                "the id was seen before, so this dispatch must not print again");
+    }
+
+    @Test
+    void refusesARepeatOfAnIdTheRecordCapDropped() {
+        JobStore store = store(Duration.ofMinutes(10), 500);
+        store.adopt("victim", "kitchen", compiled()).orElseThrow().complete();
+        store.settings(new JobSettings(Duration.ofDays(28), 100, Duration.ofSeconds(10)));
+
+        for (int index = 0; index < 200; index++) {
+            clock.advance(Duration.ofSeconds(1));
+            store.adopt("filler-" + index, "kitchen", compiled()).orElseThrow().complete();
+        }
+
+        assertTrue(store.find("victim").isEmpty(), "the cap should have dropped the oldest record");
+        assertTrue(store.adopt("victim", "kitchen", compiled()).isEmpty());
+    }
+
+    @Test
+    void forgetsAnIdOnceTheSetIsFull() {
+        // The set is bounded so it cannot grow without limit. Ten thousand ids at 64 characters
+        // is a megabyte or two, and ten days of a busy site's printing.
+        JobStore store = store(Duration.ofMinutes(10), 500);
+        store.adopt("first", "kitchen", compiled()).orElseThrow().complete();
+        for (int index = 0; index < 10_000; index++) {
+            store.adopt("filler-" + index, "kitchen", compiled()).orElseThrow().complete();
+        }
+
+        assertTrue(store.adopt("first", "kitchen", compiled()).isPresent(),
+                "the oldest id falls out of the set, which is the bound working");
+    }
+
     /** A logger whose output lands in a list rather than a console. */
     private static FoxLogger capturing(List<String> sink) {
         return new FoxLogger.Builder()

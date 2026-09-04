@@ -342,7 +342,8 @@ raised it.
   Behind a reverse proxy, put its address there, or every visitor arriving through it is counted and
   recorded as the proxy. The Settings page shows what your own request resolved to.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
-  frames are refused without dropping the connection, and job dispatch is deduplicated by id.
+  frames are refused without dropping the connection, and job dispatch is deduplicated by id
+  for the last 10,000 ids, which is far longer than any retry a dropped link can produce.
 - **Passwords** are argon2id, minimum 12 characters. Any character is accepted, including
   spaces, so passphrases work.
 
