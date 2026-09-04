@@ -128,6 +128,18 @@ COPY --from=build --chown=fenpos:fenpos /build/public ./public
 # is unavailable exactly where it is needed.
 COPY --from=build --chown=fenpos:fenpos /build/scripts ./scripts
 
+# `recover` on PATH, so recovering a locked-out install is `docker compose exec fenpos recover
+# --disable-challenge` rather than a line naming the interpreter, the script path and the flag. The
+# long form is what an operator has to get exactly right while nobody can sign in, and there is no
+# pnpm in here to shorten it with.
+#
+# A symlink rather than a copy, so the script has one home and `scripts/` stays the whole of it. The
+# executable bit is set here rather than trusted from the build context: the repository is developed
+# on Windows, where git tracks a mode bit that a checkout does not necessarily reproduce, and a
+# recovery command that answers "permission denied" is no recovery command.
+RUN chmod +x /app/scripts/recover \
+ && ln -s /app/scripts/recover /usr/local/bin/recover
+
 RUN mkdir -p /app/data && chown fenpos:fenpos /app /app/data
 
 USER fenpos

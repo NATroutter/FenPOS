@@ -1,0 +1,24 @@
+#!/bin/sh
+# The recovery commands, under a name short enough to type while an install is down.
+#
+# `docker compose exec fenpos recover --disable-challenge` rather than naming the interpreter, the
+# script path and the flag. The image symlinks this onto PATH; see the Dockerfile.
+#
+# The interpreter is called out of node_modules/.bin directly rather than through pnpm, for the
+# reason the Dockerfile gives where it does the same for the server itself: corepack tries to
+# reinstall and aborts without a TTY, so pnpm is not available in the runtime image at all.
+#
+# `readlink -f "$0"` rather than `dirname "$0"`, because the thing on PATH is a symlink and only the
+# resolved path leads back to the application directory rather than to /usr/local/bin. Resolving it
+# also means this works unchanged when run in place from a checkout.
+set -eu
+
+self=$(readlink -f "$0")
+app=$(cd "$(dirname "$self")/.." && pwd)
+
+# So `--help` and a refused flag print the command the reader typed rather than the pnpm form, which
+# is not available where this wrapper is the way in.
+FENPOS_RECOVER_COMMAND="$(basename "$0")"
+export FENPOS_RECOVER_COMMAND
+
+exec "$app/node_modules/.bin/tsx" "$app/scripts/auth-recover.ts" "$@"

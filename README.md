@@ -182,12 +182,14 @@ with access to the data volume. It resets a named account's password, clears its
 enrolment, lifts a lockout, empties the address allowlist, or switches the bot challenge off, writing
 an audit row for whichever it did and leaving agents, devices, keys and history alone.
 
-In a container there is no `pnpm` to run it with. The image calls its binaries out of
-`node_modules/.bin` directly, for the reason its Dockerfile gives, so run the script the same way:
+In a container it is `recover`, which is on the image's `PATH`:
 
 ```sh
-docker compose exec fenpos ./node_modules/.bin/tsx scripts/auth-recover.ts --disable-challenge
-``` In development, `pnpm db:reset` recreates
+docker compose exec fenpos recover --disable-challenge
+```
+
+Same commands, same flags. The separate name exists because there is no `pnpm` in the running
+image to spell `pnpm auth:recover` with. In development, `pnpm db:reset` recreates
 the database from its migrations (see
 **Development** below) and setup runs again, but that discards everything else too, not just
 the account.
@@ -392,7 +394,7 @@ mvn package
 
 | Command | What it does |
 |---|---|
-| `pnpm auth:recover` | Acts on an account from the host, outside the panel, for when nobody can sign in. `--list` names the accounts, `--reset-password <email>` replaces a credential, `--clear-2fa <email>` drops an enrolment, `--unlock <email>` lifts a lockout, `--clear-allowlist` empties the address allowlist, and `--disable-challenge` switches the bot challenge off, leaving its keys in place. Reach for the last one when the sign-in page answers "That challenge could not be verified" no matter whose password is typed, which is what a site key Cloudflare refuses looks like from the outside. One command at a time, each writing an audit row. |
+| `pnpm auth:recover`<br>(`recover` in a container) | Acts on an account from the host, outside the panel, for when nobody can sign in. `--list` names the accounts, `--reset-password <email>` replaces a credential, `--clear-2fa <email>` drops an enrolment, `--unlock <email>` lifts a lockout, `--clear-allowlist` empties the address allowlist, and `--disable-challenge` switches the bot challenge off, leaving its keys in place. Reach for the last one when the sign-in page answers "That challenge could not be verified" no matter whose password is typed, which is what a site key Cloudflare refuses looks like from the outside. One command at a time, each writing an audit row. |
 | `pnpm db:reset` | Recreates the database from the migrations. Takes everything with it, including the account. The next start mints a fresh setup key and first-run setup runs again. Useful for re-testing that flow, but it is the heavy option: `auth:recover` above is what fixes a locked-out install without discarding agents, devices, keys and history. |
 | `pnpm agent:bundle-logo` | Re-dithers `public/fenpos-logo.png` at each paper width the agent bundles and writes the rasters into `agent/src/main/resources/bundled/`. The output is committed, so the agent builds with Maven alone. Run this only after changing the logo or the widths, and commit what it produces. |
 | `pnpm dev:clean` | Clears the `.next` dev cache and restarts. |

@@ -27,6 +27,9 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  *   pnpm auth:recover --clear-allowlist
  *   pnpm auth:recover --disable-challenge
  *
+ * In a container the same commands are reached through `scripts/recover`, which the image puts on
+ * PATH as `recover`, because there is no pnpm in the runtime image to spell the above with.
+ *
  * With no email and first-run setup permanently sealed, a forgotten superuser password would
  * otherwise brick the install for good; `auth.require2fa` can do the same to an administrator who
  * loses both their phone and their recovery codes. This exists so filesystem access — not a session,
@@ -61,14 +64,25 @@ export type RecoveryCommand =
 	| { kind: "clear-allowlist" }
 	| { kind: "disable-challenge" };
 
+/**
+ * How this was invoked, as the usage text should spell it.
+ *
+ * There are two ways in and they are typed differently: `pnpm auth:recover` from a checkout, and
+ * `recover` inside a container, where there is no pnpm to run the first form with. `scripts/recover`
+ * sets this so the usage names the command the reader actually has. Printing the wrong one is worse
+ * here than anywhere else in the codebase — whoever is reading it is locked out, and the text is the
+ * only instruction they get.
+ */
+const INVOCATION = process.env.FENPOS_RECOVER_COMMAND || "pnpm auth:recover";
+
 /** Printed for `--help`, and for empty argv, and ahead of a parse error. */
 const USAGE = `Usage:
-  pnpm auth:recover --list
-  pnpm auth:recover --reset-password <email>
-  pnpm auth:recover --clear-2fa <email>
-  pnpm auth:recover --unlock <email>
-  pnpm auth:recover --clear-allowlist
-  pnpm auth:recover --disable-challenge
+  ${INVOCATION} --list
+  ${INVOCATION} --reset-password <email>
+  ${INVOCATION} --clear-2fa <email>
+  ${INVOCATION} --unlock <email>
+  ${INVOCATION} --clear-allowlist
+  ${INVOCATION} --disable-challenge
 `;
 
 /** The flags in {@link USAGE} that take no email argument. */
