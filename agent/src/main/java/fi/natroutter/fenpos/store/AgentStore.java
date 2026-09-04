@@ -4,10 +4,13 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.Persistence;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -26,8 +29,14 @@ import java.util.function.Function;
  */
 public class AgentStore implements AutoCloseable {
 
-    /** Persistence unit assembled programmatically; see {@link #open(Path)}. */
+    /** Persistence unit assembled programmatically; see {@link #open(Path, Consumer)}. */
     private static final String UNIT_NAME = "fenpos-agent";
+
+    /** Directory mode for the data directory. Nobody but the owner may even traverse it. */
+    private static final String DIRECTORY_MODE = "rwx------";
+
+    /** File mode for the database itself, as defence behind the directory. */
+    private static final String FILE_MODE = "rw-------";
 
     private final EntityManagerFactory factory;
 
@@ -44,17 +53,23 @@ public class AgentStore implements AutoCloseable {
      * what makes that safe.
      *
      * @param databaseFile path to the SQLite file; parent directories are created
+     * @param onWarning    receives anything that went wrong without being fatal, such as a mode
+     *                     that could not be set on a bind mount this process does not own
      * @return an open store
      * @throws StoreException when the directory cannot be created or the schema cannot be built
      */
-    public static AgentStore open(Path databaseFile) throws StoreException {
+    public static AgentStore open(Path databaseFile, Consumer<String> onWarning) throws StoreException {
+        Objects.requireNonNull(onWarning, "onWarning");
+        Path parent = databaseFile.toAbsolutePath().getParent();
         try {
-            Path parent = databaseFile.toAbsolutePath().getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
         } catch (Exception e) {
             throw new StoreException("Could not create the directory for " + databaseFile, e);
+        }
+        if (parent != null) {
+            restrict(parent, DIRECTORY_MODE, onWarning);
         }
 
         Map<String, Object> settings = new HashMap<>();
@@ -69,10 +84,42 @@ public class AgentStore implements AutoCloseable {
         settings.put("hibernate.show_sql", false);
         settings.put("hibernate.connection.pool_size", 1);
 
+        AgentStore store;
         try {
-            return new AgentStore(Persistence.createEntityManagerFactory(UNIT_NAME, settings));
+            store = new AgentStore(Persistence.createEntityManagerFactory(UNIT_NAME, settings));
         } catch (RuntimeException e) {
             throw new StoreException("Could not open the agent store at " + databaseFile, e);
+        }
+        // After the factory, because that is what creates the file.
+        restrict(databaseFile.toAbsolutePath(), FILE_MODE, onWarning);
+        return store;
+    }
+
+    /** Opens with warnings discarded, for tests and for callers with nowhere to put them. */
+    public static AgentStore open(Path databaseFile) throws StoreException {
+        return open(databaseFile, warning -> {
+        });
+    }
+
+    /**
+     * Narrows a path's permissions where the filesystem has them.
+     *
+     * <p>Best effort by design. The token is held in the clear because the agent has to present
+     * it, so the filesystem is what protects it, and this is the code that was missing behind
+     * {@code AgentIdentity}'s claim that it already did. A bind mount owned by someone else is an
+     * operator's arrangement rather than a fault, and refusing to start over one would be worse
+     * for them than the exposure it leaves, so this warns instead.
+     */
+    private static void restrict(Path path, String mode, Consumer<String> onWarning) {
+        if (!path.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        try {
+            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode));
+        } catch (IOException | UnsupportedOperationException | SecurityException e) {
+            onWarning.accept("Could not restrict " + path + " to " + mode + " (" + e.getMessage()
+                    + "). The agent's credential is stored there, so check that no other account "
+                    + "on this machine can read it.");
         }
     }
 

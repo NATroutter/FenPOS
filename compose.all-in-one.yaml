@@ -22,6 +22,7 @@ services:
     volumes:
       # uid 10001 owns the data inside the container. A bind mount keeps the host owner.
       #   mkdir -p server-data agent-data agent-logs
+      #   chmod 700 server-data agent-data agent-logs
       #   sudo chown -R 10001:10001 server-data agent-data agent-logs
       - ./server-data:/app/data
     environment:

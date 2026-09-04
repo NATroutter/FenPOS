@@ -80,7 +80,7 @@ owner the host gives it. Create it and hand it over first, or the server cannot 
 database:
 
 ```sh
-mkdir -p data && sudo chown -R 10001:10001 data
+mkdir -p data && chmod 700 data && sudo chown -R 10001:10001 data
 ```
 
 ```sh
@@ -103,7 +103,7 @@ owner the host gives them. Create them and hand them over first, or the agent ca
 store and refuses to start:
 
 ```sh
-mkdir -p data logs && sudo chown -R 10001:10001 data logs
+mkdir -p data logs && chmod 700 data logs && sudo chown -R 10001:10001 data logs
 ```
 
 ```sh

@@ -274,7 +274,7 @@ public class FenPOSAgent extends FoxLib {
      */
     private static boolean openStore() {
         try {
-            store = AgentStore.open(STORE_FILE);
+            store = AgentStore.open(STORE_FILE, logger::warn);
             return true;
         } catch (StoreException e) {
             // Without the store the agent cannot know who it is paired to, and pairing again

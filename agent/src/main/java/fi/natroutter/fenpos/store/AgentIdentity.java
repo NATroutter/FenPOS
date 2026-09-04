@@ -46,8 +46,10 @@ public class AgentIdentity {
      *
      * <p>Held in the clear because the agent must be able to present it. There is nothing to
      * hash against: unlike the server, which only ever compares, the agent must reproduce it.
-     * Protecting it is the filesystem's job — the store file is created with owner-only
-     * permissions and lives on a volume the operator controls.
+     * Protecting it is the filesystem's job, and {@code AgentStore.open} does that job: the data
+     * directory is created {@code rwx------} and the database {@code rw-------} wherever the
+     * filesystem has POSIX permissions, which puts the WAL and shared-memory files SQLite creates
+     * beside it out of reach as well.
      */
     @Column(name = "token", nullable = false)
     private String token;

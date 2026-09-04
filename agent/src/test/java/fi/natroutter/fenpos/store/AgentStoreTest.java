@@ -7,11 +7,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Tests the agent's local store against a real SQLite file.
@@ -56,6 +58,26 @@ class AgentStoreTest {
         // The store lives on a mounted volume that may be empty on first boot, so it has to
         // build its own path rather than expect one.
         assertTrue(Files.exists(databaseFile), "database file should have been created");
+    }
+
+    @Test
+    void createsTheDataDirectoryUnreadableByAnyoneElse() throws Exception {
+        Path database = directory.resolve("nested").resolve("agent.db");
+        assumeTrue(database.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX permissions are the thing being asserted");
+
+        try (AgentStore store = AgentStore.open(database)) {
+            store.saveIdentity(new AgentIdentity(
+                    "https://example.test", "a", "n", "t", Instant.parse("2026-09-04T10:00:00Z")));
+
+            // The directory is what matters more than the file: SQLite creates -wal and -shm
+            // siblings later, whatever mode they end up with, and a directory nobody else can
+            // traverse puts all three out of reach.
+            assertEquals(PosixFilePermissions.fromString("rwx------"),
+                    Files.getPosixFilePermissions(database.getParent()));
+            assertEquals(PosixFilePermissions.fromString("rw-------"),
+                    Files.getPosixFilePermissions(database));
+        }
     }
 
     @Test

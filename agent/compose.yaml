@@ -34,7 +34,7 @@ services:
       # The container runs as uid 10001 and a bind mount keeps the host directory
       # owner, so create both and hand them over before the first start or the
       # agent cannot open its store and refuses to run:
-      #   mkdir -p data logs && sudo chown -R 10001:10001 data logs
+      #   mkdir -p data logs && chmod 700 data logs && sudo chown -R 10001:10001 data logs
       - ./data:/app/data
       - ./logs:/app/logs
 
