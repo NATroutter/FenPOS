@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -323,9 +324,10 @@ class EscPosRendererTest {
 
     @Test
     void refusesACode128PayloadThatEscapingPushesPastTheLengthByte() {
-        // The codec bounds the content at 255, but this renderer prepends "{B" and doubles every
-        // literal brace, so content the codec accepted can still overflow. This is the only
-        // place that knows the escaping, so it is the only place that can check the result.
+        // The codec leaves Code 128 content room for the two-character selector this renderer
+        // prepends, but every literal brace is also doubled, so brace-heavy content the codec
+        // accepted can still overflow. This is the only place that knows the escaping, so it is
+        // the only place that can check the result.
         Directive.Barcode barcode = new Directive.Barcode(BarcodeSystem.CODE128, "{".repeat(200));
 
         SymbolEncodingException thrown = assertThrows(SymbolEncodingException.class,
@@ -333,6 +335,30 @@ class EscPosRendererTest {
                         List.of(new Line(Align.LEFT, null, List.of(), List.of(), List.of(barcode))),
                         Codepage.CP858, Linefeed.LF, 42));
 
+        assertTrue(thrown.getMessage().contains("255"), thrown.getMessage());
+    }
+
+    /**
+     * The exact boundary: content sized so the escaped payload lands precisely on
+     * {@code MAX_FUNCTION_B_DATA}, and one character more than that. A gross overflow, as the
+     * test above uses, cannot tell a correct bound from one that is off by a character or two —
+     * only the boundary itself can, which is exactly where the codec and this renderer once
+     * disagreed for Code 128.
+     */
+    @Test
+    void rendersACode128PayloadExactlyAtTheLengthByteAndRefusesOneCharacterMore() {
+        // "{B" is two characters of the 255 the length byte can declare, so 253 characters of
+        // plain content (no braces to double) fills it exactly.
+        Directive.Barcode atBound = new Directive.Barcode(BarcodeSystem.CODE128, "A".repeat(253));
+        assertDoesNotThrow(() -> EscPosRenderer.render(
+                List.of(new Line(Align.LEFT, null, List.of(), List.of(), List.of(atBound))),
+                Codepage.CP858, Linefeed.LF, 42));
+
+        Directive.Barcode pastBound = new Directive.Barcode(BarcodeSystem.CODE128, "A".repeat(254));
+        SymbolEncodingException thrown = assertThrows(SymbolEncodingException.class,
+                () -> EscPosRenderer.render(
+                        List.of(new Line(Align.LEFT, null, List.of(), List.of(), List.of(pastBound))),
+                        Codepage.CP858, Linefeed.LF, 42));
         assertTrue(thrown.getMessage().contains("255"), thrown.getMessage());
     }
 

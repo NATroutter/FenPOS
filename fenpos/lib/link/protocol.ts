@@ -219,43 +219,65 @@ const imageSourceSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("INLINE"), ...rasterFields }).refine(fillsItsRectangle, RECTANGLE_MESSAGE),
 ]);
 
+/** Longest linear barcode payload, which is what `GS k` function B's one-byte length field can declare. */
+const MAX_BARCODE_CHARS = 255;
+
+/**
+ * Characters the mandatory Code 128 code-set selector occupies ahead of the payload, mirroring
+ * `CODE128_SET_B`'s length in the agent's `EscPosRenderer`. The selector counts toward the same
+ * one-byte length field as the content itself, so a Code 128 payload must leave room for it.
+ */
+const CODE128_SET_SELECTOR_CHARS = 2;
+
 /** A printer action that is not text. */
-export const directiveSchema = z.discriminatedUnion("type", [
-	z.object({ type: z.literal("CUT"), mode: z.enum(["FULL", "PARTIAL"]) }),
-	z.object({ type: z.literal("FEED"), lines: z.number().int().min(1).max(255) }),
-	/**
-	 * Symbol payload bounds are the symbologies' own capacities, not round numbers. They also keep
-	 * each payload inside what its ESC/POS command can declare: `GS k` function B states its length
-	 * in one byte and `GS ( k` in two, so a longer payload declares a shorter one and the printer
-	 * reads the remainder as commands. The agent restates all three in `FrameCodec`.
-	 */
-	z.object({ type: z.literal("QR"), content: z.string().min(1).max(4_296), size: z.number().int().min(1).max(16) }),
-	z.object({
-		type: z.literal("BARCODE"),
-		system: BarcodeSystem.schema,
-		content: z.string().min(1).max(255),
-	}),
-	/**
-	 * `columns` is the symbol's data-column count, and it is the one piece of measured geometry on
-	 * this schema.
-	 *
-	 * Everything else a symbol needs, the agent's library computes for itself — which is why QR and
-	 * BARCODE carry no size. PDF417 is different because `GS ( k` function 65 defaults to zero and
-	 * a printer reads zero as "lay it out however you like". The server has already charged a line
-	 * budget against a particular layout, so leaving the choice to the firmware makes those two
-	 * different symbols. Bounded 1..30 because that is what function 65 encodes and what
-	 * `PDF417.setNumberOfColumns` accepts; zero is deliberately outside the range, so "printer
-	 * decides" cannot be expressed on this wire at all.
-	 */
-	z.object({
-		type: z.literal("PDF417"),
-		content: z.string().min(1).max(1_850),
-		errorLevel: z.number().int().min(0).max(8),
-		columns: z.number().int().min(1).max(30),
-	}),
-	z.object({ type: z.literal("DRAWER"), pin: z.union([z.literal(2), z.literal(5)]) }),
-	z.object({ type: z.literal("IMAGE"), source: imageSourceSchema }),
-]);
+export const directiveSchema = z
+	.discriminatedUnion("type", [
+		z.object({ type: z.literal("CUT"), mode: z.enum(["FULL", "PARTIAL"]) }),
+		z.object({ type: z.literal("FEED"), lines: z.number().int().min(1).max(255) }),
+		/**
+		 * Symbol payload bounds are the symbologies' own capacities, not round numbers. They also keep
+		 * each payload inside what its ESC/POS command can declare: `GS k` function B states its length
+		 * in one byte and `GS ( k` in two, so a longer payload declares a shorter one and the printer
+		 * reads the remainder as commands. The agent restates all three in `FrameCodec`.
+		 */
+		z.object({
+			type: z.literal("QR"),
+			content: z.string().min(1).max(4_296),
+			size: z.number().int().min(1).max(16),
+		}),
+		z.object({
+			type: z.literal("BARCODE"),
+			system: BarcodeSystem.schema,
+			content: z.string().min(1).max(MAX_BARCODE_CHARS),
+		}),
+		/**
+		 * `columns` is the symbol's data-column count, and it is the one piece of measured geometry on
+		 * this schema.
+		 *
+		 * Everything else a symbol needs, the agent's library computes for itself — which is why QR and
+		 * BARCODE carry no size. PDF417 is different because `GS ( k` function 65 defaults to zero and
+		 * a printer reads zero as "lay it out however you like". The server has already charged a line
+		 * budget against a particular layout, so leaving the choice to the firmware makes those two
+		 * different symbols. Bounded 1..30 because that is what function 65 encodes and what
+		 * `PDF417.setNumberOfColumns` accepts; zero is deliberately outside the range, so "printer
+		 * decides" cannot be expressed on this wire at all.
+		 */
+		z.object({
+			type: z.literal("PDF417"),
+			content: z.string().min(1).max(1_850),
+			errorLevel: z.number().int().min(0).max(8),
+			columns: z.number().int().min(1).max(30),
+		}),
+		z.object({ type: z.literal("DRAWER"), pin: z.union([z.literal(2), z.literal(5)]) }),
+		z.object({ type: z.literal("IMAGE"), source: imageSourceSchema }),
+	])
+	.refine(
+		(directive) =>
+			directive.type !== "BARCODE" ||
+			directive.system !== "CODE128" ||
+			directive.content.length <= MAX_BARCODE_CHARS - CODE128_SET_SELECTOR_CHARS,
+		"a CODE128 barcode's content must leave room for the two-character code-set selector its command prepends",
+	);
 
 /**
  * One printed line.

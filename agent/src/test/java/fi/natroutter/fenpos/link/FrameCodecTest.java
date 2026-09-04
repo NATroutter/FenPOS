@@ -533,10 +533,16 @@ class FrameCodecTest {
 
     @Test
     void acceptsASymbolPayloadAtItsBound() {
+        // Code 128's own bound is 253, not 255: the two characters EscPosRenderer's mandatory
+        // code-set selector adds ahead of the content are spent from the same one-byte length
+        // field, so the codec must leave room for them rather than granting the full 255.
         assertDoesNotThrow(() -> codec.read(dispatch("",
-                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(255) + "\"}")));
+                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(253) + "\"}")));
         assertDoesNotThrow(() -> codec.read(dispatch("",
                 "{\"type\":\"QR\",\"content\":\"" + "A".repeat(4296) + "\",\"size\":3}")));
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"PDF417\",\"content\":\"" + "A".repeat(1850)
+                        + "\",\"errorLevel\":1,\"columns\":3}")));
     }
 
     @Test

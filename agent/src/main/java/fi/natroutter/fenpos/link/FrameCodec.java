@@ -117,6 +117,21 @@ public final class FrameCodec {
      */
     private static final int MAX_BARCODE_CHARS = 255;
 
+    /**
+     * Characters the mandatory Code 128 code-set selector occupies ahead of the payload, mirroring
+     * {@code CODE128_SET_B}'s length in {@code EscPosRenderer}. The selector counts toward the same
+     * one-byte length field as the content itself, so it is not part of what the caller may spend.
+     */
+    private static final int CODE128_SET_SELECTOR_CHARS = 2;
+
+    /**
+     * Largest Code 128 payload: {@link #MAX_BARCODE_CHARS} minus the selector that
+     * {@code EscPosRenderer} always prepends, so what the codec accepts still fits the length byte
+     * once escaped. Every other barcode system keeps the full {@link #MAX_BARCODE_CHARS}, because
+     * nothing is prepended to their content.
+     */
+    private static final int MAX_CODE128_CHARS = MAX_BARCODE_CHARS - CODE128_SET_SELECTOR_CHARS;
+
     /** Longest serial port path accepted. Mirrors deviceConfigSchema.port. */
     private static final int MAX_PORT_CHARS = 256;
 
@@ -416,9 +431,13 @@ public final class FrameCodec {
             case "QR" -> new WireDirective.Qr(
                     requireAsciiContent(directive, MAX_QR_CHARS),
                     requireBoundedInt(directive, "size", 1, 16));
-            case "BARCODE" -> new WireDirective.Barcode(
-                    requireEnum(directive, "system", BarcodeSystem.class),
-                    requireContent(directive, MAX_BARCODE_CHARS));
+            case "BARCODE" -> {
+                BarcodeSystem system = requireEnum(directive, "system", BarcodeSystem.class);
+                // Code 128 alone carries a selector ahead of its content, so it alone loses
+                // characters to it; every other system's content reaches the command unchanged.
+                int max = system == BarcodeSystem.CODE128 ? MAX_CODE128_CHARS : MAX_BARCODE_CHARS;
+                yield new WireDirective.Barcode(system, requireContent(directive, max));
+            }
             // The column count is bounded 1..30 rather than 0..30: zero is what function 65 reads
             // as "printer decides", and a server that meant to say that would be sending a symbol
             // it could not have charged a line budget for.
