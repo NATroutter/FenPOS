@@ -9,6 +9,7 @@ import fi.natroutter.fenpos.enums.ConnectionStatus;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -52,8 +53,15 @@ public class SerialHandler implements PrinterPort {
      */
     private static final int ABSENT_PORT_LOG_INTERVAL = 60;
 
-    /** Attempts since this device's port was last seen, for the log interval above. */
-    private int absentAttempts;
+    /**
+     * Attempts since this device's port was last seen, for the log interval above.
+     *
+     * <p>Incremented from the reconnect thread, but reset from {@link #connect()}, which is not
+     * only called from that thread: a manual reconnect command reaches it from the link
+     * dispatcher's own thread while the reconnect thread may be incrementing at the same time.
+     * Atomic rather than a plain field for that reason.
+     */
+    private final AtomicInteger absentAttempts = new AtomicInteger();
 
     /**
      * Identity of the device this handler last opened successfully, captured rather than
@@ -138,7 +146,7 @@ public class SerialHandler implements PrinterPort {
             port = candidate;
             knownIdentity = DeviceIdentity.of(candidate);
             status = ConnectionStatus.CONNECTED;
-            absentAttempts = 0;
+            absentAttempts.set(0);
             logger.info("[" + deviceName() + "] Connected to " + serial.port());
         } finally {
             lock.unlock();
@@ -341,10 +349,10 @@ public class SerialHandler implements PrinterPort {
                     + " is now a different device; not reconnecting");
             return false;
         }
-        absentAttempts++;
-        if (absentAttempts == 1 || absentAttempts % ABSENT_PORT_LOG_INTERVAL == 0) {
-            logger.warn("[" + deviceName() + "] Port " + serial.port() + " is not present; still "
-                    + "retrying (attempt " + absentAttempts + ")");
+        int attempt = absentAttempts.incrementAndGet();
+        if (attempt == 1 || attempt % ABSENT_PORT_LOG_INTERVAL == 0) {
+            logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still "
+                    + "retrying (attempt " + attempt + ")");
         }
         return false;
     }
