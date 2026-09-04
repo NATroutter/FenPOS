@@ -160,31 +160,38 @@ public class AgentStore implements AutoCloseable {
     /**
      * Removes the stored identity.
      *
-     * <p>This is what `unpair` does locally. The credential is gone from disk afterwards, so the
-     * agent cannot reconnect until it is paired again.
+     * <p>This is what {@code unpair} does locally. The credential is gone from disk afterwards, so
+     * the agent cannot reconnect until it is paired again.
+     *
+     * <p>Overwritten before it is deleted. SQLite moves a deleted row's page to its freelist
+     * without zeroing it, so a plain delete left the token readable in the file with nothing more
+     * than {@code strings}, which is not what "forgets this agent's credential" should mean.
      *
      * @return whether an identity was present to remove
      * @throws StoreException when the write fails
      */
     public boolean clearIdentity() throws StoreException {
-        return read(em -> {
-            var existing = em.find(AgentIdentity.class, AgentIdentity.SINGLETON_ID);
-            if (existing == null) {
-                return false;
+        Optional<AgentIdentity> existing = identity();
+        if (existing.isEmpty()) {
+            return false;
+        }
+
+        byte[] noise = new byte[existing.get().token().length()];
+        new java.security.SecureRandom().nextBytes(noise);
+        String overwrite = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(noise)
+                .substring(0, existing.get().token().length());
+
+        write(em -> em.createQuery("update AgentIdentity set token = :noise where id = :id")
+                .setParameter("noise", overwrite)
+                .setParameter("id", AgentIdentity.SINGLETON_ID)
+                .executeUpdate());
+        write(em -> {
+            AgentIdentity row = em.find(AgentIdentity.class, AgentIdentity.SINGLETON_ID);
+            if (row != null) {
+                em.remove(row);
             }
-            var transaction = em.getTransaction();
-            transaction.begin();
-            try {
-                em.remove(existing);
-                transaction.commit();
-            } catch (RuntimeException e) {
-                if (transaction.isActive()) {
-                    transaction.rollback();
-                }
-                throw e;
-            }
-            return true;
         });
+        return true;
     }
 
     /**

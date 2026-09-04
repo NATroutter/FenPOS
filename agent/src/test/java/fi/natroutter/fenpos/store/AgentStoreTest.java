@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -155,5 +156,22 @@ class AgentStoreTest {
     void closingTwiceIsHarmless() {
         store.close();
         store.close();
+    }
+
+    @Test
+    void leavesNoneOfTheTokenInTheFileAfterUnpair() throws Exception {
+        String token = "aVeryDistinctiveTokenValueThatIsEasyToFindInBytes";
+        Path database = directory.resolve("agent.db");
+
+        try (AgentStore store = AgentStore.open(database)) {
+            store.saveIdentity(new AgentIdentity("https://example.test", "a", "n", token,
+                    Instant.parse("2026-09-04T10:00:00Z")));
+            assertTrue(store.clearIdentity());
+        }
+
+        // A DELETE moves the page to SQLite's freelist without zeroing it, so the credential an
+        // operator believes they revoked is still readable with `strings agent.db`.
+        String contents = new String(Files.readAllBytes(database), StandardCharsets.ISO_8859_1);
+        assertFalse(contents.contains(token), "the token survived unpair in the database file");
     }
 }
