@@ -99,6 +99,13 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private volatile FrameSender sender = FrameSender.NONE;
 
     /**
+     * What to do when the server's welcome cannot be accepted. Set once, immediately after the
+     * link exists, in the same way {@link #attach} supplies the sender.
+     */
+    private volatile Runnable welcomeRefused = () -> {
+    };
+
+    /**
      * Writes locally and forwards to the panel. Starts local-only, because the dispatcher exists
      * before the link does and a refusal during that window still belongs in this agent's log.
      */
@@ -139,6 +146,17 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         printing.jobs().listener(reporter());
     }
 
+    /**
+     * Registers what to do when the server speaks a protocol this agent does not.
+     *
+     * <p>Stopping the link is the caller's decision to make, not this class's: it holds no socket.
+     *
+     * @param handler runs once per refused welcome
+     */
+    public void onWelcomeRefused(Runnable handler) {
+        this.welcomeRefused = Objects.requireNonNull(handler, "handler");
+    }
+
     @Override
     public void accept(Frames.ServerFrame frame) {
         switch (frame) {
@@ -154,10 +172,14 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
 
     private void onWelcome(Frames.Welcome welcome) {
         if (welcome.protocolVersion() != Frames.PROTOCOL_VERSION) {
-            // The server closes the connection over this itself, so there is nothing to do but
-            // make the reason findable in the agent's own log rather than only the server's.
+            // Stopped rather than logged. A newer server's next dispatch may carry a directive
+            // this agent refuses, and failing receipt by receipt is a worse way to find that out
+            // than one refusal at the handshake, which is what the version exists to produce.
             logger.error("This server speaks link protocol " + welcome.protocolVersion()
-                    + "; this agent speaks " + Frames.PROTOCOL_VERSION + ". Update the agent.");
+                    + "; this agent speaks " + Frames.PROTOCOL_VERSION + ". Update the agent. "
+                    + "The link will not reconnect until it is restarted against a server it "
+                    + "can speak to.");
+            welcomeRefused.run();
             return;
         }
         logger.info("Server welcomed this agent as '" + welcome.agentName() + "'");

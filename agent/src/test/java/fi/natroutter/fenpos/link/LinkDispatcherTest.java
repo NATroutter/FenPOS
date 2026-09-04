@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -122,6 +123,30 @@ class LinkDispatcherTest {
         dispatcher.accept(new Frames.Welcome(99, "a1", "Kitchen agent", "2026-08-18T20:00:00Z"));
 
         assertTrue(updates().isEmpty());
+    }
+
+    @Test
+    void stopsTheLinkWhenTheServerSpeaksADifferentProtocol() {
+        AtomicBoolean refused = new AtomicBoolean();
+        dispatcher.onWelcomeRefused(() -> refused.set(true));
+
+        dispatcher.accept(new Frames.Welcome(
+                Frames.PROTOCOL_VERSION + 1, "agent-1", "Kitchen", "2026-09-04T10:00:00Z"));
+
+        // Not merely logged. A version this agent does not speak means the next dispatch may
+        // carry a directive it cannot render, so it stops rather than failing receipt by receipt.
+        assertTrue(refused.get());
+    }
+
+    @Test
+    void doesNotStopTheLinkForAMatchingProtocol() {
+        AtomicBoolean refused = new AtomicBoolean();
+        dispatcher.onWelcomeRefused(() -> refused.set(true));
+
+        dispatcher.accept(new Frames.Welcome(
+                Frames.PROTOCOL_VERSION, "agent-1", "Kitchen", "2026-09-04T10:00:00Z"));
+
+        assertFalse(refused.get());
     }
 
     // -------------------------------------------------------------------------

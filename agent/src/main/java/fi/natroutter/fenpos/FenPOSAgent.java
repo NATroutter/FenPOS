@@ -190,6 +190,7 @@ public class FenPOSAgent extends FoxLib {
         link = new LinkClient(info, dispatcher, logger);
         dispatcher.attach(link::send);
         link.onUnpaired(FenPOSAgent::forgetPairing);
+        dispatcher.onWelcomeRefused(() -> link.stop("protocol version mismatch"));
         startStatusReports(dispatcher, AgentSettings.DEFAULTS.statusInterval());
 
         Runtime.getRuntime().addShutdownHook(new Thread(FenPOSAgent::shutdown, "fenpos-agent-shutdown"));

@@ -34,6 +34,8 @@ import fi.natroutter.fenpos.print.JobSettings;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -202,7 +204,7 @@ public final class FrameCodec {
                     requireInt(root, "protocolVersion"),
                     requireId(root, "agentId"),
                     requireBounded(root, "agentName", 0, MAX_AGENT_NAME_CHARS),
-                    requireString(root, "serverTime"));
+                    requireTimestamp(root, "serverTime"));
             case "config.sync" -> readConfigSync(root);
             case "job.dispatch" -> new JobDispatch(readCompiledJob(requireObject(root, "job")));
             case "job.cancel" -> new JobCancel(requireId(root, "jobId"));
@@ -607,6 +609,24 @@ public final class FrameCodec {
         if (value.length() < min || value.length() > max) {
             throw new ProtocolException("field '" + field + "' must be " + min + ".." + max
                     + " characters, got " + value.length());
+        }
+        return value;
+    }
+
+    /**
+     * Reads an ISO-8601 instant.
+     *
+     * <p>Parsed rather than merely typed, because the value is only useful if it is a time: the
+     * server documents it as the clock an agent with a wrong one can align against, and a string
+     * that is not a time silently makes that alignment impossible.
+     */
+    private static String requireTimestamp(JsonObject parent, String field) throws ProtocolException {
+        String value = requireString(parent, field);
+        try {
+            Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new ProtocolException("field '" + field + "' must be an ISO-8601 instant, got '"
+                    + value + "'", e);
         }
         return value;
     }

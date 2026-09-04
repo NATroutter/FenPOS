@@ -876,4 +876,13 @@ class FrameCodecTest {
                 {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
                 "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(128))));
     }
+
+    @Test
+    void refusesAServerTimeThatIsNotATimestamp() {
+        for (String value : new String[] {"\"not-a-timestamp\"", "\"\"", "\"2026-13-45T99:99:99Z\""}) {
+            assertThrows(ProtocolException.class, () -> codec.read("""
+                    {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"n",\
+                    "serverTime":%s}""".formatted(value)), value);
+        }
+    }
 }
