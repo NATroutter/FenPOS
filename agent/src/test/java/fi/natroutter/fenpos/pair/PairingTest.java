@@ -102,6 +102,34 @@ class PairingTest {
     }
 
     @Test
+    void refusesPlainHttpToANameThatMerelyBeginsLikeALoopbackAddress() {
+        // A prefix is not an address. Every one of these is a name someone can register, and
+        // the reply to this request carries the bearer token, so admitting one of them sends
+        // the credential across the internet in cleartext.
+        for (String host : new String[] {
+                "127.0.0.1.evil.example", "127.attacker.example", "127.example.com",
+                "localhost.evil.example"}) {
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair("http://" + host, "AG7K-2M9P"), host);
+            assertTrue(thrown.getMessage().contains("https"), host + ": " + thrown.getMessage());
+        }
+    }
+
+    @Test
+    void stillAllowsPlainHttpToTheAddressesThatAreActuallyLoopback() throws Exception {
+        // Nothing reaches a network interface, which is the whole basis of the exception. These
+        // must keep working or a single-machine install cannot be brought up without a
+        // certificate. The port is one nothing listens on, so the failure is a connection
+        // refused rather than a scheme refusal, which is what proves the check passed.
+        for (String host : new String[] {"127.0.0.1", "127.0.0.2", "[::1]", "localhost", "LOCALHOST"}) {
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair("http://" + host + ":1", "AG7K-2M9P"), host);
+            assertFalse(thrown.getMessage().contains("requires https"),
+                    host + " must pass the scheme check: " + thrown.getMessage());
+        }
+    }
+
+    @Test
     void refusesAnAddressWithNoScheme() {
         PairingException thrown = assertThrows(PairingException.class, () ->
                 pairing.pair("fenpos.example.com", "AG7K-2M9P"));
