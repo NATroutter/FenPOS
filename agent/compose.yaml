@@ -33,6 +33,16 @@ services:
     security_opt:
       - no-new-privileges:true
 
+    # The agent writes to the two directories below and nowhere else, so the root filesystem
+    # can stay read-only. A foothold in the process then has nowhere to leave anything a
+    # restart would pick up, and the jar itself cannot be rewritten.
+    read_only: true
+    tmpfs:
+      # sqlite-jdbc unpacks its native library into /tmp and loads it from there, so this
+      # mount has to allow exec. Docker mounts a tmpfs noexec unless told otherwise, and
+      # without exec the driver fails to load and the agent refuses to start.
+      - /tmp:exec,size=64m
+
     volumes:
       # The agent's identity lives here: the server address and the credential it
       # was issued at pairing. Lose this volume and the agent is unpaired. It

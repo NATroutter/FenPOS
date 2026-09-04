@@ -327,6 +327,11 @@ raised it.
 
 - **Agents have no inbound surface.** They dial out and never listen, so there is no port to
   scan and no endpoint to post to.
+- **The agent container is locked down in the compose files.** It runs as a non-root user with
+  every Linux capability dropped, `no-new-privileges` set, and a read-only root filesystem. The
+  only writable paths are its data and log directories and a small tmpfs holding the SQLite
+  driver's native library, so a foothold in the process has nowhere to leave anything that a
+  restart would pick up, and cannot rewrite the jar it runs from.
 - **Strict TLS.** The agent validates the server's certificate against the system trust
   store, and there is no "trust all certificates" option in any form. There is no certificate
   pinning: an agent accepts any certificate a CA in its trust store has issued for the
