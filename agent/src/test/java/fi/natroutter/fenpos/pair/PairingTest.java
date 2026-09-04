@@ -295,19 +295,35 @@ class PairingTest {
         // The token is put in an Authorization header on every connection. A carriage return in
         // it fails the header build, and because the identity is persisted first, the agent then
         // retries once a minute forever and ignores FENPOS_PAIR_CODE on every later boot.
-        for (String token : new String[] {"abc\r\ndef", "abc def", "abc\u0000", "", "t".repeat(129)}) {
-            respondWithGrant("agent-1", "Kitchen", token);
-            assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"), token);
+        //
+        // Asserted against a fragment specific to why each one is refused, not just that some
+        // PairingException was thrown, so this test cannot pass for an unrelated reason: the
+        // three shape violations are refused by the base64url check, the empty one by the
+        // missing-credential check, and the over-long one by the length check.
+        String[] tokens = {"abc\r\ndef", "abc def", "abc\u0000", "", "t".repeat(129)};
+        String[] expectedFragments =
+                {"base64url", "base64url", "base64url", "missing the credential", "is plausible"};
+
+        for (int i = 0; i < tokens.length; i++) {
+            respondWithGrant("agent-1", "Kitchen", tokens[i]);
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair(baseUrl(), "AG7K-2M9P"), tokens[i]);
+            assertTrue(thrown.getMessage().contains(expectedFragments[i]),
+                    tokens[i] + ": " + thrown.getMessage());
         }
     }
 
     @Test
     void refusesAGrantWhoseIdentifiersAreOutsideTheirBounds() {
         respondWithGrant("a".repeat(65), "Kitchen", "abc");
-        assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        PairingException oversizedId = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        assertTrue(oversizedId.getMessage().contains("'agentId'"), oversizedId.getMessage());
 
         respondWithGrant("agent-1", "n".repeat(129), "abc");
-        assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        PairingException oversizedName = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        assertTrue(oversizedName.getMessage().contains("'agentName'"), oversizedName.getMessage());
     }
 
     @Test

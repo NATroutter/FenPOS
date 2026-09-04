@@ -306,8 +306,12 @@ public class LinkClient {
             // The credential cannot go in a header. Pairing refuses such a token now, so reaching
             // here means one was stored by an older build; retrying cannot fix it and the stored
             // identity keeps the next boot from reading a fresh code.
-            return "the stored credential cannot be presented (" + cause.getMessage()
-                    + "). Run 'unpair' and pair again with a new code.";
+            //
+            // The JDK's own message for this embeds the header value verbatim, which is
+            // "Bearer " plus the bearer token, so it is never read here: printing it would put
+            // the credential in the log this line exists to write to.
+            return "the stored credential contains characters that cannot be sent in an HTTP "
+                    + "header. Run 'unpair' and pair again with a new code.";
         }
 
         return Diagnostics.describe(cause);
