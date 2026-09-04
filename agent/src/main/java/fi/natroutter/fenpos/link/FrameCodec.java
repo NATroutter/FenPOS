@@ -95,6 +95,28 @@ public final class FrameCodec {
     /** Longest identifier accepted. Mirrors idSchema and requestIdSchema on the server. */
     private static final int MAX_ID_CHARS = 64;
 
+    /**
+     * Largest QR payload, which is a QR symbol's own maximum alphanumeric capacity.
+     *
+     * <p>The bound is the symbology's rather than a round number because anything past it was
+     * never going to scan. It also keeps the payload inside what {@code GS ( k} can declare: the
+     * library computes {@code pL} and {@code pH} from the character count, and a payload of
+     * 65,533 wraps them both to zero, leaving the printer reading the rest of the job as commands.
+     */
+    private static final int MAX_QR_CHARS = 4_296;
+
+    /** Largest PDF417 payload, from that symbology's own capacity, for the same reasons. */
+    private static final int MAX_PDF417_CHARS = 1_850;
+
+    /**
+     * Largest linear barcode payload.
+     *
+     * <p>{@code GS k} function B carries its length in a single byte, so a longer payload declares
+     * a shorter one and the remainder is read as commands. {@code EscPosRenderer} checks the
+     * escaped form against the same bound, because only it knows what the escaping adds.
+     */
+    private static final int MAX_BARCODE_CHARS = 255;
+
     /** Longest serial port path accepted. Mirrors deviceConfigSchema.port. */
     private static final int MAX_PORT_CHARS = 256;
 
@@ -392,16 +414,16 @@ public final class FrameCodec {
             // server applies the same bounds; repeating them is what makes this a boundary
             // rather than a place that trusts the server got it right.
             case "QR" -> new WireDirective.Qr(
-                    requireAsciiContent(directive),
+                    requireAsciiContent(directive, MAX_QR_CHARS),
                     requireBoundedInt(directive, "size", 1, 16));
             case "BARCODE" -> new WireDirective.Barcode(
                     requireEnum(directive, "system", BarcodeSystem.class),
-                    requireContent(directive));
+                    requireContent(directive, MAX_BARCODE_CHARS));
             // The column count is bounded 1..30 rather than 0..30: zero is what function 65 reads
             // as "printer decides", and a server that meant to say that would be sending a symbol
             // it could not have charged a line budget for.
             case "PDF417" -> new WireDirective.Pdf417(
-                    requireAsciiContent(directive),
+                    requireAsciiContent(directive, MAX_PDF417_CHARS),
                     requireBoundedInt(directive, "errorLevel", 0, 8),
                     requireBoundedInt(directive, "columns", 1, 30));
             case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
@@ -439,16 +461,21 @@ public final class FrameCodec {
     }
 
     /**
-     * Reads a symbol's payload, refusing an empty one.
+     * Reads a symbol's payload, refusing an empty one and one longer than the command can declare.
      *
-     * <p>An empty symbol is not a smaller symbol: there is nothing for the encoder to lay out,
-     * and the library would fail on it further down where the message names a regex rather than
-     * the job.
+     * <p>An empty symbol is not a smaller symbol: there is nothing for the encoder to lay out, and
+     * the library would fail on it further down where the message names a regex rather than the job.
+     *
+     * @param max longest payload the command that carries it can state
      */
-    private static String requireContent(JsonObject directive) throws ProtocolException {
+    private static String requireContent(JsonObject directive, int max) throws ProtocolException {
         String content = requireString(directive, "content");
         if (content.isEmpty()) {
             throw new ProtocolException("field 'content' must not be empty");
+        }
+        if (content.length() > max) {
+            throw new ProtocolException("field 'content' of " + content.length()
+                    + " characters exceeds the " + max + " this symbol's command can declare");
         }
         return content;
     }
@@ -466,8 +493,8 @@ public final class FrameCodec {
      * and column; this is the backstop for a server that did not. The linear symbologies need no
      * equivalent — the library's own alphabets are ASCII-only, so they refuse it themselves.
      */
-    private static String requireAsciiContent(JsonObject directive) throws ProtocolException {
-        String content = requireContent(directive);
+    private static String requireAsciiContent(JsonObject directive, int max) throws ProtocolException {
+        String content = requireContent(directive, max);
         for (int index = 0; index < content.length(); index++) {
             if (content.charAt(index) > 0x7F) {
                 throw new ProtocolException("field 'content' must be ASCII; '"

@@ -321,6 +321,21 @@ class EscPosRendererTest {
         assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
     }
 
+    @Test
+    void refusesACode128PayloadThatEscapingPushesPastTheLengthByte() {
+        // The codec bounds the content at 255, but this renderer prepends "{B" and doubles every
+        // literal brace, so content the codec accepted can still overflow. This is the only
+        // place that knows the escaping, so it is the only place that can check the result.
+        Directive.Barcode barcode = new Directive.Barcode(BarcodeSystem.CODE128, "{".repeat(200));
+
+        SymbolEncodingException thrown = assertThrows(SymbolEncodingException.class,
+                () -> EscPosRenderer.render(
+                        List.of(new Line(Align.LEFT, null, List.of(), List.of(), List.of(barcode))),
+                        Codepage.CP858, Linefeed.LF, 42));
+
+        assertTrue(thrown.getMessage().contains("255"), thrown.getMessage());
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

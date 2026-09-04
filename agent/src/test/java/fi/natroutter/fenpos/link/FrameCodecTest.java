@@ -517,6 +517,29 @@ class FrameCodecTest {
     }
 
     @Test
+    void refusesASymbolPayloadLongerThanItsCommandCanDeclare() {
+        // GS k function B carries its length in one byte and GS ( k in two. A payload past
+        // either wraps, and the bytes beyond the declared length are read by the printer as
+        // commands. The bounds are the symbologies' own capacities, so nothing refused here
+        // would have scanned anyway.
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(256) + "\"}")));
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"QR\",\"content\":\"" + "A".repeat(4297) + "\",\"size\":3}")));
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"PDF417\",\"content\":\"" + "A".repeat(1851)
+                        + "\",\"errorLevel\":1,\"columns\":3}")));
+    }
+
+    @Test
+    void acceptsASymbolPayloadAtItsBound() {
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(255) + "\"}")));
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"QR\",\"content\":\"" + "A".repeat(4296) + "\",\"size\":3}")));
+    }
+
+    @Test
     void refusesAPdf417ErrorLevelOutsideTheEscPosRange() {
         assertThrows(ProtocolException.class, () -> codec.read(
                 dispatch("", "{\"type\":\"PDF417\",\"content\":\"x\",\"errorLevel\":9,\"columns\":5}")));

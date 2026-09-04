@@ -1,6 +1,7 @@
 import bwip from "bwip-js/node";
 import { describe, expect, it } from "vitest";
 import { BarcodeSystem } from "@/lib/domain/enums";
+import { directiveSchema } from "@/lib/link/protocol";
 import {
 	dotWidth,
 	LINE_HEIGHT_DOTS,
@@ -515,5 +516,17 @@ describe("symbolSvg", () => {
 
 	it("names an encoder refusal as one, exactly as measuring does", () => {
 		expect(() => symbolSvg({ kind: "BARCODE", content: "1234567890123", system: "EAN13" })).toThrow(SymbolEncodeError);
+	});
+});
+
+describe("directiveSchema", () => {
+	it("refuses a symbol payload longer than its command can declare", () => {
+		expect(directiveSchema.safeParse({ type: "QR", content: "A".repeat(4297), size: 3 }).success).toBe(false);
+		expect(directiveSchema.safeParse({ type: "BARCODE", system: "CODE128", content: "A".repeat(256) }).success).toBe(
+			false,
+		);
+		expect(
+			directiveSchema.safeParse({ type: "PDF417", content: "A".repeat(1851), errorLevel: 1, columns: 3 }).success,
+		).toBe(false);
 	});
 });

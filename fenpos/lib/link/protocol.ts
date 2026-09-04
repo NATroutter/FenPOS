@@ -223,8 +223,18 @@ const imageSourceSchema = z.discriminatedUnion("kind", [
 export const directiveSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("CUT"), mode: z.enum(["FULL", "PARTIAL"]) }),
 	z.object({ type: z.literal("FEED"), lines: z.number().int().min(1).max(255) }),
-	z.object({ type: z.literal("QR"), content: z.string().min(1), size: z.number().int().min(1).max(16) }),
-	z.object({ type: z.literal("BARCODE"), system: BarcodeSystem.schema, content: z.string().min(1) }),
+	/**
+	 * Symbol payload bounds are the symbologies' own capacities, not round numbers. They also keep
+	 * each payload inside what its ESC/POS command can declare: `GS k` function B states its length
+	 * in one byte and `GS ( k` in two, so a longer payload declares a shorter one and the printer
+	 * reads the remainder as commands. The agent restates all three in `FrameCodec`.
+	 */
+	z.object({ type: z.literal("QR"), content: z.string().min(1).max(4_296), size: z.number().int().min(1).max(16) }),
+	z.object({
+		type: z.literal("BARCODE"),
+		system: BarcodeSystem.schema,
+		content: z.string().min(1).max(255),
+	}),
 	/**
 	 * `columns` is the symbol's data-column count, and it is the one piece of measured geometry on
 	 * this schema.
@@ -239,7 +249,7 @@ export const directiveSchema = z.discriminatedUnion("type", [
 	 */
 	z.object({
 		type: z.literal("PDF417"),
-		content: z.string().min(1),
+		content: z.string().min(1).max(1_850),
 		errorLevel: z.number().int().min(0).max(8),
 		columns: z.number().int().min(1).max(30),
 	}),

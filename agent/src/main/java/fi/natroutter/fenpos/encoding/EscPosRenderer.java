@@ -78,6 +78,9 @@ public final class EscPosRenderer {
     /** Code 128 code set B: the full printable ASCII range. */
     private static final String CODE128_SET_B = "{B";
 
+    /** Longest data a {@code GS k} function B command can declare, its length being one byte. */
+    private static final int MAX_FUNCTION_B_DATA = 255;
+
     private EscPosRenderer() {
     }
 
@@ -303,10 +306,19 @@ public final class EscPosRenderer {
      * fails to print.
      */
     private static String barcodeData(Directive.Barcode barcode) {
-        if (barcode.system() != BarcodeSystem.CODE128) {
-            return barcode.content();
+        String data = barcode.system() != BarcodeSystem.CODE128
+                ? barcode.content()
+                : CODE128_SET_B + barcode.content().replace("{", "{{");
+
+        // Function B declares its length in one byte. The codec bounds the content, but the
+        // escaping above adds two characters and doubles every brace, so content it accepted can
+        // still overflow here. This is the only place that knows what the escaping added.
+        if (data.length() > MAX_FUNCTION_B_DATA && system(barcode.system()).code > 6) {
+            throw new SymbolEncodingException("a " + barcode.system().name() + " barcode carries "
+                    + data.length() + " characters once escaped, and its command can declare at "
+                    + "most " + MAX_FUNCTION_B_DATA);
         }
-        return CODE128_SET_B + barcode.content().replace("{", "{{");
+        return data;
     }
 
     /**
