@@ -294,6 +294,14 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     // Device control
     // -------------------------------------------------------------------------
 
+    /** Bounds from serialPortSchema on the server. A frame breaking one is refused whole. */
+    private static final int MAX_PORT_NAME_CHARS = 256;
+    private static final int MAX_PORT_DESCRIPTION_CHARS = 256;
+    private static final int MAX_PORT_SERIAL_CHARS = 128;
+
+    /** Ports reported in one answer, also from the server's schema. */
+    private static final int MAX_PORTS_REPORTED = 256;
+
     /**
      * Answers a request for this machine's serial ports.
      * <p>
@@ -304,16 +312,45 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private void onPortsScan(Frames.PortsScan scan) {
         List<Frames.SerialPort> ports = new ArrayList<>();
         for (com.fazecast.jSerialComm.SerialPort port : SerialHandler.availablePorts()) {
-            ports.add(new Frames.SerialPort(
-                    text(port.getSystemPortName()),
-                    text(port.getPortDescription()),
+            if (ports.size() == MAX_PORTS_REPORTED) {
+                logger.warn("This machine reports more than " + MAX_PORTS_REPORTED
+                        + " serial ports; the rest are not being reported");
+                break;
+            }
+            ports.add(describePort(
+                    port.getSystemPortName(),
+                    port.getPortDescription(),
                     port.getVendorID(),
                     port.getProductID(),
-                    text(port.getSerialNumber())));
+                    port.getSerialNumber()));
         }
 
         logger.info("Reported " + ports.size() + " serial port(s) to the server");
         sender.send(new Frames.PortsResult(scan.requestId(), ports));
+    }
+
+    /**
+     * Describes one serial port in the shape the server accepts.
+     *
+     * <p>Clamped rather than passed through, and package-private so this is testable without a
+     * serial device. Two things arrive out of range. A USB device's descriptor strings are chosen
+     * by whoever made it, so their length is not this agent's to assume. And jSerialComm answers
+     * {@code -1} for a port that is not USB at all, such as a built-in UART, while the schema says
+     * 0..0xffff: sending that refused the whole frame, so a Raspberry Pi's own serial port made the
+     * panel's picker come back empty with nothing said anywhere about why.
+     */
+    static Frames.SerialPort describePort(String name, String description,
+                                          int vendorId, int productId, String serialNumber) {
+        return new Frames.SerialPort(
+                clamp(text(name), MAX_PORT_NAME_CHARS),
+                clamp(text(description), MAX_PORT_DESCRIPTION_CHARS),
+                Math.max(0, vendorId),
+                Math.max(0, productId),
+                clamp(text(serialNumber), MAX_PORT_SERIAL_CHARS));
+    }
+
+    private static String clamp(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /**

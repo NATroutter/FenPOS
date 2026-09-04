@@ -304,6 +304,31 @@ class LinkDispatcherTest {
     }
 
     @Test
+    void clampsAPortDescriptionToWhatTheServerWillAccept() {
+        Frames.SerialPort port = LinkDispatcher.describePort(
+                "/dev/" + "x".repeat(300), "d".repeat(300), -1, -1, "s".repeat(200));
+
+        // Every one of these is a bound in serialPortSchema. The server validates the whole
+        // frame, so one over-long field discards the entire scan and the picker shows nothing.
+        assertEquals(256, port.name().length());
+        assertEquals(256, port.description().length());
+        assertEquals(128, port.serialNumber().length());
+        assertEquals(0, port.vendorId());
+        assertEquals(0, port.productId());
+    }
+
+    @Test
+    void leavesAnOrdinaryUsbPortAlone() {
+        Frames.SerialPort port = LinkDispatcher.describePort(
+                "/dev/ttyUSB0", "USB Serial", 0x1a86, 0x7523, "ABC123");
+
+        assertEquals("/dev/ttyUSB0", port.name());
+        assertEquals("USB Serial", port.description());
+        assertEquals(0x1a86, port.vendorId());
+        assertEquals("ABC123", port.serialNumber());
+    }
+
+    @Test
     void pausesAndResumesADevice() {
         configure("kitchen");
 
