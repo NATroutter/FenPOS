@@ -2,6 +2,7 @@ package fi.natroutter.fenpos.device;
 
 import fi.natroutter.fenpos.link.Frames;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -51,15 +52,22 @@ public class DeviceRegistry {
      * Replaces the whole device set.
      *
      * @param wire the devices as the server described them, in the order it sent them
+     * @return every name that appeared more than once, in the order first seen. The snapshot is
+     *         authoritative so the last entry wins, but a device that vanishes because two share a
+     *         name is not something to discover later from a job that will not print.
      */
-    public void apply(List<Frames.DeviceConfig> wire) {
+    public List<String> apply(List<Frames.DeviceConfig> wire) {
         Objects.requireNonNull(wire, "wire");
         Map<String, Device> replacement = new LinkedHashMap<>();
+        List<String> collapsed = new ArrayList<>();
         for (Frames.DeviceConfig config : wire) {
             Device device = Device.from(config);
-            replacement.put(device.name(), device);
+            if (replacement.put(device.name(), device) != null && !collapsed.contains(device.name())) {
+                collapsed.add(device.name());
+            }
         }
         devices = Collections.unmodifiableMap(replacement);
+        return List.copyOf(collapsed);
     }
 
     /**

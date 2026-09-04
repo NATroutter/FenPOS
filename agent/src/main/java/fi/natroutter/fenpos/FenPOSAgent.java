@@ -227,7 +227,11 @@ public class FenPOSAgent extends FoxLib {
         if (shuttingDown) {
             return;
         }
-        devices.apply(wire);
+        List<String> collapsed = devices.apply(wire);
+        if (!collapsed.isEmpty()) {
+            logger.warn("The server sent more than one device called " + String.join(", ", collapsed)
+                    + "; only the last of each is configured");
+        }
         connections.applyDevices();
         printService.applyDevices();
         printService.settings(jobs);

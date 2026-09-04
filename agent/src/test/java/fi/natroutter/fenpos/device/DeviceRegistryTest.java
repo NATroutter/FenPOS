@@ -168,6 +168,26 @@ class DeviceRegistryTest {
     }
 
     @Test
+    void reportsADeviceNameThatAppearedTwice() {
+        DeviceRegistry registry = new DeviceRegistry();
+
+        List<String> collapsed = registry.apply(List.of(device("kitchen"), device("bar"), device("kitchen")));
+
+        // The snapshot is authoritative, so the last entry wins and the set is smaller than what
+        // was sent. Silently is the wrong way for that to happen: a device configured in the panel
+        // simply would not exist here, and nothing would say so.
+        assertEquals(List.of("kitchen"), collapsed);
+        assertEquals(2, registry.size());
+    }
+
+    @Test
+    void reportsNothingWhenEveryNameIsDistinct() {
+        DeviceRegistry registry = new DeviceRegistry();
+
+        assertEquals(List.of(), registry.apply(List.of(device("kitchen"), device("bar"))));
+    }
+
+    @Test
     void rejectsAMissingSnapshotRatherThanEmptyingItself() {
         DeviceRegistry registry = new DeviceRegistry();
         registry.apply(List.of(wire("kitchen", "COM3", 5, 5000)));
@@ -179,6 +199,10 @@ class DeviceRegistryTest {
     @Test
     void carriesThePausedFlagTheOperatorSet() {
         assertFalse(Device.from(wire("kitchen", "COM3", 5, 5000)).paused());
+    }
+
+    private static Frames.DeviceConfig device(String name) {
+        return wire(name, "COM3", 5, 5000);
     }
 
     private static Frames.DeviceConfig wire(
