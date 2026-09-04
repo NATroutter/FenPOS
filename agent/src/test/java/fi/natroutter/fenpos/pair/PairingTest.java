@@ -277,6 +277,47 @@ class PairingTest {
         assertTrue(thrown.getMessage().contains("FenPOS server"), thrown.getMessage());
     }
 
+    @Test
+    void refusesAReplyLargerThanTheCapWithoutBufferingIt() throws Exception {
+        // ofString buffers everything before the check can run, so a hostile endpoint chose how
+        // much heap this allocated. 4 MiB is enough to prove the read is bounded without making
+        // the suite slow.
+        respondWith(200, "A".repeat(4 * 1024 * 1024));
+
+        PairingException thrown = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().contains("implausibly large"), thrown.getMessage());
+    }
+
+    @Test
+    void refusesATokenThatCouldNotGoInAHeader() {
+        // The token is put in an Authorization header on every connection. A carriage return in
+        // it fails the header build, and because the identity is persisted first, the agent then
+        // retries once a minute forever and ignores FENPOS_PAIR_CODE on every later boot.
+        for (String token : new String[] {"abc\r\ndef", "abc def", "abc\u0000", "", "t".repeat(129)}) {
+            respondWithGrant("agent-1", "Kitchen", token);
+            assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"), token);
+        }
+    }
+
+    @Test
+    void refusesAGrantWhoseIdentifiersAreOutsideTheirBounds() {
+        respondWithGrant("a".repeat(65), "Kitchen", "abc");
+        assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        respondWithGrant("agent-1", "n".repeat(129), "abc");
+        assertThrows(PairingException.class, () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+    }
+
+    @Test
+    void acceptsTheTokenTheServerActuallyIssues() throws Exception {
+        // randomBytes(32).toString("base64url"), which is what lib/auth/secrets.ts mints.
+        respondWithGrant("agent-1", "Kitchen", "dGhpcy1pcy1hLWJhc2U2NHVybC10b2tlbi1zYW1wbGUtb2s");
+
+        assertEquals("Kitchen", pairing.pair(baseUrl(), "AG7K-2M9P").agentName());
+    }
+
     // -------------------------------------------------------------------------
     // Unpairing
     // -------------------------------------------------------------------------
@@ -373,9 +414,22 @@ class PairingTest {
     }
 
     private void respondWithGrant() {
+        respondWithGrant("agent-1", "Kitchen agent", "secret-token");
+    }
+
+    private void respondWithGrant(String agentId, String agentName, String token) {
         status = 200;
-        responseBody = "{\"agentId\":\"agent-1\",\"agentName\":\"Kitchen agent\","
-                + "\"token\":\"secret-token\",\"protocolVersion\":" + Frames.PROTOCOL_VERSION + "}";
+        JsonObject json = new JsonObject();
+        json.addProperty("agentId", agentId);
+        json.addProperty("agentName", agentName);
+        json.addProperty("token", token);
+        json.addProperty("protocolVersion", Frames.PROTOCOL_VERSION);
+        responseBody = json.toString();
+    }
+
+    private void respondWith(int status, String body) {
+        this.status = status;
+        this.responseBody = body;
     }
 
     private String baseUrl() {

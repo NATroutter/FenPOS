@@ -7,6 +7,7 @@ import fi.natroutter.fenpos.link.AgentInfo;
 import fi.natroutter.fenpos.link.Frames;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -14,9 +15,11 @@ import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Redeems a pairing code for this agent's long-lived credential.
@@ -45,6 +48,31 @@ public class PairingClient {
 
     /** Largest response body read. The reply is four short strings. */
     private static final int MAX_RESPONSE_BYTES = 8 * 1024;
+
+    /** Longest identifier accepted from a grant. Mirrors idSchema on the server. */
+    private static final int MAX_GRANT_ID_CHARS = 64;
+
+    /** Longest agent name accepted from a grant. Mirrors welcomeSchema.agentName. */
+    private static final int MAX_GRANT_NAME_CHARS = 128;
+
+    /**
+     * Longest token accepted, with room to spare.
+     *
+     * <p>The server mints {@code randomBytes(32).toString("base64url")}, which is 43 characters,
+     * so this is three times what it issues today and still far short of anything implausible.
+     */
+    private static final int MAX_TOKEN_CHARS = 128;
+
+    /**
+     * The shape a bearer token takes: base64url, which is what the server encodes it as.
+     *
+     * <p>Checked because this string goes into an {@code Authorization} header on every connection
+     * for the life of this agent. A token carrying a carriage return fails that header's own
+     * validation, and since the identity is persisted before the link is ever started, the result
+     * was an agent retrying once a minute against a credential it could never present, ignoring a
+     * fresh {@code FENPOS_PAIR_CODE} on every later boot because an identity was stored.
+     */
+    private static final Pattern TOKEN = Pattern.compile("^[A-Za-z0-9_-]+$");
 
     private final HttpClient http;
 
@@ -87,7 +115,7 @@ public class PairingClient {
         URI endpoint = endpointFor(serverUrl);
         String body = requestBody(code, info);
 
-        HttpResponse<String> response;
+        HttpResponse<InputStream> response;
         try {
             response = http.send(
                     HttpRequest.newBuilder(endpoint)
@@ -96,7 +124,7 @@ public class PairingClient {
                             .header("User-Agent", info.userAgent())
                             .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build(),
-                    HttpResponse.BodyHandlers.ofString());
+                    HttpResponse.BodyHandlers.ofInputStream());
         } catch (IOException e) {
             throw new PairingException(
                     "Could not reach " + endpoint + ": " + describe(e), e);
@@ -105,7 +133,28 @@ public class PairingClient {
             throw new PairingException("Pairing was interrupted", e);
         }
 
-        return readGrant(response);
+        return readGrant(response.statusCode(), readBoundedBody(response));
+    }
+
+    /**
+     * Reads at most {@link #MAX_RESPONSE_BYTES} of the reply, and one byte more so that an
+     * oversized one can be told apart from a full one.
+     *
+     * <p>Bounded as it is read rather than after. {@code BodyHandlers.ofString} buffers the whole
+     * body before any check can run, so the cap was a statement about a string this process had
+     * already allocated, and the endpoint on the other end chose how large that was.
+     */
+    private static String readBoundedBody(HttpResponse<InputStream> response) throws PairingException {
+        try (InputStream body = response.body()) {
+            byte[] bytes = body.readNBytes(MAX_RESPONSE_BYTES + 1);
+            if (bytes.length > MAX_RESPONSE_BYTES) {
+                throw new PairingException("The server's reply was implausibly large; check that "
+                        + "the address points at a FenPOS server");
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new PairingException("Could not read the server's reply: " + describe(e), e);
+        }
     }
 
     /**
@@ -240,14 +289,7 @@ public class PairingClient {
      * than guessed at: the agent says the code was not accepted and lists what would explain
      * it, instead of asserting a reason it was not told.
      */
-    private static PairingGrant readGrant(HttpResponse<String> response) throws PairingException {
-        String body = response.body() == null ? "" : response.body();
-        if (body.length() > MAX_RESPONSE_BYTES) {
-            throw new PairingException("The server's reply was implausibly large; check that "
-                    + "the address points at a FenPOS server");
-        }
-
-        int status = response.statusCode();
+    private static PairingGrant readGrant(int status, String body) throws PairingException {
         if (status == 401) {
             throw new PairingException("That pairing code was not accepted. It may be mistyped, "
                     + "expired, or already used — generate a new one in the panel under Agents.");
@@ -274,11 +316,13 @@ public class PairingClient {
                     + "address points at a FenPOS server", e);
         }
 
-        String agentId = string(json, "agentId");
-        String agentName = string(json, "agentName");
-        String token = string(json, "token");
-        if (agentId == null || agentName == null || token == null) {
-            throw new PairingException("The server's reply was missing the credential");
+        String agentId = bounded(json, "agentId", MAX_GRANT_ID_CHARS);
+        String agentName = bounded(json, "agentName", MAX_GRANT_NAME_CHARS);
+        String token = bounded(json, "token", MAX_TOKEN_CHARS);
+        if (!TOKEN.matcher(token).matches()) {
+            throw new PairingException("The server's reply carried a credential this agent cannot "
+                    + "present: a token must be base64url. Check that the address points at a "
+                    + "FenPOS server.");
         }
 
         Integer version = json.has("protocolVersion") && json.get("protocolVersion").isJsonPrimitive()
@@ -325,6 +369,20 @@ public class PairingClient {
         return flattened.length() <= BODY_EXCERPT
                 ? flattened
                 : flattened.substring(0, BODY_EXCERPT) + "…";
+    }
+
+    /** Reads a required string from a grant, refusing an absent, empty or over-long one. */
+    private static String bounded(JsonObject json, String field, int max) throws PairingException {
+        String value = string(json, field);
+        if (value == null) {
+            throw new PairingException("The server's reply was missing the credential");
+        }
+        if (value.length() > max) {
+            throw new PairingException("The server's reply carried a '" + field + "' of "
+                    + value.length() + " characters, and at most " + max + " is plausible; check "
+                    + "that the address points at a FenPOS server");
+        }
+        return value;
     }
 
     private static String string(JsonObject json, String field) {
