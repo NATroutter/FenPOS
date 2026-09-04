@@ -127,7 +127,18 @@ const assetNameSchema = deviceNameSchema;
  * text by width without reopening tags at the break.
  */
 export const spanSchema = z.object({
-	text: z.string().max(JOB_LIMITS.maxSpanChars),
+	/**
+	 * Refused rather than escaped, because there is no escaping: the agent writes this text
+	 * to the port through the device's codepage, and every codepage maps U+001B to 0x1B. A
+	 * control character here is an ESC/POS command. The markup parser already refuses them
+	 * in source text and in variable values; this is the same rule on the wire, so a frame
+	 * this server builds can never carry one even if a future compile path forgets.
+	 */
+	text: z
+		.string()
+		.max(JOB_LIMITS.maxSpanChars)
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: refusing them is the point
+		.refine((value) => !/[\x00-\x1f\x7f-\x9f]/.test(value), "must not contain control characters"),
 	bold: z.boolean(),
 	/** Underline thickness: 0 for none, 1 or 2 for the two ESC/POS weights. */
 	underline: z.union([z.literal(0), z.literal(1), z.literal(2)]),
