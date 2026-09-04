@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +39,21 @@ public class AgentStore implements AutoCloseable {
 
     /** File mode for the database itself, as defence behind the directory. */
     private static final String FILE_MODE = "rw-------";
+
+    /**
+     * Pins SQLite to a rollback journal instead of leaving the mode to the driver's default.
+     *
+     * <p>{@link #clearIdentity()} overwrites a credential's bytes in place before deleting its
+     * row, and that only clears the credential under this mode: a rollback journal writes the
+     * overwrite straight into the database file, where the later delete finds it. Under
+     * write-ahead logging the overwrite would instead land in a {@code -wal} sibling file, and
+     * the old value would still be readable from the main file until the next checkpoint. Setting
+     * this explicitly means a driver upgrade or a "switch to WAL for durability" change has to
+     * touch this line to defeat that, rather than doing it silently.
+     */
+    private static final String JOURNAL_MODE_PARAM = "?journal_mode=delete";
+
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final EntityManagerFactory factory;
 
@@ -73,7 +90,8 @@ public class AgentStore implements AutoCloseable {
         }
 
         Map<String, Object> settings = new HashMap<>();
-        settings.put("jakarta.persistence.jdbc.url", "jdbc:sqlite:" + databaseFile.toAbsolutePath());
+        settings.put("jakarta.persistence.jdbc.url",
+                "jdbc:sqlite:" + databaseFile.toAbsolutePath() + JOURNAL_MODE_PARAM);
         settings.put("jakarta.persistence.jdbc.driver", "org.sqlite.JDBC");
         settings.put("hibernate.dialect", "org.hibernate.community.dialect.SQLiteDialect");
         settings.put("hibernate.hbm2ddl.auto", "update");
@@ -166,9 +184,19 @@ public class AgentStore implements AutoCloseable {
      * <p>Overwritten before it is deleted. SQLite moves a deleted row's page to its freelist
      * without zeroing it, so a plain delete left the token readable in the file with nothing more
      * than {@code strings}, which is not what "forgets this agent's credential" should mean.
+     * Overwriting in place only clears it because the store is pinned to a rollback journal (see
+     * {@link #JOURNAL_MODE_PARAM}); under write-ahead logging the prior value would survive in the
+     * {@code -wal} sibling until a checkpoint.
+     *
+     * <p>The overwrite and the delete are separate committed transactions, so a failure can land
+     * between them: the credential is already dead once the overwrite commits, but its row can
+     * still be left behind if the delete then fails. That case is reported as such rather than as
+     * an ordinary write failure, since the operator needs to know unpairing has to be retried
+     * rather than that it never happened.
      *
      * @return whether an identity was present to remove
-     * @throws StoreException when the write fails
+     * @throws StoreException when the write fails; if the credential had already been destroyed
+     *                         by the time of the failure, the message says so
      */
     public boolean clearIdentity() throws StoreException {
         Optional<AgentIdentity> existing = identity();
@@ -177,20 +205,27 @@ public class AgentStore implements AutoCloseable {
         }
 
         byte[] noise = new byte[existing.get().token().length()];
-        new java.security.SecureRandom().nextBytes(noise);
-        String overwrite = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(noise)
+        RANDOM.nextBytes(noise);
+        String overwrite = Base64.getUrlEncoder().withoutPadding().encodeToString(noise)
                 .substring(0, existing.get().token().length());
 
         write(em -> em.createQuery("update AgentIdentity set token = :noise where id = :id")
                 .setParameter("noise", overwrite)
                 .setParameter("id", AgentIdentity.SINGLETON_ID)
                 .executeUpdate());
-        write(em -> {
-            AgentIdentity row = em.find(AgentIdentity.class, AgentIdentity.SINGLETON_ID);
-            if (row != null) {
-                em.remove(row);
-            }
-        });
+
+        try {
+            write(em -> {
+                AgentIdentity row = em.find(AgentIdentity.class, AgentIdentity.SINGLETON_ID);
+                if (row != null) {
+                    em.remove(row);
+                }
+            });
+        } catch (StoreException e) {
+            throw new StoreException("The credential was overwritten and can no longer "
+                    + "authenticate, but its row could not be removed. Run unpair again to finish "
+                    + "removing it.", e);
+        }
         return true;
     }
 

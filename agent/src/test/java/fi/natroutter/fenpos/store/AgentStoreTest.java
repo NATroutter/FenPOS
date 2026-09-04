@@ -170,8 +170,17 @@ class AgentStoreTest {
         }
 
         // A DELETE moves the page to SQLite's freelist without zeroing it, so the credential an
-        // operator believes they revoked is still readable with `strings agent.db`.
-        String contents = new String(Files.readAllBytes(database), StandardCharsets.ISO_8859_1);
-        assertFalse(contents.contains(token), "the token survived unpair in the database file");
+        // operator believes they revoked is still readable with `strings agent.db`. Every file in
+        // the store's directory is checked, not just agent.db itself, so this keeps meaning what
+        // it says if the store ever grows a -wal or -shm sibling alongside it.
+        try (var entries = Files.list(database.getParent())) {
+            for (Path entry : (Iterable<Path>) entries::iterator) {
+                if (Files.isRegularFile(entry)) {
+                    String contents = new String(Files.readAllBytes(entry), StandardCharsets.ISO_8859_1);
+                    assertFalse(contents.contains(token),
+                            "the token survived unpair in " + entry.getFileName());
+                }
+            }
+        }
     }
 }
