@@ -18,10 +18,10 @@ services:
     volumes:
       # Agents, devices, keys, jobs and the hashed account credential all live here. Back it up.
       #
-      # The container runs as uid 10001, and a bind mount keeps the host directory owner,
-      # so create it and hand it over before the first start or the server cannot open its
-      # database:
-      #   mkdir -p data && sudo chown -R 10001:10001 data
+      # The container runs as uid 10001, and a bind mount keeps the host directory owner, so
+      # create it, restrict it so no other local account can get in, and hand it over before
+      # the first start or the server cannot open its database:
+      #   mkdir -p data && chmod 700 data && sudo chown -R 10001:10001 data
       - ./data:/app/data
 
     environment:
