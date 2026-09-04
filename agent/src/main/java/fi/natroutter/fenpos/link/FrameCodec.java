@@ -551,20 +551,6 @@ public final class FrameCodec {
     }
 
     /**
-     * Reads a string the frame may leave out.
-     *
-     * <p>Absent and JSON null both read as null; a value of any other type is still refused, so
-     * an optional field cannot become a way to slip a wrong-typed value past the codec.
-     */
-    private static String optionalString(JsonObject parent, String field) throws ProtocolException {
-        JsonElement element = parent.get(field);
-        if (element == null || element.isJsonNull()) {
-            return null;
-        }
-        return requireString(parent, field);
-    }
-
-    /**
      * Reads a string of a bounded length.
      *
      * @param min shortest accepted, which is 1 wherever the server writes {@code min(1)}
