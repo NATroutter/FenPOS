@@ -289,6 +289,39 @@ class LinkDispatcherTest {
     }
 
     // -------------------------------------------------------------------------
+    // Raw write
+    // -------------------------------------------------------------------------
+
+    @Test
+    void refusesARawWriteForADeviceThisAgentDoesNotHave() {
+        FakePrinterPort port = configure("kitchen");
+
+        dispatcher.accept(new Frames.RawWrite("req-1", "nosuchdevice", "QUJD"));
+
+        Frames.CommandResult result = lastFrameOfType(Frames.CommandResult.class);
+        assertFalse(result.ok());
+        assertTrue(result.message().contains("nosuchdevice"), result.message());
+        assertEquals(0, port.writes().size());
+    }
+
+    @Test
+    void refusesARawWriteWhosePayloadIsNotBase64() {
+        FakePrinterPort port = configure("kitchen");
+
+        dispatcher.accept(new Frames.RawWrite("req-1", "kitchen", "!!!not base64!!!"));
+
+        Frames.CommandResult result = lastFrameOfType(Frames.CommandResult.class);
+        assertFalse(result.ok());
+        assertEquals(0, port.writes().size());
+    }
+
+    // A successful raw write is not exercised here: onRawWrite reaches the printer through
+    // connections.port(device), which this fixture backs with a real, unopened SerialHandler
+    // rather than the FakePrinterPort that ports.put() and configure() hand to PrintService.
+    // The write therefore always fails with "Port is not open" before reaching a port whose
+    // writes() a test could assert on.
+
+    // -------------------------------------------------------------------------
     // Device control
     // -------------------------------------------------------------------------
 
@@ -504,6 +537,14 @@ class LinkDispatcherTest {
 
     private static Frames.DeviceCommand command(String type, String requestId, String device) {
         return new Frames.DeviceCommand(type, requestId, device, null);
+    }
+
+    /** Returns the most recently sent frame of a kind, failing the test if none was sent. */
+    private <T extends Frames.AgentFrame> T lastFrameOfType(Class<T> type) {
+        synchronized (sent) {
+            return sent.stream().filter(type::isInstance).map(type::cast).reduce((a, b) -> b)
+                    .orElseThrow(() -> new AssertionError("no " + type.getSimpleName() + " in " + sent));
+        }
     }
 
     /** Waits for the most recent frame of a kind, failing the test if none arrives. */

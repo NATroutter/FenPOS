@@ -885,4 +885,72 @@ class FrameCodecTest {
                     "serverTime":%s}""".formatted(value)), value);
         }
     }
+
+    // -----------------------------------------------------------------
+    // Collection and payload bounds
+    // -----------------------------------------------------------------
+
+    @Test
+    void refusesMoreSpansOnOneLineThanTheLimit() {
+        String spans = String.join(",", java.util.Collections.nCopies(65, span("")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\","
+                        + "\"lines\":[{\"align\":\"LEFT\",\"spans\":[" + spans + "],\"directives\":[]}]}}"));
+    }
+
+    @Test
+    void refusesMoreDirectivesOnOneLineThanTheLimit() {
+        String directives = String.join(",",
+                java.util.Collections.nCopies(9, "{\"type\":\"FEED\",\"lines\":1}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\","
+                        + "\"lines\":[{\"align\":\"LEFT\",\"spans\":[],\"directives\":[" + directives + "]}]}}"));
+    }
+
+    @Test
+    void refusesMoreDevicesThanTheLimit() {
+        String device = """
+            {"name":"d","port":"/dev/ttyUSB0","baudRate":9600,"dataBits":8,"stopBits":1,\
+            "parity":"NONE","flowControl":"NONE","writeTimeoutMs":1000,"autoConnect":false,\
+            "autoReconnect":false,"reconnectDelaySeconds":5,"columns":42,"codepage":"CP858",\
+            "paused":false,"maxQueueDepth":100}""";
+        String many = String.join(",", java.util.Collections.nCopies(257, device));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[" + many + "],\"assets\":[]}"));
+    }
+
+    @Test
+    void refusesMoreSyncedRastersThanTheLimit() {
+        // One byte of dots is a 1x1 raster, so each entry is as small as a valid one can be.
+        String raster = "{\"name\":\"logo\",\"widthDots\":1,\"heightDots\":1,\"data\":\"AA==\"}";
+        String many = String.join(",", java.util.Collections.nCopies(33, raster));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[" + many + "]}"));
+    }
+
+    @Test
+    void refusesARasterPayloadLongerThanTheLimit() {
+        // Refused on the encoded length, before the array it asks for is allocated.
+        String data = "A".repeat(128 * 1024 + 4);
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[],\"assets\":["
+                        + "{\"name\":\"logo\",\"widthDots\":8,\"heightDots\":1,\"data\":\"" + data + "\"}]}"));
+    }
+
+    @Test
+    void refusesARawWriteLongerThanTheLimit() {
+        // The only frame that hands arbitrary bytes to hardware, and the cap on it had no test.
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"raw.write\",\"requestId\":\"r\",\"device\":\"kitchen\",\"bytes\":\""
+                        + "A".repeat(16_385) + "\"}"));
+    }
+
+    @Test
+    void readsARawWriteAtItsLimit() throws Exception {
+        Frames.ServerFrame frame = codec.read(
+                "{\"type\":\"raw.write\",\"requestId\":\"r\",\"device\":\"kitchen\",\"bytes\":\""
+                        + "A".repeat(16_384) + "\"}");
+
+        assertEquals(16_384, assertInstanceOf(Frames.RawWrite.class, frame).bytes().length());
+    }
 }
