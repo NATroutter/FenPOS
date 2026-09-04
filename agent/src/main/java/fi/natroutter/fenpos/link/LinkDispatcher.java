@@ -97,6 +97,8 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      */
     private final Set<String> dispatched = ConcurrentHashMap.newKeySet();
 
+    private final RawWriteLimit rawWrites = new RawWriteLimit(Instant::now);
+
     private volatile FrameSender sender = FrameSender.NONE;
 
     /**
@@ -499,6 +501,12 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         if (devices.device(raw.device()).isEmpty()) {
             reply(raw.requestId(), false,
                     "This agent has no device named '" + raw.device() + "'", raw.device());
+            return;
+        }
+
+        if (!rawWrites.allow(raw.device())) {
+            reply(raw.requestId(), false,
+                    "Too many raw writes for this device; try again in a moment", raw.device());
             return;
         }
 
