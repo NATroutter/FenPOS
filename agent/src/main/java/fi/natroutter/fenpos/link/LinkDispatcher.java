@@ -197,10 +197,22 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * the registry rather than through {@code applyConfig}, because nothing else has to react to
      * them: adopting devices reopens ports and rebuilds queues, while adopting images is a map
      * swap.
+     *
+     * <p>A device name that drops out of the new snapshot has its raw write bucket forgotten,
+     * so a server that keeps renaming devices cannot grow {@link RawWriteLimit} forever. A name
+     * that survives the update keeps its bucket exactly as it was — this is what stops a
+     * hammered device from buying itself a fresh burst just by appearing again in the next
+     * snapshot.
      */
     private void onConfigSync(Frames.ConfigSync sync) {
         devices.applyRasters(sync.assets());
+        Set<String> before = Set.copyOf(devices.names());
         applyConfig.accept(sync.devices(), sync.jobs(), sync.agent());
+        for (String name : before) {
+            if (!devices.names().contains(name)) {
+                rawWrites.forget(name);
+            }
+        }
         reportStatus();
     }
 

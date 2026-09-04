@@ -345,6 +345,49 @@ class LinkDispatcherTest {
         assertTrue(logged.message().contains("3 bytes"), logged.message());
     }
 
+    @Test
+    void forgetsARawWriteBudgetWhenADeviceIsRemoved() {
+        configure("kitchen");
+        for (int write = 1; write <= 10; write++) {
+            dispatcher.accept(new Frames.RawWrite("req-" + write, "kitchen", "QUJD"));
+        }
+        dispatcher.accept(new Frames.RawWrite("req-11", "kitchen", "QUJD"));
+        assertFalse(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "the eleventh write should have exhausted kitchen's burst");
+
+        // The device drops out of one snapshot and reappears, under the same name, in the next.
+        dispatcher.accept(new Frames.ConfigSync(List.of(), List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS));
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS));
+
+        dispatcher.accept(new Frames.RawWrite("req-12", "kitchen", "QUJD"));
+
+        // Had the bucket not been forgotten when the device dropped out, this would still see it
+        // exhausted from before the removal.
+        assertTrue(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "a device re-added under a name that was gone should start with a fresh burst");
+    }
+
+    @Test
+    void keepsARawWriteBudgetForADeviceThatSurvivesAConfigurationUpdate() {
+        configure("kitchen");
+        for (int write = 1; write <= 10; write++) {
+            dispatcher.accept(new Frames.RawWrite("req-" + write, "kitchen", "QUJD"));
+        }
+        dispatcher.accept(new Frames.RawWrite("req-11", "kitchen", "QUJD"));
+        assertFalse(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "the eleventh write should have exhausted kitchen's burst");
+
+        // The same device name is present in both the old and new snapshot; it never dropped out.
+        dispatcher.accept(new Frames.ConfigSync(List.of(device("kitchen")), List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS));
+
+        dispatcher.accept(new Frames.RawWrite("req-12", "kitchen", "QUJD"));
+
+        // A server sending the same snapshot again must not be a way to buy a fresh burst; only
+        // a device that actually left must lose its bucket.
+        assertFalse(lastFrameOfType(Frames.CommandResult.class).ok(),
+                "a device that was never removed must not get a fresh burst just by reappearing in a snapshot");
+    }
+
     // -------------------------------------------------------------------------
     // Device control
     // -------------------------------------------------------------------------
