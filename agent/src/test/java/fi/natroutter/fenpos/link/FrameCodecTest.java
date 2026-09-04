@@ -381,12 +381,24 @@ class FrameCodecTest {
     void refusesAConfigSyncWhoseJobSettingsAreNotAnObject() {
         // A ClassCastException here would escape LinkClient's ProtocolException catch and
         // close the socket, taking every printer behind this agent offline for one bad field.
-        // JSON null is excluded here: it reads the same as an absent field, not a wrong type.
         for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
             assertThrows(ProtocolException.class, () -> codec.read(
                     "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"jobs\":" + value + "}"),
                     "jobs:" + value);
         }
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncJobSettingsAreExplicitlyNull() throws Exception {
+        // Explicit null means the server chose not to send job settings, not that it sent a
+        // wrong-typed value; refusing it would drop the link over a field the server omitted.
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],"jobs":null}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(JobSettings.DEFAULTS, sync.jobs());
     }
 
     // -----------------------------------------------------------------
@@ -430,12 +442,24 @@ class FrameCodecTest {
 
     @Test
     void refusesAConfigSyncWhoseAgentSettingsAreNotAnObject() {
-        // JSON null is excluded here: it reads the same as an absent field, not a wrong type.
         for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
             assertThrows(ProtocolException.class, () -> codec.read(
                     "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"agent\":" + value + "}"),
                     "agent:" + value);
         }
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncAgentSettingsAreExplicitlyNull() throws Exception {
+        // Explicit null means the server chose not to send agent settings, not that it sent a
+        // wrong-typed value; refusing it would drop the link over a field the server omitted.
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],"agent":null}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(AgentSettings.DEFAULTS, sync.agent());
     }
 
     @Test
