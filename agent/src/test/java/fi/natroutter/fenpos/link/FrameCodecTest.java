@@ -751,4 +751,68 @@ class FrameCodecTest {
                 "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\",\"lines\":["
                         + many + "]}}"));
     }
+
+    // -----------------------------------------------------------------
+    // Identifier and name bounds
+    // -----------------------------------------------------------------
+
+    /** The device snapshot used below, with one field swapped by each test. */
+    private static String deviceSnapshot(String name, String port) {
+        return """
+            {"type":"config.sync","devices":[{"name":%s,"port":%s,"baudRate":9600,"dataBits":8,\
+            "stopBits":1,"parity":"NONE","flowControl":"NONE","writeTimeoutMs":1000,\
+            "autoConnect":false,"autoReconnect":false,"reconnectDelaySeconds":5,"columns":42,\
+            "codepage":"CP858","paused":false,"maxQueueDepth":100}],"assets":[]}"""
+                .formatted(name, port);
+    }
+
+    @Test
+    void refusesADeviceNameThatIsNotASlug() {
+        // Names reach log lines, console output and the status report the server validates.
+        // protocol.ts restricts them so no consumer has to escape them; this is that rule.
+        for (String name : new String[] {
+                "\"Kitchen\"", "\"kitchen printer\"", "\"-kitchen\"", "\"_kitchen\"",
+                "\"kitchen\\n[2J\"", "\"kitchen{RED}\"", "\"\"", "\"" + "k".repeat(65) + "\""}) {
+            assertThrows(ProtocolException.class,
+                    () -> codec.read(deviceSnapshot(name, "\"/dev/ttyUSB0\"")), name);
+        }
+    }
+
+    @Test
+    void acceptsTheSlugShapesTheServerCanSend() throws Exception {
+        for (String name : new String[] {"\"kitchen\"", "\"bar-2\"", "\"till_3\"", "\"a\"",
+                "\"" + "k".repeat(64) + "\""}) {
+            assertDoesNotThrow(() -> codec.read(deviceSnapshot(name, "\"/dev/ttyUSB0\"")), name);
+        }
+    }
+
+    @Test
+    void refusesAPortOutsideItsLengthBound() {
+        assertThrows(ProtocolException.class,
+                () -> codec.read(deviceSnapshot("\"kitchen\"", "\"\"")));
+        assertThrows(ProtocolException.class,
+                () -> codec.read(deviceSnapshot("\"kitchen\"", "\"" + "x".repeat(257) + "\"")));
+    }
+
+    @Test
+    void refusesAnIdentifierOutsideItsLengthBound() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.cancel\",\"jobId\":\"" + "j".repeat(65) + "\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.cancel\",\"jobId\":\"\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"ports.scan\",\"requestId\":\"\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"device.pause\",\"requestId\":\"r\",\"device\":\"\"}"));
+    }
+
+    @Test
+    void refusesAWelcomeWhoseIdentifiersAreOutsideTheirBounds() {
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"%s","agentName":"n",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("a".repeat(65))));
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(129))));
+    }
 }

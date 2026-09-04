@@ -91,15 +91,25 @@ public final class FrameCodec {
     /** Tallest raster accepted, in dots: what {@code GS v 0} encodes in its two vertical bytes. */
     private static final int MAX_RASTER_HEIGHT_DOTS = 65_535;
 
+    /** Longest identifier accepted. Mirrors idSchema and requestIdSchema on the server. */
+    private static final int MAX_ID_CHARS = 64;
+
+    /** Longest serial port path accepted. Mirrors deviceConfigSchema.port. */
+    private static final int MAX_PORT_CHARS = 256;
+
+    /** Longest agent name accepted. Mirrors welcomeSchema.agentName. */
+    private static final int MAX_AGENT_NAME_CHARS = 128;
+
     /**
-     * Longest image name accepted. Mirrors the server's own name limit.
+     * The shape every device and asset name takes. Mirrors deviceNameSchema on the server.
      *
-     * <p>Bounded because a name that fails to resolve is quoted back in the job's failure message,
-     * and the server caps {@code errorMessage} at 512 characters — so an unbounded name would make
-     * the update reporting the failure a frame the server rejects, losing the report along with the
-     * job.
+     * <p>Restricting the shape here is what lets every consumer downstream stop escaping: a name
+     * that cannot contain a newline, an escape or a brace cannot forge a log line, cannot retitle
+     * an operator's terminal, and cannot be refused by the server when it comes back on a status
+     * report.
      */
-    private static final int MAX_ASSET_NAME_CHARS = 64;
+    private static final java.util.regex.Pattern SLUG =
+            java.util.regex.Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
 
     /** Serialises outgoing frames. Nulls are omitted so optional fields are simply absent. */
     private final Gson gson = new GsonBuilder().create();
@@ -150,20 +160,20 @@ public final class FrameCodec {
         return switch (type) {
             case "welcome" -> new Welcome(
                     requireInt(root, "protocolVersion"),
-                    requireString(root, "agentId"),
-                    requireString(root, "agentName"),
+                    requireId(root, "agentId"),
+                    requireBounded(root, "agentName", 1, MAX_AGENT_NAME_CHARS),
                     requireString(root, "serverTime"));
             case "config.sync" -> readConfigSync(root);
             case "job.dispatch" -> new JobDispatch(readCompiledJob(requireObject(root, "job")));
-            case "job.cancel" -> new JobCancel(requireString(root, "jobId"));
+            case "job.cancel" -> new JobCancel(requireId(root, "jobId"));
             case "raw.write" -> readRawWrite(root);
-            case "ports.scan" -> new PortsScan(requireString(root, "requestId"));
+            case "ports.scan" -> new PortsScan(requireId(root, "requestId"));
             case "device.connect", "device.disconnect", "device.pause", "device.resume",
                  "device.clearQueue", "device.test" -> new DeviceCommand(
                     type,
-                    requireString(root, "requestId"),
-                    requireString(root, "device"),
-                    optionalString(root, "jobId"));
+                    requireId(root, "requestId"),
+                    requireSlug(root, "device"),
+                    optionalId(root, "jobId"));
             // An unknown type is not an error to crash on: a newer server may send frames this
             // agent has no need to understand. The caller logs and ignores it.
             default -> throw new ProtocolException("unknown frame type '" + type + "'");
@@ -183,8 +193,8 @@ public final class FrameCodec {
                     + " encoded characters exceeds the " + MAX_RAW_CHARS + " limit");
         }
         return new RawWrite(
-                requireString(root, "requestId"),
-                requireString(root, "device"),
+                requireId(root, "requestId"),
+                requireSlug(root, "device"),
                 bytes);
     }
 
@@ -195,8 +205,8 @@ public final class FrameCodec {
         for (JsonElement element : array) {
             JsonObject device = asObject(element, "device");
             devices.add(new DeviceConfig(
-                    requireString(device, "name"),
-                    requireString(device, "port"),
+                    requireSlug(device, "name"),
+                    requireBounded(device, "port", 1, MAX_PORT_CHARS),
                     requireBoundedInt(device, "baudRate", 50, 4_000_000),
                     requireBoundedInt(device, "dataBits", 5, 8),
                     requireBoundedInt(device, "stopBits", 1, 2),
@@ -218,7 +228,7 @@ public final class FrameCodec {
             JsonObject asset = asObject(element, "asset");
             Raster raster = readRaster(asset);
             assets.add(new AssetRaster(
-                    requireName(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
+                    requireSlug(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
         }
 
         JsonObject jobsObject = optionalObject(root, "jobs");
@@ -317,23 +327,6 @@ public final class FrameCodec {
     private record Raster(int widthDots, int heightDots, byte[] packed) {
     }
 
-    /**
-     * Reads an image's name, refusing one longer than a name can be.
-     *
-     * @param parent the object carrying the field
-     * @param field  which field to read
-     * @return the name
-     * @throws ProtocolException when it is missing, empty, or beyond {@link #MAX_ASSET_NAME_CHARS}
-     */
-    private static String requireName(JsonObject parent, String field) throws ProtocolException {
-        String name = requireString(parent, field);
-        if (name.isEmpty() || name.length() > MAX_ASSET_NAME_CHARS) {
-            throw new ProtocolException("field '" + field + "' must be 1.." + MAX_ASSET_NAME_CHARS
-                    + " characters, got " + name.length());
-        }
-        return name;
-    }
-
     private CompiledJob readCompiledJob(JsonObject job) throws ProtocolException {
         var array = requireArray(job, "lines", MAX_LINES);
         List<WireLine> lines = new ArrayList<>(array.size());
@@ -343,8 +336,8 @@ public final class FrameCodec {
         }
 
         return new CompiledJob(
-                requireString(job, "jobId"),
-                requireString(job, "device"),
+                requireId(job, "jobId"),
+                requireSlug(job, "device"),
                 requireEnum(job, "linefeed", Linefeed.class),
                 lines);
     }
@@ -436,7 +429,7 @@ public final class FrameCodec {
 
         return switch (kind) {
             case "REF" -> new WireDirective.StoredImage(
-                    requireName(source, "ref"),
+                    requireSlug(source, "ref"),
                     requireBoundedInt(source, "widthDots", 1, MAX_RASTER_WIDTH_DOTS));
             case "INLINE" -> {
                 Raster raster = readRaster(source);
@@ -569,6 +562,46 @@ public final class FrameCodec {
             return null;
         }
         return requireString(parent, field);
+    }
+
+    /**
+     * Reads a string of a bounded length.
+     *
+     * @param min shortest accepted, which is 1 wherever the server writes {@code min(1)}
+     * @param max longest accepted
+     */
+    private static String requireBounded(JsonObject parent, String field, int min, int max)
+            throws ProtocolException {
+        String value = requireString(parent, field);
+        if (value.length() < min || value.length() > max) {
+            throw new ProtocolException("field '" + field + "' must be " + min + ".." + max
+                    + " characters, got " + value.length());
+        }
+        return value;
+    }
+
+    /** Reads an identifier: 1..64 characters, the bound every id on this protocol shares. */
+    private static String requireId(JsonObject parent, String field) throws ProtocolException {
+        return requireBounded(parent, field, 1, MAX_ID_CHARS);
+    }
+
+    /** Reads an identifier the frame may leave out, bounded the same way when it is present. */
+    private static String optionalId(JsonObject parent, String field) throws ProtocolException {
+        JsonElement element = parent.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        return requireId(parent, field);
+    }
+
+    /** Reads a name: an identifier that is also a slug. */
+    private static String requireSlug(JsonObject parent, String field) throws ProtocolException {
+        String value = requireId(parent, field);
+        if (!SLUG.matcher(value).matches()) {
+            throw new ProtocolException("field '" + field + "' must be lowercase alphanumeric with "
+                    + "dashes or underscores, got '" + value + "'");
+        }
+        return value;
     }
 
     private static boolean requireBoolean(JsonObject parent, String field) throws ProtocolException {
