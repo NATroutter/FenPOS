@@ -130,8 +130,10 @@ class LinkDispatcherTest {
 
     @Test
     void survivesAWelcomeFromAServerOnADifferentProtocol() {
-        // The server closes the connection over this itself; the agent's job is to say why in
-        // its own log rather than to fall over.
+        // onWelcomeRefused is never wired in this test's setup, so this exercises its default:
+        // a no-op. The refusal itself, and that it stops the link, is what
+        // stopsTheLinkWhenTheServerSpeaksADifferentProtocol below covers; this only asserts that
+        // reaching the default handler does not throw and applies nothing.
         dispatcher.accept(new Frames.Welcome(99, "a1", "Kitchen agent", "2026-08-18T20:00:00Z"));
 
         assertTrue(updates().isEmpty());
