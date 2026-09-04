@@ -7,6 +7,7 @@ import { PrismaClient as AuditPrismaClient } from "../generated/prisma-audit/cli
 import {
 	clearAllowlist,
 	clearTwoFactor,
+	disableChallenge,
 	listAccounts,
 	type RecoverableAccount,
 	RecoveryRefusal,
@@ -24,6 +25,7 @@ import { siblingDatabaseUrl } from "../lib/database-url";
  *   pnpm auth:recover --clear-2fa <email>
  *   pnpm auth:recover --unlock <email>
  *   pnpm auth:recover --clear-allowlist
+ *   pnpm auth:recover --disable-challenge
  *
  * With no email and first-run setup permanently sealed, a forgotten superuser password would
  * otherwise brick the install for good; `auth.require2fa` can do the same to an administrator who
@@ -56,7 +58,8 @@ export type RecoveryCommand =
 	| { kind: "reset-password"; email: string }
 	| { kind: "clear-2fa"; email: string }
 	| { kind: "unlock"; email: string }
-	| { kind: "clear-allowlist" };
+	| { kind: "clear-allowlist" }
+	| { kind: "disable-challenge" };
 
 /** Printed for `--help`, and for empty argv, and ahead of a parse error. */
 const USAGE = `Usage:
@@ -65,12 +68,14 @@ const USAGE = `Usage:
   pnpm auth:recover --clear-2fa <email>
   pnpm auth:recover --unlock <email>
   pnpm auth:recover --clear-allowlist
+  pnpm auth:recover --disable-challenge
 `;
 
 /** The flags in {@link USAGE} that take no email argument. */
 const NO_ARGUMENT_FLAGS = {
 	"--list": "list",
 	"--clear-allowlist": "clear-allowlist",
+	"--disable-challenge": "disable-challenge",
 } as const;
 
 /** The flags in {@link USAGE} that require an email address as the following argument. */
@@ -299,6 +304,14 @@ async function runCommand(command: Exclude<RecoveryCommand, { kind: "help" } | {
 			case "clear-allowlist": {
 				await clearAllowlist(prisma, auditDb);
 				process.stdout.write("Address allowlist cleared.\n");
+				return;
+			}
+			case "disable-challenge": {
+				await disableChallenge(prisma, auditDb);
+				process.stdout.write(
+					"Bot challenge switched off. The site key and secret key are unchanged, so it can be " +
+						"switched back on from Settings once the key is working.\n",
+				);
 				return;
 			}
 			default: {

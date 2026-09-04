@@ -24,6 +24,7 @@ describe("parseRecoveryArgs", () => {
 	it("reads the commands that take no argument", () => {
 		expect(parseRecoveryArgs(["--list"])).toEqual({ kind: "list" });
 		expect(parseRecoveryArgs(["--clear-allowlist"])).toEqual({ kind: "clear-allowlist" });
+		expect(parseRecoveryArgs(["--disable-challenge"])).toEqual({ kind: "disable-challenge" });
 	});
 
 	it("treats no arguments as a request for help, not as a command", () => {

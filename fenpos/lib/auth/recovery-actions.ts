@@ -18,4 +18,6 @@ export const RECOVERY_AUDIT_ACTIONS = {
 	UNLOCK: "recover:unlock",
 	/** The address allowlist emptied, because a wrong entry locks out everyone including its author. */
 	CLEAR_ALLOWLIST: "recover:clear-allowlist",
+	/** The bot challenge switched off, because a key Cloudflare refuses locks out everyone. */
+	DISABLE_CHALLENGE: "recover:disable-challenge",
 } as const;

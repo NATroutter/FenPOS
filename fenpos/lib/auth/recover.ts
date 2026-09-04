@@ -487,3 +487,49 @@ export async function clearAllowlist(prisma: PrismaClient, auditDb: AuditPrismaC
 		provenance: NO_PROVENANCE,
 	} satisfies AuditEventInput);
 }
+
+/**
+ * The one setting {@link disableChallenge} writes. A literal for the reason
+ * {@link IP_ALLOWLIST_SETTING_KEY} is one.
+ */
+const TURNSTILE_ENABLED_SETTING_KEY = "auth.turnstileEnabled";
+
+/**
+ * Switches the bot challenge off, because a site key Cloudflare refuses locks out everyone who holds
+ * a password.
+ *
+ * `turnstileConfig` already guards the case it can see: a challenge switched on with a key field left
+ * empty is treated as no challenge, precisely so a half-configured one cannot brick an install. That
+ * guard cannot see a key that is *present and wrong*. A site key Cloudflare rejects renders no widget,
+ * a form with no widget posts no token, and `verifyTurnstile` refuses an empty token before it makes
+ * any request — so the "an unreachable Cloudflare lets the sign-in through" escape hatch never runs
+ * and every sign-in is refused, including the one an operator needs to reach Settings and undo it.
+ * The same happens to a key that was valid and has since been deleted or disabled at Cloudflare, with
+ * nothing changing on this install at all.
+ *
+ * Only the switch is written. The two keys are left exactly as they are, so an operator who fixes the
+ * key at Cloudflare turns the challenge back on from Settings rather than typing the pair in again,
+ * and so this command destroys nothing it does not have to.
+ *
+ * Shares {@link clearAllowlist}'s storage-format reasoning and its one departure from
+ * {@link recoverAccount}: no account to resolve, no `target` on the row, and an `upsert` failure
+ * throws bare rather than leaving a `FAILURE` row behind.
+ *
+ * @param prisma the application database's client, to write the setting
+ * @param auditDb the audit database's client, to record that it was written
+ */
+export async function disableChallenge(prisma: PrismaClient, auditDb: AuditPrismaClient): Promise<void> {
+	const stored = JSON.stringify(false);
+	await prisma.setting.upsert({
+		where: { key: TURNSTILE_ENABLED_SETTING_KEY },
+		update: { value: stored },
+		create: { key: TURNSTILE_ENABLED_SETTING_KEY, value: stored },
+	});
+
+	await appendAuditEvent(auditDb, {
+		action: RECOVERY_AUDIT_ACTIONS.DISABLE_CHALLENGE,
+		outcome: "SUCCESS",
+		actor: CLI_RECOVERY_ACTOR,
+		provenance: NO_PROVENANCE,
+	} satisfies AuditEventInput);
+}

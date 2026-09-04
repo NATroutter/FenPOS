@@ -16,7 +16,14 @@
  */
 import { appendAuditEvent } from "@/lib/audit/append";
 import { verifyAuditChain } from "@/lib/audit/verify";
-import { clearAllowlist, clearTwoFactor, listAccounts, resetPassword, unlockAccount } from "@/lib/auth/recover";
+import {
+	clearAllowlist,
+	clearTwoFactor,
+	disableChallenge,
+	listAccounts,
+	resetPassword,
+	unlockAccount,
+} from "@/lib/auth/recover";
 
 void appendAuditEvent;
 void listAccounts;
@@ -24,4 +31,5 @@ void resetPassword;
 void clearTwoFactor;
 void unlockAccount;
 void clearAllowlist;
+void disableChallenge;
 void verifyAuditChain;

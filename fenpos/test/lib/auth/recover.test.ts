@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import {
 	clearAllowlist,
 	clearTwoFactor,
+	disableChallenge,
 	listAccounts,
 	RecoveryRefusal,
 	resetPassword,
@@ -13,7 +14,7 @@ import {
 } from "@/lib/auth/recover";
 import { RECOVERY_AUDIT_ACTIONS } from "@/lib/auth/recovery-actions";
 import { auditDb, prisma } from "@/lib/db";
-import { setSetting, stringSetting } from "@/lib/settings/settings-service";
+import { booleanSetting, secretSetting, setSetting, stringSetting } from "@/lib/settings/settings-service";
 
 /**
  * Recovery, against a real database.
@@ -159,6 +160,42 @@ describe("recovery", () => {
 		await setSetting("auth.ipAllowlist", "10.0.0.0/8");
 		await clearAllowlist(prisma, auditDb);
 		expect(await stringSetting("auth.ipAllowlist")).toBe("");
+	});
+
+	it("switches the bot challenge off and leaves both keys where they are", async () => {
+		await setSetting("auth.turnstileEnabled", true);
+		await setSetting("auth.turnstileSiteKey", "0x4AAAAAAAsitekey");
+		await setSetting("auth.turnstileSecretKey", "0x4AAAAAAAsecret");
+
+		await disableChallenge(prisma, auditDb);
+
+		expect(await booleanSetting("auth.turnstileEnabled")).toBe(false);
+		// The keys survive on purpose: this exists for a key Cloudflare refuses, and the operator fixes
+		// that at Cloudflare and switches the challenge back on rather than retyping the pair.
+		expect(await stringSetting("auth.turnstileSiteKey")).toBe("0x4AAAAAAAsitekey");
+		expect(await secretSetting("auth.turnstileSecretKey")).toBe("0x4AAAAAAAsecret");
+	});
+
+	it("switches the challenge off on an install that never stored the setting", async () => {
+		// The row does not exist until somebody saves the setting, so the upsert's create arm is what
+		// runs on an install whose challenge was switched on and never off again. A command that only
+		// worked where a row already existed would be a no-op exactly when it is needed.
+		expect(await prisma.setting.findUnique({ where: { key: "auth.turnstileEnabled" } })).toBeNull();
+
+		await disableChallenge(prisma, auditDb);
+
+		expect(await booleanSetting("auth.turnstileEnabled")).toBe(false);
+	});
+
+	it("records that the challenge was switched off", async () => {
+		await disableChallenge(prisma, auditDb);
+
+		const row = await auditDb.auditEvent.findFirstOrThrow();
+		expect(row.action).toBe(RECOVERY_AUDIT_ACTIONS.DISABLE_CHALLENGE);
+		expect(row.outcome).toBe("SUCCESS");
+		// `checked` as well as `ok`, for the reason the chain test at the bottom of this file gives:
+		// an intact chain of nothing also answers `ok`.
+		expect(await verifyAuditChain(auditDb)).toMatchObject({ ok: true, checked: 1 });
 	});
 
 	it("refuses an address with no account, and says so without changing anything", async () => {
