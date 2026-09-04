@@ -7,11 +7,17 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -37,12 +43,19 @@ class LinkClientTest {
 
     private final AgentInfo info = new AgentInfo("1.0.0-test", "TestOS x64", "test-host");
 
+    /** How long a test waits for something the fake server or the link should produce quickly. */
+    private static final Duration PATIENCE = Duration.ofSeconds(10);
+
     private LinkClient client;
+    private FakeLinkServer server;
 
     @AfterEach
     void stopClient() {
         if (client != null) {
             client.stop("test over");
+        }
+        if (server != null) {
+            server.close();
         }
     }
 
@@ -101,6 +114,55 @@ class LinkClientTest {
         assertTrue(matching("Dropped status.report").size() == 1, lines.toString());
     }
 
+    // The claim this asserts is the whole point of the frame worker. While a handler is busy
+    // the receive thread must stay free, or the server's liveness check fires and it closes
+    // the link, taking every printer behind this agent offline for one slow write.
+    @Test
+    void answersAPingWhileAFrameIsStillBeingHandled() throws Exception {
+        CountDownLatch handling = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+            handling.countDown();
+            try {
+                release.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE), "no hello arrived");
+
+        server.send("{\"type\":\"config.sync\",\"devices\":[],\"assets\":[]}");
+        assertTrue(handling.await(10, TimeUnit.SECONDS), "the handler never ran");
+
+        server.sendPing();
+
+        assertTrue(server.awaitPong(Duration.ofSeconds(10)),
+                "no pong while a handler was busy: the receive thread is blocked");
+        release.countDown();
+    }
+
+    @Test
+    void handlesFramesInTheOrderTheyArrived() throws Exception {
+        List<String> order = new CopyOnWriteArrayList<>();
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> order.add(frame.type()), logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE));
+
+        server.send("{\"type\":\"config.sync\",\"devices\":[],\"assets\":[]}");
+        server.send("{\"type\":\"job.cancel\",\"jobId\":\"j1\"}");
+        server.send("{\"type\":\"ports.scan\",\"requestId\":\"r1\"}");
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (order.size() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(List.of("config.sync", "job.cancel", "ports.scan"), order);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -119,6 +181,11 @@ class LinkClientTest {
 
     private static AgentIdentity identityFor(int port) {
         return new AgentIdentity("http://127.0.0.1:" + port, "agent-1", "test", "token",
+                Instant.parse("2026-09-03T10:00:00Z"));
+    }
+
+    private static AgentIdentity identityFor(URI uri) {
+        return new AgentIdentity(uri.toString(), "agent-1", "test", "token",
                 Instant.parse("2026-09-03T10:00:00Z"));
     }
 

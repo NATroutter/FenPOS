@@ -37,9 +37,11 @@ import java.util.function.Consumer;
  * says so. A log that thins itself out during an outage is unreadable exactly when it is being
  * read, because the reader cannot tell throttling apart from an agent that stopped trying.
  * <p>
- * <strong>Threading.</strong> Frames arrive on the HTTP client's threads and are handed
- * straight to the handler. {@link #send} may be called from anywhere — a queue worker reporting
- * a job, the console — and is safe against a socket that closed underneath it.
+ * <strong>Threading.</strong> Frames arrive on the HTTP client's threads, are parsed there,
+ * and are then handed to {@link FrameWorker} to be acted on. Nothing blocking runs on the
+ * receive thread, which is what keeps pings answered while a serial write is in progress.
+ * {@link #send} may be called from anywhere — a queue worker reporting a job, the console —
+ * and is safe against a socket that closed underneath it.
  */
 public class LinkClient {
 
@@ -64,6 +66,7 @@ public class LinkClient {
 
     private final FoxLogger logger;
     private final FrameCodec codec = new FrameCodec();
+    private final FrameWorker frames = new FrameWorker();
     private final AgentInfo info;
     private final Consumer<Frames.ServerFrame> handler;
     private final HttpClient http;
@@ -153,6 +156,7 @@ public class LinkClient {
     /** Stops for good and releases the retry thread. Called once, during shutdown. */
     public void shutdown() {
         stop("agent shutting down");
+        frames.shutdown();
         scheduler.shutdownNow();
         try {
             if (!scheduler.awaitTermination(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
@@ -422,13 +426,23 @@ public class LinkClient {
             }
 
             partial.append(data);
-            if (last) {
-                String raw = partial.toString();
-                partial.setLength(0);
-                deliver(raw);
-            }
             webSocket.request(1);
-            return null;
+            if (!last) {
+                return null;
+            }
+
+            String raw = partial.toString();
+            partial.setLength(0);
+
+            // Parsed here, on the receive thread, because parsing is bounded by the frame cap and
+            // costs nothing worth a thread hop. Acting on the result is what can block, so that is
+            // what goes to the worker.
+            Frames.ServerFrame frame = parse(raw);
+            if (frame == null) {
+                return null;
+            }
+            Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
+            return frames.submit(() -> handle(frame));
         }
 
         @Override
@@ -466,19 +480,20 @@ public class LinkClient {
         }
 
         /**
-         * Parses one frame and hands it on.
-         * <p>
-         * A frame this agent cannot parse is logged and dropped, never fatal. A newer server may
-         * send frames this version has no need to understand, and closing the link over one
-         * would take a working printer offline for a message that did not concern it.
+         * Parses one frame, or explains why it could not be.
+         *
+         * <p>A frame this agent cannot parse is logged and dropped, never fatal. A newer server may
+         * send frames this version has no need to understand, and closing the link over one would
+         * take a working printer offline for a message that did not concern it.
+         *
+         * @return the frame, or null when it was refused
          */
-        private void deliver(String raw) {
-            Frames.ServerFrame frame;
+        private Frames.ServerFrame parse(String raw) {
             try {
-                frame = codec.read(raw);
+                return codec.read(raw);
             } catch (ProtocolException e) {
                 logger.warn("Ignored a frame from the server: " + Diagnostics.describe(e));
-                return;
+                return null;
             } catch (RuntimeException e) {
                 // A codec fault is a bug in this agent, not a reason to drop the link and take every
                 // printer behind it offline. The codec's contract is that every malformed frame is a
@@ -486,10 +501,12 @@ public class LinkClient {
                 // would ever mention, so it is logged at error level.
                 logger.error("Could not parse a frame from the server, which is a bug in this agent: "
                         + Diagnostics.describe(e));
-                return;
+                return null;
             }
+        }
 
-            Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
+        /** Acts on one frame, on the frame worker's thread. */
+        private void handle(Frames.ServerFrame frame) {
             try {
                 handler.accept(frame);
             } catch (RuntimeException e) {
