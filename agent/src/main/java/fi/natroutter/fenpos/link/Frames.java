@@ -241,6 +241,12 @@ public final class Frames {
      * misuse it, but because this is the frame where a compromised server would do the most damage
      * and the only defence left is that the agent has its own record of what it was asked to do.
      *
+     * <p><strong>A raw write ignores Pause, deliberately.</strong> Everything else refuses a paused
+     * device, because a pause means an operator stopped the paper on purpose. This does not, because
+     * the reason someone is sending raw bytes is usually that a printer is misbehaving and they have
+     * paused it so receipts stop flowing while they work on it. Refusing them then would defeat the
+     * exercise. What bounds this instead is a rate limit, in {@code RawWriteLimit}.
+     *
      * @param requestId correlates the answer with this request
      * @param device    the device to write to
      * @param bytes     the bytes, base64 encoded

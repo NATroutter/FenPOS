@@ -3,6 +3,7 @@ package fi.natroutter.fenpos.link;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -10,6 +11,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
@@ -37,9 +39,11 @@ import java.util.function.Consumer;
  * says so. A log that thins itself out during an outage is unreadable exactly when it is being
  * read, because the reader cannot tell throttling apart from an agent that stopped trying.
  * <p>
- * <strong>Threading.</strong> Frames arrive on the HTTP client's threads and are handed
- * straight to the handler. {@link #send} may be called from anywhere — a queue worker reporting
- * a job, the console — and is safe against a socket that closed underneath it.
+ * <strong>Threading.</strong> Frames arrive on the HTTP client's threads, are parsed there,
+ * and are then handed to {@link FrameWorker} to be acted on. Nothing blocking runs on the
+ * receive thread, which is what keeps pings answered while a serial write is in progress.
+ * {@link #send} may be called from anywhere — a queue worker reporting a job, the console —
+ * and is safe against a socket that closed underneath it.
  */
 public class LinkClient {
 
@@ -62,8 +66,18 @@ public class LinkClient {
      */
     static final int CLOSE_UNPAIRED = 4003;
 
+    /**
+     * Longest close reason kept, in UTF-8 bytes.
+     * <p>
+     * A close frame's control payload is capped at 125 bytes by the WebSocket protocol and two of
+     * those are the status code, so a reason can never legitimately carry more than this. Nothing
+     * local enforces that on the way in, so it is enforced here rather than assumed.
+     */
+    private static final int MAX_CLOSE_REASON_BYTES = 123;
+
     private final FoxLogger logger;
     private final FrameCodec codec = new FrameCodec();
+    private final FrameWorker frames = new FrameWorker();
     private final AgentInfo info;
     private final Consumer<Frames.ServerFrame> handler;
     private final HttpClient http;
@@ -153,6 +167,7 @@ public class LinkClient {
     /** Stops for good and releases the retry thread. Called once, during shutdown. */
     public void shutdown() {
         stop("agent shutting down");
+        frames.shutdown();
         scheduler.shutdownNow();
         try {
             if (!scheduler.awaitTermination(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
@@ -302,6 +317,18 @@ public class LinkClient {
             return "handshake refused with " + status + why + Diagnostics.stackTrace(cause);
         }
 
+        if (cause instanceof IllegalArgumentException) {
+            // The credential cannot go in a header. Pairing refuses such a token now, so reaching
+            // here means one was stored by an older build; retrying cannot fix it and the stored
+            // identity keeps the next boot from reading a fresh code.
+            //
+            // The JDK's own message for this embeds the header value verbatim, which is
+            // "Bearer " plus the bearer token, so it is never read here: printing it would put
+            // the credential in the log this line exists to write to.
+            return "the stored credential contains characters that cannot be sent in an HTTP "
+                    + "header. Run 'unpair' and pair again with a new code.";
+        }
+
         return Diagnostics.describe(cause);
     }
 
@@ -376,6 +403,20 @@ public class LinkClient {
     }
 
     /**
+     * Truncates to at most {@code maxBytes} of UTF-8, counting bytes rather than characters so a
+     * reason packed with multi-byte characters cannot smuggle in several times its stated budget.
+     * A cut that lands inside a multi-byte character decodes back with a replacement character at
+     * the end rather than a garbled tail, which is fine for a value that only ever goes into a log
+     * line.
+     */
+    private static String truncateUtf8(String value, int maxBytes) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        return bytes.length <= maxBytes
+                ? value
+                : new String(bytes, 0, maxBytes, StandardCharsets.UTF_8);
+    }
+
+    /**
      * Reads frames off one socket.
      * <p>
      * A new instance per connection, so a message half-received when a socket dies cannot leak
@@ -410,13 +451,23 @@ public class LinkClient {
             }
 
             partial.append(data);
-            if (last) {
-                String raw = partial.toString();
-                partial.setLength(0);
-                deliver(raw);
-            }
             webSocket.request(1);
-            return null;
+            if (!last) {
+                return null;
+            }
+
+            String raw = partial.toString();
+            partial.setLength(0);
+
+            // Parsed here, on the receive thread, because parsing is bounded by the frame cap and
+            // costs nothing worth a thread hop. Acting on the result is what can block, so that is
+            // what goes to the worker.
+            Frames.ServerFrame frame = parse(raw);
+            if (frame == null) {
+                return null;
+            }
+            Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
+            return frames.submit(() -> handle(frame));
         }
 
         @Override
@@ -426,7 +477,9 @@ public class LinkClient {
                 return null;
             }
             onDisconnected("closed by the server (" + statusCode
-                    + (reason == null || reason.isBlank() ? "" : ": " + reason) + ")");
+                    + (reason == null || reason.isBlank()
+                            ? "" : ": " + Text.safe(truncateUtf8(reason, MAX_CLOSE_REASON_BYTES)))
+                    + ")");
             return null;
         }
 
@@ -454,22 +507,33 @@ public class LinkClient {
         }
 
         /**
-         * Parses one frame and hands it on.
-         * <p>
-         * A frame this agent cannot parse is logged and dropped, never fatal. A newer server may
-         * send frames this version has no need to understand, and closing the link over one
-         * would take a working printer offline for a message that did not concern it.
+         * Parses one frame, or explains why it could not be.
+         *
+         * <p>A frame this agent cannot parse is logged and dropped, never fatal. A newer server may
+         * send frames this version has no need to understand, and closing the link over one would
+         * take a working printer offline for a message that did not concern it.
+         *
+         * @return the frame, or null when it was refused
          */
-        private void deliver(String raw) {
-            Frames.ServerFrame frame;
+        private Frames.ServerFrame parse(String raw) {
             try {
-                frame = codec.read(raw);
+                return codec.read(raw);
             } catch (ProtocolException e) {
                 logger.warn("Ignored a frame from the server: " + Diagnostics.describe(e));
-                return;
+                return null;
+            } catch (RuntimeException e) {
+                // A codec fault is a bug in this agent, not a reason to drop the link and take every
+                // printer behind it offline. The codec's contract is that every malformed frame is a
+                // ProtocolException; reaching here means that contract was broken, which nothing else
+                // would ever mention, so it is logged at error level.
+                logger.error("Could not parse a frame from the server, which is a bug in this agent: "
+                        + Diagnostics.describe(e));
+                return null;
             }
+        }
 
-            Diagnostics.debug(logger, "Received " + frame.type() + " (" + raw.length() + " chars)");
+        /** Acts on one frame, on the frame worker's thread. */
+        private void handle(Frames.ServerFrame frame) {
             try {
                 handler.accept(frame);
             } catch (RuntimeException e) {

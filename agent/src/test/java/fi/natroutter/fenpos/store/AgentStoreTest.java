@@ -5,13 +5,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Tests the agent's local store against a real SQLite file.
@@ -56,6 +59,26 @@ class AgentStoreTest {
         // The store lives on a mounted volume that may be empty on first boot, so it has to
         // build its own path rather than expect one.
         assertTrue(Files.exists(databaseFile), "database file should have been created");
+    }
+
+    @Test
+    void createsTheDataDirectoryUnreadableByAnyoneElse() throws Exception {
+        Path database = directory.resolve("nested").resolve("agent.db");
+        assumeTrue(database.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX permissions are the thing being asserted");
+
+        try (AgentStore store = AgentStore.open(database)) {
+            store.saveIdentity(new AgentIdentity(
+                    "https://example.test", "a", "n", "t", Instant.parse("2026-09-04T10:00:00Z")));
+
+            // The directory is what matters more than the file: SQLite creates -wal and -shm
+            // siblings later, whatever mode they end up with, and a directory nobody else can
+            // traverse puts all three out of reach.
+            assertEquals(PosixFilePermissions.fromString("rwx------"),
+                    Files.getPosixFilePermissions(database.getParent()));
+            assertEquals(PosixFilePermissions.fromString("rw-------"),
+                    Files.getPosixFilePermissions(database));
+        }
     }
 
     @Test
@@ -133,5 +156,31 @@ class AgentStoreTest {
     void closingTwiceIsHarmless() {
         store.close();
         store.close();
+    }
+
+    @Test
+    void leavesNoneOfTheTokenInTheFileAfterUnpair() throws Exception {
+        String token = "aVeryDistinctiveTokenValueThatIsEasyToFindInBytes";
+        Path database = directory.resolve("agent.db");
+
+        try (AgentStore store = AgentStore.open(database)) {
+            store.saveIdentity(new AgentIdentity("https://example.test", "a", "n", token,
+                    Instant.parse("2026-09-04T10:00:00Z")));
+            assertTrue(store.clearIdentity());
+        }
+
+        // A DELETE moves the page to SQLite's freelist without zeroing it, so the credential an
+        // operator believes they revoked is still readable with `strings agent.db`. Every file in
+        // the store's directory is checked, not just agent.db itself, so this keeps meaning what
+        // it says if the store ever grows a -wal or -shm sibling alongside it.
+        try (var entries = Files.list(database.getParent())) {
+            for (Path entry : (Iterable<Path>) entries::iterator) {
+                if (Files.isRegularFile(entry)) {
+                    String contents = new String(Files.readAllBytes(entry), StandardCharsets.ISO_8859_1);
+                    assertFalse(contents.contains(token),
+                            "the token survived unpair in " + entry.getFileName());
+                }
+            }
+        }
     }
 }

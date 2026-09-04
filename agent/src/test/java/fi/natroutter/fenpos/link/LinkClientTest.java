@@ -2,16 +2,23 @@ package fi.natroutter.fenpos.link;
 
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -37,12 +44,19 @@ class LinkClientTest {
 
     private final AgentInfo info = new AgentInfo("1.0.0-test", "TestOS x64", "test-host");
 
+    /** How long a test waits for something the fake server or the link should produce quickly. */
+    private static final Duration PATIENCE = Duration.ofSeconds(10);
+
     private LinkClient client;
+    private FakeLinkServer server;
 
     @AfterEach
     void stopClient() {
         if (client != null) {
             client.stop("test over");
+        }
+        if (server != null) {
+            server.close();
         }
     }
 
@@ -101,6 +115,86 @@ class LinkClientTest {
         assertTrue(matching("Dropped status.report").size() == 1, lines.toString());
     }
 
+    // The claim this asserts is the whole point of the frame worker. While a handler is busy
+    // the receive thread must stay free, or the server's liveness check fires and it closes
+    // the link, taking every printer behind this agent offline for one slow write.
+    @Test
+    void answersAPingWhileAFrameIsStillBeingHandled() throws Exception {
+        CountDownLatch handling = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+            handling.countDown();
+            try {
+                release.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE), "no hello arrived");
+
+        server.send("{\"type\":\"config.sync\",\"devices\":[],\"assets\":[]}");
+        assertTrue(handling.await(10, TimeUnit.SECONDS), "the handler never ran");
+
+        server.sendPing();
+
+        assertTrue(server.awaitPong(Duration.ofSeconds(10)),
+                "no pong while a handler was busy: the receive thread is blocked");
+        release.countDown();
+    }
+
+    /**
+     * The close reason comes from the far end of the socket, which past the handshake is only as
+     * trustworthy as whatever answered on it. Unescaped, a newline in one lets the reason forge
+     * what reads as a second, unrelated entry: the logger rewrites every real newline it is given
+     * into a line break followed by the level's own colour marker, which is indistinguishable from
+     * a fresh entry starting once the terminal renders it. {@link Text#safe} closes that off by
+     * leaving no real newline character in the string for the logger to find.
+     */
+    @Test
+    void escapesTheServersCloseReasonBeforeLoggingIt() throws Exception {
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+        }, logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE), "no hello arrived");
+
+        String reason = "forged\nline {RED}";
+        server.close(4000, reason);
+
+        awaitLines("Link lost", 1);
+        List<String> lost = matching("Link lost");
+        // The whole point of escaping is that no real newline survives into the logged line, so
+        // the sequence right after "forged" can never be mistaken for the start of another entry.
+        assertFalse(lost.get(0).contains("forged\n"), lost.get(0));
+        assertTrue(lost.get(0).contains(Text.safe("forged\nline")), lost.get(0));
+        // The colour pass runs over the line on its way to the terminal and substitutes {RED}
+        // wherever it appears. Finding the escaped form intact on the other side is what proves
+        // it found nothing to substitute: a match would have consumed the readable RED} with it.
+        assertTrue(lost.get(0).contains(Text.safe("{RED}")), lost.get(0));
+    }
+
+    @Test
+    void handlesFramesInTheOrderTheyArrived() throws Exception {
+        List<String> order = new CopyOnWriteArrayList<>();
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> order.add(frame.type()), logger);
+        client.start(identityFor(server.uri()));
+        assertNotNull(server.awaitFrame(PATIENCE));
+
+        server.send("{\"type\":\"config.sync\",\"devices\":[],\"assets\":[]}");
+        server.send("{\"type\":\"job.cancel\",\"jobId\":\"j1\"}");
+        server.send("{\"type\":\"ports.scan\",\"requestId\":\"r1\"}");
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (order.size() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(List.of("config.sync", "job.cancel", "ports.scan"), order);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -119,6 +213,11 @@ class LinkClientTest {
 
     private static AgentIdentity identityFor(int port) {
         return new AgentIdentity("http://127.0.0.1:" + port, "agent-1", "test", "token",
+                Instant.parse("2026-09-03T10:00:00Z"));
+    }
+
+    private static AgentIdentity identityFor(URI uri) {
+        return new AgentIdentity(uri.toString(), "agent-1", "test", "token",
                 Instant.parse("2026-09-03T10:00:00Z"));
     }
 

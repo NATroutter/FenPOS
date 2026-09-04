@@ -34,9 +34,12 @@ import fi.natroutter.fenpos.print.JobSettings;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Reads and writes link frames.
@@ -91,15 +94,64 @@ public final class FrameCodec {
     /** Tallest raster accepted, in dots: what {@code GS v 0} encodes in its two vertical bytes. */
     private static final int MAX_RASTER_HEIGHT_DOTS = 65_535;
 
+    /** Longest identifier accepted. Mirrors idSchema and requestIdSchema on the server. */
+    private static final int MAX_ID_CHARS = 64;
+
     /**
-     * Longest image name accepted. Mirrors the server's own name limit.
+     * Largest QR payload, which is a QR symbol's own maximum alphanumeric capacity.
      *
-     * <p>Bounded because a name that fails to resolve is quoted back in the job's failure message,
-     * and the server caps {@code errorMessage} at 512 characters — so an unbounded name would make
-     * the update reporting the failure a frame the server rejects, losing the report along with the
-     * job.
+     * <p>The bound is the symbology's rather than a round number because anything past it was
+     * never going to scan. It also keeps the payload inside what {@code GS ( k} can declare: the
+     * library computes {@code pL} and {@code pH} from the character count, and a payload of
+     * 65,533 wraps them both to zero, leaving the printer reading the rest of the job as commands.
      */
-    private static final int MAX_ASSET_NAME_CHARS = 64;
+    private static final int MAX_QR_CHARS = 4_296;
+
+    /** Largest PDF417 payload, from that symbology's own capacity, for the same reasons. */
+    private static final int MAX_PDF417_CHARS = 1_850;
+
+    /**
+     * Largest linear barcode payload.
+     *
+     * <p>{@code GS k} function B carries its length in a single byte, so a longer payload declares
+     * a shorter one and the remainder is read as commands. {@code EscPosRenderer} checks the
+     * escaped form against the same bound, because only it knows what the escaping adds.
+     */
+    private static final int MAX_BARCODE_CHARS = 255;
+
+    /**
+     * Characters the mandatory Code 128 code-set selector occupies ahead of the payload, mirroring
+     * {@code CODE128_SET_B}'s length in {@code EscPosRenderer}. The selector counts toward the same
+     * one-byte length field as the content itself, so it is not part of what the caller may spend.
+     */
+    private static final int CODE128_SET_SELECTOR_CHARS = 2;
+
+    /**
+     * Largest Code 128 payload: {@link #MAX_BARCODE_CHARS} minus the selector that
+     * {@code EscPosRenderer} always prepends, so what the codec accepts still fits the length byte
+     * once escaped. Every other barcode system keeps the full {@link #MAX_BARCODE_CHARS}, because
+     * nothing is prepended to their content.
+     */
+    private static final int MAX_CODE128_CHARS = MAX_BARCODE_CHARS - CODE128_SET_SELECTOR_CHARS;
+
+    /** Longest serial port path accepted. Mirrors deviceConfigSchema.port. */
+    private static final int MAX_PORT_CHARS = 256;
+
+    /**
+     * Longest agent name accepted. Mirrors the maximum {@code welcomeSchema.agentName} declares on
+     * the server; that field has no minimum there, so there is none to mirror here.
+     */
+    private static final int MAX_AGENT_NAME_CHARS = 128;
+
+    /**
+     * The shape every device and asset name takes. Mirrors deviceNameSchema on the server.
+     *
+     * <p>Restricting the shape here is what lets every consumer downstream stop escaping: a name
+     * that cannot contain a newline, an escape or a brace cannot forge a log line, cannot retitle
+     * an operator's terminal, and cannot be refused by the server when it comes back on a status
+     * report.
+     */
+    private static final Pattern SLUG = Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
 
     /** Serialises outgoing frames. Nulls are omitted so optional fields are simply absent. */
     private final Gson gson = new GsonBuilder().create();
@@ -150,20 +202,20 @@ public final class FrameCodec {
         return switch (type) {
             case "welcome" -> new Welcome(
                     requireInt(root, "protocolVersion"),
-                    requireString(root, "agentId"),
-                    requireString(root, "agentName"),
-                    requireString(root, "serverTime"));
+                    requireId(root, "agentId"),
+                    requireBounded(root, "agentName", 0, MAX_AGENT_NAME_CHARS),
+                    requireTimestamp(root, "serverTime"));
             case "config.sync" -> readConfigSync(root);
             case "job.dispatch" -> new JobDispatch(readCompiledJob(requireObject(root, "job")));
-            case "job.cancel" -> new JobCancel(requireString(root, "jobId"));
+            case "job.cancel" -> new JobCancel(requireId(root, "jobId"));
             case "raw.write" -> readRawWrite(root);
-            case "ports.scan" -> new PortsScan(requireString(root, "requestId"));
+            case "ports.scan" -> new PortsScan(requireId(root, "requestId"));
             case "device.connect", "device.disconnect", "device.pause", "device.resume",
                  "device.clearQueue", "device.test" -> new DeviceCommand(
                     type,
-                    requireString(root, "requestId"),
-                    requireString(root, "device"),
-                    optionalString(root, "jobId"));
+                    requireId(root, "requestId"),
+                    requireSlug(root, "device"),
+                    optionalId(root, "jobId"));
             // An unknown type is not an error to crash on: a newer server may send frames this
             // agent has no need to understand. The caller logs and ignores it.
             default -> throw new ProtocolException("unknown frame type '" + type + "'");
@@ -183,8 +235,8 @@ public final class FrameCodec {
                     + " encoded characters exceeds the " + MAX_RAW_CHARS + " limit");
         }
         return new RawWrite(
-                requireString(root, "requestId"),
-                requireString(root, "device"),
+                requireId(root, "requestId"),
+                requireSlug(root, "device"),
                 bytes);
     }
 
@@ -195,8 +247,8 @@ public final class FrameCodec {
         for (JsonElement element : array) {
             JsonObject device = asObject(element, "device");
             devices.add(new DeviceConfig(
-                    requireString(device, "name"),
-                    requireString(device, "port"),
+                    requireSlug(device, "name"),
+                    requireBounded(device, "port", 1, MAX_PORT_CHARS),
                     requireBoundedInt(device, "baudRate", 50, 4_000_000),
                     requireBoundedInt(device, "dataBits", 5, 8),
                     requireBoundedInt(device, "stopBits", 1, 2),
@@ -218,13 +270,13 @@ public final class FrameCodec {
             JsonObject asset = asObject(element, "asset");
             Raster raster = readRaster(asset);
             assets.add(new AssetRaster(
-                    requireName(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
+                    requireSlug(asset, "name"), raster.widthDots(), raster.heightDots(), raster.packed()));
         }
 
-        JsonObject jobsObject = root.getAsJsonObject("jobs");
+        JsonObject jobsObject = optionalObject(root, "jobs");
         JobSettings jobs = jobsObject == null ? JobSettings.DEFAULTS : readJobSettings(jobsObject);
 
-        JsonObject agentObject = root.getAsJsonObject("agent");
+        JsonObject agentObject = optionalObject(root, "agent");
         AgentSettings agent = agentObject == null ? AgentSettings.DEFAULTS : readAgentSettings(agentObject);
 
         return new ConfigSync(devices, assets, jobs, agent);
@@ -317,23 +369,6 @@ public final class FrameCodec {
     private record Raster(int widthDots, int heightDots, byte[] packed) {
     }
 
-    /**
-     * Reads an image's name, refusing one longer than a name can be.
-     *
-     * @param parent the object carrying the field
-     * @param field  which field to read
-     * @return the name
-     * @throws ProtocolException when it is missing, empty, or beyond {@link #MAX_ASSET_NAME_CHARS}
-     */
-    private static String requireName(JsonObject parent, String field) throws ProtocolException {
-        String name = requireString(parent, field);
-        if (name.isEmpty() || name.length() > MAX_ASSET_NAME_CHARS) {
-            throw new ProtocolException("field '" + field + "' must be 1.." + MAX_ASSET_NAME_CHARS
-                    + " characters, got " + name.length());
-        }
-        return name;
-    }
-
     private CompiledJob readCompiledJob(JsonObject job) throws ProtocolException {
         var array = requireArray(job, "lines", MAX_LINES);
         List<WireLine> lines = new ArrayList<>(array.size());
@@ -343,8 +378,8 @@ public final class FrameCodec {
         }
 
         return new CompiledJob(
-                requireString(job, "jobId"),
-                requireString(job, "device"),
+                requireId(job, "jobId"),
+                requireSlug(job, "device"),
                 requireEnum(job, "linefeed", Linefeed.class),
                 lines);
     }
@@ -354,12 +389,8 @@ public final class FrameCodec {
         List<WireSpan> spans = new ArrayList<>(spanArray.size());
         for (JsonElement element : spanArray) {
             JsonObject span = asObject(element, "span");
-            String text = requireString(span, "text");
-            if (text.length() > MAX_SPAN_CHARS) {
-                throw new ProtocolException("span of " + text.length() + " characters exceeds " + MAX_SPAN_CHARS);
-            }
             spans.add(new WireSpan(
-                    text,
+                    requirePrintable(span, "text", MAX_SPAN_CHARS),
                     requireBoolean(span, "bold"),
                     requireBoundedInt(span, "underline", 0, 2),
                     requireBoolean(span, "invert"),
@@ -400,16 +431,20 @@ public final class FrameCodec {
             // server applies the same bounds; repeating them is what makes this a boundary
             // rather than a place that trusts the server got it right.
             case "QR" -> new WireDirective.Qr(
-                    requireAsciiContent(directive),
+                    requireAsciiContent(directive, MAX_QR_CHARS),
                     requireBoundedInt(directive, "size", 1, 16));
-            case "BARCODE" -> new WireDirective.Barcode(
-                    requireEnum(directive, "system", BarcodeSystem.class),
-                    requireContent(directive));
+            case "BARCODE" -> {
+                BarcodeSystem system = requireEnum(directive, "system", BarcodeSystem.class);
+                // Code 128 alone carries a selector ahead of its content, so it alone loses
+                // characters to it; every other system's content reaches the command unchanged.
+                int max = system == BarcodeSystem.CODE128 ? MAX_CODE128_CHARS : MAX_BARCODE_CHARS;
+                yield new WireDirective.Barcode(system, requireContent(directive, max));
+            }
             // The column count is bounded 1..30 rather than 0..30: zero is what function 65 reads
             // as "printer decides", and a server that meant to say that would be sending a symbol
             // it could not have charged a line budget for.
             case "PDF417" -> new WireDirective.Pdf417(
-                    requireAsciiContent(directive),
+                    requireAsciiContent(directive, MAX_PDF417_CHARS),
                     requireBoundedInt(directive, "errorLevel", 0, 8),
                     requireBoundedInt(directive, "columns", 1, 30));
             case "DRAWER" -> new WireDirective.Drawer(requireDrawerPin(directive));
@@ -436,7 +471,7 @@ public final class FrameCodec {
 
         return switch (kind) {
             case "REF" -> new WireDirective.StoredImage(
-                    requireName(source, "ref"),
+                    requireSlug(source, "ref"),
                     requireBoundedInt(source, "widthDots", 1, MAX_RASTER_WIDTH_DOTS));
             case "INLINE" -> {
                 Raster raster = readRaster(source);
@@ -447,16 +482,21 @@ public final class FrameCodec {
     }
 
     /**
-     * Reads a symbol's payload, refusing an empty one.
+     * Reads a symbol's payload, refusing an empty one and one longer than the command can declare.
      *
-     * <p>An empty symbol is not a smaller symbol: there is nothing for the encoder to lay out,
-     * and the library would fail on it further down where the message names a regex rather than
-     * the job.
+     * <p>An empty symbol is not a smaller symbol: there is nothing for the encoder to lay out, and
+     * the library would fail on it further down where the message names a regex rather than the job.
+     *
+     * @param max longest payload the command that carries it can state
      */
-    private static String requireContent(JsonObject directive) throws ProtocolException {
+    private static String requireContent(JsonObject directive, int max) throws ProtocolException {
         String content = requireString(directive, "content");
         if (content.isEmpty()) {
             throw new ProtocolException("field 'content' must not be empty");
+        }
+        if (content.length() > max) {
+            throw new ProtocolException("field 'content' of " + content.length()
+                    + " characters exceeds the " + max + " this symbol's command can declare");
         }
         return content;
     }
@@ -474,8 +514,8 @@ public final class FrameCodec {
      * and column; this is the backstop for a server that did not. The linear symbologies need no
      * equivalent — the library's own alphabets are ASCII-only, so they refuse it themselves.
      */
-    private static String requireAsciiContent(JsonObject directive) throws ProtocolException {
-        String content = requireContent(directive);
+    private static String requireAsciiContent(JsonObject directive, int max) throws ProtocolException {
+        String content = requireContent(directive, max);
         for (int index = 0; index < content.length(); index++) {
             if (content.charAt(index) > 0x7F) {
                 throw new ProtocolException("field 'content' must be ASCII; '"
@@ -511,6 +551,24 @@ public final class FrameCodec {
         return element.getAsJsonObject();
     }
 
+    /**
+     * Reads an object the frame may leave out.
+     *
+     * <p>Absent and JSON null both read as null; a value of any other type is refused, so an
+     * optional field cannot become a way to slip a wrong-typed value past the codec. Written
+     * because {@code JsonObject.getAsJsonObject(String)} is an unchecked cast: it threw a
+     * {@code ClassCastException} straight past this class's contract, and the caller on the
+     * receive path only catches {@link ProtocolException}, so one bad optional field closed
+     * the socket.
+     */
+    private static JsonObject optionalObject(JsonObject parent, String field) throws ProtocolException {
+        JsonElement element = parent.get(field);
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        return requireObject(parent, field);
+    }
+
     private static JsonObject asObject(JsonElement element, String what) throws ProtocolException {
         if (element == null || !element.isJsonObject()) {
             throw new ProtocolException(what + " must be an object");
@@ -540,17 +598,96 @@ public final class FrameCodec {
     }
 
     /**
-     * Reads a string the frame may leave out.
+     * Reads a string of a bounded length.
      *
-     * <p>Absent and JSON null both read as null; a value of any other type is still refused, so
-     * an optional field cannot become a way to slip a wrong-typed value past the codec.
+     * @param min shortest accepted, which is 1 wherever the server writes {@code min(1)}
+     * @param max longest accepted
      */
-    private static String optionalString(JsonObject parent, String field) throws ProtocolException {
+    private static String requireBounded(JsonObject parent, String field, int min, int max)
+            throws ProtocolException {
+        String value = requireString(parent, field);
+        if (value.length() < min || value.length() > max) {
+            throw new ProtocolException("field '" + field + "' must be " + min + ".." + max
+                    + " characters, got " + value.length());
+        }
+        return value;
+    }
+
+    /**
+     * Reads an ISO-8601 instant.
+     *
+     * <p>Parsed rather than merely typed, because the value is only useful if it is a time: the
+     * server documents it as the clock an agent with a wrong one can align against, and a string
+     * that is not a time silently makes that alignment impossible.
+     */
+    private static String requireTimestamp(JsonObject parent, String field) throws ProtocolException {
+        String value = requireString(parent, field);
+        try {
+            Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new ProtocolException("field '" + field + "' must be an ISO-8601 instant, got '"
+                    + value + "'", e);
+        }
+        return value;
+    }
+
+    /**
+     * Reads text that will be written to a printer, refusing anything it would read as a command.
+     *
+     * <p>The renderer writes span text through {@code String.getBytes(charset)}, and every codepage
+     * here maps U+001B to 0x1B, so a control character in a span is an ESC/POS command by the time
+     * it reaches the port. The markup parsers on both sides already refuse control characters in
+     * text, which is why no legitimate job carries one; this is the same rule stated at the wire,
+     * where a compromised server is the one writing the text.
+     */
+    private static String requirePrintable(JsonObject parent, String field, int max)
+            throws ProtocolException {
+        String value = requireString(parent, field);
+        if (value.length() > max) {
+            throw new ProtocolException("field '" + field + "' of " + value.length()
+                    + " characters exceeds " + max);
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (isControl(character)) {
+                throw new ProtocolException(String.format(
+                        "field '%s' holds U+%04X at index %d, which a printer reads as a command",
+                        field, (int) character, index));
+            }
+        }
+        return value;
+    }
+
+    /**
+     * Whether a character would be consumed by a printer as a command rather than printed.
+     * Covers C0 including tab, DEL, and C1. Mirrors {@code MarkupParser.isControl}.
+     */
+    private static boolean isControl(char value) {
+        return value < 0x20 || value == 0x7F || (value >= 0x80 && value <= 0x9F);
+    }
+
+    /** Reads an identifier: 1..64 characters, the bound every id on this protocol shares. */
+    private static String requireId(JsonObject parent, String field) throws ProtocolException {
+        return requireBounded(parent, field, 1, MAX_ID_CHARS);
+    }
+
+    /** Reads an identifier the frame may leave out, bounded the same way when it is present. */
+    private static String optionalId(JsonObject parent, String field) throws ProtocolException {
         JsonElement element = parent.get(field);
         if (element == null || element.isJsonNull()) {
             return null;
         }
-        return requireString(parent, field);
+        return requireId(parent, field);
+    }
+
+    /** Reads a name: an identifier that is also a slug. */
+    private static String requireSlug(JsonObject parent, String field) throws ProtocolException {
+        String value = requireId(parent, field);
+        if (!SLUG.matcher(value).matches()) {
+            throw new ProtocolException("field '" + field + "' must be lowercase alphanumeric with "
+                    + "dashes or underscores, got '" + value + "'");
+        }
+        return value;
     }
 
     private static boolean requireBoolean(JsonObject parent, String field) throws ProtocolException {

@@ -22,6 +22,7 @@ import fi.natroutter.fenpos.serial.DeviceConnectionManager;
 import fi.natroutter.fenpos.serial.PrinterPort;
 import fi.natroutter.fenpos.serial.PrinterWriteException;
 import fi.natroutter.fenpos.serial.SerialHandler;
+import fi.natroutter.fenpos.util.Text;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -96,7 +97,16 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      */
     private final Set<String> dispatched = ConcurrentHashMap.newKeySet();
 
+    private final RawWriteLimit rawWrites = new RawWriteLimit(Instant::now);
+
     private volatile FrameSender sender = FrameSender.NONE;
+
+    /**
+     * What to do when the server's welcome cannot be accepted. Set once, immediately after the
+     * link exists, in the same way {@link #attach} supplies the sender.
+     */
+    private volatile Runnable welcomeRefused = () -> {
+    };
 
     /**
      * Writes locally and forwards to the panel. Starts local-only, because the dispatcher exists
@@ -139,6 +149,17 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         printing.jobs().listener(reporter());
     }
 
+    /**
+     * Registers what to do when the server speaks a protocol this agent does not.
+     *
+     * <p>Stopping the link is the caller's decision to make, not this class's: it holds no socket.
+     *
+     * @param handler runs once per refused welcome
+     */
+    public void onWelcomeRefused(Runnable handler) {
+        this.welcomeRefused = Objects.requireNonNull(handler, "handler");
+    }
+
     @Override
     public void accept(Frames.ServerFrame frame) {
         switch (frame) {
@@ -154,13 +175,17 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
 
     private void onWelcome(Frames.Welcome welcome) {
         if (welcome.protocolVersion() != Frames.PROTOCOL_VERSION) {
-            // The server closes the connection over this itself, so there is nothing to do but
-            // make the reason findable in the agent's own log rather than only the server's.
+            // Stopped rather than logged. A newer server's next dispatch may carry a directive
+            // this agent refuses, and failing receipt by receipt is a worse way to find that out
+            // than one refusal at the handshake, which is what the version exists to produce.
             logger.error("This server speaks link protocol " + welcome.protocolVersion()
-                    + "; this agent speaks " + Frames.PROTOCOL_VERSION + ". Update the agent.");
+                    + "; this agent speaks " + Frames.PROTOCOL_VERSION + ". Update the agent. "
+                    + "The link will not reconnect until it is restarted against a server it "
+                    + "can speak to.");
+            welcomeRefused.run();
             return;
         }
-        logger.info("Server welcomed this agent as '" + welcome.agentName() + "'");
+        logger.info("Server welcomed this agent as '" + text(welcome.agentName()) + "'");
     }
 
     /**
@@ -172,11 +197,33 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * the registry rather than through {@code applyConfig}, because nothing else has to react to
      * them: adopting devices reopens ports and rebuilds queues, while adopting images is a map
      * swap.
+     *
+     * <p>This is one of three callers of {@code applyConfig}, alongside a local {@code unpair}
+     * and the server unpairing this agent, so anything that must happen on every device set
+     * replacement — such as {@link #forgetDevice}, which {@code applyConfig}'s implementation
+     * calls for a name that drops out — is the implementation's job, not this method's.
      */
     private void onConfigSync(Frames.ConfigSync sync) {
         devices.applyRasters(sync.assets());
         applyConfig.accept(sync.devices(), sync.jobs(), sync.agent());
         reportStatus();
+    }
+
+    /**
+     * Drops the raw write budget held for a device that is no longer configured.
+     *
+     * <p>{@code applyConfig}'s implementation calls this once for each name that drops out of a
+     * device set replacement, wherever that replacement happens — this class's own
+     * {@code config.sync} handling, a local {@code unpair}, and the server unpairing this agent
+     * all replace the device set through the same {@link ConfigListener}, and this is what keeps
+     * {@link RawWriteLimit} bounded across all three rather than only the one that happens to be
+     * a frame arriving over the link. A name that stays configured is never touched here, which
+     * is what stops a device from buying itself a fresh burst just by surviving an update.
+     *
+     * @param device the device name that is no longer configured
+     */
+    public void forgetDevice(String device) {
+        rawWrites.forget(device);
     }
 
     /**
@@ -271,6 +318,14 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     // Device control
     // -------------------------------------------------------------------------
 
+    /** Bounds from serialPortSchema on the server. A frame breaking one is refused whole. */
+    private static final int MAX_PORT_NAME_CHARS = 256;
+    private static final int MAX_PORT_DESCRIPTION_CHARS = 256;
+    private static final int MAX_PORT_SERIAL_CHARS = 128;
+
+    /** Ports reported in one answer, also from the server's schema. */
+    private static final int MAX_PORTS_REPORTED = 256;
+
     /**
      * Answers a request for this machine's serial ports.
      * <p>
@@ -281,16 +336,45 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
     private void onPortsScan(Frames.PortsScan scan) {
         List<Frames.SerialPort> ports = new ArrayList<>();
         for (com.fazecast.jSerialComm.SerialPort port : SerialHandler.availablePorts()) {
-            ports.add(new Frames.SerialPort(
+            if (ports.size() == MAX_PORTS_REPORTED) {
+                logger.warn("This machine reports more than " + MAX_PORTS_REPORTED
+                        + " serial ports; the rest are not being reported");
+                break;
+            }
+            ports.add(describePort(
                     port.getSystemPortName(),
-                    text(port.getPortDescription()),
+                    port.getPortDescription(),
                     port.getVendorID(),
                     port.getProductID(),
-                    text(port.getSerialNumber())));
+                    port.getSerialNumber()));
         }
 
         logger.info("Reported " + ports.size() + " serial port(s) to the server");
         sender.send(new Frames.PortsResult(scan.requestId(), ports));
+    }
+
+    /**
+     * Describes one serial port in the shape the server accepts.
+     *
+     * <p>Clamped rather than passed through, and package-private so this is testable without a
+     * serial device. Two things arrive out of range. A USB device's descriptor strings are chosen
+     * by whoever made it, so their length is not this agent's to assume. And jSerialComm answers
+     * {@code -1} for a port that is not USB at all, such as a built-in UART, while the schema says
+     * 0..0xffff: sending that refused the whole frame, so a Raspberry Pi's own serial port made the
+     * panel's picker come back empty with nothing said anywhere about why.
+     */
+    static Frames.SerialPort describePort(String name, String description,
+                                          int vendorId, int productId, String serialNumber) {
+        return new Frames.SerialPort(
+                clamp(text(name), MAX_PORT_NAME_CHARS),
+                clamp(text(description), MAX_PORT_DESCRIPTION_CHARS),
+                Math.max(0, vendorId),
+                Math.max(0, productId),
+                clamp(text(serialNumber), MAX_PORT_SERIAL_CHARS));
+    }
+
+    private static String clamp(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /**
@@ -442,6 +526,12 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
             return;
         }
 
+        if (!rawWrites.allow(raw.device())) {
+            reply(raw.requestId(), false,
+                    "Too many raw writes for this device; try again in a moment", raw.device());
+            return;
+        }
+
         byte[] payload;
         try {
             payload = Base64.getDecoder().decode(raw.bytes());
@@ -507,9 +597,9 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
         sender.send(new Frames.StatusReport(statuses));
     }
 
-    /** Normalises an operating system string, which may be null or absent. */
+    /** Normalises an operating system string, which may be null, and makes it safe to log. */
     private static String text(String value) {
-        return value == null ? "" : value;
+        return Text.safe(value);
     }
 
     /**

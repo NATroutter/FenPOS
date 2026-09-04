@@ -102,11 +102,11 @@ class DeviceRegistryTest {
     }
 
     @Test
-    void clearingLeavesNoDevices() {
+    void anEmptySnapshotLeavesNoDevices() {
         DeviceRegistry registry = new DeviceRegistry();
         registry.apply(List.of(wire("kitchen", "COM3", 5, 5000)));
 
-        registry.clear();
+        registry.apply(List.of());
 
         assertEquals(0, registry.size());
     }
@@ -152,11 +152,13 @@ class DeviceRegistryTest {
 
     /** Unpairing releases the printers; the pictures they were going to print go with them. */
     @Test
-    void clearingLeavesNoImagesEither() {
+    void anEmptySnapshotLeavesNoImagesEither() {
         DeviceRegistry registry = new DeviceRegistry();
+        registry.apply(List.of(wire("kitchen", "COM3", 5, 5000)));
         registry.applyRasters(List.of(raster("logo", 384)));
 
-        registry.clear();
+        registry.apply(List.of());
+        registry.applyRasters(List.of());
 
         assertEquals(0, registry.rasterCount());
         assertTrue(registry.raster("logo", 384).isEmpty());
@@ -165,6 +167,26 @@ class DeviceRegistryTest {
     /** One raster of the given width, one dot tall: enough to be found, small enough to read. */
     private static Frames.AssetRaster raster(String name, int widthDots) {
         return new Frames.AssetRaster(name, widthDots, 1, new byte[(widthDots + 7) / 8]);
+    }
+
+    @Test
+    void reportsADeviceNameThatAppearedTwice() {
+        DeviceRegistry registry = new DeviceRegistry();
+
+        List<String> collapsed = registry.apply(List.of(device("kitchen"), device("bar"), device("kitchen")));
+
+        // The snapshot is authoritative, so the last entry wins and the set is smaller than what
+        // was sent. Silently is the wrong way for that to happen: a device configured in the panel
+        // simply would not exist here, and nothing would say so.
+        assertEquals(List.of("kitchen"), collapsed);
+        assertEquals(2, registry.size());
+    }
+
+    @Test
+    void reportsNothingWhenEveryNameIsDistinct() {
+        DeviceRegistry registry = new DeviceRegistry();
+
+        assertEquals(List.of(), registry.apply(List.of(device("kitchen"), device("bar"))));
     }
 
     @Test
@@ -179,6 +201,10 @@ class DeviceRegistryTest {
     @Test
     void carriesThePausedFlagTheOperatorSet() {
         assertFalse(Device.from(wire("kitchen", "COM3", 5, 5000)).paused());
+    }
+
+    private static Frames.DeviceConfig device(String name) {
+        return wire(name, "COM3", 5, 5000);
     }
 
     private static Frames.DeviceConfig wire(

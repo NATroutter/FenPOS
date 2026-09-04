@@ -9,6 +9,7 @@ import fi.natroutter.fenpos.link.AgentInfo;
 import fi.natroutter.fenpos.link.Frames;
 import fi.natroutter.fenpos.store.AgentIdentity;
 import fi.natroutter.fenpos.store.AgentStore;
+import fi.natroutter.fenpos.util.Text;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,9 @@ class PairingTest {
     private volatile int status = 200;
     private volatile String responseBody = "";
 
+    /** A {@code Location} header to send, or {@code null} to send none. */
+    private volatile String locationHeader = null;
+
     @BeforeEach
     void startServer(@TempDir Path directory) throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -99,6 +103,34 @@ class PairingTest {
         AgentIdentity identity = pairing.pair(baseUrl(), "AG7K-2M9P");
 
         assertEquals("Kitchen agent", identity.agentName());
+    }
+
+    @Test
+    void refusesPlainHttpToANameThatMerelyBeginsLikeALoopbackAddress() {
+        // A prefix is not an address. Every one of these is a name someone can register, and
+        // the reply to this request carries the bearer token, so admitting one of them sends
+        // the credential across the internet in cleartext.
+        for (String host : new String[] {
+                "127.0.0.1.evil.example", "127.attacker.example", "127.example.com",
+                "localhost.evil.example"}) {
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair("http://" + host, "AG7K-2M9P"), host);
+            assertTrue(thrown.getMessage().contains("https"), host + ": " + thrown.getMessage());
+        }
+    }
+
+    @Test
+    void stillAllowsPlainHttpToTheAddressesThatAreActuallyLoopback() throws Exception {
+        // Nothing reaches a network interface, which is the whole basis of the exception. These
+        // must keep working or a single-machine install cannot be brought up without a
+        // certificate. The port is one nothing listens on, so the failure is a connection
+        // refused rather than a scheme refusal, which is what proves the check passed.
+        for (String host : new String[] {"127.0.0.1", "127.0.0.2", "[::1]", "localhost", "LOCALHOST"}) {
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair("http://" + host + ":1", "AG7K-2M9P"), host);
+            assertFalse(thrown.getMessage().contains("requires https"),
+                    host + " must pass the scheme check: " + thrown.getMessage());
+        }
     }
 
     @Test
@@ -175,6 +207,30 @@ class PairingTest {
         assertTrue(thrown.getMessage().contains("expired"), thrown.getMessage());
     }
 
+    /**
+     * The server answers this request before the code is even checked, so its {@code message}
+     * field is exactly as foreign as any other reply body. A newline in it could forge a second
+     * log line and a brace could drive the colour codes the console substitutes into a message,
+     * the same hazard the branch already escapes for a pairing reply's {@code agentName}.
+     * <p>
+     * Compared against {@link Text#safe} on the flattened text rather than searched for the raw
+     * brace, because doubling the opening brace does not remove the five characters {@code {RED}}
+     * from the result — it only stops the parser reading them as one token. A real newline has no
+     * such overlap, so its absence is checked directly.
+     */
+    @Test
+    void escapesControlCharactersAndBracesInTheServersErrorMessage() {
+        status = 400;
+        responseBody = "{\"message\":\"forged\\nline {RED}\"}";
+
+        PairingException thrown = assertThrows(PairingException.class, () ->
+                pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        // summarise() collapses the whitespace run first, the same as it does for a proxy's body.
+        assertTrue(thrown.getMessage().contains(Text.safe("forged line {RED}")), thrown.getMessage());
+        assertFalse(thrown.getMessage().contains("\n"), thrown.getMessage());
+    }
+
     @Test
     void reportsRateLimitingSeparatelyFromARefusal() {
         status = 429;
@@ -220,6 +276,18 @@ class PairingTest {
     }
 
     @Test
+    void doesNotFollowARedirectToAnotherOrigin() {
+        // A redirect on this request would move the credential exchange to a host the operator
+        // never named, so the client is built with Redirect.NEVER and the status is surfaced.
+        respondWithRedirect(307, "https://elsewhere.invalid/api/pair");
+
+        PairingException thrown = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().contains("307"), thrown.getMessage());
+    }
+
+    @Test
     void refusesAServerOnADifferentProtocolVersion() {
         status = 200;
         responseBody = "{\"agentId\":\"a1\",\"agentName\":\"n\",\"token\":\"t\",\"protocolVersion\":99}";
@@ -247,6 +315,63 @@ class PairingTest {
                 pairing.pair(baseUrl(), "AG7K-2M9P"));
 
         assertTrue(thrown.getMessage().contains("FenPOS server"), thrown.getMessage());
+    }
+
+    @Test
+    void refusesAReplyLargerThanTheCapWithoutBufferingIt() throws Exception {
+        // ofString buffers everything before the check can run, so a hostile endpoint chose how
+        // much heap this allocated. 4 MiB is enough to prove the read is bounded without making
+        // the suite slow.
+        respondWith(200, "A".repeat(4 * 1024 * 1024));
+
+        PairingException thrown = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+
+        assertTrue(thrown.getMessage().contains("implausibly large"), thrown.getMessage());
+    }
+
+    @Test
+    void refusesATokenThatCouldNotGoInAHeader() {
+        // The token is put in an Authorization header on every connection. A carriage return in
+        // it fails the header build, and because the identity is persisted first, the agent then
+        // retries once a minute forever and ignores FENPOS_PAIR_CODE on every later boot.
+        //
+        // Asserted against a fragment specific to why each one is refused, not just that some
+        // PairingException was thrown, so this test cannot pass for an unrelated reason: the
+        // three shape violations are refused by the base64url check, the empty one by the
+        // missing-credential check, and the over-long one by the length check.
+        String[] tokens = {"abc\r\ndef", "abc def", "abc\u0000", "", "t".repeat(129)};
+        String[] expectedFragments =
+                {"base64url", "base64url", "base64url", "missing the credential", "is plausible"};
+
+        for (int i = 0; i < tokens.length; i++) {
+            respondWithGrant("agent-1", "Kitchen", tokens[i]);
+            PairingException thrown = assertThrows(PairingException.class,
+                    () -> pairing.pair(baseUrl(), "AG7K-2M9P"), tokens[i]);
+            assertTrue(thrown.getMessage().contains(expectedFragments[i]),
+                    tokens[i] + ": " + thrown.getMessage());
+        }
+    }
+
+    @Test
+    void refusesAGrantWhoseIdentifiersAreOutsideTheirBounds() {
+        respondWithGrant("a".repeat(65), "Kitchen", "abc");
+        PairingException oversizedId = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        assertTrue(oversizedId.getMessage().contains("'agentId'"), oversizedId.getMessage());
+
+        respondWithGrant("agent-1", "n".repeat(129), "abc");
+        PairingException oversizedName = assertThrows(PairingException.class,
+                () -> pairing.pair(baseUrl(), "AG7K-2M9P"));
+        assertTrue(oversizedName.getMessage().contains("'agentName'"), oversizedName.getMessage());
+    }
+
+    @Test
+    void acceptsTheTokenTheServerActuallyIssues() throws Exception {
+        // randomBytes(32).toString("base64url"), which is what lib/auth/secrets.ts mints.
+        respondWithGrant("agent-1", "Kitchen", "dGhpcy1pcy1hLWJhc2U2NHVybC10b2tlbi1zYW1wbGUtb2s");
+
+        assertEquals("Kitchen", pairing.pair(baseUrl(), "AG7K-2M9P").agentName());
     }
 
     // -------------------------------------------------------------------------
@@ -345,9 +470,28 @@ class PairingTest {
     }
 
     private void respondWithGrant() {
+        respondWithGrant("agent-1", "Kitchen agent", "secret-token");
+    }
+
+    private void respondWithGrant(String agentId, String agentName, String token) {
         status = 200;
-        responseBody = "{\"agentId\":\"agent-1\",\"agentName\":\"Kitchen agent\","
-                + "\"token\":\"secret-token\",\"protocolVersion\":" + Frames.PROTOCOL_VERSION + "}";
+        JsonObject json = new JsonObject();
+        json.addProperty("agentId", agentId);
+        json.addProperty("agentName", agentName);
+        json.addProperty("token", token);
+        json.addProperty("protocolVersion", Frames.PROTOCOL_VERSION);
+        responseBody = json.toString();
+    }
+
+    private void respondWith(int status, String body) {
+        this.status = status;
+        this.responseBody = body;
+    }
+
+    private void respondWithRedirect(int status, String location) {
+        this.status = status;
+        this.responseBody = "";
+        this.locationHeader = location;
     }
 
     private String baseUrl() {
@@ -361,6 +505,9 @@ class PairingTest {
 
             byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
+            if (locationHeader != null) {
+                exchange.getResponseHeaders().add("Location", locationHeader);
+            }
             exchange.sendResponseHeaders(status, body.length);
             exchange.getResponseBody().write(body);
         }

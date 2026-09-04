@@ -9,6 +9,7 @@ import fi.natroutter.fenpos.enums.ConnectionStatus;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -39,7 +40,28 @@ public class SerialHandler implements PrinterPort {
     private volatile boolean shuttingDown;
 
     private SerialPort port;
-    private Thread reconnectThread;
+    private volatile Thread reconnectThread;
+
+    /**
+     * How many absent-port attempts pass between warnings.
+     *
+     * <p>Every attempt used to warn. At the protocol's minimum reconnect delay of one second that
+     * is a line a second for as long as a printer stays unplugged, which fills the log volume and
+     * buries everything else in it. Going silent is worse, though: a retry loop that says nothing
+     * reads exactly like one that died, which is the reason the first version reported every
+     * attempt. So the first is reported, and then one in sixty, each carrying the count.
+     */
+    private static final int ABSENT_PORT_LOG_INTERVAL = 60;
+
+    /**
+     * Attempts since this device's port was last seen, for the log interval above.
+     *
+     * <p>Incremented from the reconnect thread, but reset from {@link #connect()}, which is not
+     * only called from that thread: a manual reconnect command reaches it from the link
+     * dispatcher's own thread while the reconnect thread may be incrementing at the same time.
+     * Atomic rather than a plain field for that reason.
+     */
+    private final AtomicInteger absentAttempts = new AtomicInteger();
 
     /**
      * Identity of the device this handler last opened successfully, captured rather than
@@ -92,6 +114,17 @@ public class SerialHandler implements PrinterPort {
             if (status.isUsable()) {
                 return;
             }
+            if (!isReportedByTheSystem(serial.port())) {
+                // The path comes from the server, and jSerialComm opens whatever it is given.
+                // On Linux that includes a tty: /dev/tty is the process's own terminal, which
+                // both compose files provide, so an unchecked path is a way for a config.sync
+                // to write ESC/POS bytes at whoever is attached. The panel builds its picker
+                // from a scan, so a real configuration always names something in this list, and
+                // isExpectedDevice already walks it on every reconnect.
+                status = ConnectionStatus.NO_DEVICE;
+                logger.error("[" + deviceName() + "] No such port: " + serial.port());
+                return;
+            }
             SerialPort candidate;
             try {
                 candidate = SerialPort.getCommPort(serial.port());
@@ -113,6 +146,7 @@ public class SerialHandler implements PrinterPort {
             port = candidate;
             knownIdentity = DeviceIdentity.of(candidate);
             status = ConnectionStatus.CONNECTED;
+            absentAttempts.set(0);
             logger.info("[" + deviceName() + "] Connected to " + serial.port());
         } finally {
             lock.unlock();
@@ -234,17 +268,24 @@ public class SerialHandler implements PrinterPort {
         if (shuttingDown || !serial.autoReconnect()) {
             return;
         }
-        if (reconnectThread != null && reconnectThread.isAlive()) {
-            return;
+        // The lock is reentrant, so the call from handleLostDevice, which already holds it, is
+        // safe. Without it two callers could both see a dead thread and start one each: the
+        // duplicate does no harm beyond a leaked thread and doubled log lines, but nothing about
+        // this field was safe to read from three threads.
+        lock.lock();
+        try {
+            if (reconnectThread != null && reconnectThread.isAlive()) {
+                return;
+            }
+            long delayMillis = serial.reconnectDelay().toMillis();
+            logger.info("[" + deviceName() + "] Retrying every "
+                    + serial.reconnectDelay().toSeconds() + "s until the device returns");
+            reconnectThread = Thread.ofVirtual()
+                    .name("fenpos-agent-reconnect-" + deviceName())
+                    .start(() -> reconnectUntilConnected(delayMillis));
+        } finally {
+            lock.unlock();
         }
-
-        long delayMillis = serial.reconnectDelay().toMillis();
-        logger.info("[" + deviceName() + "] Retrying every "
-                + serial.reconnectDelay().toSeconds() + "s until the device returns");
-
-        reconnectThread = Thread.ofVirtual()
-                .name("fenpos-agent-reconnect-" + deviceName())
-                .start(() -> reconnectUntilConnected(delayMillis));
     }
 
     /**
@@ -308,7 +349,21 @@ public class SerialHandler implements PrinterPort {
                     + " is now a different device; not reconnecting");
             return false;
         }
-        logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still retrying");
+        int attempt = absentAttempts.incrementAndGet();
+        if (attempt == 1 || attempt % ABSENT_PORT_LOG_INTERVAL == 0) {
+            logger.warn("[" + deviceName() + "] Port " + portName + " is not present; still "
+                    + "retrying (attempt " + attempt + ")");
+        }
+        return false;
+    }
+
+    /** Whether the operating system currently reports a serial port under this name. */
+    private static boolean isReportedByTheSystem(String portName) {
+        for (SerialPort candidate : SerialPort.getCommPorts()) {
+            if (portName.equals(candidate.getSystemPortName())) {
+                return true;
+            }
+        }
         return false;
     }
 

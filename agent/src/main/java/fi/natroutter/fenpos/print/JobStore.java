@@ -6,7 +6,9 @@ import fi.natroutter.foxlib.logger.FoxLogger;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -36,6 +38,31 @@ public class JobStore {
     private static final int ID_BYTES = ID_LENGTH / 2;
 
     private final Map<String, PrintJob> jobs = new ConcurrentHashMap<>();
+
+    /**
+     * Job identifiers this agent has accepted, whether or not their records still exist.
+     *
+     * <p>Separate from {@link #jobs} because the two answer different questions with different
+     * lifetimes. A record is what the panel reads and is meant to expire: retention drops it, and
+     * the record cap drops it, and both of those are set by the server. An identity is what makes
+     * a repeat dispatch recognisable, and forgetting one means printing a receipt twice, which
+     * costs whoever is holding the paper. Tying the second to the first made "deduplicated by id"
+     * a promise about a window the server could shrink to a minute.
+     *
+     * <p>Bounded rather than kept forever, oldest forgotten first. Ten thousand identifiers of at
+     * most 64 characters is a megabyte or two, and at a thousand receipts a day it is ten days of
+     * deduplication, which is far longer than any retry a link could produce.
+     */
+    private static final int MAX_SEEN_IDS = 10_000;
+
+    private final Map<String, Boolean> seen = Collections.synchronizedMap(
+            new LinkedHashMap<>(256, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > MAX_SEEN_IDS;
+                }
+            });
+
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
 
@@ -118,6 +145,9 @@ public class JobStore {
      */
     public Optional<PrintJob> adopt(String id, String deviceName, CompiledJob compiled) {
         Objects.requireNonNull(id, "id");
+        if (seen.putIfAbsent(id, Boolean.TRUE) != null) {
+            return Optional.empty();
+        }
         PrintJob job = new PrintJob(id, deviceName, compiled, clock, listener, logger);
         if (jobs.putIfAbsent(id, job) != null) {
             return Optional.empty();

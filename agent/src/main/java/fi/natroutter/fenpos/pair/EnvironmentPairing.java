@@ -3,6 +3,7 @@ package fi.natroutter.fenpos.pair;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Text;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -83,7 +84,7 @@ public final class EnvironmentPairing {
                 // Said out loud rather than passed over. Silence here would look exactly like a
                 // successful re-pair, and an operator who changed the code expecting it to take
                 // effect would have no way to tell that it had not.
-                logger.info("Already paired as '" + stored.get().agentName() + "'; ignoring "
+                logger.info("Already paired as '" + Text.safe(stored.get().agentName()) + "'; ignoring "
                         + CODE_VARIABLE + ". Run 'unpair' first to pair with a different server.");
             }
             return stored;
@@ -99,7 +100,7 @@ public final class EnvironmentPairing {
 
         try {
             AgentIdentity identity = pairing.pair(server, code);
-            logger.info("Paired as '" + identity.agentName() + "' to " + identity.serverUrl());
+            logger.info("Paired as '" + Text.safe(identity.agentName()) + "' to " + identity.serverUrl());
             return Optional.of(identity);
         } catch (PairingException e) {
             // Reported plainly enough to act on: regenerate in the panel, update the value,

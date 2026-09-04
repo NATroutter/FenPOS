@@ -80,7 +80,7 @@ owner the host gives it. Create it and hand it over first, or the server cannot 
 database:
 
 ```sh
-mkdir -p data && sudo chown -R 10001:10001 data
+mkdir -p data && chmod 700 data && sudo chown -R 10001:10001 data
 ```
 
 ```sh
@@ -103,7 +103,7 @@ owner the host gives them. Create them and hand them over first, or the agent ca
 store and refuses to start:
 
 ```sh
-mkdir -p data logs && sudo chown -R 10001:10001 data logs
+mkdir -p data logs && chmod 700 data logs && sudo chown -R 10001:10001 data logs
 ```
 
 ```sh
@@ -327,9 +327,15 @@ raised it.
 
 - **Agents have no inbound surface.** They dial out and never listen, so there is no port to
   scan and no endpoint to post to.
-- **Strict TLS.** There is no "trust all certificates" option, in any form.
-- **SPKI pinning from pairing onward**, so a mis-issued certificate or a MITM proxy is
-  refused even when the certificate chain validates.
+- **The agent container is locked down in the compose files.** It runs as a non-root user with
+  every Linux capability dropped, `no-new-privileges` set, and a read-only root filesystem. The
+  only writable paths are its data and log directories and a small tmpfs holding the SQLite
+  driver's native library, so a foothold in the process has nowhere to leave anything that a
+  restart would pick up, and cannot rewrite the jar it runs from.
+- **Strict TLS.** The agent validates the server's certificate against the system trust
+  store, and there is no "trust all certificates" option in any form. There is no certificate
+  pinning: an agent accepts any certificate a CA in its trust store has issued for the
+  server's name, so a TLS-inspecting proxy on the path can read and alter the link.
 - **Pairing codes** are single-use, consumed atomically at redemption, expire in 15 minutes,
   and are rate-limited per address.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
@@ -341,7 +347,8 @@ raised it.
   Behind a reverse proxy, put its address there, or every visitor arriving through it is counted and
   recorded as the proxy. The Settings page shows what your own request resolved to.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
-  frames are refused without dropping the connection, and job dispatch is deduplicated by id.
+  frames are refused without dropping the connection, and job dispatch is deduplicated by id
+  for the last 10,000 ids, which is far longer than any retry a dropped link can produce.
 - **Passwords** are argon2id, minimum 12 characters. Any character is accepted, including
   spaces, so passphrases work.
 

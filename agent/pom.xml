@@ -33,15 +33,6 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
 				<version>3.1.0</version>
-				<configuration>
-					<archive>
-						<manifest>
-							<addClasspath>true</addClasspath>
-							<classpathPrefix>lib/</classpathPrefix>
-							<mainClass>${mainClass}</mainClass>
-						</manifest>
-					</archive>
-				</configuration>
 			</plugin>
 
 			<plugin>
@@ -73,7 +64,29 @@
 						<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
 							<mainClass>${mainClass}</mainClass>
 						</transformer>
+						<!--
+						    Without this, two dependencies declaring the same service file
+						    overwrite one another and whichever shade wrote first wins, which
+						    is a silent way to lose a JDBC driver or a logging provider.
+						-->
+						<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
 					</transformers>
+					<filters>
+						<filter>
+							<artifact>*:*</artifact>
+							<excludes>
+								<!--
+								    A signed dependency's signature covers its own jar, not
+								    this one. Copied in, the JVM refuses the whole shaded jar
+								    with "Invalid signature file digest".
+								-->
+								<exclude>META-INF/*.SF</exclude>
+								<exclude>META-INF/*.DSA</exclude>
+								<exclude>META-INF/*.RSA</exclude>
+								<exclude>module-info.class</exclude>
+							</excludes>
+						</filter>
+					</filters>
 					<createDependencyReducedPom>false</createDependencyReducedPom>
 				</configuration>
 				<executions>
@@ -88,18 +101,62 @@
 		</plugins>
 
 		<resources>
+			<!--
+			    Only this one file needs the project version substituted into it. Filtering the
+			    whole directory ran every resource through Maven's ${...} and @...@ substitution,
+			    which is why the bundled rasters had to be base64 rather than binary, and which
+			    would silently bake a build machine's property into the jar the day a resource
+			    happened to contain one of those delimiters.
+			-->
 			<resource>
 				<directory>src/main/resources</directory>
 				<filtering>true</filtering>
+				<includes>
+					<include>build.properties</include>
+				</includes>
+			</resource>
+			<resource>
+				<directory>src/main/resources</directory>
+				<filtering>false</filtering>
+				<excludes>
+					<exclude>build.properties</exclude>
+				</excludes>
 			</resource>
 		</resources>
 	</build>
 
 	<repositories>
+		<!--
+		    Central is named explicitly, and first, because Maven consults declared
+		    repositories in the order they appear and appends the super-POM's central last.
+		    Left implicit, the repository below had first refusal on Hibernate, Gson, JLine
+		    and every other artifact in this build, so whoever controls that host could have
+		    served any of them. Named first, only an artifact genuinely absent from Central
+		    reaches it, which is foxlib and nothing else.
+
+		    A mirror does not achieve this. Mirrors rewrite a repository's URL; they do not
+		    change which repositories are asked, or in what order.
+		-->
+		<repository>
+			<id>central</id>
+			<url>https://repo.maven.apache.org/maven2</url>
+			<releases>
+				<checksumPolicy>fail</checksumPolicy>
+			</releases>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
 		<repository>
 			<id>natroutter-releases</id>
 			<name>NATroutter's Repository</name>
 			<url>https://repo.nat.gg/releases</url>
+			<releases>
+				<checksumPolicy>fail</checksumPolicy>
+			</releases>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
 		</repository>
 	</repositories>
 
@@ -119,7 +176,7 @@
 		<dependency>
 			<groupId>fi.natroutter</groupId>
 			<artifactId>foxlib</artifactId>
-			<version>1.4.4</version>
+			<version>1.5.0</version>
 		</dependency>
 		<dependency>
 			<groupId>com.fazecast</groupId>

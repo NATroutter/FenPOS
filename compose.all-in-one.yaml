@@ -22,6 +22,7 @@ services:
     volumes:
       # uid 10001 owns the data inside the container. A bind mount keeps the host owner.
       #   mkdir -p server-data agent-data agent-logs
+      #   chmod 700 server-data agent-data agent-logs
       #   sudo chown -R 10001:10001 server-data agent-data agent-logs
       - ./server-data:/app/data
     environment:
@@ -57,6 +58,24 @@ services:
       - "/dev/ttyUSB0:/dev/ttyUSB0"
     group_add:
       - "20"
+
+    # The agent needs no capability at all. Device access comes from the group above, which is
+    # a group membership rather than a capability.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # The agent writes to the two directories below and nowhere else, so the root filesystem
+    # can stay read-only. A foothold in the process then has nowhere to leave anything a
+    # restart would pick up, and the jar itself cannot be rewritten.
+    read_only: true
+    tmpfs:
+      # sqlite-jdbc unpacks its native library into /tmp and loads it from there, so this
+      # mount has to allow exec. Docker mounts a tmpfs noexec unless told otherwise, and
+      # without exec the driver fails to load and the agent refuses to start.
+      - /tmp:exec,size=64m
+
     volumes:
       - ./agent-data:/app/data
       - ./agent-logs:/app/logs

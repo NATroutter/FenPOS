@@ -35,7 +35,10 @@ RUN useradd --system --create-home --uid 10001 fenpos-agent
 
 WORKDIR /app
 COPY --from=build /build/target/fenpos-agent.jar /app/fenpos-agent.jar
-RUN mkdir -p /app/logs /app/data && chown -R fenpos-agent:fenpos-agent /app
+# Only the two directories the agent writes to. The jar stays root-owned and read-only to the
+# process, so a foothold in the agent cannot rewrite what runs on the next restart, and cannot
+# create the lib/ directory the manifest used to name.
+RUN mkdir -p /app/logs /app/data && chown -R fenpos-agent:fenpos-agent /app/logs /app/data
 
 # Never root: device access comes from a supplementary group instead (see
 # compose.yaml). A fixed uid keeps bind-mounted log ownership predictable.

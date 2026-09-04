@@ -4,6 +4,7 @@ import com.fazecast.jSerialComm.SerialPort;
 import fi.natroutter.fenpos.console.Command;
 import fi.natroutter.fenpos.console.ConsoleOutput;
 import fi.natroutter.fenpos.serial.SerialHandler;
+import fi.natroutter.fenpos.util.Text;
 
 import java.util.List;
 import java.util.Objects;
@@ -47,16 +48,16 @@ public class ScanCommand implements Command {
                 "PORT", "DESCRIPTION", "VID:PID", "SERIAL"));
         for (SerialPort port : ports) {
             out.println(String.format("%-12s %-28s %04X:%04X %s",
-                    port.getSystemPortName(),
-                    truncate(port.getPortDescription(), 28),
+                    Text.safe(port.getSystemPortName()),
+                    truncate(Text.safe(port.getPortDescription()), 28),
                     port.getVendorID(),
                     port.getProductID(),
-                    blankToDash(port.getSerialNumber())));
+                    blankToDash(Text.safe(port.getSerialNumber()))));
         }
     }
 
     private static String truncate(String value, int width) {
-        if (value == null) {
+        if (value.isEmpty()) {
             return "-";
         }
         return value.length() <= width ? value : value.substring(0, width - 1) + "…";

@@ -26,6 +26,23 @@ services:
     group_add:
       - "20"                     # dialout on Debian/Ubuntu
 
+    # The agent needs no capability at all. Device access comes from the group above, which is
+    # a group membership rather than a capability.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # The agent writes to the two directories below and nowhere else, so the root filesystem
+    # can stay read-only. A foothold in the process then has nowhere to leave anything a
+    # restart would pick up, and the jar itself cannot be rewritten.
+    read_only: true
+    tmpfs:
+      # sqlite-jdbc unpacks its native library into /tmp and loads it from there, so this
+      # mount has to allow exec. Docker mounts a tmpfs noexec unless told otherwise, and
+      # without exec the driver fails to load and the agent refuses to start.
+      - /tmp:exec,size=64m
+
     volumes:
       # The agent's identity lives here: the server address and the credential it
       # was issued at pairing. Lose this volume and the agent is unpaired. It
@@ -34,7 +51,7 @@ services:
       # The container runs as uid 10001 and a bind mount keeps the host directory
       # owner, so create both and hand them over before the first start or the
       # agent cannot open its store and refuses to run:
-      #   mkdir -p data logs && sudo chown -R 10001:10001 data logs
+      #   mkdir -p data logs && chmod 700 data logs && sudo chown -R 10001:10001 data logs
       - ./data:/app/data
       - ./logs:/app/logs
 

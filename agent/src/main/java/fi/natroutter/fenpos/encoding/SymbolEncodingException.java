@@ -24,4 +24,12 @@ public class SymbolEncodingException extends RuntimeException {
     public SymbolEncodingException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    /**
+     * @param message what could not be encoded, for a refusal this class raises itself rather
+     *                than one it is wrapping
+     */
+    public SymbolEncodingException(String message) {
+        super(message, null);
+    }
 }

@@ -168,6 +168,33 @@ class PrintServiceTest {
         assertEquals(5, service.jobs().all().size());
     }
 
+    @Test
+    void releasesThePayloadOnceTheJobIsFinished() {
+        PrintJob job = new PrintJob("j1", "kitchen", new CompiledJob(new byte[512], 3),
+                Clock.systemUTC(), logger);
+
+        assertEquals(512, job.bytes());
+        job.complete();
+
+        // Nothing reads the payload after the write, and holding it is what let a server choose
+        // how much memory this process spends by choosing a retention and a record cap.
+        assertEquals(512, job.bytes(), "the reported size must survive the release");
+        assertThrows(IllegalStateException.class, job::payload);
+    }
+
+    @Test
+    void releasesThePayloadWhenAJobIsCancelledOrFails() {
+        PrintJob cancelled = new PrintJob("j1", "kitchen", new CompiledJob(new byte[8], 1),
+                Clock.systemUTC(), logger);
+        assertTrue(cancelled.cancel());
+        assertThrows(IllegalStateException.class, cancelled::payload);
+
+        PrintJob failed = new PrintJob("j2", "kitchen", new CompiledJob(new byte[8], 1),
+                Clock.systemUTC(), logger);
+        failed.fail("no paper");
+        assertThrows(IllegalStateException.class, failed::payload);
+    }
+
     private static CompiledJob compiled() {
         return new CompiledJob(new byte[]{1, 2, 3}, 1);
     }

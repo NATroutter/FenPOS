@@ -377,6 +377,30 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read(json));
     }
 
+    @Test
+    void refusesAConfigSyncWhoseJobSettingsAreNotAnObject() {
+        // A ClassCastException here would escape LinkClient's ProtocolException catch and
+        // close the socket, taking every printer behind this agent offline for one bad field.
+        for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
+            assertThrows(ProtocolException.class, () -> codec.read(
+                    "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"jobs\":" + value + "}"),
+                    "jobs:" + value);
+        }
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncJobSettingsAreExplicitlyNull() throws Exception {
+        // Explicit null means the server chose not to send job settings, not that it sent a
+        // wrong-typed value; refusing it would drop the link over a field the server omitted.
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],"jobs":null}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(JobSettings.DEFAULTS, sync.jobs());
+    }
+
     // -----------------------------------------------------------------
     // Reading: agent settings
     // -----------------------------------------------------------------
@@ -414,6 +438,28 @@ class FrameCodecTest {
                 """;
 
         assertThrows(ProtocolException.class, () -> codec.read(json));
+    }
+
+    @Test
+    void refusesAConfigSyncWhoseAgentSettingsAreNotAnObject() {
+        for (String value : new String[] {"[]", "\"x\"", "7", "true"}) {
+            assertThrows(ProtocolException.class, () -> codec.read(
+                    "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[],\"agent\":" + value + "}"),
+                    "agent:" + value);
+        }
+    }
+
+    @Test
+    void fallsBackToDefaultsWhenConfigSyncAgentSettingsAreExplicitlyNull() throws Exception {
+        // Explicit null means the server chose not to send agent settings, not that it sent a
+        // wrong-typed value; refusing it would drop the link over a field the server omitted.
+        String json = """
+                {"type":"config.sync","devices":[],"assets":[],"agent":null}
+                """;
+
+        ConfigSync sync = assertInstanceOf(ConfigSync.class, codec.read(json));
+
+        assertEquals(AgentSettings.DEFAULTS, sync.agent());
     }
 
     @Test
@@ -468,6 +514,35 @@ class FrameCodecTest {
     void refusesASymbologyThisAgentDoesNotHave() {
         assertThrows(ProtocolException.class, () -> codec.read(
                 dispatch("", "{\"type\":\"BARCODE\",\"system\":\"QR\",\"content\":\"x\"}")));
+    }
+
+    @Test
+    void refusesASymbolPayloadLongerThanItsCommandCanDeclare() {
+        // GS k function B carries its length in one byte and GS ( k in two. A payload past
+        // either wraps, and the bytes beyond the declared length are read by the printer as
+        // commands. The bounds are the symbologies' own capacities, so nothing refused here
+        // would have scanned anyway.
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(256) + "\"}")));
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"QR\",\"content\":\"" + "A".repeat(4297) + "\",\"size\":3}")));
+        assertThrows(ProtocolException.class, () -> codec.read(dispatch("",
+                "{\"type\":\"PDF417\",\"content\":\"" + "A".repeat(1851)
+                        + "\",\"errorLevel\":1,\"columns\":3}")));
+    }
+
+    @Test
+    void acceptsASymbolPayloadAtItsBound() {
+        // Code 128's own bound is 253, not 255: the two characters EscPosRenderer's mandatory
+        // code-set selector adds ahead of the content are spent from the same one-byte length
+        // field, so the codec must leave room for them rather than granting the full 255.
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"BARCODE\",\"system\":\"CODE128\",\"content\":\"" + "A".repeat(253) + "\"}")));
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"QR\",\"content\":\"" + "A".repeat(4296) + "\",\"size\":3}")));
+        assertDoesNotThrow(() -> codec.read(dispatch("",
+                "{\"type\":\"PDF417\",\"content\":\"" + "A".repeat(1850)
+                        + "\",\"errorLevel\":1,\"columns\":3}")));
     }
 
     @Test
@@ -572,6 +647,25 @@ class FrameCodecTest {
         String long_ = span("").replace("Kahvi", "x".repeat(513));
 
         assertThrows(ProtocolException.class, () -> codec.read(dispatch(long_, "")));
+    }
+
+    @Test
+    void refusesSpanTextCarryingBytesThePrinterWouldReadAsACommand() {
+        // The markup parser on both sides refuses control characters, so no legitimate job
+        // carries one. Without this check the link path bypasses that rule entirely: the
+        // renderer writes span text to the port verbatim, so an ESC in a span is a command,
+        // outside the size cap and the warning line that wrap a raw write.
+        for (String escaped : new String[] {"\\u001b", "\\u001d", "\\u0000", "\\u0009",
+                "\\u007f", "\\u009b"}) {
+            String span = span("").replace("Kahvi", "ab" + escaped + "cd");
+            assertThrows(ProtocolException.class, () -> codec.read(dispatch(span, "")), escaped);
+        }
+    }
+
+    @Test
+    void acceptsTheCharactersAReceiptActuallyContains() {
+        String span = span("").replace("Kahvi", "Kahvi 2,50 EUR - Aamiainen");
+        assertDoesNotThrow(() -> codec.read(dispatch(span, "")));
     }
 
     @Test
@@ -704,5 +798,185 @@ class FrameCodecTest {
         assertThrows(ProtocolException.class, () -> codec.read(
                 "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\",\"lines\":["
                         + many + "]}}"));
+    }
+
+    // -----------------------------------------------------------------
+    // Identifier and name bounds
+    // -----------------------------------------------------------------
+
+    /** The device snapshot used below, with one field swapped by each test. */
+    private static String deviceSnapshot(String name, String port) {
+        return """
+            {"type":"config.sync","devices":[{"name":%s,"port":%s,"baudRate":9600,"dataBits":8,\
+            "stopBits":1,"parity":"NONE","flowControl":"NONE","writeTimeoutMs":1000,\
+            "autoConnect":false,"autoReconnect":false,"reconnectDelaySeconds":5,"columns":42,\
+            "codepage":"CP858","paused":false,"maxQueueDepth":100}],"assets":[]}"""
+                .formatted(name, port);
+    }
+
+    @Test
+    void refusesADeviceNameThatIsNotASlug() {
+        // Names reach log lines, console output and the status report the server validates.
+        // protocol.ts restricts them so no consumer has to escape them; this is that rule.
+        for (String name : new String[] {
+                "\"Kitchen\"", "\"kitchen printer\"", "\"-kitchen\"", "\"_kitchen\"",
+                "\"kitchen\\n[2J\"", "\"kitchen{RED}\"", "\"\"", "\"" + "k".repeat(65) + "\""}) {
+            assertThrows(ProtocolException.class,
+                    () -> codec.read(deviceSnapshot(name, "\"/dev/ttyUSB0\"")), name);
+        }
+    }
+
+    @Test
+    void acceptsTheSlugShapesTheServerCanSend() throws Exception {
+        for (String name : new String[] {"\"kitchen\"", "\"bar-2\"", "\"till_3\"", "\"a\"",
+                "\"" + "k".repeat(64) + "\""}) {
+            assertDoesNotThrow(() -> codec.read(deviceSnapshot(name, "\"/dev/ttyUSB0\"")), name);
+        }
+    }
+
+    @Test
+    void refusesAPortOutsideItsLengthBound() {
+        assertThrows(ProtocolException.class,
+                () -> codec.read(deviceSnapshot("\"kitchen\"", "\"\"")));
+        assertThrows(ProtocolException.class,
+                () -> codec.read(deviceSnapshot("\"kitchen\"", "\"" + "x".repeat(257) + "\"")));
+    }
+
+    @Test
+    void acceptsAPortAtItsMaximumLength() {
+        assertDoesNotThrow(() ->
+                codec.read(deviceSnapshot("\"kitchen\"", "\"" + "x".repeat(256) + "\"")));
+    }
+
+    @Test
+    void refusesAnIdentifierOutsideItsLengthBound() {
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.cancel\",\"jobId\":\"" + "j".repeat(65) + "\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.cancel\",\"jobId\":\"\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"ports.scan\",\"requestId\":\"\"}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"device.pause\",\"requestId\":\"r\",\"device\":\"\"}"));
+    }
+
+    @Test
+    void refusesAWelcomeWhoseIdentifiersAreOutsideTheirBounds() {
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"%s","agentName":"n",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("a".repeat(65))));
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(129))));
+    }
+
+    @Test
+    void acceptsAWelcomeAgentNameAtItsMaximumLength() {
+        assertDoesNotThrow(() -> codec.read("""
+                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(128))));
+    }
+
+    @Test
+    void refusesAServerTimeThatIsNotATimestamp() {
+        for (String value : new String[] {"\"not-a-timestamp\"", "\"\"", "\"2026-13-45T99:99:99Z\""}) {
+            assertThrows(ProtocolException.class, () -> codec.read("""
+                    {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"n",\
+                    "serverTime":%s}""".formatted(value)), value);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Collection and payload bounds
+    // -----------------------------------------------------------------
+
+    @Test
+    void refusesMoreSpansOnOneLineThanTheLimit() {
+        String spans = String.join(",", java.util.Collections.nCopies(65, span("")));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\","
+                        + "\"lines\":[{\"align\":\"LEFT\",\"spans\":[" + spans + "],\"directives\":[]}]}}"));
+    }
+
+    @Test
+    void refusesMoreDirectivesOnOneLineThanTheLimit() {
+        String directives = String.join(",",
+                java.util.Collections.nCopies(9, "{\"type\":\"FEED\",\"lines\":1}"));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"job.dispatch\",\"job\":{\"jobId\":\"j\",\"device\":\"k\",\"linefeed\":\"LF\","
+                        + "\"lines\":[{\"align\":\"LEFT\",\"spans\":[],\"directives\":[" + directives + "]}]}}"));
+    }
+
+    @Test
+    void refusesMoreDevicesThanTheLimit() {
+        String device = """
+            {"name":"d","port":"/dev/ttyUSB0","baudRate":9600,"dataBits":8,"stopBits":1,\
+            "parity":"NONE","flowControl":"NONE","writeTimeoutMs":1000,"autoConnect":false,\
+            "autoReconnect":false,"reconnectDelaySeconds":5,"columns":42,"codepage":"CP858",\
+            "paused":false,"maxQueueDepth":100}""";
+        String many = String.join(",", java.util.Collections.nCopies(257, device));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[" + many + "],\"assets\":[]}"));
+    }
+
+    @Test
+    void refusesMoreSyncedRastersThanTheLimit() {
+        // One byte of dots is a 1x1 raster, so each entry is as small as a valid one can be.
+        String raster = "{\"name\":\"logo\",\"widthDots\":1,\"heightDots\":1,\"data\":\"AA==\"}";
+        String many = String.join(",", java.util.Collections.nCopies(33, raster));
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[],\"assets\":[" + many + "]}"));
+    }
+
+    @Test
+    void refusesARasterPayloadLongerThanTheLimit() {
+        // Refused on the encoded length, before the array it asks for is allocated.
+        String data = "A".repeat(128 * 1024 + 4);
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"config.sync\",\"devices\":[],\"assets\":["
+                        + "{\"name\":\"logo\",\"widthDots\":8,\"heightDots\":1,\"data\":\"" + data + "\"}]}"));
+    }
+
+    @Test
+    void refusesARawWriteLongerThanTheLimit() {
+        // The only frame that hands arbitrary bytes to hardware.
+        assertThrows(ProtocolException.class, () -> codec.read(
+                "{\"type\":\"raw.write\",\"requestId\":\"r\",\"device\":\"kitchen\",\"bytes\":\""
+                        + "A".repeat(16_385) + "\"}"));
+    }
+
+    @Test
+    void readsARawWriteAtItsLimit() throws Exception {
+        Frames.ServerFrame frame = codec.read(
+                "{\"type\":\"raw.write\",\"requestId\":\"r\",\"device\":\"kitchen\",\"bytes\":\""
+                        + "A".repeat(16_384) + "\"}");
+
+        assertEquals(16_384, assertInstanceOf(Frames.RawWrite.class, frame).bytes().length());
+    }
+
+    @Test
+    void saturatesRatherThanWrappingOnANumberTooLargeForAnInt() {
+        // A double cast saturates at Integer.MAX_VALUE rather than wrapping, so an absurd number
+        // lands outside every bound rather than inside a small one. Worth pinning, because a cast
+        // that wrapped would make 4294967296 read as 0 and pass a bound that starts at 1.
+        assertThrows(ProtocolException.class, () -> codec.read("""
+                {"type":"config.sync","devices":[{"name":"kitchen","port":"/dev/ttyUSB0",\
+                "baudRate":1e18,"dataBits":8,"stopBits":1,"parity":"NONE","flowControl":"NONE",\
+                "writeTimeoutMs":1000,"autoConnect":false,"autoReconnect":false,\
+                "reconnectDelaySeconds":5,"columns":42,"codepage":"CP858","paused":false,\
+                "maxQueueDepth":100}],"assets":[]}"""));
+    }
+
+    @Test
+    void survivesDeeplyNestedJsonWithinTheFrameCap() {
+        // Gson's element adapter is iterative rather than recursive, so nesting this deep parses
+        // and is refused rather than overflowing the stack. Pinned because a Gson upgrade that
+        // reverted to recursion would turn one frame into a crash, and nothing else would notice.
+        int depth = 60_000;
+        String nested = "{\"type\":\"job.dispatch\",\"job\":"
+                + "[".repeat(depth) + "]".repeat(depth) + "}";
+        assertTrue(nested.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 256 * 1024);
+
+        assertThrows(ProtocolException.class, () -> codec.read(nested));
     }
 }
