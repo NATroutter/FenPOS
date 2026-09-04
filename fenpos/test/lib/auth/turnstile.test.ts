@@ -164,18 +164,18 @@ describe("the sign-in bot challenge", () => {
 			expect(called).not.toHaveBeenCalled();
 		});
 
-		it.each(["invalid-input-secret", "missing-input-secret"])(
-			"lets the sign-in through when Cloudflare answers '%s'",
-			async (code) => {
-				await configure();
-				cloudflareAnswers({ success: false, "error-codes": [code] });
+		it.each([
+			"invalid-input-secret",
+			"missing-input-secret",
+		])("lets the sign-in through when Cloudflare answers '%s'", async (code) => {
+			await configure();
+			cloudflareAnswers({ success: false, "error-codes": [code] });
 
-				// A secret Cloudflare will not take is this install's misconfiguration, not a verdict about
-				// the caller, and refusing on it locks out every account at once — including the one needed
-				// to reach Settings and fix the key.
-				expect(await verifyTurnstile("a-token", "203.0.113.4")).toEqual({ ok: true });
-			},
-		);
+			// A secret Cloudflare will not take is this install's misconfiguration, not a verdict about
+			// the caller, and refusing on it locks out every account at once — including the one needed
+			// to reach Settings and fix the key.
+			expect(await verifyTurnstile("a-token", "203.0.113.4")).toEqual({ ok: true });
+		});
 
 		it("still refuses when a secret complaint arrives beside a real verdict about the token", async () => {
 			await configure();
