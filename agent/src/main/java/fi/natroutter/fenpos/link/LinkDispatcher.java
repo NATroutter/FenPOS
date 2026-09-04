@@ -183,7 +183,7 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
             welcomeRefused.run();
             return;
         }
-        logger.info("Server welcomed this agent as '" + welcome.agentName() + "'");
+        logger.info("Server welcomed this agent as '" + text(welcome.agentName()) + "'");
     }
 
     /**

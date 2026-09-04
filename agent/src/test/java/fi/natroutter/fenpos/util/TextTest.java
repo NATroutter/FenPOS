@@ -34,6 +34,7 @@ class TextTest {
     void leavesOrdinaryTextAlone() {
         assertEquals("USB Serial (ch340)", Text.safe("USB Serial (ch340)"));
         assertEquals("Ravintola Kahvila", Text.safe("Ravintola Kahvila"));
+        assertEquals("Ravintola Kahvilä, Töölö", Text.safe("Ravintola Kahvilä, Töölö"));
     }
 
     @Test
