@@ -50,6 +50,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -151,6 +152,12 @@ public class FenPOSAgent extends FoxLib {
     private static Duration shutdownGrace = JobSettings.DEFAULTS.shutdownGrace();
     private static volatile boolean shuttingDown;
 
+    /**
+     * Released once the agent is stopping, which is the only thing that lets {@code main} return.
+     * See {@link #awaitShutdown()} for why the process needs holding open at all.
+     */
+    private static final CountDownLatch stopped = new CountDownLatch(1);
+
     public static void main(String[] args) {
         // Log output goes through the console sink so that, once the interactive console
         // is running, JLine can draw log lines above the prompt instead of over whatever
@@ -208,6 +215,38 @@ public class FenPOSAgent extends FoxLib {
 
         // Started last so its prompt appears once the startup log has settled.
         startConsole(startedAt);
+
+        awaitShutdown();
+    }
+
+    /**
+     * Holds the process open until something asks the agent to stop.
+     *
+     * **Every thread this agent starts is a daemon**, by design: the janitor, the link's scheduler
+     * and the frame worker all set it explicitly, and the console, the print queues and the serial
+     * reconnect loop are virtual threads, which are daemons and cannot be anything else. A daemon
+     * thread does not keep a JVM alive, so without this {@code main} returns, the runtime finds no
+     * live non-daemon thread, and the process exits normally seconds after it started. Under a
+     * restart policy that is a boot loop rather than a crash, which is the hardest shape of this
+     * failure to read: every line of the startup log looks correct and the exit status is zero.
+     *
+     * It kept running before only by accident. The logging library held a `java.util.Timer`, whose
+     * thread is non-daemon unless asked otherwise, and that alone was what kept the process up. When
+     * that became a daemon executor the accident ended, and the agent stopped for a reason that was
+     * nowhere in the agent.
+     *
+     * Blocking here rather than restoring somebody else's non-daemon thread: a service that runs
+     * until it is stopped should say so where it is started, rather than depend on a library's
+     * choice of thread flag.
+     */
+    private static void awaitShutdown() {
+        try {
+            stopped.await();
+        } catch (InterruptedException e) {
+            // Only the runtime interrupts this thread, and only on the way down. Preserve the flag
+            // and let main return: the hook runs the shutdown either way.
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -445,6 +484,12 @@ public class FenPOSAgent extends FoxLib {
             store.close();
         }
         logger.info("Goodbye");
+
+        // Last, so that a `stop` typed at the console drains everything above before `main` is let
+        // go. Released after the work rather than before it, because releasing first would let the
+        // process begin exiting while the queues were still settling, which is the graceful part of
+        // this shutdown. The runtime's own hook reaches here too and releasing twice costs nothing.
+        stopped.countDown();
     }
 
     private static void printBanner() {
