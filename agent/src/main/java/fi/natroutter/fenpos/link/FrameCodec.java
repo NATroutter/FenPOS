@@ -97,7 +97,10 @@ public final class FrameCodec {
     /** Longest serial port path accepted. Mirrors deviceConfigSchema.port. */
     private static final int MAX_PORT_CHARS = 256;
 
-    /** Longest agent name accepted. Mirrors welcomeSchema.agentName. */
+    /**
+     * Longest agent name accepted. Mirrors the maximum {@code welcomeSchema.agentName} declares on
+     * the server; that field has no minimum there, so there is none to mirror here.
+     */
     private static final int MAX_AGENT_NAME_CHARS = 128;
 
     /**
@@ -161,7 +164,7 @@ public final class FrameCodec {
             case "welcome" -> new Welcome(
                     requireInt(root, "protocolVersion"),
                     requireId(root, "agentId"),
-                    requireBounded(root, "agentName", 1, MAX_AGENT_NAME_CHARS),
+                    requireBounded(root, "agentName", 0, MAX_AGENT_NAME_CHARS),
                     requireString(root, "serverTime"));
             case "config.sync" -> readConfigSync(root);
             case "job.dispatch" -> new JobDispatch(readCompiledJob(requireObject(root, "job")));
