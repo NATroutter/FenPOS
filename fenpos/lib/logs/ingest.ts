@@ -95,33 +95,39 @@ async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
 }
 
 /**
- * The strictest a `logs.*` limit could legally be, for the window that exists before any settings
- * read has finished.
+ * The limits in force for the window that exists before any settings read has finished — one field
+ * read from its declared minimum, the other from its declared default, because a count and a
+ * length fail differently when the number behind them is not the one an operator configured.
  *
- * Read from each setting's declared minimum rather than its declared default: a burst that lands
- * on an agent's very first window races this read, and every line in that burst is decided before
- * the read can possibly land. A default would let the whole burst through at whatever the shipped
- * number happens to be, which for `logs.linesPerMinutePerAgent` is far above what an operator may
- * actually have configured — the minimum is the one number no configuration can be tighter than.
- * Needed because the window is now recorded before the read rather than after it — see {@link
- * allow} — which leaves a moment where a line has to be decided with nothing cached yet.
+ * `maxLinesPerWindow` reads the minimum. A burst that lands on an agent's very first window races
+ * this read, and every line in it is decided before the read can possibly land, so this is the cap
+ * actually enforced until it does. The minimum is the one number no configuration can be tighter
+ * than, so deciding against it can only drop a line the real setting would have kept — recoverable,
+ * since the agent still holds the line and the next one it sends is checked against the setting
+ * that has since loaded.
+ *
+ * `maxMessageChars` reads the default instead. Its minimum is 200 characters, and truncating a
+ * message that has already been accepted destroys the part cut off rather than merely delaying it
+ * — the setting's own description names a long stack trace as the case that hits it. Nothing
+ * retries the missing half once that has happened, so the safer number for a length is the one an
+ * install is likeliest to be running, not the one no install could be under.
  */
-function declaredLogIngestSettings(): LogIngestSettings {
-	// Both keys read here are declared `type: "integer"`, which is the only variant carrying a
-	// `min`. A mismatch here is a definition that changed type without this reader being updated,
-	// which is a programming error rather than a stored value.
-	const declaredMinimum = (key: SettingKey): number =>
-		(SETTINGS.find((setting) => setting.key === key) as Extract<SettingDefinition, { type: "integer" }>).min;
+function provisionalLogIngestSettings(): LogIngestSettings {
+	// Both keys read below are declared `type: "integer"`, the only variant carrying `min` and
+	// `fallback` as numbers. A mismatch here is a definition that changed type without this reader
+	// being updated, which is a programming error rather than a stored value.
+	const integerSetting = (key: SettingKey): Extract<SettingDefinition, { type: "integer" }> =>
+		SETTINGS.find((setting) => setting.key === key) as Extract<SettingDefinition, { type: "integer" }>;
 
 	return {
-		maxLinesPerWindow: declaredMinimum("logs.linesPerMinutePerAgent"),
-		maxMessageChars: declaredMinimum("logs.maxMessageChars"),
+		maxLinesPerWindow: integerSetting("logs.linesPerMinutePerAgent").min,
+		maxMessageChars: integerSetting("logs.maxMessageChars").fallback,
 	};
 }
 
-/** The limits in force right now, falling back to the declared minimums before the first read lands. */
+/** The limits in force right now, falling back to the provisional ones before the first read lands. */
 function currentLogIngestSettings(): LogIngestSettings {
-	return globalForIngest.fenposLogIngestSettings ?? declaredLogIngestSettings();
+	return globalForIngest.fenposLogIngestSettings ?? provisionalLogIngestSettings();
 }
 
 /**
