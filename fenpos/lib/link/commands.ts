@@ -63,15 +63,20 @@ async function commandTimeoutMs(): Promise<number> {
  * @throws ApiError when the socket had closed; whatever `send` threw otherwise
  */
 function dispatch(link: AgentLink, requestId: string, frame: ServerFrame, offlineMessage: string): void {
+	// Registered before the write, so a close arriving between here and the reply finds it.
+	link.pending.add(requestId);
+
 	let sent: boolean;
 	try {
 		sent = link.send(frame);
 	} catch (error) {
+		link.pending.delete(requestId);
 		cancelReply(requestId);
 		throw error;
 	}
 
 	if (!sent) {
+		link.pending.delete(requestId);
 		cancelReply(requestId);
 		throw new ApiError("agent_offline", offlineMessage);
 	}
@@ -106,6 +111,9 @@ export async function scanPorts(agentId: string): Promise<SerialPortInfo[]> {
 		return result.ports;
 	} catch (error) {
 		throw asApiError(error, "The agent did not answer the scan.");
+	} finally {
+		// Whether it answered, timed out or was failed by a disconnect, this request is over.
+		link.pending.delete(requestId);
 	}
 }
 
@@ -149,6 +157,8 @@ export async function sendDeviceCommand(
 		result = await waiting;
 	} catch (error) {
 		throw asApiError(error, "The agent did not answer.");
+	} finally {
+		link.pending.delete(requestId);
 	}
 
 	if (!result.ok) {
@@ -212,6 +222,8 @@ export async function sendRawWrite(agentId: string, deviceName: string, bytes: s
 		// A raw write that timed out may or may not have reached the printer. Said plainly,
 		// because the operator is the only one who can go and look at the paper.
 		throw asApiError(error, "The agent did not answer; the bytes may or may not have been written.");
+	} finally {
+		link.pending.delete(requestId);
 	}
 
 	if (!result.ok) {

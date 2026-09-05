@@ -29,6 +29,15 @@ export interface AgentLink {
 	 */
 	readonly address: string;
 	/**
+	 * The requests sent on this connection that are still waiting for an answer.
+	 *
+	 * Held per connection rather than globally because that is the lifetime that matters: when the
+	 * socket goes, every answer it was going to carry goes with it, and a caller left waiting out
+	 * its full timeout learns nothing it did not already know. Written by whoever sends a request
+	 * and read once, by the close handler.
+	 */
+	readonly pending: Set<string>;
+	/**
 	 * Sends a frame to the agent.
 	 *
 	 * @param frame the frame to send

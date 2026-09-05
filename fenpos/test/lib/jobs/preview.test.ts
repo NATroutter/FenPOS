@@ -210,6 +210,7 @@ describe("a preview and a print of the same markup", () => {
 			agentName: "helsinki",
 			connectedAt: new Date(),
 			address: "203.0.113.10",
+			pending: new Set<string>(),
 			send(frame) {
 				if (frame.type === "job.dispatch") {
 					lastJob = frame.job;

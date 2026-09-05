@@ -18,7 +18,7 @@ import {
 } from "@/lib/link/protocol";
 import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLink } from "@/lib/link/registry";
 import { plausibleTime } from "@/lib/link/reported-time";
-import { settleReply } from "@/lib/link/requests";
+import { failRequests, settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { ingestLog } from "@/lib/logs/ingest";
 import { globalAgentSettings, globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
@@ -91,6 +91,7 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 		agentName: agent.name,
 		connectedAt: new Date(),
 		address,
+		pending: new Set<string>(),
 		send(frame: ServerFrame): boolean {
 			if (socket.readyState !== socket.OPEN) {
 				return false;
@@ -236,6 +237,16 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 		// close from a displaced socket must not overwrite the state of its replacement.
 		if (unregisterLink(link)) {
 			void markOffline(agent.id);
+			// Everything this connection was going to answer, answered now. The socket is gone, so
+			// the answer is not coming, and a panel action left spinning until its own timeout tells
+			// an operator less than the truth does.
+			const abandoned = failRequests(link.pending, "The agent disconnected before it answered.");
+			if (abandoned > 0) {
+				logger.info("Failed requests waiting on a agent that disconnected", {
+					agentId: agent.id,
+					count: abandoned,
+				});
+			}
 			// Its printers are unreachable the moment the socket is, and a stale "connected"
 			// chip is a confident wrong answer rather than an obvious absence.
 			clearAgentStatus(agent.id);

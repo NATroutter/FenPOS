@@ -98,6 +98,7 @@ beforeEach(async () => {
 		agentName: agent.name,
 		connectedAt: new Date(),
 		address: "203.0.113.10",
+		pending: new Set<string>(),
 		send: () => true,
 		close() {},
 	};

@@ -26,6 +26,7 @@ function fakeLink(agentId: string): AgentLink & { readonly frames: ServerFrame[]
 		agentName: "agent",
 		connectedAt: new Date(),
 		address: "203.0.113.10",
+		pending: new Set<string>(),
 		frames,
 		send(frame) {
 			frames.push(frame);

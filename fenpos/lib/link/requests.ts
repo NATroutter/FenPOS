@@ -67,7 +67,10 @@ export class RequestTimeoutError extends Error {
 /**
  * Mints an identifier for a request.
  *
- * @returns an identifier no in-flight request is using
+ * Drawn at random rather than checked against the requests in flight: at this width a collision is
+ * not something worth a lookup on every call.
+ *
+ * @returns an identifier for one request
  */
 export function newRequestId(): string {
 	return randomUUID();
