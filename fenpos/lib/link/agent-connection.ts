@@ -317,6 +317,13 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			logger.error("Could not record agent as online", error, { agentId: agent.id });
 		}
 
+		// Before the configuration goes out, so an agent that is about to be handed work is not
+		// also being reconciled against. Skipped entirely when the frame carries no list: absent
+		// means the agent has no answer, not that it holds nothing.
+		if (frame.outstanding !== undefined) {
+			await settleLostJobs(agent.id, frame.outstanding, link.connectedAt);
+		}
+
 		link.send({
 			type: "welcome",
 			protocolVersion: PROTOCOL_VERSION,
@@ -502,6 +509,71 @@ async function markOffline(agentId: string): Promise<void> {
 		});
 	} catch (error) {
 		logger.error("Could not record agent as offline", error, { agentId });
+	}
+}
+
+/**
+ * Fails the jobs an agent no longer holds.
+ *
+ * A job's outcome reaches this server in one way only: an update from the agent that printed it.
+ * That update is best effort — an agent whose link is down drops it rather than queueing it, and a
+ * restart empties the agent's job store entirely — so a job dispatched and never heard about again
+ * would sit queued for ever, which reads as a slow printer rather than as work that will never
+ * finish. The handshake is where that is repairable, because it is the one moment the agent can say
+ * what it still has.
+ *
+ * **Only jobs older than this connection.** A job submitted after this link registered was
+ * submitted *on* it, and the agent will report it in the ordinary way; failing it here would settle
+ * a receipt that is about to print. The agent's own list cannot mention it either, since it was
+ * built before the socket opened.
+ *
+ * Each settled job is announced, because a caller subscribed to a webhook is waiting for exactly
+ * this answer and would otherwise never receive one.
+ *
+ * @param agentId the agent that just connected
+ * @param outstanding the job ids it says it still holds
+ * @param connectedAt when this connection registered
+ */
+async function settleLostJobs(agentId: string, outstanding: string[], connectedAt: Date): Promise<void> {
+	try {
+		const lost = await prisma.job.findMany({
+			where: {
+				agentId,
+				status: { notIn: [...TERMINAL_JOB_STATUSES] },
+				submittedAt: { lt: connectedAt },
+				...(outstanding.length > 0 ? { id: { notIn: outstanding } } : {}),
+			},
+			select: { id: true },
+		});
+
+		if (lost.length === 0) {
+			return;
+		}
+
+		await prisma.job.updateMany({
+			where: { id: { in: lost.map((job) => job.id) } },
+			data: {
+				status: "FAILED",
+				finishedAt: new Date(),
+				errorCode: "agent_lost_job",
+				errorMessage: "The agent reconnected without this job, so its outcome is unknown.",
+				// Cleared for the same reason `failJob` clears it: a caller who retries an
+				// identical body must get a fresh attempt rather than a replay of a job that
+				// never finished.
+				idempotencyKey: null,
+				idempotencyHash: null,
+			},
+		});
+
+		logger.warn("Settled jobs an agent no longer holds", { agentId, count: lost.length });
+
+		for (const job of lost) {
+			await queueJobSettled(job.id);
+		}
+	} catch (error) {
+		// Never fatal. The connection is worth more than the repair, and the next reconnect
+		// tries again.
+		logger.error("Could not settle jobs an agent no longer holds", error, { agentId });
 	}
 }
 

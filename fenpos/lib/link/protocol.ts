@@ -353,6 +353,16 @@ export type AssetRaster = z.infer<typeof assetRasterSchema>;
 // ---------------------------------------------------------------------------
 
 /**
+ * Most job identifiers one `hello` may carry.
+ *
+ * An agent with more outstanding than this sends none at all rather than a truncated list, because
+ * a partial list is read here as "everything else has been abandoned" and would settle jobs that
+ * are still printing. Well inside {@link MAX_FRAME_BYTES}: a thousand identifiers of the length this
+ * server issues is some thirty kilobytes.
+ */
+export const MAX_OUTSTANDING_JOBS = 1000;
+
+/**
  * Agent to server: the opening frame, sent once per connection.
  *
  * Carries no credential — the token is presented in the upgrade request, so a connection
@@ -365,6 +375,16 @@ export const helloSchema = z.object({
 	agentVersion: z.string().max(64),
 	platform: z.string().max(128),
 	hostname: z.string().max(255),
+	/**
+	 * The jobs the agent accepted and has not finished reporting on.
+	 *
+	 * Optional, and the distinction between absent and empty is the whole point. Empty means "I
+	 * hold none of yours", which lets this server settle every job it still has open for that
+	 * agent. Absent means the agent has no answer — it is an older build, or it holds more than it
+	 * can report honestly — and nothing is settled on the strength of it. Reading absent as empty
+	 * would fail every receipt an older agent was in the middle of printing.
+	 */
+	outstanding: z.array(idSchema).max(MAX_OUTSTANDING_JOBS).optional(),
 });
 
 /** Server to agent: accepted, here is who you are. */
