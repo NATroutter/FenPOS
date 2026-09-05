@@ -20,7 +20,7 @@ import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLin
 import { plausibleTime } from "@/lib/link/reported-time";
 import { settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
-import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
+import { ingestLog } from "@/lib/logs/ingest";
 import { globalAgentSettings, globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
 import { queueJobSettled } from "@/lib/webhooks/notify";
 
@@ -239,7 +239,6 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			// Its printers are unreachable the moment the socket is, and a stale "connected"
 			// chip is a confident wrong answer rather than an obvious absence.
 			clearAgentStatus(agent.id);
-			clearLogWindow(agent.id);
 			publish({
 				kind: "agent",
 				agentId: agent.id,

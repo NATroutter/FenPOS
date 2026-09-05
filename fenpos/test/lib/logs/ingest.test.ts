@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { logsDb, prisma } from "@/lib/db";
-import { clearLogWindow, ingestLog } from "@/lib/logs/ingest";
+import { ingestLog } from "@/lib/logs/ingest";
 import { listLogs } from "@/lib/logs/log-service";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -33,9 +33,6 @@ describe("log ingestion", () => {
 		otherAgentId = (await prisma.agent.create({ data: { name: "site-b" }, select: { id: true } })).id;
 
 		await prisma.device.create({ data: { agentId, name: "kitchen", port: "COM3" } });
-
-		clearLogWindow(agentId);
-		clearLogWindow(otherAgentId);
 	});
 
 	const line = (overrides: Partial<Parameters<typeof ingestLog>[1]> = {}) =>
@@ -114,19 +111,6 @@ describe("log ingestion", () => {
 
 		// One site flooding must not silence another's lines.
 		expect(await ingestLog(otherAgentId, line({ message: "still heard" }))).toBe(true);
-	});
-
-	it("starts a fresh allowance once an agent's window is cleared", async () => {
-		for (let attempt = 0; attempt < 200; attempt++) {
-			await ingestLog(agentId, line());
-		}
-		expect(await ingestLog(agentId, line())).toBe(false);
-
-		// What a reconnect does: the agent that comes back is not still being punished for what
-		// the previous connection did.
-		clearLogWindow(agentId);
-
-		expect(await ingestLog(agentId, line())).toBe(true);
 	});
 
 	it("keeps the agent's own timestamp", async () => {
@@ -215,10 +199,10 @@ describe("log ingestion", () => {
 	 * (which `settings-service.test.ts` already covers).
 	 *
 	 * Settings are read once per rate-limit window rather than once per line (`ingest.ts`,
-	 * `refreshLogIngestSettings`), which this file's `beforeEach` cooperates with: it creates a
-	 * fresh agent id and calls `clearLogWindow` for it every test, so the first `ingestLog` call in
-	 * each test always finds no window and refreshes the cached settings before checking anything
-	 * against them.
+	 * `refreshLogIngestSettings`), which this file's `beforeEach` cooperates with: it mints a fresh
+	 * agent id every test, so no window from an earlier test can already be keyed to it, and the
+	 * first `ingestLog` call in each test always finds no window and refreshes the cached settings
+	 * before checking anything against them.
 	 */
 	describe("configured via settings", () => {
 		it("throttles at the configured rate rather than the built-in one", async () => {

@@ -6,7 +6,12 @@ import type { LogFrame } from "@/lib/link/protocol";
 import { plausibleTime } from "@/lib/link/reported-time";
 import { logger } from "@/lib/logger";
 import { LOG_SEVERITY } from "@/lib/logs/log-sort";
-import { globalLogIngestSettings } from "@/lib/settings/settings-service";
+import {
+	globalLogIngestSettings,
+	SETTINGS,
+	type SettingDefinition,
+	type SettingKey,
+} from "@/lib/settings/settings-service";
 
 /**
  * Recording log lines an agent forwarded.
@@ -15,6 +20,11 @@ import { globalLogIngestSettings } from "@/lib/settings/settings-service";
  * will not open, a job retrying forever — produces the same line thousands of times a minute, and
  * without a bound it would fill the database with it and push out everything worth reading. The
  * cap is per agent, so one misbehaving site cannot drown out the others.
+ *
+ * The window is keyed by agent and expires on its own clock. It is deliberately not cleared when a
+ * connection closes: the budget is stated per minute, and releasing it on disconnect would make it
+ * per connection instead — an agent that cycles its socket would buy a fresh one each time, which
+ * is exactly the failure loop this exists to bound.
  *
  * Retention is bounded for a related reason — this table exists to answer "what happened this
  * shift" — but it is not enforced here. It runs on `lib/maintenance/pass.ts`'s timer, off the
@@ -85,6 +95,36 @@ async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
 }
 
 /**
+ * The strictest a `logs.*` limit could legally be, for the window that exists before any settings
+ * read has finished.
+ *
+ * Read from each setting's declared minimum rather than its declared default: a burst that lands
+ * on an agent's very first window races this read, and every line in that burst is decided before
+ * the read can possibly land. A default would let the whole burst through at whatever the shipped
+ * number happens to be, which for `logs.linesPerMinutePerAgent` is far above what an operator may
+ * actually have configured — the minimum is the one number no configuration can be tighter than.
+ * Needed because the window is now recorded before the read rather than after it — see {@link
+ * allow} — which leaves a moment where a line has to be decided with nothing cached yet.
+ */
+function declaredLogIngestSettings(): LogIngestSettings {
+	// Both keys read here are declared `type: "integer"`, which is the only variant carrying a
+	// `min`. A mismatch here is a definition that changed type without this reader being updated,
+	// which is a programming error rather than a stored value.
+	const declaredMinimum = (key: SettingKey): number =>
+		(SETTINGS.find((setting) => setting.key === key) as Extract<SettingDefinition, { type: "integer" }>).min;
+
+	return {
+		maxLinesPerWindow: declaredMinimum("logs.linesPerMinutePerAgent"),
+		maxMessageChars: declaredMinimum("logs.maxMessageChars"),
+	};
+}
+
+/** The limits in force right now, falling back to the declared minimums before the first read lands. */
+function currentLogIngestSettings(): LogIngestSettings {
+	return globalForIngest.fenposLogIngestSettings ?? declaredLogIngestSettings();
+}
+
+/**
  * Records a log line an agent sent.
  *
  * **Never throws**, for the same reason `recordServerLog` (`lib/logs/log-service.ts`) never does: the
@@ -102,9 +142,7 @@ export async function ingestLog(agentId: string, frame: LogFrame): Promise<boole
 		return false;
 	}
 
-	// Populated by allow() above, which refreshes it whenever this agent's window is (re)created —
-	// guaranteed to have run at least once by the time any window exists.
-	const settings = globalForIngest.fenposLogIngestSettings as LogIngestSettings;
+	const settings = currentLogIngestSettings();
 
 	try {
 		// Resolved by name within this agent, so a agent cannot attribute a line to another's device
@@ -182,15 +220,18 @@ async function allow(agentId: string): Promise<boolean> {
 	const window = windows.get(agentId);
 
 	if (!window || now >= window.resetAt) {
-		await refreshLogIngestSettings();
+		// Recorded before the settings read, not after it. Nothing serialises these calls — the
+		// link handler starts each one without waiting for the last — so with the window written
+		// only after the await, every line of a burst found no window, made one of its own, and
+		// was allowed. The cap is decided per window, and the burst made as many windows as it
+		// had lines.
 		windows.set(agentId, { count: 1, resetAt: now + WINDOW_MS, warned: false });
+		await refreshLogIngestSettings();
 		return true;
 	}
 
 	window.count++;
-	// Set by refreshLogIngestSettings the last time any agent's window was (re)created, which has
-	// happened at least once by the time a pre-existing window reaches this line.
-	const settings = globalForIngest.fenposLogIngestSettings as LogIngestSettings;
+	const settings = currentLogIngestSettings();
 	if (window.count <= settings.maxLinesPerWindow) {
 		return true;
 	}
@@ -205,9 +246,4 @@ async function allow(agentId: string): Promise<boolean> {
 		});
 	}
 	return false;
-}
-
-/** Forgets an agent's rate-limit window. Called when it disconnects. */
-export function clearLogWindow(agentId: string): void {
-	windows.delete(agentId);
 }
