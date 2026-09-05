@@ -114,6 +114,27 @@ export function resolveAddress(
 }
 
 /**
+ * The address that opened the connection, and nothing else.
+ *
+ * Deliberately narrower than {@link getClientAddress}, which consults the trusted-proxy settings to
+ * decide whether a forwarding header may name somebody else. That is a database read, and the two
+ * endpoints an unauthenticated caller can reach have to be able to refuse one before doing any: a
+ * request that is going to be turned away must not cost a query first, or the refusal is more
+ * expensive than the request.
+ *
+ * The value is the peer, so it cannot be chosen by the caller, which is what a limiter needs. On an
+ * install with no trusted proxy configured — the default — it is the same value
+ * {@link getClientAddress} would return anyway.
+ *
+ * @returns the peer's address, or {@link UNKNOWN_ADDRESS} when this process cannot see one
+ */
+export async function getPeerAddress(): Promise<string> {
+	const headerList = await headers();
+	const peer = headerList.get(PEER_ADDRESS_HEADER);
+	return peer && peer.trim() !== "" ? normaliseAddress(peer) : UNKNOWN_ADDRESS;
+}
+
+/**
  * Resolves the caller's address, and says where it came from.
  *
  * Used by the Settings page to show an operator what their own configuration currently produces.

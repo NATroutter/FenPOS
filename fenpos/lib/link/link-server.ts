@@ -37,14 +37,11 @@ const MAX_PAYLOAD_BYTES = 256 * 1024;
 /**
  * How many upgrade attempts one address may make per minute.
  *
- * Every attempt costs a settings read and an indexed lookup before it can be refused, on a request
- * that carries no credential — so the work is done first and the refusal comes second, which is the
- * wrong way round for anything unauthenticated. An agent needs a handful: one on start, and one per
- * reconnect while a flaky link settles, which the agent's own backoff already spaces out. Twenty a
- * minute is far more than that and far less than a flood.
- *
- * Keyed by address, which is now the peer that opened the connection rather than a header the caller
- * wrote — the reason this bound is worth having at all.
+ * Keyed on the peer that opened the connection — read straight off the socket, with no settings
+ * query — because the endpoint carries no credential, and a caller this is about to refuse must not
+ * pay for a database read first. An agent needs a handful: one on start, and one per reconnect while
+ * a flaky link settles, which the agent's own backoff already spaces out. Twenty a minute is far more
+ * than that and far less than a flood.
  */
 const upgradeLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
 
@@ -126,22 +123,25 @@ async function routeUpgrade(
 	socket: Duplex,
 	head: Buffer,
 ): Promise<void> {
-	const address = await clientAddress(request);
+	// The socket's own peer, read synchronously and before anything else. Resolving the address a
+	// forwarding header names costs a settings query, and doing that ahead of the limiter would
+	// mean every attempt this endpoint is about to refuse paid for a database read first.
+	const peer = request.socket.remoteAddress ?? UNKNOWN_ADDRESS;
 
 	try {
 		// Before the token is read, and so before the database is touched: the point of a limiter on an
 		// unauthenticated path is that a caller over it costs nothing to turn away.
-		const attempt = upgradeLimiter.consume(address);
+		const attempt = upgradeLimiter.consume(peer);
 		if (!attempt.allowed) {
 			refuse(socket, 429, "Too Many Requests");
-			logger.warn("Link upgrade rate limit engaged", { address, retryAfterMs: attempt.retryAfterMs });
+			logger.warn("Link upgrade rate limit engaged", { address: peer, retryAfterMs: attempt.retryAfterMs });
 			return;
 		}
 
 		const token = bearerToken(request.headers.authorization);
 		if (!token) {
 			refuse(socket, 401, "Unauthorized");
-			logger.warn("Link upgrade without a bearer token", { address });
+			logger.warn("Link upgrade without a bearer token", { address: peer });
 			return;
 		}
 
@@ -150,14 +150,14 @@ async function routeUpgrade(
 			// One response for an unknown token and for a agent that was unpaired, so the
 			// endpoint cannot be used to test whether a token was ever valid.
 			refuse(socket, 401, "Unauthorized");
-			logger.warn("Link upgrade with an unrecognised token", { address });
+			logger.warn("Link upgrade with an unrecognised token", { address: peer });
 			return;
 		}
 
 		// A working credential does not spend the address budget, so an agent reconnecting
 		// repeatedly through a bad link is not refused by the address limiter above. What bounds
 		// the credential itself is the per-agent budget below.
-		upgradeLimiter.reset(address);
+		upgradeLimiter.reset(peer);
 
 		// Spent, not returned: this is the budget that actually bounds a credential holder.
 		const budget = agentLimiter.consume(agent.id);
@@ -165,17 +165,22 @@ async function routeUpgrade(
 			refuse(socket, 429, "Too Many Requests");
 			logger.warn("Agent connection rate limit engaged", {
 				agentId: agent.id,
-				address,
+				address: peer,
 				retryAfterMs: budget.retryAfterMs,
 			});
 			return;
 		}
 
+		// Past every refusal, so the settings this costs are read once per accepted connection
+		// rather than once per attempt. Recorded on the connection so a displacement can name both
+		// ends, which on an install behind a proxy means the address the proxy names.
+		const address = await clientAddress(request);
+
 		wss.handleUpgrade(request, socket, head, (ws) => {
 			handleAgentConnection(ws, agent, address);
 		});
 	} catch (error) {
-		logger.error("Failed to handle a link upgrade", error, { address });
+		logger.error("Failed to handle a link upgrade", error, { address: peer });
 		// The socket is half-upgraded and cannot be handed back to the HTTP server, so it is
 		// destroyed rather than left consuming a file descriptor.
 		socket.destroy();
@@ -236,8 +241,9 @@ function refuse(socket: Duplex, status: number, message: string): void {
  * value either way, and the same rule applied to it: a forwarding header is read only when that
  * peer is a configured trusted proxy.
  *
- * **Never throws.** It is called before the try in {@link routeUpgrade} and reads settings to do its
- * job; a database hiccup must cost an agent its address in the log, not its connection.
+ * **Never throws.** Called from inside {@link routeUpgrade} once every refusal is past, reading
+ * settings to do its job — a database hiccup at that point must cost an agent its address in the
+ * log, not the connection it has already been granted.
  *
  * @param request the upgrade request
  * @returns the caller's address

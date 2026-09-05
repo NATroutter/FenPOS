@@ -5,7 +5,7 @@ import { pairingLimiter } from "@/lib/auth/rate-limit";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { PROTOCOL_VERSION } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
-import { getClientAddress } from "@/lib/request-context";
+import { getClientAddress, getPeerAddress } from "@/lib/request-context";
 import { booleanSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -47,29 +47,40 @@ const pairRequestSchema = z.object({
 const REJECTION = { error: "invalid_key", message: "That pairing code is not valid." } as const;
 
 export async function POST(request: Request): Promise<Response> {
-	const address = await getClientAddress();
+	// The peer, not the resolved address: this keys the limiter below, and reading the
+	// trusted-proxy settings first would mean a database query on every request the limiter is
+	// about to refuse. The resolved address is read afterwards, only for the record.
+	const peer = await getPeerAddress();
+	// Overwritten below once it is safe to spend a settings read; kept as the peer until then so
+	// an error thrown before that point still has something honest to log.
+	let address = peer;
 
 	try {
-		// Consumed first, unconditionally — before the body is read and before `pairing.enabled`
-		// is even checked. Checking `pairing.enabled` first would be cheaper, but it would also
-		// mean the limiter's state never advances while pairing is off, and a caller who sends a
-		// flood of requests would see request #11 answered differently depending on whether
-		// pairing is on (429 rate_limited) or off (401, forever, since the limiter was never
-		// touched) — a volume-based oracle for "is this install worth attacking" that needs no
-		// correct code at all. Consuming here first keeps the limiter's state, and so the
-		// endpoint's behaviour under volume, identical in both cases. Do not "optimise" this back.
-		const limit = pairingLimiter.consume(address);
+		// Consumed first, unconditionally — before any settings are read, before the body is read
+		// and before `pairing.enabled` is even checked. Checking `pairing.enabled` first would be
+		// cheaper, but it would also mean the limiter's state never advances while pairing is off,
+		// and a caller who sends a flood of requests would see request #11 answered differently
+		// depending on whether pairing is on (429 rate_limited) or off (401, forever, since the
+		// limiter was never touched) — a volume-based oracle for "is this install worth attacking"
+		// that needs no correct code at all. Consuming here first keeps the limiter's state, and so
+		// the endpoint's behaviour under volume, identical in both cases. Do not "optimise" this back.
+		const limit = pairingLimiter.consume(peer);
 		if (!limit.allowed) {
-			logger.warn("Pairing rate limit engaged", { address, retryAfterMs: limit.retryAfterMs });
+			logger.warn("Pairing rate limit engaged", { address: peer, retryAfterMs: limit.retryAfterMs });
 			throw new ApiError("rate_limited", "Too many pairing attempts. Try again shortly.", {
 				retryAfterSeconds: Math.ceil(limit.retryAfterMs / 1000),
 			});
 		}
 
 		if (!(await booleanSetting("pairing.enabled"))) {
-			logger.warn("Pairing refused: pairing is switched off", { address });
+			logger.warn("Pairing refused: pairing is switched off", { address: peer });
 			return Response.json(REJECTION, { status: 401 });
 		}
+
+		// Past the limiter, so the query this costs is one a caller cannot make cheaply. Used for
+		// the log lines and the pairing record, where an install behind a proxy wants the address
+		// the proxy names rather than the proxy's own.
+		address = await getClientAddress();
 
 		// Bounded on the way in rather than measured afterwards. This is the one unauthenticated write
 		// in the system, so a body it is going to refuse must never be a body it first holds — reading
@@ -118,7 +129,7 @@ export async function POST(request: Request): Promise<Response> {
 
 		// A successful pairing clears the throttle, so installing several agents in a row from
 		// one workstation does not lock the installer out partway through.
-		pairingLimiter.reset(address);
+		pairingLimiter.reset(peer);
 
 		logger.info("Agent paired", {
 			address,

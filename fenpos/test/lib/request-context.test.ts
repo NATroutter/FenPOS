@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { resolveAddress, UNKNOWN_ADDRESS } from "@/lib/request-context";
+import { headers } from "next/headers";
+import { describe, expect, it, vi } from "vitest";
+import { getPeerAddress, PEER_ADDRESS_HEADER, resolveAddress, UNKNOWN_ADDRESS } from "@/lib/request-context";
 import type { GlobalProxyTrust } from "@/lib/settings/settings-service";
+import * as settings from "@/lib/settings/settings-service";
+
+vi.mock("next/headers", () => ({
+	headers: vi.fn(),
+}));
 
 /**
  * Tests for how the caller's address is worked out.
@@ -236,5 +242,23 @@ describe("resolving the caller's address", () => {
 		expect(resolveAddress(from({ "x-forwarded-for": "  203.0.113.9  " }), rightmost, PROXY).address).toBe(
 			"203.0.113.9",
 		);
+	});
+});
+
+describe("getPeerAddress", () => {
+	it("answers from the connection alone, with no settings read", async () => {
+		// This is what the two unauthenticated endpoints key their limiter on, and it has to be
+		// answerable before anything touches the database — a request that is about to be refused
+		// must not cost a query first.
+		const reads = vi.spyOn(settings, "globalProxyTrust");
+		vi.mocked(headers).mockResolvedValue(new Headers({ [PEER_ADDRESS_HEADER]: "203.0.113.5" }));
+
+		await expect(getPeerAddress()).resolves.toBe("203.0.113.5");
+		expect(reads).not.toHaveBeenCalled();
+	});
+
+	it("answers unknown when the process cannot see a peer", async () => {
+		vi.mocked(headers).mockResolvedValue(new Headers());
+		await expect(getPeerAddress()).resolves.toBe(UNKNOWN_ADDRESS);
 	});
 });
