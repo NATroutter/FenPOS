@@ -309,6 +309,16 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 				displacedConnectedAt: displaced.connectedAt.toISOString(),
 			});
 			displaced.close("replaced by a newer connection");
+			// The old socket's own close handler will run, but `unregisterLink` inside it finds this
+			// connection already holding the registry slot and does nothing — so this is the only
+			// place anything waiting on the displaced connection ever gets failed.
+			const abandoned = failRequests(displaced.pending, "The agent reconnected on a new connection.");
+			if (abandoned > 0) {
+				logger.info("Failed requests waiting on a agent that was displaced", {
+					agentId: agent.id,
+					count: abandoned,
+				});
+			}
 		}
 
 		try {

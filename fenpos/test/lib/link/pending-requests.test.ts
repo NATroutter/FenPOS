@@ -147,7 +147,38 @@ describe("pending requests on a closed connection", () => {
 		socket.close();
 
 		const message = await scan;
-		expect(message).toContain("disconnected");
+		// "disconnected" alone would also match dispatch's own "disconnected before the scan was
+		// sent" if a slow settings read pushed the send itself past the socket closing. Only the
+		// close handler's own reason says the request was answered by the disconnect rather than
+		// never sent.
+		expect(message).toContain("before it answered");
+		expect(Date.now() - started).toBeLessThan(5_000);
+	}, 20_000);
+
+	it("fails a scan waiting on a connection that a reconnect displaces", async () => {
+		// The old connection's own close event fires after the registry already points at the new
+		// one, so its close handler's `unregisterLink` finds nothing to do and never reaches
+		// `failRequests`. A scan started on it has to be failed at the point of displacement itself,
+		// or it sits waiting on a socket that is still technically open but will never answer again.
+		await setSetting("link.scanTimeoutSeconds", 120);
+		const agent = await pairedAgent();
+
+		const first = connect(agent.token);
+		await new Promise<void>((resolve) => first.once("open", resolve));
+		first.send(helloFrame());
+		await frameAt(first, 1);
+
+		const started = Date.now();
+		const scan = scanPorts(agent.id).catch((error: Error) => error.message);
+		await delay(50);
+
+		const second = connect(agent.token);
+		await new Promise<void>((resolve) => second.once("open", resolve));
+		second.send(helloFrame());
+		await frameAt(second, 1);
+
+		const message = await scan;
+		expect(message).toContain("reconnected on a new connection");
 		expect(Date.now() - started).toBeLessThan(5_000);
 	}, 20_000);
 });
