@@ -2,8 +2,10 @@ import "server-only";
 import { issuePairingCode } from "@/lib/agents/pairing";
 import { prisma } from "@/lib/db";
 import type { AgentStatus } from "@/lib/domain/enums";
+import { TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
+import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
  * Agent lifecycle as the admin panel sees it: creating, renaming, unpairing, removing.
@@ -176,6 +178,35 @@ export async function unpairAgent(agentId: string): Promise<{ code: string; expi
 
 	if (updated.count === 0) {
 		throw new ApiError("unknown_agent", "No such agent.");
+	}
+
+	// The agent will never report on these. Its credential is gone, so it cannot reconnect to
+	// tell anyone how they ended, and nothing else on this side can answer for a printer. Left
+	// alone they would read as queued for ever. Selected before the update because `updateMany`
+	// does not hand back the rows it touched, and each one still needs its own announcement below.
+	const stranded = await prisma.job.findMany({
+		where: { agentId, status: { notIn: [...TERMINAL_JOB_STATUSES] } },
+		select: { id: true },
+	});
+
+	if (stranded.length > 0) {
+		await prisma.job.updateMany({
+			where: { id: { in: stranded.map((job) => job.id) } },
+			data: {
+				status: "FAILED",
+				finishedAt: new Date(),
+				errorCode: "agent_unpaired",
+				errorMessage: "The agent was unpaired before this job finished.",
+				idempotencyKey: null,
+				idempotencyHash: null,
+			},
+		});
+
+		// A caller subscribed to a webhook is waiting for precisely this answer, and an unpair
+		// must tell it the same way a reconnect that finds a job gone does.
+		for (const job of stranded) {
+			await queueJobSettled(job.id);
+		}
 	}
 
 	// Replaces any outstanding code: one from the previous pairing attempt must not carry over,

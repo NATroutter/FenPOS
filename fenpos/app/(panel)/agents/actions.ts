@@ -110,6 +110,11 @@ export async function unpairAgent(agentId: string): Promise<ActionState> {
 /**
  * Deletes a agent and everything configured behind it.
  *
+ * Closed with the `unpaired` code, as unpairing is. From the agent's side the two say the same
+ * thing — the credential this link was using no longer exists — and the code is what stops it
+ * retrying for ever against a row that is gone, ignoring a fresh pairing code on every later boot
+ * because an identity is still stored.
+ *
  * @param agentId the agent to delete
  * @returns the state to render
  */
@@ -117,7 +122,7 @@ export async function deleteAgent(agentId: string): Promise<ActionState> {
 	return panelAction(
 		"agents:delete",
 		async () => {
-			getLink(agentId)?.close("removed by the administrator");
+			getLink(agentId)?.close("removed by the administrator", CLOSE.unpaired);
 			await deleteAgentRecord(agentId);
 			logger.info("Agent deleted", { agentId });
 		},

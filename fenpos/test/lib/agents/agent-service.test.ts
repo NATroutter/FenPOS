@@ -78,4 +78,29 @@ describe("unpairAgent", () => {
 	it("refuses an unknown agent", async () => {
 		await expect(unpairAgent("no-such-agent")).rejects.toThrow(/no such agent/i);
 	});
+
+	it("fails the jobs an unpaired agent was still working on", async () => {
+		// Clearing the credential means the agent will never report on these. Left alone they
+		// would sit queued for ever, with no agent left that could ever settle them.
+		const agent = await prisma.agent.create({ data: { name: "kitchen", tokenHash: "hash" }, select: { id: true } });
+		const device = await prisma.device.create({
+			data: { agentId: agent.id, name: "printer", port: "COM1" },
+			select: { id: true },
+		});
+		const queued = await prisma.job.create({
+			data: { agentId: agent.id, deviceId: device.id, status: "QUEUED" },
+			select: { id: true },
+		});
+		const done = await prisma.job.create({
+			data: { agentId: agent.id, deviceId: device.id, status: "COMPLETED" },
+			select: { id: true },
+		});
+
+		await unpairAgent(agent.id);
+
+		expect((await prisma.job.findUniqueOrThrow({ where: { id: queued.id } })).status).toBe("FAILED");
+		expect((await prisma.job.findUniqueOrThrow({ where: { id: queued.id } })).errorCode).toBe("agent_unpaired");
+		// A settled job stays settled: how a receipt ended is answered once.
+		expect((await prisma.job.findUniqueOrThrow({ where: { id: done.id } })).status).toBe("COMPLETED");
+	});
 });
