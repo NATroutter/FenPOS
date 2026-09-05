@@ -13,7 +13,12 @@ services:
 
     ports:
       # Panel, print API and the agent link all share this one port.
-      - "3000:3000"
+      #
+      # Bound to loopback because nothing here terminates TLS, and the agent link carries a bearer
+      # token on every connection. Put a reverse proxy in front and let it hold the certificate; if
+      # you genuinely mean to expose this directly, change this to "3000:3000" and understand that
+      # every credential on it crosses the network in the clear.
+      - "127.0.0.1:3000:3000"
 
     volumes:
       # Agents, devices, keys, jobs and the hashed account credential all live here. Back it up.
@@ -30,7 +35,10 @@ services:
       # Set it in the shell that runs `docker compose`, or in a .env file next to this one
       # (docker compose loads that automatically). Never commit the real value. Changing it
       # signs everyone out. It is not stored in the data/ volume above.
-      BETTER_AUTH_SECRET: "GENERATE_NEW_SECRET"
+      #
+      # The `:?` form is what makes the failure land here, before a container exists, rather
+      # than as a crash loop with the reason buried in a restarting container's logs.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET; generate one with `openssl rand -base64 32`}
       BETTER_AUTH_URL: "https://fenpos.example.com"
       TZ: "Europe/Helsinki"
 
