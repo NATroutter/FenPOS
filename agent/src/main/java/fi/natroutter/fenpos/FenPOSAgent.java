@@ -454,9 +454,10 @@ public class FenPOSAgent extends FoxLib {
     /**
      * Stops the agent in dependency order.
      * <p>
-     * Queues settle what is outstanding, then the serial ports are released, and the store
-     * closes last so a job update written during the drain still lands. Guarded so a manual
-     * {@code stop} followed by the JVM hook does not run it twice.
+     * Queues settle what is outstanding first, while the link is still up so their last updates
+     * reach the server; then the link goes down, then the serial ports are released, and the store
+     * closes last so a write during the drain still lands. Guarded so a manual {@code stop}
+     * followed by the JVM hook does not run it twice.
      */
     public static synchronized void shutdown() {
         if (shuttingDown) {
@@ -471,11 +472,15 @@ public class FenPOSAgent extends FoxLib {
         if (janitor != null) {
             janitor.shutdownNow();
         }
-        if (link != null) {
-            link.shutdown();
-        }
+        // Before the link, so that every job this drain settles still has a socket to report on.
+        // Queued work is cancelled here and anything mid-write is failed, and the server has no
+        // other source for either: it would otherwise hold both as queued for good, which reads
+        // as a slow printer rather than as work that will never finish.
         if (printService != null) {
             printService.shutdown(shutdownGrace);
+        }
+        if (link != null) {
+            link.shutdown();
         }
         if (connections != null) {
             connections.shutdown();
