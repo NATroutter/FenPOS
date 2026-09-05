@@ -116,3 +116,7 @@ run/
 /FoxFrame/
 /logs/
 /docs
+
+# Security-audit reproductions. Deliberately untracked: a reproduction of an unfixed
+# flaw is not something to publish. Mirrors fenpos/.gitignore's `test/security/`.
+src/test/java/fi/natroutter/fenpos/security/
