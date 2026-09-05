@@ -268,9 +268,8 @@ class LinkDispatcherTest {
         assertTrue(port.awaitWrites(5000));
         dispatcher.accept(dispatch("job-1", "kitchen", "Kahvi"));
 
-        // A dispatch can arrive twice — a server retry after a close it did not see
-        // acknowledged, or a spool replayed on reconnect — and a receipt printed twice costs
-        // whoever is holding the paper.
+        // Nothing on this side can tell a second copy of a dispatch from a new one except by its
+        // identifier, and a receipt printed twice costs whoever is holding the paper.
         Thread.sleep(250);
         assertEquals(1, port.writeCount());
     }

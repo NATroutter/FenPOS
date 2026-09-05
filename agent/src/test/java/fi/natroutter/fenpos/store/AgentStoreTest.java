@@ -71,9 +71,9 @@ class AgentStoreTest {
             store.saveIdentity(new AgentIdentity(
                     "https://example.test", "a", "n", "t", Instant.parse("2026-09-04T10:00:00Z")));
 
-            // The directory is what matters more than the file: SQLite creates -wal and -shm
-            // siblings later, whatever mode they end up with, and a directory nobody else can
-            // traverse puts all three out of reach.
+            // The directory is what matters more than the file: SQLite writes a rollback journal
+            // beside the database for the length of every write, whatever mode that file ends up
+            // with, and a directory nobody else can traverse puts both out of reach.
             assertEquals(PosixFilePermissions.fromString("rwx------"),
                     Files.getPosixFilePermissions(database.getParent()));
             assertEquals(PosixFilePermissions.fromString("rw-------"),
@@ -171,8 +171,9 @@ class AgentStoreTest {
 
         // A DELETE moves the page to SQLite's freelist without zeroing it, so the credential an
         // operator believes they revoked is still readable with `strings agent.db`. Every file in
-        // the store's directory is checked, not just agent.db itself, so this keeps meaning what
-        // it says if the store ever grows a -wal or -shm sibling alongside it.
+        // the store's directory is checked rather than agent.db alone, so a copy left behind in a
+        // journal beside it fails this too — as would one in the -wal sibling that switching the
+        // store off its rollback journal would introduce.
         try (var entries = Files.list(database.getParent())) {
             for (Path entry : (Iterable<Path>) entries::iterator) {
                 if (Files.isRegularFile(entry)) {

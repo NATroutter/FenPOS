@@ -9,9 +9,10 @@ const { plausibleTime } = await import("@/lib/link/reported-time");
  *
  * The field is written to columns retention sweeps on, so the two directions fail differently and
  * the bounds are deliberately not symmetric. A time far in the past has a row archived and deleted
- * on the next pass; a time far in the future has it swept by nothing, ever. Backdating is also
- * sometimes truthful — job state reconciles on reconnect, so a receipt that finished during an
- * outage is reported hours later with the time it really finished — while a forward drift never is.
+ * on the next pass; a time far in the future has it swept by nothing, ever. An early time is also
+ * the one that can be honest: a frame is stamped as it goes out and one that cannot go is dropped
+ * rather than queued, so the only distance between a reported time and this server's is the
+ * distance between the two clocks — and a clock that is behind is ordinary. A forward drift is not.
  */
 describe("reading a time an agent reported", () => {
 	const NOW = Date.parse("2026-09-03T12:00:00.000Z");
@@ -22,8 +23,8 @@ describe("reading a time an agent reported", () => {
 	});
 
 	it("believes a backdated time inside the day it allows", () => {
-		// A job that finished during a six-hour outage and was reported on reconnect. Squashing this
-		// would lose a real fact and make every line of the backlog claim the same moment.
+		// A till whose clock is six hours behind, reporting a job it really did finish. Squashing
+		// this would lose a real fact and hide the wrong clock that produced it.
 		expect(at("2026-09-03T06:00:00.000Z")).toBe("2026-09-03T06:00:00.000Z");
 	});
 

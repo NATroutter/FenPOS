@@ -366,11 +366,14 @@ raised it.
   for the last 10,000 ids, which is far longer than any retry a dropped link can produce. The one
   frame that does end a connection is an oversized one, on both sides: a peer sending more than
   256 KiB in a single message is not speaking this protocol.
-- **A job always settles.** An agent names the work it still holds each time it connects, so a
-  receipt whose outcome was lost to a dropped link or a restart is failed rather than left queued
-  for ever. Unpairing an agent fails its outstanding jobs the same way, since a revoked credential
-  can never come back to report on them; deleting an agent removes them along with everything else
-  it owned.
+- **A job settles the next time its agent is heard from.** An agent names the work it still holds
+  each time it connects, so a receipt whose outcome was lost to a dropped link or a restart is
+  failed rather than left queued for ever. An agent that never comes back is the gap: its jobs stay
+  queued until it does, or until you unpair it — which fails them the same way, since a revoked
+  credential can never come back to report on them. Deleting an agent removes them along with
+  everything else it owned. An agent holding more than a thousand unfinished jobs names none of
+  them rather than a partial list, and nothing is settled that time: a partial list reads as "the
+  rest are abandoned" and would fail receipts that are still printing.
 - **Rate limits are per credential as well as per address.** Pairing and the link endpoint are
   limited per address, and an agent is additionally limited in how often it may reconnect, because
   a working credential would otherwise be exempt from the address limit by design.

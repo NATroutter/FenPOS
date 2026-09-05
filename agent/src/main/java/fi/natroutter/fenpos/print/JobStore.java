@@ -132,11 +132,11 @@ public class JobStore {
     /**
      * Registers a job under an identifier the server assigned, refusing a repeat.
      * <p>
-     * Deduplication lives here because the identifier is what makes it possible. A dispatch can
-     * arrive twice — the server retrying after a close it did not see acknowledged, or an agent
-     * replaying its spool on reconnect — and printing a receipt twice is a real cost to whoever
-     * is holding the paper. Returning empty rather than throwing keeps the caller simple: a
-     * duplicate is an expected consequence of an at-least-once link, not a fault.
+     * Deduplication lives here because the identifier is what makes it possible. Nothing else on
+     * this side can tell a fresh dispatch from a second copy of one already printed, and a receipt
+     * printed twice is a real cost to whoever is holding the paper — so a repeat is checked for
+     * rather than assumed away, whatever produced it. Returning empty rather than throwing keeps
+     * the caller simple: a duplicate is something this boundary absorbs, not a fault to report.
      *
      * @param id         the server's job identifier
      * @param deviceName the device the job prints on
