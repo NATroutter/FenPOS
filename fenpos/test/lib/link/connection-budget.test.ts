@@ -73,51 +73,64 @@ describe("agent connection budget", () => {
 		return socket;
 	}
 
+	/**
+	 * Ten is the per-agent budget itself, not a stand-in for "at least one refusal". A limiter set
+	 * to one would also produce a refusal somewhere in twenty attempts, so counting opens rather
+	 * than only refusals is what actually pins the number down.
+	 */
+	const AGENT_CONNECTION_BUDGET = 10;
+
+	/** Connects `attempts` times with `token`, closing each socket, and tallies how each resolved. */
+	async function driveConnections(token: string, attempts: number): Promise<{ opened: number; refused: number }> {
+		let opened = 0;
+		let refused = 0;
+		for (let attempt = 0; attempt < attempts; attempt++) {
+			const socket = connect(token);
+			const outcome = await new Promise<"open" | string>((resolve) => {
+				socket.once("open", () => resolve("open"));
+				socket.once("error", (error: Error) => resolve(error.message));
+			});
+			if (outcome === "open") {
+				opened++;
+			} else if (outcome.includes("429")) {
+				refused++;
+			}
+			socket.close();
+		}
+		return { opened, refused };
+	}
+
 	it("refuses a credential that reconnects far faster than any agent would", async () => {
 		// Every connect costs a settings read, a token lookup, a device query and a dither of each
 		// stored image. The agent's own backoff never produces more than a handful a minute, so a
 		// caller that does is either broken or is holding a credential it should not have — and in
 		// either case it also displaces whatever connection was there before it.
+		//
+		// A fresh agent starts this case with its own budget untouched, whatever earlier cases in
+		// this file left behind.
 		const agent = await pairedAgent();
 
-		let refused = 0;
-		for (let attempt = 0; attempt < 20; attempt++) {
-			const socket = connect(agent.token);
-			const outcome = await new Promise<"open" | string>((resolve) => {
-				socket.once("open", () => resolve("open"));
-				socket.once("error", (error: Error) => resolve(error.message));
-			});
-			if (outcome !== "open" && outcome.includes("429")) {
-				refused++;
-			}
-			socket.close();
-		}
+		const { opened, refused } = await driveConnections(agent.token, 20);
 
-		expect(refused).toBeGreaterThan(0);
+		expect(opened).toBe(AGENT_CONNECTION_BUDGET);
+		expect(refused).toBe(20 - AGENT_CONNECTION_BUDGET);
 	});
 
 	it("keeps one agent's connection budget clear of another behind the same address", async () => {
 		// Several tills behind one shop's router share an address, so a budget that bound them
 		// together would let a chatty or compromised till take the others offline with it. The
 		// address limiter cannot make this distinction; the per-credential budget is what does.
+		//
+		// Each `pairedAgent()` call mints its own id, so the noisy one's spending here cannot touch
+		// a budget the quiet one has not opened yet, regardless of what either agent above spent.
 		const noisy = await pairedAgent("noisy");
 		const quiet = await pairedAgent("quiet");
 
-		let refused = 0;
-		for (let attempt = 0; attempt < 15; attempt++) {
-			const socket = connect(noisy.token);
-			const outcome = await new Promise<"open" | string>((resolve) => {
-				socket.once("open", () => resolve("open"));
-				socket.once("error", (error: Error) => resolve(error.message));
-			});
-			if (outcome !== "open" && outcome.includes("429")) {
-				refused++;
-			}
-			socket.close();
-		}
+		const { opened, refused } = await driveConnections(noisy.token, 15);
 
-		// The noisy one spent its own budget...
-		expect(refused).toBeGreaterThan(0);
+		// The noisy one spent exactly its own budget...
+		expect(opened).toBe(AGENT_CONNECTION_BUDGET);
+		expect(refused).toBe(15 - AGENT_CONNECTION_BUDGET);
 
 		// ...and the quiet one still has all of its own.
 		const socket = connect(quiet.token);

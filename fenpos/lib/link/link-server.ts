@@ -58,9 +58,15 @@ const upgradeLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
  * cheap — a settings read, an indexed lookup, an agent write, a device query and a dither of every
  * stored image at every paper width behind that agent, each time.
  *
- * So the credential gets a budget of its own, and this one is spent rather than returned. Ten a
- * minute is an order of magnitude more than the agent's own backoff will ever produce: it opens one
- * on start and one per reconnect, spaced out further on each failure.
+ * So the credential gets a budget of its own, and this one is spent rather than returned. An agent's
+ * ordinary retries never come close to it: one connection on start, one per drop, backed off
+ * further each time the attempt fails. What does reach it is a caller that keeps *succeeding* —
+ * `LinkClient` clears its backoff the moment a connection opens, before anything past the upgrade is
+ * known to be good, so two processes sharing one credential, or a link that opens and drops right
+ * after the handshake, can cycle close to once a second. Ten a minute catches that within ten
+ * seconds rather than letting it run unbounded. The refusal then does the rest of the work on its
+ * own: a 429 is not an open, so the backoff it leaves behind keeps growing on every attempt after,
+ * and the fixed window has cleared again long before that growing gap lets the caller back in.
  */
 const agentLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });
 
@@ -148,6 +154,11 @@ async function routeUpgrade(
 			return;
 		}
 
+		// A working credential does not spend the address budget, so an agent reconnecting
+		// repeatedly through a bad link is not refused by the address limiter above. What bounds
+		// the credential itself is the per-agent budget below.
+		upgradeLimiter.reset(address);
+
 		// Spent, not returned: this is the budget that actually bounds a credential holder.
 		const budget = agentLimiter.consume(agent.id);
 		if (!budget.allowed) {
@@ -159,11 +170,6 @@ async function routeUpgrade(
 			});
 			return;
 		}
-
-		// A working credential does not spend the address budget, so an agent reconnecting
-		// repeatedly through a bad link is not refused by the address limiter above. What bounds
-		// the credential itself is the per-agent budget beside it.
-		upgradeLimiter.reset(address);
 
 		wss.handleUpgrade(request, socket, head, (ws) => {
 			handleAgentConnection(ws, agent, address);
