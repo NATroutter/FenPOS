@@ -1,7 +1,9 @@
+import { headers } from "next/headers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { envSchema } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
+import { PEER_ADDRESS_HEADER } from "@/lib/net/peer-header";
 import { getPublicAddress } from "@/lib/public-url";
 import { setSetting } from "@/lib/settings/settings-service";
 
@@ -12,6 +14,12 @@ import { setSetting } from "@/lib/settings/settings-service";
  * the headers a proxied request would carry. This is the first test file in the repo to stub it;
  * later files needing the same stub should follow this shape. `vi.mock` calls are hoisted above
  * every import in this file, `getPublicAddress`'s included, so the stub is in place before it runs.
+ *
+ * The default stub carries a peer address as well as the forwarding headers, because
+ * `getPublicAddress` now trusts a forwarding header only from a peer on `server.trustedProxies` —
+ * the `beforeEach` below configures that peer as trusted so the tests written against the old
+ * behaviour still exercise the header path they name. Tests about the trust boundary itself
+ * override the stub with a request that carries no peer.
  */
 vi.mock("next/headers", () => ({
 	headers: vi.fn(async () => new Headers({ "x-forwarded-proto": "https", "x-forwarded-host": "panel.internal" })),
@@ -20,11 +28,23 @@ vi.mock("next/headers", () => ({
 describe("getPublicAddress", () => {
 	beforeEach(async () => {
 		await prisma.setting.deleteMany();
+		await setSetting("server.trustedProxies", "10.0.0.2");
+		vi.mocked(headers).mockResolvedValue(
+			new Headers({
+				[PEER_ADDRESS_HEADER]: "10.0.0.2",
+				"x-forwarded-proto": "https",
+				"x-forwarded-host": "panel.internal",
+			}),
+		);
 	});
 
 	it("uses the configured address when one is saved", async () => {
 		await setSetting("server.publicUrl", "https://fenpos.example.com");
-		expect(await getPublicAddress()).toEqual({ url: "https://fenpos.example.com", source: "configured" });
+		expect(await getPublicAddress()).toEqual({
+			url: "https://fenpos.example.com",
+			source: "configured",
+			agentWillRefuse: false,
+		});
 	});
 
 	it("strips a trailing slash from the configured address", async () => {
@@ -33,7 +53,39 @@ describe("getPublicAddress", () => {
 	});
 
 	it("derives from the request when nothing is saved", async () => {
-		expect(await getPublicAddress()).toEqual({ url: "https://panel.internal", source: "request" });
+		expect(await getPublicAddress()).toEqual({
+			url: "https://panel.internal",
+			source: "request",
+			agentWillRefuse: false,
+		});
+	});
+
+	it("ignores a forwarding header from a peer that is not a trusted proxy", async () => {
+		// Every other address in this system is the connection rather than a claim, and this one is
+		// copied off a screen and typed into a terminal at a shop — so a caller must not be able to
+		// choose what an operator is told to type.
+		vi.mocked(headers).mockResolvedValue(
+			new Headers({ host: "fenpos.internal:3000", "x-forwarded-host": "attacker.example" }),
+		);
+
+		expect((await getPublicAddress()).url).toBe("http://fenpos.internal:3000");
+	});
+
+	it("marks an address the agent will refuse", async () => {
+		// Plain HTTP to anything but loopback is refused at the agent, so an operator handed one
+		// discovers that at the far end of a site visit.
+		vi.mocked(headers).mockResolvedValue(new Headers({ host: "fenpos.example.com" }));
+
+		expect(await getPublicAddress()).toMatchObject({
+			url: "http://fenpos.example.com",
+			agentWillRefuse: true,
+		});
+	});
+
+	it("does not mark a loopback address, which an agent accepts over plain HTTP", async () => {
+		vi.mocked(headers).mockResolvedValue(new Headers({ host: "127.0.0.1:3000" }));
+
+		expect((await getPublicAddress()).agentWillRefuse).toBe(false);
 	});
 
 	it("refuses an address that is not an absolute http or https URL", async () => {

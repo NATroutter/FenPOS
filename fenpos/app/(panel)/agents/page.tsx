@@ -82,6 +82,7 @@ export default async function AgentsPage() {
 							agent={agent}
 							serverAddress={address.url}
 							addressIsInferred={address.source === "request"}
+							agentWillRefuse={address.agentWillRefuse}
 							pairingEnabled={pairingEnabled}
 							permits={permits}
 						/>

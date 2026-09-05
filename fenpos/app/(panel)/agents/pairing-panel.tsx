@@ -37,6 +37,7 @@ export function PairingPanel({
 	expiresAt,
 	serverAddress,
 	addressIsInferred,
+	agentWillRefuse,
 	pairingEnabled,
 	canRefresh,
 }: {
@@ -47,6 +48,8 @@ export function PairingPanel({
 	serverAddress: string;
 	/** Whether the address was derived from this request rather than configured. */
 	addressIsInferred: boolean;
+	/** Whether an agent's transport rule would turn this address away. */
+	agentWillRefuse: boolean;
 	/** Whether `/api/pair` currently accepts codes at all. */
 	pairingEnabled: boolean;
 	/** Whether the operator holds `agents:pairing-code`. The code itself still shows: reading it is
@@ -63,6 +66,13 @@ export function PairingPanel({
 				{addressIsInferred ? (
 					<p className="text-[11px] leading-relaxed text-subtle-foreground">
 						Inferred from this request. If agents reach the server on a different address, set it under{" "}
+						<span className="font-medium">Settings → General</span>.
+					</p>
+				) : null}
+				{agentWillRefuse ? (
+					<p className="text-[11px] leading-relaxed text-destructive">
+						An agent will refuse this address. Plain HTTP is accepted only to loopback, because the reply to a pairing
+						request carries the agent's credential. Put the server behind TLS and set the address under{" "}
 						<span className="font-medium">Settings → General</span>.
 					</p>
 				) : null}

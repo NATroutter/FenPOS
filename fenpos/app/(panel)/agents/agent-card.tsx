@@ -56,12 +56,16 @@ export function AgentCard({
 	agent,
 	serverAddress,
 	addressIsInferred,
+	agentWillRefuse,
 	pairingEnabled,
 	permits,
 }: {
 	agent: AgentCardData;
 	serverAddress: string;
 	addressIsInferred: boolean;
+	/** Whether an agent's transport rule would turn `serverAddress` away. Passed through to
+	    {@link PairingPanel}. */
+	agentWillRefuse: boolean;
 	/** Whether `/api/pair` currently accepts codes at all. Passed through to {@link PairingPanel}. */
 	pairingEnabled: boolean;
 	permits: AgentPermits;
@@ -88,6 +92,7 @@ export function AgentCard({
 						expiresAt={agent.pairing?.expiresAt ?? null}
 						serverAddress={serverAddress}
 						addressIsInferred={addressIsInferred}
+						agentWillRefuse={agentWillRefuse}
 						pairingEnabled={pairingEnabled}
 						canRefresh={permits["agents:pairing-code"]}
 					/>
