@@ -204,6 +204,7 @@ public class FenPOSAgent extends FoxLib {
         link = new LinkClient(info, dispatcher, logger);
         dispatcher.attach(link::send);
         link.onUnpaired(FenPOSAgent::forgetPairing);
+        link.outstandingJobs(dispatcher::outstandingJobIds);
         dispatcher.onWelcomeRefused(() -> link.stop("protocol version mismatch"));
         startStatusReports(dispatcher, AgentSettings.DEFAULTS.statusInterval());
 

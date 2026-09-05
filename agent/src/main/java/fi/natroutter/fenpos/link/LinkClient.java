@@ -13,6 +13,7 @@ import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
@@ -21,6 +22,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * The agent's outbound connection to the server.
@@ -89,6 +91,7 @@ public class LinkClient {
     private volatile AgentIdentity identity;
     private volatile boolean stopped;
     private volatile Runnable unpairedHandler;
+    private volatile Supplier<List<String>> outstandingJobs = () -> null;
 
     /**
      * @param info    how this agent describes itself in {@code hello}
@@ -162,6 +165,19 @@ public class LinkClient {
      */
     public void onUnpaired(Runnable handler) {
         this.unpairedHandler = handler;
+    }
+
+    /**
+     * Registers where to find the jobs this agent has not finished reporting on.
+     * <p>
+     * Read once per connection attempt, as the handshake is built. The link holds no job state of
+     * its own and must not start doing so, which is why this is a supplier rather than a set kept
+     * here.
+     *
+     * @param outstanding answers with the identifiers, or null when it cannot
+     */
+    public void outstandingJobs(Supplier<List<String>> outstanding) {
+        this.outstandingJobs = Objects.requireNonNull(outstanding, "outstanding");
     }
 
     /** Stops for good and releases the retry thread. Called once, during shutdown. */
@@ -273,7 +289,8 @@ public class LinkClient {
                             Frames.PROTOCOL_VERSION,
                             info.agentVersion(),
                             info.platform(),
-                            info.hostname()));
+                            info.hostname(),
+                            outstandingJobs.get()));
                 });
     }
 

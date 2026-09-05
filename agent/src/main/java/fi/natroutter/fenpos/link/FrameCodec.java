@@ -64,6 +64,14 @@ public final class FrameCodec {
      */
     public static final int MAX_FRAME_BYTES = 256 * 1024;
 
+    /**
+     * Most job identifiers one {@code hello} may carry. Mirrors MAX_OUTSTANDING_JOBS on the server.
+     *
+     * <p>An agent holding more than this sends none rather than a truncated list: a partial list is
+     * read as "everything else has been abandoned" and would settle jobs that are still printing.
+     */
+    public static final int MAX_REPORTED_OUTSTANDING = 1000;
+
     /** Printed lines in one job. */
     private static final int MAX_LINES = 1000;
 

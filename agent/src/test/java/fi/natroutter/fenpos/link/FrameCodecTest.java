@@ -56,7 +56,7 @@ class FrameCodecTest {
 
     @Test
     void writesHelloWithItsDiscriminator() {
-        String json = codec.write(new Hello(Frames.PROTOCOL_VERSION, "1.0.0", "linux-x64", "kitchen-pi"));
+        String json = codec.write(new Hello(Frames.PROTOCOL_VERSION, "1.0.0", "linux-x64", "kitchen-pi", null));
 
         assertTrue(json.contains("\"type\":\"hello\""), json);
         assertTrue(json.contains("\"hostname\":\"kitchen-pi\""), json);

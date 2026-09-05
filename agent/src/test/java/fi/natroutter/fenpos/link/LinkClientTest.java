@@ -176,6 +176,43 @@ class LinkClientTest {
         assertTrue(lost.get(0).contains(Text.safe("{RED}")), lost.get(0));
     }
 
+    /**
+     * The server has no other way to learn that a job it dispatched is no longer being worked on.
+     * A restart empties this agent's job store, and an update lost to a dropped link is never
+     * resent, so without this the server holds such a job as queued for ever. Naming what is still
+     * outstanding lets it settle the rest.
+     */
+    @Test
+    void namesTheJobsItStillHoldsInItsHello() throws Exception {
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+        }, logger);
+        client.outstandingJobs(() -> List.of("job-a", "job-b"));
+        client.start(identityFor(server.uri()));
+
+        String hello = server.awaitFrame(PATIENCE);
+        assertNotNull(hello, "no hello arrived");
+        assertTrue(hello.contains("\"outstanding\":[\"job-a\",\"job-b\"]"), hello);
+    }
+
+    /**
+     * An agent that cannot answer the question says nothing rather than guessing. An absent field
+     * means "no information", which is also what an older agent sends, so the server treats both
+     * the same way and settles nothing on the strength of it.
+     */
+    @Test
+    void omitsOutstandingWhenItHasNoAnswer() throws Exception {
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+        }, logger);
+        client.outstandingJobs(() -> null);
+        client.start(identityFor(server.uri()));
+
+        String hello = server.awaitFrame(PATIENCE);
+        assertNotNull(hello, "no hello arrived");
+        assertFalse(hello.contains("outstanding"), hello);
+    }
+
     @Test
     void handlesFramesInTheOrderTheyArrived() throws Exception {
         List<String> order = new CopyOnWriteArrayList<>();

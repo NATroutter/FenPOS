@@ -81,9 +81,22 @@ public final class Frames {
      * @param agentVersion    the agent's own software version
      * @param platform        operating system and architecture
      * @param hostname        the host this agent runs on
+     * @param outstanding     identifiers of the jobs this agent accepted and has not finished
+     *                        reporting on, or null when it has no answer to give. Null is not
+     *                        "none": it means the question cannot be answered, and the server
+     *                        settles nothing on the strength of it. That is also what an agent
+     *                        built before this field existed sends, so the two are indistinguishable
+     *                        and the server treats them alike.
      */
-    public record Hello(int protocolVersion, String agentVersion, String platform, String hostname)
-            implements AgentFrame {
+    public record Hello(int protocolVersion,
+                        String agentVersion,
+                        String platform,
+                        String hostname,
+                        List<String> outstanding) implements AgentFrame {
+
+        public Hello {
+            outstanding = outstanding == null ? null : List.copyOf(outstanding);
+        }
 
         @Override
         public String type() {

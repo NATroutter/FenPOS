@@ -97,6 +97,22 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      */
     private final Set<String> dispatched = ConcurrentHashMap.newKeySet();
 
+    /**
+     * The jobs this agent accepted and has not finished reporting on.
+     *
+     * <p>Sent with each {@code hello} so the server can settle the ones this agent no longer has.
+     * It cannot work that out alone: a job's outcome only ever reaches it in an update, an update
+     * that could not be sent is dropped rather than queued, and a restart empties this set
+     * entirely — so a job the server dispatched and never heard about again is one it would hold
+     * as queued for ever.
+     *
+     * @return the identifiers, or null when there are too many to report honestly
+     */
+    public List<String> outstandingJobIds() {
+        List<String> ids = List.copyOf(dispatched);
+        return ids.size() > FrameCodec.MAX_REPORTED_OUTSTANDING ? null : ids;
+    }
+
     private final RawWriteLimit rawWrites = new RawWriteLimit(Instant::now);
 
     private volatile FrameSender sender = FrameSender.NONE;
