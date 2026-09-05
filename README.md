@@ -364,11 +364,15 @@ raised it.
   before it decides.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
   frames are refused without dropping the connection, and job dispatch is deduplicated by id
-  for the last 10,000 ids, which is far longer than any retry a dropped link can produce. What ends
-  a connection on either side is an oversized frame: a peer sending more than 256 KiB in a single
-  message is not speaking this protocol. The server ends one for two further reasons the agent has
-  no equivalent of — a binary message, which this protocol never sends and which the server will not
-  decode to find out what it was, and a `hello` naming a protocol version it does not speak.
+  for the last 10,000 ids, which is far longer than any retry a dropped link can produce. The frame
+  that ends a connection on either side is an oversized one: a peer sending more than 256 KiB in a
+  single message is not speaking this protocol. Two further frames end one on the server, which the
+  agent has no equivalent of — a binary message, which this protocol never sends and which the
+  server will not decode to find out what it was, and a `hello` naming a protocol version it does
+  not speak. Frames are not the only thing that ends a link, and the rest are not about validation
+  at all: the server also closes a connection that never sends its opening frame, drops one that
+  stops answering heartbeats, and closes one displaced when the same agent connects again or
+  unpaired by an operator.
 - **A job settles the next time its agent is heard from.** An agent names the work it still holds
   each time it connects, so a receipt whose outcome was lost to a dropped link or a restart is
   failed rather than left queued for ever. An agent that never comes back is the gap: its jobs stay

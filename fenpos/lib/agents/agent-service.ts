@@ -5,9 +5,8 @@ import type { AgentStatus } from "@/lib/domain/enums";
 import { TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
-import { failUnfinishedJobs } from "@/lib/jobs/settle";
+import { settleUnfinishedJobs } from "@/lib/jobs/settle";
 import { logger } from "@/lib/logger";
-import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
  * Agent lifecycle as the admin panel sees it: creating, renaming, unpairing, removing.
@@ -190,8 +189,7 @@ export async function unpairAgent(agentId: string): Promise<{ code: string; expi
 
 	// The agent will never report on these. Its credential is gone, so it cannot reconnect to
 	// tell anyone how they ended, and nothing else on this side can answer for a printer. Left
-	// alone they would read as queued for ever. Selected first because each one still needs its own
-	// announcement below, which needs the ids.
+	// alone they would read as queued for ever.
 	const stranded = await prisma.job.findMany({
 		where: { agentId, status: { notIn: [...TERMINAL_JOB_STATUSES] } },
 		select: { id: true },
@@ -199,25 +197,24 @@ export async function unpairAgent(agentId: string): Promise<{ code: string; expi
 
 	if (stranded.length > 0) {
 		try {
-			const settled = await failUnfinishedJobs(
+			// Each one is announced as it is failed, because a caller subscribed to a webhook is
+			// waiting for precisely this answer and an unpair must tell it the same way a reconnect
+			// that finds a job gone does. Only what is actually written: the link is still open at
+			// this point and the agent is still reporting, so a job may well have settled on its own
+			// since the selection above, and a receipt announced as completed must not then be
+			// announced as failed.
+			await settleUnfinishedJobs(
 				stranded.map((job) => job.id),
 				{ errorCode: "agent_unpaired", errorMessage: "The agent was unpaired before this job finished." },
 			);
-
-			// A caller subscribed to a webhook is waiting for precisely this answer, and an unpair
-			// must tell it the same way a reconnect that finds a job gone does. Only what was
-			// actually written: the link is still open at this point and the agent is still
-			// reporting, so a job may well have settled on its own since the selection above, and a
-			// receipt announced as completed must not then be announced as failed.
-			for (const jobId of settled) {
-				await queueJobSettled(jobId);
-			}
 		} catch (error) {
 			// Not fatal, deliberately. The credential is already cleared above, so the unpair has
 			// taken effect whatever happens here, and the operator standing at the till still needs
 			// the code this returns. Throwing would report a completed unpair as a failure and
-			// withhold that code, while leaving the jobs in exactly the state a caught failure
-			// leaves them: unfinished, unreportable, and visible as such in the panel.
+			// withhold that code, while leaving the jobs in exactly the state a caught failure leaves
+			// them. Nothing retries this — an agent can only be unpaired once — so what was written
+			// before the failure was also announced before it, and what was not stays unfinished and
+			// visible as such in the panel.
 			logger.error("Could not fail the jobs an unpaired agent was still working on", error, { agentId });
 		}
 	}

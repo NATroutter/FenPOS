@@ -3,7 +3,7 @@ import type { WebSocket } from "ws";
 import { prisma } from "@/lib/db";
 import { isTerminalJobStatus, TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
-import { failUnfinishedJobs } from "@/lib/jobs/settle";
+import { settleUnfinishedJobs } from "@/lib/jobs/settle";
 import { rastersFor } from "@/lib/link/asset-sync";
 import { clearAgentStatus, recordStatus } from "@/lib/link/device-status";
 import {
@@ -560,10 +560,11 @@ async function markOffline(agentId: string): Promise<void> {
  * a receipt that is about to print. The agent's own list cannot mention it either, since it was
  * built before the socket opened.
  *
- * Each job this actually settles is announced, because a caller subscribed to a webhook is waiting
- * for exactly this answer and would otherwise never receive one. Only the ones actually settled: a
- * job that reached a terminal state of its own between the selection and the write has already been
- * answered, and announcing it again would contradict the answer the subscriber already has.
+ * Each job this actually settles is announced as it is settled, because a caller subscribed to a
+ * webhook is waiting for exactly this answer and would otherwise never receive one. Only the ones
+ * actually settled: a job that reached a terminal state of its own between the selection and the
+ * write has already been answered, and announcing it again would contradict the answer the
+ * subscriber already has.
  *
  * @param agentId the agent that just connected
  * @param outstanding the job ids it says it still holds
@@ -585,7 +586,7 @@ async function settleLostJobs(agentId: string, outstanding: string[], connectedA
 			return;
 		}
 
-		const settled = await failUnfinishedJobs(
+		const settled = await settleUnfinishedJobs(
 			lost.map((job) => job.id),
 			{
 				errorCode: "agent_lost_job",
@@ -598,14 +599,12 @@ async function settleLostJobs(agentId: string, outstanding: string[], connectedA
 		}
 
 		logger.warn("Settled jobs an agent no longer holds", { agentId, count: settled.length });
-
-		for (const jobId of settled) {
-			await queueJobSettled(jobId);
-		}
 	} catch (error) {
-		// Never fatal. The connection is worth more than the repair, and the next reconnect
-		// tries again — including for a settle that failed part-way through a large backlog, since
-		// the selection above runs again and a job still unfinished is still selected.
+		// Never fatal. The connection is worth more than the repair, and the next reconnect tries
+		// again — for the jobs this did not reach, which are the ones still unfinished, so the
+		// selection above finds them again. What it did reach it also announced on the way, so a
+		// failure part-way through a large backlog leaves nothing written and unspoken for; only
+		// this log line and the count are lost.
 		logger.error("Could not settle jobs an agent no longer holds", error, { agentId });
 	}
 }
