@@ -11,6 +11,16 @@ import java.net.UnknownHostException;
  * second refuses is an agent that pairs and then never connects; the reverse is a credential
  * crossing a network in cleartext.
  *
+ * <p>Loopback is the single exception to the https rule at both of them, and it is a property of
+ * the address rather than a setting: traffic to loopback never reaches a network interface, so
+ * there is no path for anyone to read a credential off it. The exception exists so the system can
+ * be brought up and tested on one machine without standing up a certificate first.
+ *
+ * <p>Deliberately not a flag. The hazard the https rule defends against is someone adding a
+ * "skip TLS" switch for a staging environment and it surviving into production; a rule tied to
+ * the address cannot survive being pointed at a real host, because pointing it at one is exactly
+ * what makes the rule bite.
+ *
  * <p>Decided on the parsed address rather than on the text, because a prefix is not an address:
  * anything beginning "127." would admit {@code 127.0.0.1.evil.example}, a name anyone can register.
  * A literal is required before {@link InetAddress} is asked, so no name server is consulted;

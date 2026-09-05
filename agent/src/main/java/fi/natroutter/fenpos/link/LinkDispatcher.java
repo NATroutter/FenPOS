@@ -622,9 +622,10 @@ public class LinkDispatcher implements Consumer<Frames.ServerFrame> {
      * Builds the listener that turns local state changes into {@code job.update} frames.
      * <p>
      * Reporting is best effort by design. If the link is down when a job finishes, the update is
-     * lost and the server reconciles when the agent reconnects — which is the right trade for a
-     * printer that must keep printing through an outage rather than block on telling anyone. The
-     * loss itself is not silent: {@code LinkClient.send} logs every frame it could not hand over.
+     * lost and the server settles the job when this agent next connects and names what it still
+     * holds — which is the right trade for a printer that must keep printing through an outage
+     * rather than block on telling anyone. The loss itself is not silent: {@code LinkClient.send}
+     * logs every frame it could not hand over.
      * <p>
      * Failures here are caught and logged rather than allowed out. {@code PrintJob} swallows a
      * throwing listener to protect the queue worker that called it, and a swallow is only safe

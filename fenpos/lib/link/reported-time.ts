@@ -24,13 +24,15 @@ import { logger } from "@/lib/logger";
 /**
  * How far into the past a reported time may reach.
  *
- * Generous, because backdating is sometimes the truthful answer. An agent's job state reconciles on
- * reconnect (`LinkDispatcher`), so a receipt that finished during an overnight outage is reported
- * hours later with the time it actually finished, and squashing that to "an hour ago" would lose a
- * real fact and make every line of the backlog claim the same moment. Log lines never need it —
- * `AgentLog` forwards best-effort and drops what it cannot send rather than queueing it, so a log
- * frame's time is always within milliseconds of now — but the bound is shared and has to fit the
- * caller that does.
+ * Generous, because a clock that is behind is the ordinary way a time arrives early and the event
+ * it carries is still worth having. A till with no battery-backed clock boots at whatever time it
+ * last knew and only catches up when the network does, and every job it finishes in between is
+ * reported hours behind this server; refusing those would lose a printed receipt and the evidence
+ * of the wrong clock together.
+ *
+ * Nothing arrives deliberately backdated. A frame is timed as it goes out, and one that cannot go
+ * is dropped rather than queued — an agent holds no backlog to send later — so the only distance
+ * between a reported time and this server's clock is the distance between the two clocks.
  *
  * A day is still far inside `logs.retentionDays` (30 by default), which is what stops backdating
  * being a way to have a line archived and deleted on the next pass.

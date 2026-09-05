@@ -209,9 +209,8 @@
 			<version>2.10.1</version>
 		</dependency>
 		<!--
-		    Local persistence for the agent: its identity, the device configuration the server
-		    pushed, and jobs spooled while disconnected. The community dialects artifact is
-		    where Hibernate keeps the SQLite dialect.
+		    Local persistence for the agent's identity. The community dialects artifact is where
+		    Hibernate keeps the SQLite dialect.
 		-->
 		<dependency>
 			<groupId>org.hibernate.orm</groupId>

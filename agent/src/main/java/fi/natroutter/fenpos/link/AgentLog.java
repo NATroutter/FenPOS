@@ -18,7 +18,9 @@ import java.util.Objects;
  * <p><strong>Forwarding is best effort.</strong> A line that cannot be sent is dropped rather
  * than buffered: an agent whose link is down has better uses for its memory than holding log
  * text, and the lines that matter operationally — a job failing, a port refusing to open — are
- * already reflected in job state and status reports, which do reconcile on reconnect.
+ * already reflected in job state and status reports, both of which are made whole again on the
+ * next connection: the server settles the jobs this agent no longer holds, and the agent pushes a
+ * fresh status report as soon as the configuration arrives.
  *
  * <p>Not every local log line comes through here. Only what an operator watching the panel would
  * act on is forwarded, because a log they cannot filter is a log they stop reading.

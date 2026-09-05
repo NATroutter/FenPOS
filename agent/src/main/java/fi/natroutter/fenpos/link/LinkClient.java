@@ -219,11 +219,11 @@ public class LinkClient {
      * <p>
      * Returns whether it went rather than throwing, because the caller is usually a queue worker
      * reporting a job it has already printed. There is nothing useful for it to do about a
-     * closed socket — the server reconciles on reconnect — and an exception there would fail a
-     * job that actually succeeded.
+     * closed socket — the server settles what this agent no longer holds on the next handshake —
+     * and an exception there would fail a job that actually succeeded.
      * <p>
      * A frame that cannot go is still written to the local log. Dropping it is the right handling
-     * and reconciliation does make the server whole again, but "the right handling" is not the same
+     * and the handshake does make the server whole again, but "the right handling" is not the same
      * as "nothing happened": an operator comparing the panel against the printer during an outage
      * needs to see which updates never left the building.
      *
@@ -233,8 +233,8 @@ public class LinkClient {
     public boolean send(Frames.AgentFrame frame) {
         WebSocket open = socket.get();
         if (open == null || open.isOutputClosed()) {
-            logger.warn("Dropped " + frame.type() + ": the link is down. The server reconciles on"
-                    + " reconnect.");
+            logger.warn("Dropped " + frame.type() + ": the link is down. The server settles this"
+                    + " on the next handshake.");
             return false;
         }
         try {

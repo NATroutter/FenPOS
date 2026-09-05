@@ -58,10 +58,10 @@ the printer.
 > are only for working on FenPOS itself.
 
 > [!IMPORTANT]
-> **`BETTER_AUTH_SECRET` is required and has no default.** Both compose files below read it from
-> your environment and refuse to start without it. `docker compose` fails immediately with a
-> message telling you what to set, rather than crash-looping the container. Generate one and
-> export it before the first `up`:
+> **`BETTER_AUTH_SECRET` is required and has no default.** Every compose file below that runs the
+> server reads it from your environment and refuses to start without it. `docker compose` fails
+> immediately with a message telling you what to set, rather than crash-looping the container.
+> Generate one and export it before the first `up`:
 > ```sh
 > export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 > ```
@@ -88,7 +88,9 @@ docker compose -f compose.server.yaml up -d
 docker compose -f compose.server.yaml logs fenpos   # the setup key is in here
 ```
 
-Put it behind TLS. Agents refuse plain HTTP to anything but loopback.
+Put it behind TLS. The compose file publishes on loopback for that reason, and agents refuse plain
+HTTP to anything but loopback. The panel says so on an agent's card when the address it would hand
+out is one an agent will turn away.
 
 ### 2 · Agent only
 
@@ -345,19 +347,33 @@ raised it.
   store, and there is no "trust all certificates" option in any form. There is no certificate
   pinning: an agent accepts any certificate a CA in its trust store has issued for the
   server's name, so a TLS-inspecting proxy on the path can read and alter the link.
-- **Pairing codes** are single-use, consumed atomically at redemption, expire in 15 minutes,
-  and are rate-limited per address.
+- **Pairing codes** are single-use, consumed atomically at redemption, expire in fifteen minutes by
+  default — **Settings → Security** sets the lifetime — and are rate-limited per address.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
   five attempts per minute per address, and an account locks after ten consecutive failures.
 - **The caller's address is the connection, not a header.** Everything keyed on an address — the
-  sign-in limit above, the pairing limit, the optional address allowlist, every audit row — uses the
-  peer that opened the connection. A forwarding header such as `X-Forwarded-For` is read only from
-  the addresses listed under **Settings → Security → Trusted proxies**, which is empty by default.
-  Behind a reverse proxy, put its address there, or every visitor arriving through it is counted and
-  recorded as the proxy. The Settings page shows what your own request resolved to.
+  sign-in limit above, the optional address allowlist, every audit row, and the address shown for
+  pairing — uses the peer that opened the connection. A forwarding header such as `X-Forwarded-For`
+  is read only from the addresses listed under **Settings → Security → Trusted proxies**, which is
+  empty by default. Behind a reverse proxy, put its address there, or every visitor arriving through
+  it is counted and recorded as the proxy. The Settings page shows what your own request resolved
+  to. The two rate limits guarding an endpoint that has not authenticated anyone yet — pairing and
+  the agent link — are the exception: they count the peer whatever that list says, because reading
+  it is a database query, and an endpoint whose job is to turn a flood away cannot pay for one
+  before it decides.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
   frames are refused without dropping the connection, and job dispatch is deduplicated by id
-  for the last 10,000 ids, which is far longer than any retry a dropped link can produce.
+  for the last 10,000 ids, which is far longer than any retry a dropped link can produce. The one
+  frame that does end a connection is an oversized one, on both sides: a peer sending more than
+  256 KiB in a single message is not speaking this protocol.
+- **A job always settles.** An agent names the work it still holds each time it connects, so a
+  receipt whose outcome was lost to a dropped link or a restart is failed rather than left queued
+  for ever. Unpairing an agent fails its outstanding jobs the same way, since a revoked credential
+  can never come back to report on them; deleting an agent removes them along with everything else
+  it owned.
+- **Rate limits are per credential as well as per address.** Pairing and the link endpoint are
+  limited per address, and an agent is additionally limited in how often it may reconnect, because
+  a working credential would otherwise be exempt from the address limit by design.
 - **Passwords** are argon2id, minimum 12 characters. Any character is accepted, including
   spaces, so passphrases work.
 

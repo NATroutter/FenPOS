@@ -20,10 +20,10 @@ import java.util.function.Function;
 /**
  * The agent's local database.
  *
- * <p>Holds what the agent must survive a restart with: its identity, the device configuration
- * the server last pushed, and jobs accepted but not yet printed. The server remains the source
- * of truth for all of it — this is a cache plus a spool, and it exists so a network outage
- * during service does not stop paper coming out.
+ * <p>Holds the one thing the agent must survive a restart with: its identity. The device
+ * configuration and the jobs in flight are deliberately not here — the server pushes a whole
+ * configuration snapshot on every connection, and a job resurrected after a restart would print
+ * something the customer stopped waiting for long ago.
  *
  * <p>Owns the {@link EntityManagerFactory} for the process and must be closed at shutdown. Held
  * as an ordinary object rather than a static so tests can open a store on a temporary file
