@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { redeemPairingCode } from "@/lib/agents/pairing";
 import { readBoundedText } from "@/lib/api/bounded-body";
-import { pairingLimiter } from "@/lib/auth/rate-limit";
+import { pairingFloodLimiter, pairingLimiter } from "@/lib/auth/rate-limit";
 import { ApiError, toErrorResponse } from "@/lib/errors";
 import { PROTOCOL_VERSION } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
@@ -13,13 +13,15 @@ import { booleanSetting } from "@/lib/settings/settings-service";
  *
  * The only unauthenticated write in the system. Everything about it is shaped by that:
  *
- * - Rate limited by the connection's own peer, not the resolved client address — the two differ
- *   on an install behind a trusted proxy, and resolving one costs a settings read this endpoint
- *   cannot afford to pay before it even knows whether to refuse. The peer is what makes the code's
- *   entropy budget hold: a twelve-character code is comfortable only because guessing is
- *   throttled. The limiter is consumed unconditionally, before `pairing.enabled` is even read —
- *   see that check's own comment below for why the ordering there is deliberate rather than an
- *   oversight.
+ * - Rate limited twice. `pairingFloodLimiter` is consumed first, on the connection's own peer,
+ *   before any settings are read — resolving the client address costs a query, and a request
+ *   this endpoint is about to refuse must not cost one first. Only a caller past that gate has
+ *   its client address resolved and spends against `pairingLimiter`, the tight budget the code's
+ *   entropy actually assumes. Keying the tight budget on the peer instead would have been cheaper
+ *   still, but every caller behind one reverse proxy shares a peer, so it would also mean one
+ *   hostile caller spending every other caller's guesses. Both limiters are consumed
+ *   unconditionally, before `pairing.enabled` is even read — see that check's own comment below
+ *   for why the ordering there is deliberate rather than an oversight.
  * - Every failure returns one identical response. Distinguishing "wrong", "expired" and
  *   "already used" would let a caller map the code space by probing for near-misses. The
  *   server log records which it was.
@@ -50,40 +52,53 @@ const pairRequestSchema = z.object({
 const REJECTION = { error: "invalid_key", message: "That pairing code is not valid." } as const;
 
 export async function POST(request: Request): Promise<Response> {
-	// The peer, not the resolved address: this keys the limiter below, and reading the
-	// trusted-proxy settings first would mean a database query on every request the limiter is
-	// about to refuse. The resolved address is read afterwards, only for the record.
+	// The peer, not the resolved address: this keys the flood limiter below, and reading the
+	// trusted-proxy settings first would mean a database query on every request that limiter is
+	// about to refuse. The resolved address is read afterwards, once it is safe to pay for it.
 	const peer = await getPeerAddress();
 	// Overwritten below once it is safe to spend a settings read; kept as the peer until then so
 	// an error thrown before that point still has something honest to log.
 	let address = peer;
 
 	try {
-		// Consumed first, unconditionally — before any settings are read, before the body is read
-		// and before `pairing.enabled` is even checked. Checking `pairing.enabled` first would be
-		// cheaper, but it would also mean the limiter's state never advances while pairing is off,
-		// and a caller who sends a flood of requests would see request #11 answered differently
-		// depending on whether pairing is on (429 rate_limited) or off (401, forever, since the
-		// limiter was never touched) — a volume-based oracle for "is this install worth attacking"
-		// that needs no correct code at all. Consuming here first keeps the limiter's state, and so
-		// the endpoint's behaviour under volume, identical in both cases. Do not "optimise" this back.
-		const limit = pairingLimiter.consume(peer);
+		// Both limiters are consumed unconditionally — before any settings are read, before the
+		// body is read and before `pairing.enabled` is even checked. Checking `pairing.enabled`
+		// first would be cheaper, but it would also mean a limiter's state does not advance while
+		// pairing is off, and a caller who sends a flood of requests would see the request that
+		// exhausts it answered differently depending on whether pairing is on (429 rate_limited) or
+		// off (401, forever, since the limiter was never touched) — a volume-based oracle for "is
+		// this install worth attacking" that needs no correct code at all. That is just as true of
+		// the tight limiter as it was when it was the only one: consuming it only while pairing is
+		// on would move the oracle from the flood limiter's threshold to the tight limiter's,
+		// rather than removing it. Consuming both here first, in order, keeps each limiter's state —
+		// and so the endpoint's behaviour under volume — identical whether pairing is on or off. Do
+		// not "optimise" this back.
+		const flood = pairingFloodLimiter.consume(peer);
+		if (!flood.allowed) {
+			logger.warn("Pairing flood limit engaged", { address: peer, retryAfterMs: flood.retryAfterMs });
+			throw new ApiError("rate_limited", "Too many pairing attempts. Try again shortly.", {
+				retryAfterSeconds: Math.ceil(flood.retryAfterMs / 1000),
+			});
+		}
+
+		// Past the flood gate, so the query this costs is one a caller cannot make for free. Used
+		// for the log lines and the pairing record, where an install behind a proxy wants the
+		// address the proxy names rather than the proxy's own — and now also to key the tight
+		// limiter below, so that address, not the shared peer, is what a guess spends against.
+		address = await getClientAddress();
+
+		const limit = pairingLimiter.consume(address);
 		if (!limit.allowed) {
-			logger.warn("Pairing rate limit engaged", { address: peer, retryAfterMs: limit.retryAfterMs });
+			logger.warn("Pairing rate limit engaged", { address, retryAfterMs: limit.retryAfterMs });
 			throw new ApiError("rate_limited", "Too many pairing attempts. Try again shortly.", {
 				retryAfterSeconds: Math.ceil(limit.retryAfterMs / 1000),
 			});
 		}
 
 		if (!(await booleanSetting("pairing.enabled"))) {
-			logger.warn("Pairing refused: pairing is switched off", { address: peer });
+			logger.warn("Pairing refused: pairing is switched off", { address });
 			return Response.json(REJECTION, { status: 401 });
 		}
-
-		// Past the limiter, so the query this costs is one a caller cannot make cheaply. Used for
-		// the log lines and the pairing record, where an install behind a proxy wants the address
-		// the proxy names rather than the proxy's own.
-		address = await getClientAddress();
 
 		// Bounded on the way in rather than measured afterwards. This is the one unauthenticated write
 		// in the system, so a body it is going to refuse must never be a body it first holds — reading
@@ -130,9 +145,14 @@ export async function POST(request: Request): Promise<Response> {
 			return Response.json(REJECTION, { status: 401 });
 		}
 
-		// A successful pairing clears the throttle, so installing several agents in a row from
-		// one workstation does not lock the installer out partway through.
-		pairingLimiter.reset(peer);
+		// A successful pairing clears the tight throttle for this address, so installing several
+		// agents in a row from one workstation does not lock the installer out partway through.
+		// The flood limiter is left alone: it is keyed on the shared peer, not this one caller, and
+		// resetting a shared budget on any single success would let a caller spend part of it
+		// guessing, then ride someone else's successful pairing — or one of its own, once it lands
+		// a correct guess — back to a full sixty rather than actually paying for the floor it is
+		// meant to be.
+		pairingLimiter.reset(address);
 
 		logger.info("Agent paired", {
 			address,

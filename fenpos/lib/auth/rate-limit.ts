@@ -222,12 +222,33 @@ export function signInThrottlePhrase(limit: number): string {
 }
 
 /**
- * Pairing limiter, keyed by client address.
+ * Flood guard in front of the pairing limiter, keyed by the connection's own peer.
  *
- * Tighter than sign-in because a pairing attempt is a guess at a code rather than at a
- * password an operator might genuinely mistype. Deliberately not a setting: the pairing code's
- * entropy budget assumes guessing is slow, and loosening this limit would weaken that assumption
- * invisibly — unlike the sign-in throttle, there is no floor here that is safe to expose.
+ * Not the budget the pairing code's entropy relies on — that is `pairingLimiter`, below — and
+ * loose on purpose, because it is answering a different question. This gate exists so that a
+ * caller cannot make the endpoint spend a settings read for free: it is consumed before
+ * `pairing.enabled` or the client address is resolved, so it has to be cheap to check and cheap
+ * to key, which means keying it on the peer rather than on a value that itself costs a query to
+ * find out. Sixty a minute does nothing to protect a twelve-character code against a determined
+ * guesser; it only bounds how much database work an unauthenticated caller can trigger before
+ * `pairingLimiter` — keyed on the address it actually costs a read to resolve — ever gets a turn.
+ */
+export const pairingFloodLimiter = new RateLimiter({ limit: 60, windowMs: 60_000 });
+
+/**
+ * Pairing limiter, keyed by the caller's resolved client address.
+ *
+ * This is the budget the code's entropy assumes: tighter than sign-in because a pairing attempt
+ * is a guess at a code rather than at a password an operator might genuinely mistype, and
+ * deliberately not a setting, for the same reason it is tight — the entropy budget assumes
+ * guessing is slow, and loosening this limit would weaken that assumption invisibly. Unlike the
+ * sign-in throttle, there is no floor here that is safe to expose.
+ *
+ * Sitting behind `pairingFloodLimiter` rather than being the only gate is what lets this stay
+ * keyed on the resolved address instead of the peer: behind one reverse proxy every caller shares
+ * a peer, and a budget this tight would let one caller behind that proxy spend every other
+ * caller's guesses if it were keyed there too. Resolving the address costs a settings read, which
+ * is exactly what the flood limiter in front of this exists to keep a refused caller from causing.
  */
 export const pairingLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });
 
