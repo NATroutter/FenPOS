@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -560,6 +561,51 @@ class LinkDispatcherTest {
         dispatcher.accept(command("device.pause", "the-request", "kitchen"));
 
         assertEquals("the-request", awaitFrame(Frames.CommandResult.class).requestId());
+    }
+
+    // -------------------------------------------------------------------------
+    // Outstanding job reporting
+    // -------------------------------------------------------------------------
+
+    /**
+     * Empty means this agent holds no outstanding jobs; the server is licensed to settle any
+     * jobs it dispatched. Null means the agent cannot answer — cannot tell if it has them —
+     * and the server must not settle anything. They must stay distinguishable, or the server
+     * loses jobs that are still printing.
+     */
+    @Test
+    void returnsEmptyListOfOutstandingJobIdsWhenNoneArePending() {
+        configure("kitchen");
+
+        List<String> outstanding = dispatcher.outstandingJobIds();
+
+        assertEquals(Collections.emptyList(), outstanding);
+    }
+
+    /**
+     * With more than {@link FrameCodec#MAX_REPORTED_OUTSTANDING} jobs, the agent cannot name
+     * them all in one frame. Returning null signals "I cannot answer," which prevents the server
+     * from settling jobs that are still printing just because the list does not name them.
+     * Truncating would claim the agent is done with the missing jobs when it is not.
+     */
+    @Test
+    void returnsNullInsteadOfTruncatedListWhenOutstandingJobsExceedTheMax() {
+        FakePrinterPort port = new FakePrinterPort(1);
+        ports.put("kitchen", port);
+        Frames.DeviceConfig kitchenWithLargeQueue = new Frames.DeviceConfig(
+                "kitchen", "COM3", 19200, 8, 1, Parity.NONE, FlowControl.NONE,
+                5000, false, false, 5, 32, Codepage.CP858, false,
+                FrameCodec.MAX_REPORTED_OUTSTANDING + 100);
+        dispatcher.accept(new Frames.ConfigSync(List.of(kitchenWithLargeQueue), List.of(), JobSettings.DEFAULTS, AgentSettings.DEFAULTS));
+        // Deliberately not started, so submitted jobs stay pending and count toward outstanding.
+
+        for (int i = 1; i <= FrameCodec.MAX_REPORTED_OUTSTANDING + 1; i++) {
+            dispatcher.accept(dispatch("job-" + i, "kitchen", "content"));
+        }
+
+        List<String> outstanding = dispatcher.outstandingJobIds();
+
+        assertNull(outstanding);
     }
 
     // -------------------------------------------------------------------------

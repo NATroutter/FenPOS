@@ -162,6 +162,10 @@ export async function renameAgent(agentId: string, rawName: string): Promise<voi
  * offline — the same button, the same details, nothing to type on the replacement machine — and
  * the only way to a code was deleting the agent and creating it again, printers and all.
  *
+ * Every non-terminal job this agent accepted is also failed and announced. The agent will not
+ * reconnect to report how those jobs end — its credential is revoked, and only this printer's
+ * agent can answer for it — so left unresolved they would read as queued forever.
+ *
  * Closing the live connection is the caller's responsibility — the registry that owns
  * sockets is deliberately not reachable from here, so that this module stays testable
  * without one.
