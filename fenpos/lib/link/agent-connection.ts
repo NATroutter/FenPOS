@@ -214,7 +214,7 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 					// flight. The second is a connection speaking to a request it was never
 					// sent, which is worth telling apart in the logs even though both are
 					// dropped the same way.
-					if (isMisdirectedReply(parsed.frame.requestId, agent.id)) {
+					if (isMisdirectedReply(agent.id, parsed.frame.requestId)) {
 						logger.warn("Reply to a request sent to a different agent", {
 							agentId: agent.id,
 							type: parsed.frame.type,

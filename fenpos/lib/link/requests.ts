@@ -171,11 +171,11 @@ export function settleReply(agentId: string, requestId: string, value: unknown):
  * question it was never asked. This does not change what happens to the reply — only which
  * sentence gets written down about it.
  *
- * @param requestId the request {@link settleReply} found no match for
  * @param agentId the agent the reply arrived from
+ * @param requestId the request {@link settleReply} found no match for
  * @returns whether that request is still waiting, just on a different agent
  */
-export function isMisdirectedReply(requestId: string, agentId: string): boolean {
+export function isMisdirectedReply(agentId: string, requestId: string): boolean {
 	const waiter = pending.get(requestId);
 	return waiter !== undefined && waiter.agentId !== agentId;
 }

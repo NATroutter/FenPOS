@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	awaitReply,
 	failRequests,
+	isMisdirectedReply,
 	newRequestId,
 	RequestTimeoutError,
 	requestTimeoutPhrase,
@@ -122,6 +123,30 @@ describe("request correlation", () => {
 		expect(settleReply("agent-b", id, "not yours")).toBe(false);
 		expect(settleReply("agent-a", id, "yours")).toBe(true);
 		await expect(waiting).resolves.toBe("yours");
+	});
+
+	it("does not call a missing waiter misdirected", () => {
+		expect(isMisdirectedReply("agent-a", "never-issued")).toBe(false);
+	});
+
+	it("does not call a waiter misdirected when it belongs to the asking agent", async () => {
+		const id = newRequestId();
+		const waiting = awaitReply<string>("agent-a", id, 5000);
+
+		expect(isMisdirectedReply("agent-a", id)).toBe(false);
+
+		settleReply("agent-a", id, "mine");
+		await expect(waiting).resolves.toBe("mine");
+	});
+
+	it("calls a waiter misdirected when it belongs to a different agent", async () => {
+		const id = newRequestId();
+		const waiting = awaitReply<string>("agent-a", id, 5000);
+
+		expect(isMisdirectedReply("agent-b", id)).toBe(true);
+
+		settleReply("agent-a", id, "mine");
+		await expect(waiting).resolves.toBe("mine");
 	});
 });
 
