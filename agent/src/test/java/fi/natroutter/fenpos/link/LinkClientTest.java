@@ -232,6 +232,35 @@ class LinkClientTest {
         assertEquals(List.of("config.sync", "job.cancel", "ports.scan"), order);
     }
 
+    /**
+     * The rule that keeps the credential off the wire is enforced when an address is stored. It is
+     * enforced again here because the stored value outlives the moment it was written — a restart,
+     * an upgrade, a store edited by hand — and this is the point where the consequence lands: the
+     * bearer token goes out in a header on every attempt.
+     */
+    @Test
+    void refusesToDialPlainHttpToSomethingThatIsNotLoopback() throws Exception {
+        client = new LinkClient(info, frame -> {
+        }, logger, impatient());
+        client.start(new AgentIdentity("http://printers.example.com", "agent-1", "test", "token",
+                Instant.parse("2026-01-01T00:00:00Z")));
+
+        awaitLines("is not usable", 1);
+        assertTrue(matching("is not usable").get(0).contains("unpair"), lines.toString());
+    }
+
+    @Test
+    void dialsPlainHttpToLoopback() throws Exception {
+        // The single exception, and it is a property of the address rather than a setting: traffic
+        // to loopback never reaches a network interface.
+        server = new FakeLinkServer();
+        client = new LinkClient(info, frame -> {
+        }, logger);
+        client.start(identityFor(server.uri()));
+
+        assertNotNull(server.awaitFrame(PATIENCE), "no hello arrived");
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

@@ -3,6 +3,7 @@ package fi.natroutter.fenpos.link;
 import fi.natroutter.foxlib.logger.FoxLogger;
 import fi.natroutter.fenpos.Diagnostics;
 import fi.natroutter.fenpos.store.AgentIdentity;
+import fi.natroutter.fenpos.util.Addresses;
 import fi.natroutter.fenpos.util.Text;
 
 import java.net.URI;
@@ -400,6 +401,12 @@ public class LinkClient {
      * The scheme is mapped rather than assumed, so an install paired over plain HTTP against
      * loopback connects over {@code ws} and one paired over HTTPS connects over {@code wss}. A
      * fixed scheme would silently fail one of the two.
+     * <p>
+     * The transport rule is checked again here, not only where the address was stored. The stored
+     * value outlives the moment it was written — a restart, an upgrade, a store edited by hand —
+     * and this is the point where the consequence lands: the bearer token goes out in a header on
+     * every attempt, and over plain HTTP to anything but loopback it is readable by whoever is on
+     * the path.
      */
     private static URI endpointFor(String serverUrl) throws URISyntaxException {
         String trimmed = serverUrl.trim();
@@ -414,6 +421,11 @@ public class LinkClient {
             case "http", "ws" -> "ws";
             default -> throw new URISyntaxException(serverUrl, "unsupported scheme '" + scheme + "'");
         };
+
+        if ("ws".equals(socketScheme) && !Addresses.isLoopback(base.getHost())) {
+            throw new URISyntaxException(serverUrl,
+                    "plain HTTP carries this agent's credential, so it is accepted only to loopback");
+        }
 
         return new URI(socketScheme + "://" + base.getRawAuthority()
                 + (base.getRawPath() == null ? "" : base.getRawPath()) + LINK_PATH);

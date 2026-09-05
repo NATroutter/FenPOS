@@ -5,14 +5,13 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import fi.natroutter.fenpos.link.AgentInfo;
 import fi.natroutter.fenpos.link.Frames;
+import fi.natroutter.fenpos.util.Addresses;
 import fi.natroutter.fenpos.util.Text;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -187,7 +186,7 @@ public class PairingClient {
             throw new PairingException("'" + serverUrl + "' is not a complete address; include "
                     + "the scheme, for example https://fenpos.example.com");
         }
-        if (!"https".equals(scheme) && !isLoopback(base.getHost())) {
+        if (!"https".equals(scheme) && !Addresses.isLoopback(base.getHost())) {
             throw new PairingException("Pairing requires https. The reply to this request "
                     + "carries this agent's credential, and over " + scheme
                     + " anyone on the network path could read it.");
@@ -198,72 +197,6 @@ public class PairingClient {
         } catch (URISyntaxException e) {
             throw new PairingException("'" + serverUrl + "' is not a valid address", e);
         }
-    }
-
-    /**
-     * Whether an address names this machine.
-     * <p>
-     * The single exception to the https rule, and it is a property of the address rather than a
-     * setting: traffic to loopback never reaches a network interface, so there is no path for
-     * anyone to read the credential off. It exists so the system can be brought up and tested
-     * on one machine without standing up a certificate first.
-     * <p>
-     * Deliberately not a flag. The hazard the https rule defends against is someone adding a
-     * "skip TLS" switch for a staging environment and it surviving into production; a rule tied
-     * to the address cannot survive being pointed at a real host.
-     * <p>
-     * Decided on the parsed address rather than on the text, because a prefix is not an address:
-     * this used to accept anything beginning "127.", and {@code 127.0.0.1.evil.example} is a name
-     * anyone can register. A literal is required before {@link InetAddress} is asked, so no name
-     * server is consulted; resolving here would trade a prefix bug for a rebinding one, where the
-     * answer depends on what DNS says at the moment of the check rather than on what the operator
-     * typed.
-     *
-     * @param host the host from the address
-     * @return whether it is a loopback address
-     */
-    private static boolean isLoopback(String host) {
-        if (host == null) {
-            return false;
-        }
-        String bare = host.startsWith("[") && host.endsWith("]")
-                ? host.substring(1, host.length() - 1)
-                : host;
-        if (bare.equalsIgnoreCase("localhost")) {
-            return true;
-        }
-        if (!isNumericAddress(bare)) {
-            return false;
-        }
-        try {
-            return InetAddress.getByName(bare).isLoopbackAddress();
-        } catch (UnknownHostException e) {
-            return false;
-        }
-    }
-
-    /**
-     * Whether a host is already written as an IP address, so that resolving it asks no name server.
-     *
-     * <p>A colon can only appear in an IPv6 literal. Otherwise every character has to be a digit or
-     * a dot, which admits the shorthands {@code 127.1} and {@code 2130706433} alongside dotted
-     * quads: those are genuinely loopback, and letting {@link InetAddress} decide is better than
-     * reimplementing its arithmetic here. What matters is that a name never reaches it.
-     */
-    private static boolean isNumericAddress(String host) {
-        if (host.isEmpty()) {
-            return false;
-        }
-        if (host.indexOf(':') >= 0) {
-            return true;
-        }
-        for (int index = 0; index < host.length(); index++) {
-            char character = host.charAt(index);
-            if (character != '.' && (character < '0' || character > '9')) {
-                return false;
-            }
-        }
-        return true;
     }
 
     /** Builds the redemption request body. */
