@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import { prisma } from "@/lib/db";
 import { isTerminalJobStatus, TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { publish } from "@/lib/events/bus";
+import { failUnfinishedJobs } from "@/lib/jobs/settle";
 import { rastersFor } from "@/lib/link/asset-sync";
 import { clearAgentStatus, recordStatus } from "@/lib/link/device-status";
 import {
@@ -559,8 +560,10 @@ async function markOffline(agentId: string): Promise<void> {
  * a receipt that is about to print. The agent's own list cannot mention it either, since it was
  * built before the socket opened.
  *
- * Each settled job is announced, because a caller subscribed to a webhook is waiting for exactly
- * this answer and would otherwise never receive one.
+ * Each job this actually settles is announced, because a caller subscribed to a webhook is waiting
+ * for exactly this answer and would otherwise never receive one. Only the ones actually settled: a
+ * job that reached a terminal state of its own between the selection and the write has already been
+ * answered, and announcing it again would contradict the answer the subscriber already has.
  *
  * @param agentId the agent that just connected
  * @param outstanding the job ids it says it still holds
@@ -582,29 +585,27 @@ async function settleLostJobs(agentId: string, outstanding: string[], connectedA
 			return;
 		}
 
-		await prisma.job.updateMany({
-			where: { id: { in: lost.map((job) => job.id) } },
-			data: {
-				status: "FAILED",
-				finishedAt: new Date(),
+		const settled = await failUnfinishedJobs(
+			lost.map((job) => job.id),
+			{
 				errorCode: "agent_lost_job",
 				errorMessage: "The agent reconnected without this job, so its outcome is unknown.",
-				// Cleared for the same reason `failJob` clears it: a caller who retries an
-				// identical body must get a fresh attempt rather than a replay of a job that
-				// never finished.
-				idempotencyKey: null,
-				idempotencyHash: null,
 			},
-		});
+		);
 
-		logger.warn("Settled jobs an agent no longer holds", { agentId, count: lost.length });
+		if (settled.length === 0) {
+			return;
+		}
 
-		for (const job of lost) {
-			await queueJobSettled(job.id);
+		logger.warn("Settled jobs an agent no longer holds", { agentId, count: settled.length });
+
+		for (const jobId of settled) {
+			await queueJobSettled(jobId);
 		}
 	} catch (error) {
 		// Never fatal. The connection is worth more than the repair, and the next reconnect
-		// tries again.
+		// tries again — including for a settle that failed part-way through a large backlog, since
+		// the selection above runs again and a job still unfinished is still selected.
 		logger.error("Could not settle jobs an agent no longer holds", error, { agentId });
 	}
 }

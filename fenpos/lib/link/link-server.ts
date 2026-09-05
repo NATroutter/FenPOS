@@ -157,6 +157,11 @@ async function routeUpgrade(
 		// A working credential does not spend the address budget, so an agent reconnecting
 		// repeatedly through a bad link is not refused by the address limiter above. What bounds
 		// the credential itself is the per-agent budget below.
+		//
+		// Ahead of that budget's refusal, not after it. A credential already over its own budget would
+		// otherwise spend an address token on every further attempt, and the address is shared: one
+		// till in a reboot loop would refuse the healthy tills behind the same router. Swapping these
+		// two statements is what `test/lib/link/connection-budget.test.ts` refuses to let pass.
 		upgradeLimiter.reset(peer);
 
 		// Spent, not returned: this is the budget that actually bounds a credential holder.

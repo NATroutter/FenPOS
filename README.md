@@ -350,7 +350,8 @@ raised it.
 - **Pairing codes** are single-use, consumed atomically at redemption, expire in fifteen minutes by
   default — **Settings → Security** sets the lifetime — and are rate-limited per address.
 - **Sessions** are database-backed and revocable, 12 hours, HttpOnly. Sign-in is limited to
-  five attempts per minute per address, and an account locks after ten consecutive failures.
+  five attempts per minute per address, and an account locks after ten consecutive failures. Both
+  are set under **Settings → Security**; the per-address throttle can be tightened, never loosened.
 - **The caller's address is the connection, not a header.** Everything keyed on an address — the
   sign-in limit above, the optional address allowlist, every audit row, and the address shown for
   pairing — uses the peer that opened the connection. A forwarding header such as `X-Forwarded-For`
@@ -363,9 +364,11 @@ raised it.
   before it decides.
 - **The agent validates what the server sends it.** Every frame is bounds-checked, unknown
   frames are refused without dropping the connection, and job dispatch is deduplicated by id
-  for the last 10,000 ids, which is far longer than any retry a dropped link can produce. The one
-  frame that does end a connection is an oversized one, on both sides: a peer sending more than
-  256 KiB in a single message is not speaking this protocol.
+  for the last 10,000 ids, which is far longer than any retry a dropped link can produce. What ends
+  a connection on either side is an oversized frame: a peer sending more than 256 KiB in a single
+  message is not speaking this protocol. The server ends one for two further reasons the agent has
+  no equivalent of — a binary message, which this protocol never sends and which the server will not
+  decode to find out what it was, and a `hello` naming a protocol version it does not speak.
 - **A job settles the next time its agent is heard from.** An agent names the work it still holds
   each time it connects, so a receipt whose outcome was lost to a dropped link or a restart is
   failed rather than left queued for ever. An agent that never comes back is the gap: its jobs stay

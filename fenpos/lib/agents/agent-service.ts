@@ -5,6 +5,8 @@ import type { AgentStatus } from "@/lib/domain/enums";
 import { TERMINAL_JOB_STATUSES } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
 import { ApiError } from "@/lib/errors";
+import { failUnfinishedJobs } from "@/lib/jobs/settle";
+import { logger } from "@/lib/logger";
 import { queueJobSettled } from "@/lib/webhooks/notify";
 
 /**
@@ -162,9 +164,11 @@ export async function renameAgent(agentId: string, rawName: string): Promise<voi
  * offline — the same button, the same details, nothing to type on the replacement machine — and
  * the only way to a code was deleting the agent and creating it again, printers and all.
  *
- * Every non-terminal job this agent accepted is also failed and announced. The agent will not
- * reconnect to report how those jobs end — its credential is revoked, and only this printer's
- * agent can answer for it — so left unresolved they would read as queued forever.
+ * Every job this agent accepted and had not finished is also failed and announced. The agent will
+ * not reconnect to report how those jobs end — its credential is revoked, and only this printer's
+ * agent can answer for it — so left unresolved they would read as queued forever. A job that does
+ * finish while this runs is left as it finished: the link is closed by the caller, after this, so
+ * the agent is still connected and may still be reporting throughout.
  *
  * Closing the live connection is the caller's responsibility — the registry that owns
  * sockets is deliberately not reachable from here, so that this module stays testable
@@ -186,30 +190,35 @@ export async function unpairAgent(agentId: string): Promise<{ code: string; expi
 
 	// The agent will never report on these. Its credential is gone, so it cannot reconnect to
 	// tell anyone how they ended, and nothing else on this side can answer for a printer. Left
-	// alone they would read as queued for ever. Selected before the update because `updateMany`
-	// does not hand back the rows it touched, and each one still needs its own announcement below.
+	// alone they would read as queued for ever. Selected first because each one still needs its own
+	// announcement below, which needs the ids.
 	const stranded = await prisma.job.findMany({
 		where: { agentId, status: { notIn: [...TERMINAL_JOB_STATUSES] } },
 		select: { id: true },
 	});
 
 	if (stranded.length > 0) {
-		await prisma.job.updateMany({
-			where: { id: { in: stranded.map((job) => job.id) } },
-			data: {
-				status: "FAILED",
-				finishedAt: new Date(),
-				errorCode: "agent_unpaired",
-				errorMessage: "The agent was unpaired before this job finished.",
-				idempotencyKey: null,
-				idempotencyHash: null,
-			},
-		});
+		try {
+			const settled = await failUnfinishedJobs(
+				stranded.map((job) => job.id),
+				{ errorCode: "agent_unpaired", errorMessage: "The agent was unpaired before this job finished." },
+			);
 
-		// A caller subscribed to a webhook is waiting for precisely this answer, and an unpair
-		// must tell it the same way a reconnect that finds a job gone does.
-		for (const job of stranded) {
-			await queueJobSettled(job.id);
+			// A caller subscribed to a webhook is waiting for precisely this answer, and an unpair
+			// must tell it the same way a reconnect that finds a job gone does. Only what was
+			// actually written: the link is still open at this point and the agent is still
+			// reporting, so a job may well have settled on its own since the selection above, and a
+			// receipt announced as completed must not then be announced as failed.
+			for (const jobId of settled) {
+				await queueJobSettled(jobId);
+			}
+		} catch (error) {
+			// Not fatal, deliberately. The credential is already cleared above, so the unpair has
+			// taken effect whatever happens here, and the operator standing at the till still needs
+			// the code this returns. Throwing would report a completed unpair as a failure and
+			// withhold that code, while leaving the jobs in exactly the state a caught failure
+			// leaves them: unfinished, unreportable, and visible as such in the panel.
+			logger.error("Could not fail the jobs an unpaired agent was still working on", error, { agentId });
 		}
 	}
 

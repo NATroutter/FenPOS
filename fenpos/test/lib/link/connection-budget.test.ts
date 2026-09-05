@@ -80,6 +80,12 @@ describe("agent connection budget", () => {
 	 */
 	const AGENT_CONNECTION_BUDGET = 10;
 
+	/**
+	 * The per-address upgrade budget, which the last case below turns on rather than merely mentions:
+	 * it is how many refusals it would take to empty an address, if a refusal spent anything.
+	 */
+	const ADDRESS_UPGRADE_BUDGET = 20;
+
 	/** Connects `attempts` times with `token`, closing each socket, and tallies how each resolved. */
 	async function driveConnections(token: string, attempts: number): Promise<{ opened: number; refused: number }> {
 		let opened = 0;
@@ -134,6 +140,37 @@ describe("agent connection budget", () => {
 
 		// ...and the quiet one still has all of its own.
 		const socket = connect(quiet.token);
+		await new Promise<void>((resolve, reject) => {
+			socket.once("open", resolve);
+			socket.once("error", reject);
+		});
+		expect(socket.readyState).toBe(WebSocket.OPEN);
+	});
+
+	it("does not spend the address budget on a credential that is already over its own", async () => {
+		// A till stuck in a reboot loop is refused by its own credential's budget, over and over. Those
+		// refusals must cost the *address* nothing, or the loop takes down every healthy till behind the
+		// same router with it — the address budget is shared and there are only twenty of it a minute.
+		//
+		// That is a property of ordering, not of either limiter on its own: the address token is handed
+		// back the moment the credential authenticates, which has to happen ahead of the per-agent
+		// budget's refusal rather than after it. This is the case that notices when it does not. The
+		// two above cannot: neither drives enough refusals to empty an address that is twenty deep, so
+		// the neighbour connects either way.
+		const looping = await pairedAgent("looping");
+		const neighbour = await pairedAgent("neighbour");
+
+		const attempts = AGENT_CONNECTION_BUDGET + ADDRESS_UPGRADE_BUDGET;
+		const { opened, refused } = await driveConnections(looping.token, attempts);
+
+		// Its own budget is what refused it, and it went far enough past that budget that the refusals
+		// alone would have emptied the address of every token it has.
+		expect(opened).toBe(AGENT_CONNECTION_BUDGET);
+		expect(refused).toBe(ADDRESS_UPGRADE_BUDGET);
+
+		// The neighbour has its own credential and has spent nothing, so the only thing that could turn
+		// it away here is a budget the looping till emptied on its behalf.
+		const socket = connect(neighbour.token);
 		await new Promise<void>((resolve, reject) => {
 			socket.once("open", resolve);
 			socket.once("error", reject);
