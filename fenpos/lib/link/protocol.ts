@@ -243,6 +243,29 @@ const MAX_BARCODE_CHARS = 255;
  */
 const CODE128_SET_SELECTOR_CHARS = 2;
 
+/**
+ * Whether a symbol's payload is within ASCII.
+ *
+ * Not a preference. The agent's encoder assembles a two-dimensional symbol's store-data command
+ * with a length taken from the character count while writing the string's UTF-8 bytes, so one
+ * character above U+007F makes the two disagree and the printer reads a truncated payload as a
+ * valid symbol — it scans, and it scans as the wrong thing. The markup compiler refuses the same
+ * content where a caller gets a line and a column for it; stating it here as well means a frame
+ * carrying one cannot be built at all, rather than being built and then silently refused at the
+ * far end.
+ */
+const isAscii = (content: string): boolean => {
+	for (const character of content) {
+		if ((character.codePointAt(0) ?? 0) > 0x7f) {
+			return false;
+		}
+	}
+	return true;
+};
+
+const ASCII_MESSAGE =
+	"content must be ASCII; a wider character makes the symbol's declared length disagree with its bytes";
+
 /** A printer action that is not text. */
 export const directiveSchema = z
 	.discriminatedUnion("type", [
@@ -256,7 +279,7 @@ export const directiveSchema = z
 		 */
 		z.object({
 			type: z.literal("QR"),
-			content: z.string().min(1).max(4_296),
+			content: z.string().min(1).max(4_296).refine(isAscii, ASCII_MESSAGE),
 			size: z.number().int().min(1).max(16),
 		}),
 		z.object({
@@ -278,7 +301,7 @@ export const directiveSchema = z
 		 */
 		z.object({
 			type: z.literal("PDF417"),
-			content: z.string().min(1).max(1_850),
+			content: z.string().min(1).max(1_850).refine(isAscii, ASCII_MESSAGE),
 			errorLevel: z.number().int().min(0).max(8),
 			columns: z.number().int().min(1).max(30),
 		}),

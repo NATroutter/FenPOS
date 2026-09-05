@@ -653,6 +653,25 @@ describe("block directives on the wire", () => {
 	});
 });
 
+describe("two-dimensional symbol content", () => {
+	it("refuses a QR payload outside ASCII", () => {
+		// The agent declares such a symbol's length in characters and sends it as UTF-8 bytes, so
+		// one character above U+007F makes the two disagree and the printer reads a truncated
+		// payload as a valid symbol. It scans, and it scans as the wrong thing.
+		expect(directiveSchema.safeParse({ type: "QR", content: "hyvää", size: 4 }).success).toBe(false);
+	});
+
+	it("refuses a PDF417 payload outside ASCII", () => {
+		expect(directiveSchema.safeParse({ type: "PDF417", content: "héllo", errorLevel: 2, columns: 6 }).success).toBe(
+			false,
+		);
+	});
+
+	it("accepts an ASCII payload", () => {
+		expect(directiveSchema.safeParse({ type: "QR", content: "https://example.com", size: 4 }).success).toBe(true);
+	});
+});
+
 describe("images on the wire", () => {
 	/** A raster of the right size for its rectangle, all paper. */
 	function bits(widthDots: number, heightDots: number): string {

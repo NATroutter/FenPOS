@@ -17,6 +17,7 @@ import fi.natroutter.fenpos.link.Frames.WireDirective;
 import fi.natroutter.fenpos.print.JobSettings;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -574,6 +575,42 @@ class FrameCodecTest {
         String oversized = "{\"type\":\"welcome\",\"pad\":\"" + "x".repeat(FrameCodec.MAX_FRAME_BYTES) + "\"}";
 
         assertThrows(ProtocolException.class, () -> codec.read(oversized));
+    }
+
+    @Test
+    void acceptsAFrameExactlyAtTheCap() throws ProtocolException {
+        // The cap is the same number on both sides and is measured the same way: UTF-8 bytes of
+        // the JSON, not characters. A frame one byte inside it has to be accepted, or a legitimate
+        // receipt at the limit is refused by whichever side counts differently.
+        String prefix = "{\"type\":\"job.cancel\",\"jobId\":\"";
+        String suffix = "\"}";
+        String padded = prefix + "a".repeat(FrameCodec.MAX_FRAME_BYTES - prefix.length() - suffix.length()) + suffix;
+
+        // Too long for an identifier, so this is refused for its length rather than its size —
+        // which is the point: it got past the byte cap.
+        assertEquals(FrameCodec.MAX_FRAME_BYTES, padded.getBytes(StandardCharsets.UTF_8).length);
+        ProtocolException refusal = assertThrows(ProtocolException.class, () -> codec.read(padded));
+        assertTrue(refusal.getMessage().contains("jobId"), refusal.getMessage());
+    }
+
+    @Test
+    void refusesAFrameOverTheCapBeforeParsingIt() {
+        String oversized = "{\"type\":\"job.cancel\",\"jobId\":\"" + "a".repeat(FrameCodec.MAX_FRAME_BYTES) + "\"}";
+
+        ProtocolException refusal = assertThrows(ProtocolException.class, () -> codec.read(oversized));
+        assertTrue(refusal.getMessage().contains("exceeds the " + FrameCodec.MAX_FRAME_BYTES),
+                refusal.getMessage());
+    }
+
+    @Test
+    void measuresTheCapInBytesRatherThanCharacters() {
+        // Two hundred thousand two-byte characters: inside the cap if it counted characters, well
+        // past it in the bytes that actually cross the socket.
+        String multibyte = "{\"type\":\"job.cancel\",\"jobId\":\"" + "ä".repeat(200_000) + "\"}";
+
+        assertTrue(multibyte.length() < FrameCodec.MAX_FRAME_BYTES);
+        ProtocolException refusal = assertThrows(ProtocolException.class, () -> codec.read(multibyte));
+        assertTrue(refusal.getMessage().startsWith("frame of 400"), refusal.getMessage());
     }
 
     @Test
