@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { IMAGE_LIMITS, JOB_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
+import { IMAGE_LIMITS, JOB_LIMITS, MAX_FRAME_BYTES, MAX_OUTSTANDING_JOBS, WIRE_LIMITS } from "@/lib/link/protocol";
 
 /**
  * The agent restates every bound on this protocol, because a receiver that trusts the sender's
@@ -12,6 +12,16 @@ import { IMAGE_LIMITS, JOB_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
  * This is a monorepo, so the Java file is right there to read. Reading it is cruder than
  * generating both sides from one description, and much cheaper: the numbers are few, they change
  * rarely, and a mismatch here names exactly which one moved.
+ *
+ * **Every expectation comes from the schema module, never from a number typed in here.** A row
+ * comparing the agent's constant against a literal restated in this file catches the agent moving
+ * and nothing else — and the direction it misses is the worse one, because a bound loosened on
+ * this side produces a job the API accepts and the agent then drops.
+ *
+ * What this table cannot see is drift in meaning behind a number that hasn't moved. The frame cap
+ * is the example worth naming: both sides must measure it in UTF-8 bytes rather than characters,
+ * and this table would not notice if one side started counting characters while the declared
+ * number stayed at 256 * 1024. Each side asserts that property in its own suite instead.
  */
 const CODEC = join(__dirname, "../../../../agent/src/main/java/fi/natroutter/fenpos/link/FrameCodec.java");
 
@@ -59,15 +69,16 @@ describe("the agent's bounds match this protocol", () => {
 		["MAX_SYNCED_RASTERS", IMAGE_LIMITS.maxSyncedRasters],
 		["MAX_RASTER_WIDTH_DOTS", IMAGE_LIMITS.maxWidthDots],
 		["MAX_RASTER_HEIGHT_DOTS", IMAGE_LIMITS.maxHeightDots],
-		["MAX_DEVICES", 256],
-		["MAX_RAW_CHARS", 16_384],
-		["MAX_ID_CHARS", 64],
-		["MAX_PORT_CHARS", 256],
-		["MAX_AGENT_NAME_CHARS", 128],
-		["MAX_QR_CHARS", 4_296],
-		["MAX_PDF417_CHARS", 1_850],
-		["MAX_BARCODE_CHARS", 255],
-		["MAX_CODE128_CHARS", 253],
+		["MAX_DEVICES", WIRE_LIMITS.maxDevices],
+		["MAX_RAW_CHARS", WIRE_LIMITS.maxRawChars],
+		["MAX_ID_CHARS", WIRE_LIMITS.maxIdChars],
+		["MAX_PORT_CHARS", WIRE_LIMITS.maxPortChars],
+		["MAX_AGENT_NAME_CHARS", WIRE_LIMITS.maxAgentNameChars],
+		["MAX_QR_CHARS", WIRE_LIMITS.maxQrChars],
+		["MAX_PDF417_CHARS", WIRE_LIMITS.maxPdf417Chars],
+		["MAX_BARCODE_CHARS", WIRE_LIMITS.maxBarcodeChars],
+		["MAX_CODE128_CHARS", WIRE_LIMITS.maxBarcodeChars - WIRE_LIMITS.code128SelectorChars],
+		["MAX_REPORTED_OUTSTANDING", MAX_OUTSTANDING_JOBS],
 	])("%s", (name, expected) => {
 		expect(agentBound(name)).toBe(expected);
 	});

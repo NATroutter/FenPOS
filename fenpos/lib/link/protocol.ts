@@ -97,6 +97,35 @@ export const IMAGE_LIMITS = {
 } as const;
 
 /**
+ * Bounds the agent restates that belong to no other group.
+ *
+ * Exported for the same reason {@link JOB_LIMITS} is: the contract test compares the agent's
+ * constants against these, and a bound written as a literal inside a schema is one the test can
+ * only compare against a literal restated in the test — which catches the agent moving and never
+ * catches this side moving.
+ */
+export const WIRE_LIMITS = {
+	/** Devices in one configuration snapshot. */
+	maxDevices: 256,
+	/** Base64 characters in one raw write. Everything above this derives from it. */
+	maxRawChars: 16_384,
+	/** Characters in any identifier on this wire. */
+	maxIdChars: 64,
+	/** Characters in a serial port path. */
+	maxPortChars: 256,
+	/** Characters in the agent name a welcome carries. */
+	maxAgentNameChars: 128,
+	/** Characters in a QR payload, which is that symbology's own alphanumeric capacity. */
+	maxQrChars: 4_296,
+	/** Characters in a PDF417 payload, from that symbology's own capacity. */
+	maxPdf417Chars: 1_850,
+	/** Characters a linear barcode's one-byte length field can declare. */
+	maxBarcodeChars: 255,
+	/** Characters the mandatory Code 128 code-set selector occupies ahead of the payload. */
+	code128SelectorChars: 2,
+} as const;
+
+/**
  * Identifier shapes, bounded so an oversized value cannot be stored or logged, and restricted so a
  * value that arrives here cannot forge a log line.
  *
@@ -110,7 +139,7 @@ export const IMAGE_LIMITS = {
 const idSchema = z
 	.string()
 	.min(1)
-	.max(64)
+	.max(WIRE_LIMITS.maxIdChars)
 	.regex(/^[A-Za-z0-9_-]+$/, "must be letters, digits, dashes or underscores");
 const deviceNameSchema = z
 	.string()
@@ -233,16 +262,6 @@ const imageSourceSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("INLINE"), ...rasterFields }).refine(fillsItsRectangle, RECTANGLE_MESSAGE),
 ]);
 
-/** Longest linear barcode payload, which is what `GS k` function B's one-byte length field can declare. */
-const MAX_BARCODE_CHARS = 255;
-
-/**
- * Characters the mandatory Code 128 code-set selector occupies ahead of the payload, mirroring
- * `CODE128_SET_B`'s length in the agent's `EscPosRenderer`. The selector counts toward the same
- * one-byte length field as the content itself, so a Code 128 payload must leave room for it.
- */
-const CODE128_SET_SELECTOR_CHARS = 2;
-
 /**
  * Whether a symbol's payload is within ASCII.
  *
@@ -279,13 +298,13 @@ export const directiveSchema = z
 		 */
 		z.object({
 			type: z.literal("QR"),
-			content: z.string().min(1).max(4_296).refine(isAscii, ASCII_MESSAGE),
+			content: z.string().min(1).max(WIRE_LIMITS.maxQrChars).refine(isAscii, ASCII_MESSAGE),
 			size: z.number().int().min(1).max(16),
 		}),
 		z.object({
 			type: z.literal("BARCODE"),
 			system: BarcodeSystem.schema,
-			content: z.string().min(1).max(MAX_BARCODE_CHARS),
+			content: z.string().min(1).max(WIRE_LIMITS.maxBarcodeChars),
 		}),
 		/**
 		 * `columns` is the symbol's data-column count, and it is the one piece of measured geometry on
@@ -301,7 +320,7 @@ export const directiveSchema = z
 		 */
 		z.object({
 			type: z.literal("PDF417"),
-			content: z.string().min(1).max(1_850).refine(isAscii, ASCII_MESSAGE),
+			content: z.string().min(1).max(WIRE_LIMITS.maxPdf417Chars).refine(isAscii, ASCII_MESSAGE),
 			errorLevel: z.number().int().min(0).max(8),
 			columns: z.number().int().min(1).max(30),
 		}),
@@ -312,7 +331,7 @@ export const directiveSchema = z
 		(directive) =>
 			directive.type !== "BARCODE" ||
 			directive.system !== "CODE128" ||
-			directive.content.length <= MAX_BARCODE_CHARS - CODE128_SET_SELECTOR_CHARS,
+			directive.content.length <= WIRE_LIMITS.maxBarcodeChars - WIRE_LIMITS.code128SelectorChars,
 		"a CODE128 barcode's content must leave room for the two-character code-set selector its command prepends",
 	);
 
@@ -353,7 +372,7 @@ export type CompiledJob = z.infer<typeof compiledJobSchema>;
  */
 export const deviceConfigSchema = z.object({
 	name: deviceNameSchema,
-	port: z.string().min(1).max(256),
+	port: z.string().min(1).max(WIRE_LIMITS.maxPortChars),
 	baudRate: z.number().int().min(50).max(4_000_000),
 	dataBits: z.number().int().min(5).max(8),
 	stopBits: z.number().int().min(1).max(2),
@@ -429,7 +448,7 @@ export const welcomeSchema = z.object({
 	type: z.literal("welcome"),
 	protocolVersion: z.number().int(),
 	agentId: idSchema,
-	agentName: z.string().max(128),
+	agentName: z.string().max(WIRE_LIMITS.maxAgentNameChars),
 	/** Server time, so a agent with a wrong clock can report timings the server can align. */
 	serverTime: z.string().datetime(),
 });
@@ -490,7 +509,7 @@ export const agentSettingsSchema = z.object({
  */
 export const configSyncSchema = z.object({
 	type: z.literal("config.sync"),
-	devices: z.array(deviceConfigSchema).max(256),
+	devices: z.array(deviceConfigSchema).max(WIRE_LIMITS.maxDevices),
 	assets: z.array(assetRasterSchema).max(IMAGE_LIMITS.maxSyncedRasters),
 	/**
 	 * Optional so the frame stays compatible in both directions: an agent built before this field
@@ -581,7 +600,7 @@ export const rawWriteSchema = z.object({
 	requestId: requestIdSchema,
 	device: deviceNameSchema,
 	/** The bytes, base64 encoded. */
-	bytes: z.string().max(16_384),
+	bytes: z.string().max(WIRE_LIMITS.maxRawChars),
 });
 
 /** Server to agent: enumerate the serial ports this machine can see. */
