@@ -147,6 +147,34 @@ describe("parseAgentFrame", () => {
 		);
 		expect(result.ok).toBe(false);
 	});
+
+	it("rejects a job identifier carrying anything but an identifier's characters", () => {
+		// Identifiers are interpolated into log lines on both sides, and a log line is read by a
+		// person at a terminal. A newline in one forges an entry; an escape sequence drives the
+		// terminal. Device and asset names have been slugs for exactly this reason and identifiers
+		// were the gap.
+		const forged = parseAgentFrame(
+			JSON.stringify({
+				type: "job.update",
+				jobId: "\x1b[31mFAKE\x1b[0m {RED}\nWARN forged",
+				status: "FAILED",
+				at: new Date().toISOString(),
+			}),
+		);
+		expect(forged.ok).toBe(false);
+	});
+
+	it("accepts the identifiers this server actually issues", () => {
+		const cuid = parseAgentFrame(
+			JSON.stringify({
+				type: "job.update",
+				jobId: "cmtn7vj5r0001vcvhd59uswty",
+				status: "COMPLETED",
+				at: new Date().toISOString(),
+			}),
+		);
+		expect(cuid.ok).toBe(true);
+	});
 });
 
 describe("serialiseServerFrame", () => {

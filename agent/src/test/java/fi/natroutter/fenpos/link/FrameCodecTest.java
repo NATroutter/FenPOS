@@ -861,6 +861,25 @@ class FrameCodecTest {
     }
 
     @Test
+    void refusesAnIdentifierThatCouldForgeALogLine() {
+        // Every log line that names a job interpolates this value. A newline in it produces an
+        // entry that reads exactly like a real one, and a brace drives the colour substitution the
+        // logger applies on the way to a terminal. Names have always been slugs for that reason;
+        // identifiers were the one foreign string that was not.
+        String frame = "{\"type\":\"job.cancel\",\"jobId\":\"a\\u001b[31m {RED}\\nb\"}";
+
+        ProtocolException refusal = assertThrows(ProtocolException.class, () -> codec.read(frame));
+        assertTrue(refusal.getMessage().contains("jobId"), refusal.getMessage());
+    }
+
+    @Test
+    void acceptsTheIdentifiersTheServerIssues() {
+        assertDoesNotThrow(() -> codec.read("{\"type\":\"job.cancel\",\"jobId\":\"cmtn7vj5r0001vcvhd59uswty\"}"));
+        assertDoesNotThrow(() -> codec.read(
+                "{\"type\":\"ports.scan\",\"requestId\":\"3f2b1c9e-7a10-4c62-9f0d-8e5a1b4c7d33\"}"));
+    }
+
+    @Test
     void refusesAWelcomeWhoseIdentifiersAreOutsideTheirBounds() {
         assertThrows(ProtocolException.class, () -> codec.read("""
                 {"type":"welcome","protocolVersion":3,"agentId":"%s","agentName":"n",\

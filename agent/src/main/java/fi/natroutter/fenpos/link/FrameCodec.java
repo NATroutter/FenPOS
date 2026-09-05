@@ -161,6 +161,17 @@ public final class FrameCodec {
      */
     private static final Pattern SLUG = Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
 
+    /**
+     * The shape every identifier on this wire takes. Mirrors idSchema on the server.
+     *
+     * <p>Looser than {@link #SLUG} — an identifier is not a name and is never written into a path —
+     * but restricted for the same reason: every log line that names a job or a request
+     * interpolates one, a newline in it produces an entry that reads exactly like a real one, and a
+     * brace reaches the colour substitution the logger applies on its way to a terminal. The
+     * alternative was escaping at each of the dozen call sites and remembering to at the next one.
+     */
+    private static final Pattern ID = Pattern.compile("^[A-Za-z0-9_-]+$");
+
     /** Serialises outgoing frames. Nulls are omitted so optional fields are simply absent. */
     private final Gson gson = new GsonBuilder().create();
 
@@ -674,9 +685,14 @@ public final class FrameCodec {
         return value < 0x20 || value == 0x7F || (value >= 0x80 && value <= 0x9F);
     }
 
-    /** Reads an identifier: 1..64 characters, the bound every id on this protocol shares. */
+    /** Reads an identifier: 1..64 characters of the alphabet every id on this protocol shares. */
     private static String requireId(JsonObject parent, String field) throws ProtocolException {
-        return requireBounded(parent, field, 1, MAX_ID_CHARS);
+        String value = requireBounded(parent, field, 1, MAX_ID_CHARS);
+        if (!ID.matcher(value).matches()) {
+            throw new ProtocolException("field '" + field + "' must be letters, digits, dashes or "
+                    + "underscores");
+        }
+        return value;
     }
 
     /** Reads an identifier the frame may leave out, bounded the same way when it is present. */

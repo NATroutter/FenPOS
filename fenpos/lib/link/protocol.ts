@@ -96,8 +96,22 @@ export const IMAGE_LIMITS = {
 	maxHeightDots: 65_535,
 } as const;
 
-/** Identifier shapes, bounded so an oversized value cannot be stored or logged. */
-const idSchema = z.string().min(1).max(64);
+/**
+ * Identifier shapes, bounded so an oversized value cannot be stored or logged, and restricted so a
+ * value that arrives here cannot forge a log line.
+ *
+ * The alphabet is the same argument `deviceNameSchema` makes one line down: an identifier is
+ * interpolated into log lines on both sides of this link, and a log line is read by a person at a
+ * terminal. A newline in one produces what reads as a separate entry, and a brace reaches the
+ * colour substitution the agent's logger applies on its way to that terminal. Every identifier
+ * either side issues — this server's record ids and the request ids it mints — is already within
+ * this set, so nothing legitimate is narrowed by saying so.
+ */
+const idSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(/^[A-Za-z0-9_-]+$/, "must be letters, digits, dashes or underscores");
 const deviceNameSchema = z
 	.string()
 	.min(1)
@@ -515,8 +529,12 @@ export const jobUpdateSchema = z.object({
  * request — a scan it just started, a port it just asked to open — and without correlation it
  * would have to guess which reply was its own, which goes wrong precisely when two operators
  * are working at once.
+ *
+ * Aliased to {@link idSchema} rather than restated, so the two cannot drift: a request id is
+ * interpolated into the same log lines a job id is, and one alphabet rule for every identifier on
+ * this wire is what keeps escaping out of every consumer.
  */
-const requestIdSchema = z.string().min(1).max(64);
+const requestIdSchema = idSchema;
 
 /**
  * Server to agent: write these bytes to the printer, unmodified.
