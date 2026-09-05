@@ -13,10 +13,13 @@ import { booleanSetting } from "@/lib/settings/settings-service";
  *
  * The only unauthenticated write in the system. Everything about it is shaped by that:
  *
- * - Rate limited by client address, which is what makes the code's entropy budget hold. A
- *   twelve-character code is comfortable only because guessing is throttled. The limiter is
- *   consumed unconditionally, before `pairing.enabled` is even read — see that check's own
- *   comment below for why the ordering there is deliberate rather than an oversight.
+ * - Rate limited by the connection's own peer, not the resolved client address — the two differ
+ *   on an install behind a trusted proxy, and resolving one costs a settings read this endpoint
+ *   cannot afford to pay before it even knows whether to refuse. The peer is what makes the code's
+ *   entropy budget hold: a twelve-character code is comfortable only because guessing is
+ *   throttled. The limiter is consumed unconditionally, before `pairing.enabled` is even read —
+ *   see that check's own comment below for why the ordering there is deliberate rather than an
+ *   oversight.
  * - Every failure returns one identical response. Distinguishing "wrong", "expired" and
  *   "already used" would let a caller map the code space by probing for near-misses. The
  *   server log records which it was.

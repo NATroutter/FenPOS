@@ -249,8 +249,11 @@ describe("getPeerAddress", () => {
 	it("answers from the connection alone, with no settings read", async () => {
 		// This is what the two unauthenticated endpoints key their limiter on, and it has to be
 		// answerable before anything touches the database — a request that is about to be refused
-		// must not cost a query first.
-		const reads = vi.spyOn(settings, "globalProxyTrust");
+		// must not cost a query first. Spied on `listSettings` rather than `globalProxyTrust`
+		// specifically, since every settings accessor in this codebase reads through it — the
+		// guarantee holds for any setting this function might someday be tempted to consult, not
+		// just the one it happens to be tempted by today.
+		const reads = vi.spyOn(settings, "listSettings");
 		vi.mocked(headers).mockResolvedValue(new Headers({ [PEER_ADDRESS_HEADER]: "203.0.113.5" }));
 
 		await expect(getPeerAddress()).resolves.toBe("203.0.113.5");
