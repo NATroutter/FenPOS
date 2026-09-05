@@ -99,16 +99,18 @@ async function refreshLogIngestSettings(): Promise<LogIngestSettings> {
  * read from its declared minimum, the other from its declared default, because a count and a
  * length fail differently when the number behind them is not the one an operator configured.
  *
- * `maxLinesPerWindow` reads the minimum. A burst that lands on an agent's very first window races
- * this read, and every line in it is decided before the read can possibly land, so this is the cap
- * actually enforced until it does. The minimum is the one number no configuration can be tighter
- * than, so deciding against it can only drop a line the real setting would have kept — recoverable,
- * since the agent still holds the line and the next one it sends is checked against the setting
- * that has since loaded.
+ * `maxLinesPerWindow` reads the minimum. The cache this falls back to is global, so the cold window
+ * it covers is per process rather than per agent — but whichever agent's window opens inside it, its
+ * lines are decided before the read can possibly land, so this is the cap actually enforced until it
+ * does. The minimum is the one number no configuration can be tighter than, so deciding against it
+ * can only drop a line the real setting would have kept — recoverable, since the agent still holds
+ * the line and the next one it sends is checked against the setting that has since loaded.
  *
  * `maxMessageChars` reads the default instead. Its minimum is 200 characters, and truncating a
  * message that has already been accepted destroys the part cut off rather than merely delaying it
- * — the setting's own description names a long stack trace as the case that hits it. Nothing
+ * — the setting's own description names a long stack trace as the case that hits it. This is not
+ * guaranteed safe either: an install configured above the default still has its messages cut to
+ * 1000 characters during the cold window, just fewer of them than a floor of 200 would cut. Nothing
  * retries the missing half once that has happened, so the safer number for a length is the one an
  * install is likeliest to be running, not the one no install could be under.
  */
@@ -116,12 +118,12 @@ function provisionalLogIngestSettings(): LogIngestSettings {
 	// Both keys read below are declared `type: "integer"`, the only variant carrying `min` and
 	// `fallback` as numbers. A mismatch here is a definition that changed type without this reader
 	// being updated, which is a programming error rather than a stored value.
-	const integerSetting = (key: SettingKey): Extract<SettingDefinition, { type: "integer" }> =>
+	const integerDeclaration = (key: SettingKey): Extract<SettingDefinition, { type: "integer" }> =>
 		SETTINGS.find((setting) => setting.key === key) as Extract<SettingDefinition, { type: "integer" }>;
 
 	return {
-		maxLinesPerWindow: integerSetting("logs.linesPerMinutePerAgent").min,
-		maxMessageChars: integerSetting("logs.maxMessageChars").fallback,
+		maxLinesPerWindow: integerDeclaration("logs.linesPerMinutePerAgent").min,
+		maxMessageChars: integerDeclaration("logs.maxMessageChars").fallback,
 	};
 }
 
