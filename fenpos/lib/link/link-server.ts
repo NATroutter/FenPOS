@@ -49,6 +49,22 @@ const MAX_PAYLOAD_BYTES = 256 * 1024;
 const upgradeLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
 
 /**
+ * How many connections one agent may open per minute, whatever address it comes from.
+ *
+ * The address limiter above cannot do this job. It is handed back on a successful authentication,
+ * and deliberately so: several tills behind one shop's router share an address, and a hostile
+ * caller there must not be able to spend the real agent out of its own connection. The consequence
+ * is that a caller holding a working credential is exempt from it entirely, and a connection is not
+ * cheap — a settings read, an indexed lookup, an agent write, a device query and a dither of every
+ * stored image at every paper width behind that agent, each time.
+ *
+ * So the credential gets a budget of its own, and this one is spent rather than returned. Ten a
+ * minute is an order of magnitude more than the agent's own backoff will ever produce: it opens one
+ * on start and one per reconnect, spaced out further on each failure.
+ */
+const agentLimiter = new RateLimiter({ limit: 10, windowMs: 60_000 });
+
+/**
  * Handles one upgrade request destined for the link endpoint.
  *
  * @param request the upgrade request
@@ -132,8 +148,21 @@ async function routeUpgrade(
 			return;
 		}
 
-		// A credential that works is not a flood, whatever else it is: an agent reconnecting through a
-		// bad link must not spend itself out of the budget a hostile caller filled.
+		// Spent, not returned: this is the budget that actually bounds a credential holder.
+		const budget = agentLimiter.consume(agent.id);
+		if (!budget.allowed) {
+			refuse(socket, 429, "Too Many Requests");
+			logger.warn("Agent connection rate limit engaged", {
+				agentId: agent.id,
+				address,
+				retryAfterMs: budget.retryAfterMs,
+			});
+			return;
+		}
+
+		// A working credential does not spend the address budget, so an agent reconnecting
+		// repeatedly through a bad link is not refused by the address limiter above. What bounds
+		// the credential itself is the per-agent budget beside it.
 		upgradeLimiter.reset(address);
 
 		wss.handleUpgrade(request, socket, head, (ws) => {
