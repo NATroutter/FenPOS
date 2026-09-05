@@ -101,7 +101,7 @@ export async function scanPorts(agentId: string): Promise<SerialPortInfo[]> {
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<PortsResultFrame>(requestId, await scanTimeoutMs());
+	const waiting = awaitReply<PortsResultFrame>(agentId, requestId, await scanTimeoutMs());
 
 	dispatch(link, requestId, { type: "ports.scan", requestId }, "That agent disconnected before the scan was sent.");
 
@@ -145,7 +145,7 @@ export async function sendDeviceCommand(
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
+	const waiting = awaitReply<CommandResultFrame>(agentId, requestId, await commandTimeoutMs());
 
 	const frame = options.jobId
 		? { type: command, requestId, device: deviceName, jobId: options.jobId }
@@ -206,7 +206,7 @@ export async function sendRawWrite(agentId: string, deviceName: string, bytes: s
 	}
 
 	const requestId = newRequestId();
-	const waiting = awaitReply<CommandResultFrame>(requestId, await commandTimeoutMs());
+	const waiting = awaitReply<CommandResultFrame>(agentId, requestId, await commandTimeoutMs());
 
 	dispatch(
 		link,

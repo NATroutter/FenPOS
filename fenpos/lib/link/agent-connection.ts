@@ -18,7 +18,7 @@ import {
 } from "@/lib/link/protocol";
 import { type AgentLink, connectedAgentIds, getLink, registerLink, unregisterLink } from "@/lib/link/registry";
 import { plausibleTime } from "@/lib/link/reported-time";
-import { failRequests, settleReply } from "@/lib/link/requests";
+import { failRequests, isMisdirectedReply, settleReply } from "@/lib/link/requests";
 import { logger } from "@/lib/logger";
 import { ingestLog } from "@/lib/logs/ingest";
 import { globalAgentSettings, globalJobSettings, integerSetting } from "@/lib/settings/settings-service";
@@ -206,13 +206,25 @@ export function handleAgentConnection(socket: WebSocket, agent: AuthenticatedAge
 			case "ports.result":
 			case "command.result":
 				// A reply nobody is waiting for is dropped. That is what a reply arriving after
-				// its timeout looks like, and also what an agent inventing request ids looks
-				// like; the same silence makes both harmless.
-				if (!settleReply(parsed.frame.requestId, parsed.frame)) {
-					logger.warn("Reply to a request nobody is waiting for", {
-						agentId: agent.id,
-						type: parsed.frame.type,
-					});
+				// its timeout looks like, what an agent inventing request ids looks like, and
+				// what an agent answering a question that was put to a different one looks
+				// like; the same silence makes all three harmless.
+				if (!settleReply(agent.id, parsed.frame.requestId, parsed.frame)) {
+					// The first case is routine — a reply and its own timeout crossed in
+					// flight. The second is a connection speaking to a request it was never
+					// sent, which is worth telling apart in the logs even though both are
+					// dropped the same way.
+					if (isMisdirectedReply(parsed.frame.requestId, agent.id)) {
+						logger.warn("Reply to a request sent to a different agent", {
+							agentId: agent.id,
+							type: parsed.frame.type,
+						});
+					} else {
+						logger.warn("Reply to a request nobody is waiting for", {
+							agentId: agent.id,
+							type: parsed.frame.type,
+						});
+					}
 				}
 				break;
 		}

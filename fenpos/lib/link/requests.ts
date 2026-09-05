@@ -22,6 +22,16 @@ import { randomUUID } from "node:crypto";
  */
 
 interface Pending {
+	/**
+	 * The agent this request went to.
+	 *
+	 * Checked when a reply arrives, so a correlation identifier is not the only thing standing
+	 * between one agent and another's answer. Identifiers are minted wide enough that guessing one
+	 * is not a route in, but that is a property of how they are generated rather than a check
+	 * anyone made — and a later change to how they are generated would turn a detail into a hole
+	 * with nothing here to object.
+	 */
+	agentId: string;
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	timer: NodeJS.Timeout;
@@ -82,12 +92,13 @@ export function newRequestId(): string {
  * `timeoutMs` has no built-in default — see the module doc comment above — so every caller states
  * it, typically read moments earlier from the setting that governs that caller's kind of request.
  *
+ * @param agentId the agent the request was sent to
  * @param requestId the identifier sent with the request
  * @param timeoutMs how long to wait before giving up
  * @returns the reply frame
  * @throws RequestTimeoutError when nothing answers in time
  */
-export function awaitReply<T>(requestId: string, timeoutMs: number): Promise<T> {
+export function awaitReply<T>(agentId: string, requestId: string, timeoutMs: number): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			pending.delete(requestId);
@@ -96,7 +107,7 @@ export function awaitReply<T>(requestId: string, timeoutMs: number): Promise<T> 
 
 		// Not unref'd: the wait should keep the process from exiting mid-request in the same way
 		// any other in-flight work does.
-		pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer });
+		pending.set(requestId, { agentId, resolve: resolve as (value: unknown) => void, reject, timer });
 	});
 }
 
@@ -131,21 +142,42 @@ export function cancelReply(requestId: string): void {
  *
  * A reply with no waiter is dropped without complaint. That is what a reply arriving after its
  * timeout looks like, and it is also what a hostile agent inventing request ids looks like —
- * neither is worth an error, and both are made harmless by the same silence.
+ * neither is worth an error, and both are made harmless by the same silence. An answer from an
+ * agent other than the one asked is dropped the same way, and for the same reason.
  *
+ * @param agentId the agent the reply arrived from
  * @param requestId the request being answered
  * @param value the reply
  * @returns whether anyone was waiting
  */
-export function settleReply(requestId: string, value: unknown): boolean {
+export function settleReply(agentId: string, requestId: string, value: unknown): boolean {
 	const waiter = pending.get(requestId);
-	if (!waiter) {
+	if (!waiter || waiter.agentId !== agentId) {
 		return false;
 	}
 	pending.delete(requestId);
 	clearTimeout(waiter.timer);
 	waiter.resolve(value);
 	return true;
+}
+
+/**
+ * Tells a caller who already got `false` from {@link settleReply} which of its two reasons this
+ * was.
+ *
+ * Both are dropped identically and neither is an error, but they are not equally interesting to
+ * an operator watching logs: a reply arriving after its own timeout is routine traffic, while one
+ * addressed to a request that belongs to another agent is a connection saying things about a
+ * question it was never asked. This does not change what happens to the reply — only which
+ * sentence gets written down about it.
+ *
+ * @param requestId the request {@link settleReply} found no match for
+ * @param agentId the agent the reply arrived from
+ * @returns whether that request is still waiting, just on a different agent
+ */
+export function isMisdirectedReply(requestId: string, agentId: string): boolean {
+	const waiter = pending.get(requestId);
+	return waiter !== undefined && waiter.agentId !== agentId;
 }
 
 /**
