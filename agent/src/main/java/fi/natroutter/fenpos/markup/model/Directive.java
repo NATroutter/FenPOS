@@ -25,6 +25,12 @@ import fi.natroutter.fenpos.enums.BarcodeSystem;
  */
 public sealed interface Directive {
 
+    /** Widest image accepted, in dots — far beyond the paper any of these printers takes. */
+    int MAX_WIDTH_DOTS = 4_096;
+
+    /** Tallest image accepted, in dots: what the raster command declares in its two height bytes. */
+    int MAX_HEIGHT_DOTS = 65_535;
+
     /** Advances the paper by a fixed number of lines. */
     record Feed(int lines) implements Directive {
         public Feed {
@@ -146,6 +152,15 @@ public sealed interface Directive {
             if (widthDots < 1 || heightDots < 1) {
                 throw new IllegalArgumentException(
                         "an image must have dots, not " + widthDots + "x" + heightDots);
+            }
+            // Bounded here rather than only at the wire, so that every way an image is built is
+            // bounded — including the rasters shipped inside this jar, which reach the renderer
+            // without passing the codec. The raster command declares its height in two bytes and
+            // the printer reads exactly that many rows, so a taller image wraps the field and the
+            // printer consumes the rest of the job as image data.
+            if (widthDots > MAX_WIDTH_DOTS || heightDots > MAX_HEIGHT_DOTS) {
+                throw new IllegalArgumentException("an image may be at most " + MAX_WIDTH_DOTS + "x"
+                        + MAX_HEIGHT_DOTS + " dots, not " + widthDots + "x" + heightDots);
             }
             if (packed == null) {
                 throw new IllegalArgumentException("image dots must not be null");
