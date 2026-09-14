@@ -59,7 +59,7 @@ export function resolveFills(line: Line, columns: number): Line {
  * @param count how many fills are sharing them
  * @returns one budget per fill, in order, summing to `slack`
  */
-function share(slack: number, count: number): number[] {
+export function share(slack: number, count: number): number[] {
 	const base = Math.floor(slack / count);
 	const remainder = slack % count;
 	return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0));
