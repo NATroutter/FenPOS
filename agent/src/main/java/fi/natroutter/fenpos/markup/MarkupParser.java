@@ -245,7 +245,13 @@ public final class MarkupParser {
             switch (current) {
                 case '<' -> readTag();
                 case '&' -> readEntity();
-                case '\n' -> endLine();
+                case '\n' -> {
+                    if (block != null) {
+                        continueLineInsideBlock();
+                    } else {
+                        endLine();
+                    }
+                }
                 default -> readText(current);
             }
         }
@@ -265,8 +271,9 @@ public final class MarkupParser {
     /**
      * Closes out the current line: flushes any pending text, checks that a rule, a symbol or an
      * image did not have to share this line with anything else, and records the finished
-     * {@link Line}. Called for every {@code \n} in the document, and once more after the loop for
-     * the final line, which the document does not have to end with a newline to have.
+     * {@link Line}. Called for every {@code \n} in the document that is not inside an open content
+     * block — see {@link #continueLineInsideBlock()} for that case — and once more after the loop
+     * for the final line, which the document does not have to end with a newline to have.
      * <p>
      * Resets the state that is local to one printed line — the accumulated spans, fills and
      * directives, and the "something already claimed this line" trackers — but keeps whatever a
@@ -297,6 +304,26 @@ public final class MarkupParser {
             pendingWrapReset = false;
         }
 
+        index++;
+        line++;
+        lineStart = index;
+    }
+
+    /**
+     * Advances past a {@code \n} found while an {@link #block} is open, without ending the
+     * printed line the block belongs to.
+     * <p>
+     * A {@code <qr>}, {@code <barcode>}, {@code <pdf417>} or {@code <image>} that spans several
+     * lines of the document still becomes exactly one printed {@link Line} — the one that was
+     * current when the block opened, not one per raw line it happens to be written across. The
+     * server's renderer feeds the paper once for that line; a blank {@link Line} for each raw
+     * line swallowed by the block would feed it once per line instead. So unlike
+     * {@link #endLine()}, nothing is flushed and no {@code Line} is snapshotted here — only
+     * {@link #line} and {@link #lineStart} move, which is what keeps a problem reported after the
+     * block closes, or a tag illegally nested inside it, pointing at the raw document line it is
+     * actually on.
+     */
+    private void continueLineInsideBlock() {
         index++;
         line++;
         lineStart = index;
@@ -867,7 +894,7 @@ public final class MarkupParser {
         }
         throw new MarkupException(soleOccupant.error(), soleOccupant.line(), soleOccupant.column(),
                 soleOccupant.name(),
-                "<" + soleOccupant.name() + "> takes a whole line and must be alone in its element");
+                "<" + soleOccupant.name() + "> takes a whole line and must be alone on its line");
     }
 
     // -------------------------------------------------------------------------

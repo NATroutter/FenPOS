@@ -34,13 +34,13 @@ public enum Tag {
     /** Built-in font selection. */
     FONT("font", Kind.PAIRED, Argument.REQUIRED),
 
-    /** Line justification. Paired, and required to enclose the whole element. */
+    /** Line justification. Paired, and required to enclose the whole line. */
     ALIGN("align", Kind.PAIRED, Argument.REQUIRED),
 
-    /** Break this line at the paper width. Paired, and required to enclose the whole element. */
+    /** Break this line at the paper width. Paired, and required to enclose the whole line. */
     WRAP("wrap", Kind.PAIRED, Argument.NONE),
 
-    /** Print this line as written. Paired, and required to enclose the whole element. */
+    /** Print this line as written. Paired, and required to enclose the whole line. */
     NOWRAP("nowrap", Kind.PAIRED, Argument.NONE),
 
     /**
@@ -57,7 +57,7 @@ public enum Tag {
     /** Advance the paper by a number of lines. */
     FEED("feed", Kind.VOID, Argument.REQUIRED),
 
-    /** A full-width horizontal rule. Required to be alone in its element. */
+    /** A full-width horizontal rule. Required to be alone on its line. */
     HR("hr", Kind.VOID, Argument.NONE),
 
     /** A QR code. Argument is the module size, 1-16. */

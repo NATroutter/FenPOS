@@ -182,6 +182,21 @@ class MarkupParserTest {
     }
 
     /**
+     * A second, independent {@code <align>} written after the first closed on the same line is
+     * refused by the same check as a nested one — naming {@code align}, the tag being opened,
+     * rather than the one that closed.
+     */
+    @Test
+    void rejectsAlignReopenedAfterTheFirstClosedOnTheSameLine() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<align=center>a</align><align=left>b</align>"));
+
+        assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
+        assertEquals("align", thrown.detail());
+        assertEquals(24, thrown.column());
+    }
+
+    /**
      * Deliberate, not incidental: the line-owning rule that governs {@code <wrap>}/{@code <nowrap>}
      * also governs {@code <align>}, so a line-owning tag opened inside a styling tag is refused
      * regardless of which one it is.
@@ -386,6 +401,21 @@ class MarkupParserTest {
         assertEquals(MarkupError.INVALID_WRAP_SCOPE,
                 assertThrows(MarkupException.class,
                         () -> MarkupParser.parse("<wrap><nowrap>x</nowrap></wrap>")).error());
+    }
+
+    /**
+     * A {@code <nowrap>} opened after an independent {@code <wrap>} closed on the same line is
+     * refused by the same check as a nested one — naming {@code nowrap}, the tag being opened,
+     * rather than {@code wrap}, the one that closed.
+     */
+    @Test
+    void rejectsNowrapReopenedAfterWrapClosedOnTheSameLine() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<wrap>a</wrap><nowrap>b</nowrap>"));
+
+        assertEquals(MarkupError.INVALID_WRAP_SCOPE, thrown.error());
+        assertEquals("nowrap", thrown.detail());
+        assertEquals(15, thrown.column());
     }
 
     @Test
@@ -765,14 +795,44 @@ class MarkupParserTest {
         assertEquals(3, thrown.column());
     }
 
+    /**
+     * A content block that spans several raw lines of the document still becomes exactly one
+     * printed line: the server feeds the paper once for it, and a blank {@link Line} for each raw
+     * line the block happened to be written across would feed it once per line instead.
+     */
     @Test
     void trimsLineBreaksInsideAnImageReference() throws MarkupException {
         ImageResolver images = (name, width) -> name.equals("logo")
                 ? Optional.of(ONE_DOT) : Optional.empty();
         List<Line> lines = MarkupParser.parseDocument("<image>\nlogo\n</image>", images);
 
-        assertEquals(3, lines.size());
-        assertEquals(1, lines.stream().mapToInt(line -> line.directives().size()).sum());
+        assertEquals(1, lines.size());
+        assertEquals(1, lines.get(0).directives().size());
+    }
+
+    @Test
+    void resumesOrdinaryLinesAfterABlockThatSpannedSeveralLines() throws MarkupException {
+        ImageResolver images = (name, width) -> name.equals("logo")
+                ? Optional.of(ONE_DOT) : Optional.empty();
+        List<Line> lines = MarkupParser.parseDocument("<image>\nlogo\n</image>\nafter", images);
+
+        assertEquals(2, lines.size());
+        assertEquals("after", lines.get(1).spans().get(0).text());
+    }
+
+    /**
+     * The newlines a block swallows still count towards the document's line numbers, even though
+     * they produce no {@link Line} of their own — so an error on the line after the block reports
+     * that line, not the raw count of {@link Line}s produced so far.
+     */
+    @Test
+    void reportsTheDocumentLineAfterABlockThatSpannedSeveralLines() {
+        ImageResolver images = (name, width) -> name.equals("logo")
+                ? Optional.of(ONE_DOT) : Optional.empty();
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parseDocument(
+                "<image>\nlogo\n</image>\nafter <blink>x</blink>", images));
+
+        assertEquals(4, thrown.line());
     }
 
     @Test
