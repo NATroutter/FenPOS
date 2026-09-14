@@ -59,14 +59,18 @@ beforeAll(async () => {
 const COLUMNS = 42;
 const PAPER_DOTS = 504;
 
-/** Resolves for {@link COLUMNS}, which is what almost every case here wants. No variable context: these cases are about images, not substitution. */
-const resolve = (data: string[]) => resolveImages(data, COLUMNS, null);
+/**
+ * Resolves for {@link COLUMNS}, which is what almost every case here wants. No variable context:
+ * these cases are about images, not substitution. The lines are joined as a caller sends them, one
+ * string with a newline between lines.
+ */
+const resolve = (lines: string[]) => resolveImages(lines.join("\n"), COLUMNS, null);
 
 /**
- * A receipt naming `count` distinct URLs, one per element.
+ * A receipt naming `count` distinct URLs, one per line.
  *
  * @param count how many distinct remote images to name
- * @returns the elements
+ * @returns the lines
  */
 function remoteImages(count: number): string[] {
 	return Array.from({ length: count }, (_, index) => `<image>https://x.test/${index}.png</image>`);
@@ -116,7 +120,7 @@ function headerClaiming(width: number, height: number): Buffer {
 /**
  * Runs a resolve expected to fail and returns the `ApiError` it raised.
  *
- * @param data the elements to resolve
+ * @param data the lines to resolve
  * @returns the error, having asserted it is an ApiError
  */
 async function refusal(data: string[]): Promise<ApiError> {
@@ -352,7 +356,10 @@ describe("resolveImages", () => {
 
 		const images = await resolve(["<bold>unclosed", "<image>logo</image>"]);
 
-		expect(images.get("logo")).toMatchObject({ width: 128, height: 40 });
+		// A receipt is one document, so a tag left open anywhere leaves no tree to walk and nothing
+		// is resolved. The compile that follows raises it with a line and a column, which is a better
+		// answer than anything this pre-pass could give — and no connection was opened for it.
+		expect(images.size).toBe(0);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
@@ -368,6 +375,18 @@ describe("resolveImages", () => {
 			width: 128,
 			height: 40,
 		});
+	});
+
+	it("finds an image whose name is wrapped onto its own line", async () => {
+		await createAsset("logo", PNG);
+		const resolved = await resolveImages("<image>\nlogo\n</image>", 42, null);
+
+		expect(resolved.has("logo")).toBe(true);
+	});
+
+	it("finds an image inside a spanning scope", async () => {
+		await createAsset("logo", PNG);
+		expect((await resolveImages("<bold>\n<image>logo</image>\n</bold>", 42, null)).has("logo")).toBe(true);
 	});
 
 	it("resolves nothing at all for a receipt with no images", async () => {
@@ -502,7 +521,7 @@ describe("dots that have to travel with the job", () => {
 	it("keys a raster by the printed width, which follows the device's paper", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages(["<image>https://x.test/l.png</image>"], 32, null);
+		const images = await resolveImages("<image>https://x.test/l.png</image>", 32, null);
 
 		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])]).toEqual([384]);
 	});
@@ -586,7 +605,7 @@ describe("dots that have to travel with the job", () => {
 			};
 			const limits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
 
-			const request = readRequest({ data: ["<image>fenpos</image>"], linefeed: "LF" }, limits, settings, 200);
+			const request = readRequest({ data: "<image>fenpos</image>", linefeed: "LF" }, limits, settings, 200);
 			const job = compile("job-1", "kitchen", request, limits, settings);
 
 			expect(compiledJobSchema.safeParse(job).success).toBe(true);

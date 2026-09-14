@@ -1,19 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
-import { compiledJobSchema } from "@/lib/link/protocol";
-import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
+import { compiledJobSchema, rasterBytes } from "@/lib/link/protocol";
+import { dotWidth, pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
 	type CompileSettings,
-	collectElementErrors,
+	collectDocumentErrors,
 	compile,
 	countOutputLines,
 	countTextLines,
+	layOut,
+	type PrintRequest,
 	readRequest,
 } from "@/lib/markup/compiler";
+import type { ResolvedImages } from "@/lib/markup/images";
 
 /** The value-length cap `readRequest` enforces on a supplied `variables` field. Not itself under test here. */
 const MAX_VARIABLE_VALUE_CHARS = 200;
+
+/**
+ * Runs something expected to be refused and returns the error it raised.
+ *
+ * @param run the call under test
+ * @returns the error, having asserted it is an `ApiError`
+ */
+function refusal(run: () => unknown): ApiError {
+	try {
+		run();
+	} catch (thrown) {
+		if (thrown instanceof ApiError) {
+			return thrown;
+		}
+		throw thrown;
+	}
+	throw new Error("expected the call to be refused");
+}
+
+/**
+ * One image as the pre-pass would hand it over: 40x20 dots of solid ink, at 42 columns of paper.
+ *
+ * @param name the reference the receipt writes
+ * @returns the resolved images a compile can be handed
+ */
+function imagesFor(name: string): ResolvedImages {
+	const raster = { widthDots: 40, heightDots: 20, packed: Buffer.alloc(rasterBytes(40, 20), 0xff) };
+	return new Map([[name, { width: 40, height: 20, inline: new Map([[dotWidth(42), raster]]) }]]);
+}
 
 /**
  * Behavioural tests for the compile pipeline.
@@ -61,7 +93,7 @@ describe("compile pipeline", () => {
 	};
 
 	it("compiles a valid request into a job", () => {
-		const job = run({ data: ["Tea 2.50", "<bold>Total</bold>"] });
+		const job = run({ data: "Tea 2.50\n<bold>Total</bold>" });
 
 		expect(job.lines).toHaveLength(2);
 		expect(job.device).toBe("kitchen");
@@ -85,51 +117,51 @@ describe("compile pipeline", () => {
 		expect(error({}).code).toBe("missing_field");
 	});
 
-	it("rejects data that is not an array", () => {
-		expect(error({ data: "one line" }).code).toBe("invalid_type");
-	});
-
-	it("rejects a non-string element and names its line", () => {
-		const thrown = error({ data: ["ok", 42] });
-
-		expect(thrown.code).toBe("invalid_type");
-		expect(thrown.details.line).toBe(2);
-	});
-
 	it("rejects an unknown linefeed", () => {
-		expect(error({ data: ["x"], linefeed: "CR" }).code).toBe("invalid_linefeed");
+		expect(error({ data: "x", linefeed: "CR" }).code).toBe("invalid_linefeed");
 	});
 
 	// -----------------------------------------------------------------------
 	// Limits
 	// -----------------------------------------------------------------------
 
-	it("rejects too many elements", () => {
-		expect(error({ data: Array.from({ length: 6 }, () => "x") }).code).toBe("too_many_lines");
+	it("rejects too many lines", () => {
+		expect(error({ data: Array.from({ length: 6 }, () => "x").join("\n") }).code).toBe("too_many_lines");
 	});
 
-	it("rejects an element longer than the limit", () => {
-		const thrown = error({ data: ["ok", "a".repeat(21)] });
+	it("rejects a line longer than the limit, naming it", () => {
+		const thrown = refusal(() =>
+			layOut(
+				readRequest({ data: `ok\n${"a".repeat(21)}` }, limits, settings, MAX_VARIABLE_VALUE_CHARS),
+				settings,
+				limits,
+			),
+		);
 
 		expect(thrown.code).toBe("line_too_long");
 		expect(thrown.details.line).toBe(2);
 	});
 
 	it("rejects total text larger than the limit", () => {
-		expect(error({ data: Array.from({ length: 3 }, () => "a".repeat(20)) }).code).toBe("text_too_large");
+		const data = Array.from({ length: 3 }, () => "a".repeat(20)).join("\n");
+		const thrown = refusal(() =>
+			layOut(readRequest({ data }, limits, settings, MAX_VARIABLE_VALUE_CHARS), settings, limits),
+		);
+
+		expect(thrown.code).toBe("text_too_large");
 	});
 
 	it("rejects too many lines after wrapping", () => {
-		// Each element is within every input limit, but wraps to two lines at width 10, so only
+		// Each line is within every input limit, but wraps to two lines at width 10, so only
 		// the post-wrap count can catch this. Checking the submitted count alone would let a
 		// short request produce an unbounded receipt.
-		expect(error({ data: ["ab ab ab ab", "cd cd cd cd"] }).code).toBe("too_many_output_lines");
+		expect(error({ data: "ab ab ab ab\ncd cd cd cd" }).code).toBe("too_many_output_lines");
 	});
 
-	it("checks limits before parsing content", () => {
+	it("counts the lines before parsing content", () => {
 		// A request that is both oversized and malformed is refused for the cheaper reason,
 		// without parsing megabytes of markup first.
-		expect(error({ data: [`${"a".repeat(21)}<blink>`] }).code).toBe("line_too_long");
+		expect(error({ data: Array.from({ length: 6 }, () => "<blink>").join("\n") }).code).toBe("too_many_lines");
 	});
 
 	// -----------------------------------------------------------------------
@@ -137,7 +169,7 @@ describe("compile pipeline", () => {
 	// -----------------------------------------------------------------------
 
 	it("reports a markup error with its line and column", () => {
-		const thrown = error({ data: ["ok", "a <blink>b</blink>"] });
+		const thrown = error({ data: "ok\na <blink>b</blink>" });
 
 		expect(thrown.code).toBe("unknown_tag");
 		expect(thrown.details.line).toBe(2);
@@ -145,7 +177,7 @@ describe("compile pipeline", () => {
 	});
 
 	it("reports an unsupported character with everything needed to fix it", () => {
-		const thrown = error({ data: ["ok", "Hello 😎"] });
+		const thrown = error({ data: "ok\nHello 😎" });
 
 		expect(thrown.code).toBe("unsupported_character");
 		expect(thrown.details.line).toBe(2);
@@ -155,7 +187,7 @@ describe("compile pipeline", () => {
 	});
 
 	it("reports a control character with its position", () => {
-		const thrown = error({ data: ["a\tb"] });
+		const thrown = error({ data: "a\tb" });
 
 		expect(thrown.code).toBe("control_character");
 		expect(thrown.details.line).toBe(1);
@@ -167,17 +199,17 @@ describe("compile pipeline", () => {
 	// -----------------------------------------------------------------------
 
 	it("wraps by default according to the device width", () => {
-		const job = run({ data: ["ab ".repeat(4)] });
+		const job = run({ data: "ab ".repeat(4) });
 
 		expect(job.lines, "11 columns of text should wrap at width 10").toHaveLength(2);
 	});
 
 	it("takes the linefeed from the device when the request omits it", () => {
-		expect(run({ data: ["x"] }).linefeed).toBe("LF");
+		expect(run({ data: "x" }).linefeed).toBe("LF");
 	});
 
 	it("takes the linefeed from the request when it supplies one", () => {
-		expect(run({ data: ["x"], linefeed: "CRLF" }).linefeed).toBe("CRLF");
+		expect(run({ data: "x", linefeed: "CRLF" }).linefeed).toBe("CRLF");
 	});
 
 	// -----------------------------------------------------------------------
@@ -185,7 +217,7 @@ describe("compile pipeline", () => {
 	// -----------------------------------------------------------------------
 
 	it("expands a rule to the device width, since only the server knows it", () => {
-		const job = run({ data: ["<hr>"] });
+		const job = run({ data: "<hr>" });
 
 		expect(job.lines[0].spans[0].text).toBe("-".repeat(10));
 		// The agent never has to know what a rule is: what crosses the link is always text.
@@ -193,16 +225,16 @@ describe("compile pipeline", () => {
 	});
 
 	it("carries cut and feed directives through to the wire", () => {
-		const job = run({ data: ["done<feed=2>", "<cut=partial>"] });
+		const job = run({ data: "done<feed=2>\n<cut=partial>" });
 
 		expect(job.lines[0].directives).toEqual([{ type: "FEED", lines: 2 }]);
 		expect(job.lines[1].directives).toEqual([{ type: "CUT", mode: "PARTIAL" }]);
 	});
 
 	it("resolves styles onto each span rather than leaving a tag stack", () => {
-		// Two short elements rather than one nested string, because the fixture's line limit is
+		// Two short lines rather than one nested string, because the fixture's line limit is
 		// twenty characters and the point being made is about the output, not the input.
-		const job = run({ data: ["<size=2>x</size>", "<bold>y</bold>"] });
+		const job = run({ data: "<size=2>x</size>\n<bold>y</bold>" });
 
 		expect(job.lines[0].spans[0].widthMult).toBe(2);
 		expect(job.lines[0].spans[0].heightMult).toBe(2);
@@ -212,7 +244,7 @@ describe("compile pipeline", () => {
 	it("does not count directive-only lines as printed lines", () => {
 		// A cut emits its command without advancing the paper, so it must not count against the
 		// output limit or be reported as a printed line.
-		const job = run({ data: ["one", "<cut>"] });
+		const job = run({ data: "one\n<cut>" });
 
 		expect(job.lines).toHaveLength(2);
 		expect(
@@ -223,15 +255,16 @@ describe("compile pipeline", () => {
 		).toBe(0);
 	});
 
-	it("compiles an empty data array", () => {
-		const job = run({ data: [] });
+	it("compiles an empty document into one blank line", () => {
+		const job = run({ data: "" });
 
-		expect(job.lines).toHaveLength(0);
+		expect(job.lines).toHaveLength(1);
+		expect(job.lines[0].spans).toHaveLength(0);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 	});
 
 	describe("per-line wrapping", () => {
-		// The shared limits allow twenty characters per element, which a tagged line exceeds
+		// The shared limits allow twenty characters per line, which a tagged line exceeds
 		// before it ever reaches the wrapper. Roomier here so the tag is what is being tested.
 		const roomy: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 6 };
 
@@ -243,20 +276,20 @@ describe("compile pipeline", () => {
 
 		it("leaves a <nowrap> line intact while its neighbours wrap", () => {
 			// At width 10, "ab ab ab ab" wraps to two lines; the tagged twin stays one.
-			const job = wrapping({ data: ["ab ab ab ab", "<nowrap>ab ab ab ab</nowrap>"] });
+			const job = wrapping({ data: "ab ab ab ab\n<nowrap>ab ab ab ab</nowrap>" });
 
 			expect(job.lines).toHaveLength(3);
 		});
 
 		it("wraps a <wrap> line when the device default is off", () => {
-			const job = wrapping({ data: ["<wrap>ab ab ab ab</wrap>"] }, false);
+			const job = wrapping({ data: "<wrap>ab ab ab ab</wrap>" }, false);
 
 			expect(job.lines).toHaveLength(2);
 		});
 
 		it("follows the device default when no tag is present", () => {
-			expect(wrapping({ data: ["ab ab ab ab"] }, false).lines).toHaveLength(1);
-			expect(wrapping({ data: ["ab ab ab ab"] }, true).lines).toHaveLength(2);
+			expect(wrapping({ data: "ab ab ab ab" }, false).lines).toHaveLength(1);
+			expect(wrapping({ data: "ab ab ab ab" }, true).lines).toHaveLength(2);
 		});
 
 		it("counts lines produced by a tag against the output limit", () => {
@@ -267,7 +300,7 @@ describe("compile pipeline", () => {
 				compile(
 					"job",
 					"kitchen",
-					readRequest({ data: ["<wrap>ab ab ab ab</wrap>"] }, tight, merged, MAX_VARIABLE_VALUE_CHARS),
+					readRequest({ data: "<wrap>ab ab ab ab</wrap>" }, tight, merged, MAX_VARIABLE_VALUE_CHARS),
 					tight,
 					merged,
 				),
@@ -277,18 +310,49 @@ describe("compile pipeline", () => {
 
 	describe("request fields", () => {
 		it("rejects the removed wrap field and names its replacement", () => {
-			const failure = error({ data: ["x"], wrap: false });
+			const failure = error({ data: "x", wrap: false });
 
 			expect(failure.code).toBe("unknown_field");
 			expect(failure.message).toContain("<nowrap>");
 		});
 
 		it("rejects a misspelled field", () => {
-			expect(error({ data: ["x"], linefeeed: "LF" }).code).toBe("unknown_field");
+			expect(error({ data: "x", linefeeed: "LF" }).code).toBe("unknown_field");
 		});
 
 		it("still accepts data and linefeed", () => {
-			expect(() => run({ data: ["x"], linefeed: "CRLF" })).not.toThrow();
+			expect(() => run({ data: "x", linefeed: "CRLF" })).not.toThrow();
+		});
+
+		it("refuses an array in data with a message naming the change", () => {
+			const thrown = refusal(() => readRequest({ data: ["a", "b"] }, limits, settings, MAX_VARIABLE_VALUE_CHARS));
+
+			expect(thrown.code).toBe("invalid_type");
+			expect(thrown.message).toBe(
+				"'data' is no longer an array of lines. Send one string, with a newline between lines.",
+			);
+		});
+
+		it("refuses a non-string data", () => {
+			expect(refusal(() => readRequest({ data: 7 }, limits, settings, MAX_VARIABLE_VALUE_CHARS)).message).toMatch(
+				/must be a string/,
+			);
+		});
+
+		it("counts lines of the string against maxLines after normalising line endings", () => {
+			expect(() =>
+				readRequest({ data: "a\r\nb\r\nc" }, { ...limits, maxLines: 3 }, settings, MAX_VARIABLE_VALUE_CHARS),
+			).not.toThrow();
+			const thrown = refusal(() =>
+				readRequest({ data: "a\nb\nc\nd" }, { ...limits, maxLines: 3 }, settings, MAX_VARIABLE_VALUE_CHARS),
+			);
+
+			expect(thrown.code).toBe("too_many_lines");
+			expect(thrown.message).toBe("At most 3 lines are allowed, got 4");
+		});
+
+		it("keeps the request's data normalised", () => {
+			expect(readRequest({ data: "a\r\nb" }, limits, settings, MAX_VARIABLE_VALUE_CHARS).data).toBe("a\nb");
 		});
 	});
 
@@ -300,7 +364,7 @@ describe("compile pipeline", () => {
 	const printed = (line: { spans: { text: string }[] }): string => line.spans.map((span) => span.text).join("");
 
 	it("pads a fill to the device's width", () => {
-		const job = run({ data: ["a<fill>b"] });
+		const job = run({ data: "a<fill>b" });
 
 		expect(printed(job.lines[0])).toBe(`a${" ".repeat(8)}b`);
 	});
@@ -311,13 +375,13 @@ describe("compile pipeline", () => {
 	 * anywhere, and `defaultWrap` is on in this fixture.
 	 */
 	it("does not wrap a line it filled", () => {
-		const job = run({ data: ["a<fill>b"] });
+		const job = run({ data: "a<fill>b" });
 
 		expect(job.lines).toHaveLength(1);
 	});
 
 	it("fills the same markup differently for a narrower device", () => {
-		const request = readRequest({ data: ["a<fill>b"] }, limits, settings, MAX_VARIABLE_VALUE_CHARS);
+		const request = readRequest({ data: "a<fill>b" }, limits, settings, MAX_VARIABLE_VALUE_CHARS);
 		const narrow = compile("job-1", "kitchen", request, limits, { ...settings, columns: 6 });
 
 		expect(printed(narrow.lines[0])).toBe(`a${" ".repeat(4)}b`);
@@ -331,21 +395,22 @@ describe("compile pipeline", () => {
 	 * fails here, rather than shipping the agent a field it has no idea what to do with.
 	 */
 	it("carries no fill across the wire", () => {
-		const job = run({ data: ["a<fill>b"] });
+		const job = run({ data: "a<fill>b" });
 
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 		expect(job.lines[0]).not.toHaveProperty("fills");
 	});
 
 	/**
-	 * The preview collects every element's errors without a device in hand, so a fill character has
+	 * The preview collects every line's errors without a device in hand, so a fill character has
 	 * to be checkable before the column count exists. That is why the charset pass runs first.
 	 */
 	it("reports an unprintable fill character with no column count in hand", () => {
-		const errors = collectElementErrors(
-			{ data: ["a<fill=€>b"], linefeed: "LF", variables: {} },
+		const errors = collectDocumentErrors(
+			{ data: "a<fill=€>b", linefeed: "LF", variables: {} },
 			{ ...settings, codepage: "CP437" },
 			null,
+			limits,
 		);
 
 		expect(errors).toHaveLength(1);
@@ -393,11 +458,15 @@ describe("block line budget", () => {
 	 */
 	const WIDE_SETTINGS: CompileSettings = { ...SETTINGS, columns: 42 };
 
+	/** Roomy enough that no character limit fires: these cases are about the line budget. */
+	const BUDGET_LIMITS: CompileLimits = { maxLines: 20, maxLineChars: 80, maxTotalChars: 400, maxOutputLines: 400 };
+
 	it("charges a QR code its printed height, not one line", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, WIDE_SETTINGS);
+		const plain = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, WIDE_SETTINGS, BUDGET_LIMITS);
 		const withQr = countOutputLines(
-			{ data: ["Hello", "<qr>https://example.com/o/1</qr>"], linefeed: "LF", variables: {} },
+			{ data: "Hello\n<qr>https://example.com/o/1</qr>", linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
+			BUDGET_LIMITS,
 		);
 		expect(withQr - plain).toBeGreaterThan(1);
 	});
@@ -417,10 +486,10 @@ describe("block line budget", () => {
 	it("refuses a symbol wider than the device's paper, naming the tag and its column", () => {
 		// Wrapped in an alignment so the tag is not at column 1, which is what shows the column
 		// really travelled from the parser rather than being a constant the compiler made up.
-		const element = "<align=center><qr=8>https://example.com/o/1</qr></align>";
+		const tagged = "<align=center><qr=8>https://example.com/o/1</qr></align>";
 		const thrown = (() => {
 			try {
-				countOutputLines({ data: ["Hello", element], linefeed: "LF", variables: {} }, SETTINGS);
+				countOutputLines({ data: `Hello\n${tagged}`, linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
 				return null;
 			} catch (error) {
 				return error as ApiError;
@@ -430,21 +499,27 @@ describe("block line budget", () => {
 		expect(thrown).toBeInstanceOf(ApiError);
 		expect(thrown?.code).toBe("symbol_too_wide");
 		expect(thrown?.status).toBe(422);
-		expect(thrown?.details).toMatchObject({ line: 2, column: element.indexOf("<qr=8>") + 1, detail: "qr" });
+		expect(thrown?.details).toMatchObject({ line: 2, column: tagged.indexOf("<qr=8>") + 1, detail: "qr" });
 		expect(thrown?.message).toMatch(/200 dots wide, more than the 120/);
 
 		// The same symbol on paper wide enough for it compiles, so this is the width and not the tag.
-		expect(() => countOutputLines({ data: [element], linefeed: "LF", variables: {} }, WIDE_SETTINGS)).not.toThrow();
+		expect(() =>
+			countOutputLines({ data: tagged, linefeed: "LF", variables: {} }, WIDE_SETTINGS, BUDGET_LIMITS),
+		).not.toThrow();
 	});
 
 	it("charges a drawer pulse nothing, because it prints nothing", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
-		const withDrawer = countOutputLines({ data: ["Hello", "<drawer>"], linefeed: "LF", variables: {} }, SETTINGS);
+		const plain = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
+		const withDrawer = countOutputLines(
+			{ data: "Hello\n<drawer>", linefeed: "LF", variables: {} },
+			SETTINGS,
+			BUDGET_LIMITS,
+		);
 		expect(withDrawer).toBe(plain);
 	});
 
 	it("charges a barcode and a PDF417 symbol exactly their measured height", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, WIDE_SETTINGS);
+		const plain = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, WIDE_SETTINGS, BUDGET_LIMITS);
 
 		const barcodeHeight = symbolGeometry({
 			kind: "BARCODE",
@@ -452,15 +527,17 @@ describe("block line budget", () => {
 			content: "1234567890128",
 		}).heightLines;
 		const withBarcode = countOutputLines(
-			{ data: ["Hello", "<barcode=EAN13>1234567890128</barcode>"], linefeed: "LF", variables: {} },
+			{ data: "Hello\n<barcode=EAN13>1234567890128</barcode>", linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
+			BUDGET_LIMITS,
 		);
 		expect(withBarcode - plain).toBe(barcodeHeight);
 
 		const pdf417Height = symbolGeometry({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 }).heightLines;
 		const withPdf417 = countOutputLines(
-			{ data: ["Hello", "<pdf417>ORDER-1</pdf417>"], linefeed: "LF", variables: {} },
+			{ data: "Hello\n<pdf417>ORDER-1</pdf417>", linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
+			BUDGET_LIMITS,
 		);
 		expect(withPdf417 - plain).toBe(pdf417Height);
 	});
@@ -471,31 +548,39 @@ describe("block line budget", () => {
 	// exists to add, because leaving a known undercount inside the function being rewritten here
 	// is worse than the small behaviour change of charging a rule what it actually costs.
 	it("charges a rule one line, since it prints as a full line of dashes", () => {
-		const plain = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
-		const withRule = countOutputLines({ data: ["Hello", "<hr>"], linefeed: "LF", variables: {} }, SETTINGS);
+		const plain = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
+		const withRule = countOutputLines({ data: "Hello\n<hr>", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
 		expect(withRule - plain).toBe(1);
 	});
 
 	it("charges an image the paper its dots will cover", () => {
 		// 120 dots wide, so 240 dots tall, which is ten lines of 24.
-		expect(countOutputLines({ data: ["<image>logo</image>"], linefeed: "LF", variables: {} }, SETTINGS)).toBe(10);
+		expect(
+			countOutputLines({ data: "<image>logo</image>", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS),
+		).toBe(10);
 	});
 
 	it("charges a half-width image half the paper", () => {
-		expect(countOutputLines({ data: ["<image=50>logo</image>"], linefeed: "LF", variables: {} }, SETTINGS)).toBe(5);
+		expect(
+			countOutputLines({ data: "<image=50>logo</image>", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS),
+		).toBe(5);
 	});
 
 	it("charges a URL image from its own dimensions, the same as a stored one", () => {
 		// Landscape, so at full width it is half as tall as the paper is wide: 60 dots, three lines.
 		expect(
-			countOutputLines({ data: ["<image>https://x.test/l.png?v=2</image>"], linefeed: "LF", variables: {} }, SETTINGS),
+			countOutputLines(
+				{ data: "<image>https://x.test/l.png?v=2</image>", linefeed: "LF", variables: {} },
+				SETTINGS,
+				BUDGET_LIMITS,
+			),
 		).toBe(3);
 	});
 
 	it("refuses a job whose images do not fit, the same as one whose text does not", () => {
 		const limits: CompileLimits = { maxLines: 5, maxLineChars: 40, maxTotalChars: 100, maxOutputLines: 9 };
 		const request = readRequest(
-			{ data: ["<image>logo</image>"], linefeed: "LF" },
+			{ data: "<image>logo</image>", linefeed: "LF" },
 			limits,
 			SETTINGS,
 			MAX_VARIABLE_VALUE_CHARS,
@@ -511,13 +596,17 @@ describe("block line budget", () => {
 	 */
 	it("refuses to charge an image nobody resolved, rather than charging it nothing", () => {
 		expect(() =>
-			countOutputLines({ data: ["<image>missing</image>"], linefeed: "LF", variables: {} }, SETTINGS),
+			countOutputLines({ data: "<image>missing</image>", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS),
 		).toThrow(/missing/);
 	});
 
 	it("charges a line carrying both text and a drawer pulse exactly one line", () => {
-		const withText = countOutputLines({ data: ["Hello"], linefeed: "LF", variables: {} }, SETTINGS);
-		const withTextAndDrawer = countOutputLines({ data: ["Hello<drawer>"], linefeed: "LF", variables: {} }, SETTINGS);
+		const withText = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
+		const withTextAndDrawer = countOutputLines(
+			{ data: "Hello<drawer>", linefeed: "LF", variables: {} },
+			SETTINGS,
+			BUDGET_LIMITS,
+		);
 		expect(withTextAndDrawer).toBe(withText);
 	});
 
@@ -530,7 +619,7 @@ describe("block line budget", () => {
 					"<barcode=EAN13>1234567890128</barcode>",
 					"<pdf417=4>ORDER-1</pdf417>",
 					"<drawer=5>",
-				],
+				].join("\n"),
 				linefeed: "LF",
 			},
 			limits,
@@ -591,8 +680,8 @@ describe("images on the wire", () => {
 
 	const limits: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 40 };
 
-	const directivesFor = (element: string) => {
-		const request = readRequest({ data: [element], linefeed: "LF" }, limits, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
+	const directivesFor = (markup: string) => {
+		const request = readRequest({ data: markup, linefeed: "LF" }, limits, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
 		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 		return job.lines[0].directives;
@@ -668,7 +757,7 @@ describe("compiling with variables", () => {
 		const job = compile(
 			"j",
 			"counter",
-			{ data: ["Call {phone}"], linefeed: "LF", variables: {} },
+			{ data: "Call {phone}", linefeed: "LF", variables: {} },
 			limits(),
 			withVariables({ phone: "010" }),
 		);
@@ -677,13 +766,7 @@ describe("compiling with variables", () => {
 	});
 
 	it("leaves braces alone when the compile has no variable context", () => {
-		const job = compile(
-			"j",
-			"counter",
-			{ data: ["Call {phone}"], linefeed: "LF", variables: {} },
-			limits(),
-			settings(),
-		);
+		const job = compile("j", "counter", { data: "Call {phone}", linefeed: "LF", variables: {} }, limits(), settings());
 
 		expect(job.lines[0].spans.map((span) => span.text).join("")).toBe("Call {phone}");
 	});
@@ -693,7 +776,7 @@ describe("compiling with variables", () => {
 		const job = compile(
 			"j",
 			"counter",
-			{ data: ["{v}"], linefeed: "LF", variables: {} },
+			{ data: "{v}", linefeed: "LF", variables: {} },
 			limits(),
 			withVariables({ v: long }),
 		);
@@ -703,3 +786,130 @@ describe("compiling with variables", () => {
 		expect(job.lines).toHaveLength(2);
 	});
 });
+
+/**
+ * The receipt as one string, which is what `data` carries.
+ *
+ * A wider device than the fixtures above — 42 columns — because these cases are about lines that
+ * span each other and about a receipt whose exact bytes are pinned below.
+ */
+describe("a document in one string", () => {
+	const LIMITS: CompileLimits = { maxLines: 200, maxLineChars: 256, maxTotalChars: 16384, maxOutputLines: 300 };
+
+	const SETTINGS: CompileSettings = {
+		columns: 42,
+		codepage: "CP437",
+		onUnsupported: "REJECT",
+		defaultWrap: true,
+		defaultLinefeed: "LF",
+		images: new Map(),
+		variables: null,
+	};
+
+	const settingsWith = (overrides: Partial<CompileSettings>): CompileSettings => ({ ...SETTINGS, ...overrides });
+
+	const request = (data: string): PrintRequest => ({ data, linefeed: "LF", variables: {} });
+
+	it("charges line and total character limits per line, skipping the inside of a content tag", () => {
+		const wrapped = `<image>\n${"x".repeat(300)}\n</image>`;
+		expect(() => layOut(request(wrapped), settingsWith({ images: imagesFor("x".repeat(300)) }), LIMITS)).not.toThrow();
+
+		const thrown = refusal(() => layOut(request("y".repeat(300)), settingsWith({}), LIMITS));
+		expect(thrown.code).toBe("line_too_long");
+		expect(thrown.details).toEqual({ line: 1 });
+	});
+
+	it("reports a markup error with the document line", () => {
+		const thrown = refusal(() => layOut(request("ok\n<bold>open"), settingsWith({}), LIMITS));
+
+		expect(thrown.code).toBe("unclosed_tag");
+		expect(thrown.details).toMatchObject({ line: 2, column: 1 });
+	});
+
+	it("compiles a spanning scope into styled lines on the wire", () => {
+		const job = compile("j", "d", request("<bold>a\nb</bold>"), LIMITS, settingsWith({}));
+
+		expect(job.lines.map((line) => line.spans[0])).toMatchObject([
+			{ text: "a", bold: true },
+			{ text: "b", bold: true },
+		]);
+	});
+
+	/**
+	 * The proof that nothing about the printed result changed when `data` stopped being an array.
+	 *
+	 * The expectation is not written from memory: it is the wire this same receipt compiled to before
+	 * the parser was rewritten, captured by running the old compiler over the same six elements.
+	 */
+	it("produces identical wire bytes for legacy single-line markup joined by newlines", () => {
+		const legacy = [
+			"<align=center><bold>THE CORNER CAFE</bold></align>",
+			"<hr>",
+			"Coffee<fill>2.50",
+			"<bold>Total<fill>5.50</bold>",
+			"<feed=3>",
+			"<cut>",
+		];
+		const job = compile("j", "d", request(legacy.join("\n")), LIMITS, settingsWith({}));
+
+		expect(job.lines).toEqual(EXPECTED_LEGACY_WIRE);
+	});
+});
+
+/** The wire the six legacy elements above compiled to before `data` became one string. */
+const EXPECTED_LEGACY_WIRE = [
+	{
+		align: "CENTER",
+		spans: [
+			{ text: "THE CORNER CAFE", bold: true, underline: 0, invert: false, widthMult: 1, heightMult: 1, font: "A" },
+		],
+		directives: [],
+	},
+	{
+		align: "LEFT",
+		spans: [
+			{
+				text: "------------------------------------------",
+				bold: false,
+				underline: 0,
+				invert: false,
+				widthMult: 1,
+				heightMult: 1,
+				font: "A",
+			},
+		],
+		directives: [],
+	},
+	{
+		align: "LEFT",
+		spans: [
+			{
+				text: "Coffee                                2.50",
+				bold: false,
+				underline: 0,
+				invert: false,
+				widthMult: 1,
+				heightMult: 1,
+				font: "A",
+			},
+		],
+		directives: [],
+	},
+	{
+		align: "LEFT",
+		spans: [
+			{
+				text: "Total                                 5.50",
+				bold: true,
+				underline: 0,
+				invert: false,
+				widthMult: 1,
+				heightMult: 1,
+				font: "A",
+			},
+		],
+		directives: [],
+	},
+	{ align: "LEFT", spans: [], directives: [{ type: "FEED", lines: 3 }] },
+	{ align: "LEFT", spans: [], directives: [{ type: "CUT", mode: "FULL" }] },
+];

@@ -173,7 +173,7 @@ function previewFault(message: string, code: string, status: number) {
  * Split out of the action so the gate wraps one function. Everything below is as it was.
  *
  * @param deviceId the device whose width and codepage to compile against
- * @param source the markup, one element per line
+ * @param source the markup, one printed line per line of text
  * @param linefeed what will terminate each line, or null to use the device's own setting
  * @returns the paper and its measurements, or everything wrong with it
  */
@@ -181,11 +181,16 @@ async function compilePreviewFor(deviceId: string, source: string, linefeed: Lin
 	// The chosen ending goes through the body, exactly as Print sends it, so the footer reports
 	// what a real request would resolve to rather than restating the device's setting. Omitted
 	// when null, because absence is how the body asks for the device's own.
-	const data = source.split("\n");
-	const body = linefeed ? { data, linefeed } : { data };
+	const body = linefeed ? { data: source, linefeed } : { data: source };
 
-	const { preview: compiled, request, settings } = await compilePreviewWithContext(deviceId, body);
-	if (compiled.errors.length > 0 || compiled.lines === null || request === null || settings === null) {
+	const { preview: compiled, request, settings, limits } = await compilePreviewWithContext(deviceId, body);
+	if (
+		compiled.errors.length > 0 ||
+		compiled.lines === null ||
+		request === null ||
+		settings === null ||
+		limits === null
+	) {
 		return { ...compiled, lines: null };
 	}
 
@@ -198,7 +203,7 @@ async function compilePreviewFor(deviceId: string, source: string, linefeed: Lin
 		// `compiled.lines` did, and the loop below zips the two arrays together by index — silently
 		// pairing the wrong text with the wrong block, with no error at all. Reusing the one read
 		// `compilePreviewWithContext` already did is what keeps that zip sound; see its doc comment.
-		const laidOut = layOut(request, settings);
+		const laidOut = layOut(request, settings, limits);
 
 		// One line at a time rather than `Promise.all`. Drawing an image can mean decoding and
 		// dithering it, and `MAX_IMAGE_DIMENSION` bounds *one* decode — a receipt naming several

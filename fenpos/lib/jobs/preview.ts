@@ -6,7 +6,7 @@ import { logger } from "@/lib/logger";
 import {
 	type CompileLimits,
 	type CompileSettings,
-	collectElementErrors,
+	collectDocumentErrors,
 	compile,
 	countOutputLines,
 	type DeviceSettings,
@@ -87,6 +87,8 @@ export interface PreviewWithContext {
 	request: PrintRequest | null;
 	/** The resolved settings `preview` was compiled from, or null if resolution never completed. */
 	settings: CompileSettings | null;
+	/** The limits `preview` was compiled under, or null if the device was never read. */
+	limits: CompileLimits | null;
 }
 
 /**
@@ -174,11 +176,12 @@ export async function compilePreviewWithContext(
 				preview: { ...measured(deviceSettings.defaultLinefeed), errors: [faultOf(error)] },
 				request: null,
 				settings: null,
+				limits,
 			};
 		}
 
-		// Resolved before the element errors, even though it is a database read and they are not:
-		// `collectElementErrors` parses every element, and `unknown_variable` is one of the errors it
+		// Resolved before the document errors, even though it is a database read and they are not:
+		// `collectDocumentErrors` parses the document, and `unknown_variable` is one of the errors it
 		// has to be able to report.
 		//
 		// `apiKeyName` comes from the caller and is not hardcoded, because it is the one fact in this
@@ -197,19 +200,25 @@ export async function compilePreviewWithContext(
 				supplied: request.variables,
 			});
 		} catch (error) {
-			return { preview: { ...measured(request.linefeed), errors: [faultOf(error)] }, request, settings: null };
-		}
-
-		const elementErrors = collectElementErrors(request, deviceSettings, variables);
-		if (elementErrors.length > 0) {
 			return {
-				preview: { ...measured(request.linefeed), errors: elementErrors.map(faultOf) },
+				preview: { ...measured(request.linefeed), errors: [faultOf(error)] },
 				request,
 				settings: null,
+				limits,
 			};
 		}
 
-		// After the element errors, deliberately: markup that does not compile has no business making
+		const documentErrors = collectDocumentErrors(request, deviceSettings, variables, limits);
+		if (documentErrors.length > 0) {
+			return {
+				preview: { ...measured(request.linefeed), errors: documentErrors.map(faultOf) },
+				request,
+				settings: null,
+				limits,
+			};
+		}
+
+		// After the document's own errors, deliberately: markup that does not compile has no business making
 		// this server fetch a URL. A refusal here — a deleted asset, a host that will not answer — is
 		// the caller's to fix like any other, so it is reported beside them and the measurements stay.
 		let settings: CompileSettings;
@@ -220,7 +229,12 @@ export async function compilePreviewWithContext(
 				images: await resolveImages(request.data, deviceSettings.columns, variables),
 			};
 		} catch (error) {
-			return { preview: { ...measured(request.linefeed), errors: [faultOf(error)] }, request, settings: null };
+			return {
+				preview: { ...measured(request.linefeed), errors: [faultOf(error)] },
+				request,
+				settings: null,
+				limits,
+			};
 		}
 
 		const job = compile("preview", device.name, request, limits, settings);
@@ -229,7 +243,7 @@ export async function compilePreviewWithContext(
 			preview: {
 				columns: device.columns,
 				errors: [],
-				outputLines: countOutputLines(request, settings),
+				outputLines: countOutputLines(request, settings, limits),
 				maxOutputLines: limits.maxOutputLines,
 				linefeed: request.linefeed,
 				lines: job.lines.map((line) => ({
@@ -245,12 +259,13 @@ export async function compilePreviewWithContext(
 			},
 			request,
 			settings,
+			limits,
 		};
 	} catch (error) {
 		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
 
 		if (error instanceof ApiError) {
-			return { preview: { ...blank, errors: [faultOf(error)] }, request: null, settings: null };
+			return { preview: { ...blank, errors: [faultOf(error)] }, request: null, settings: null, limits: null };
 		}
 
 		logger.error("Preview failed", error);
@@ -269,6 +284,7 @@ export async function compilePreviewWithContext(
 			},
 			request: null,
 			settings: null,
+			limits: null,
 		};
 	}
 }

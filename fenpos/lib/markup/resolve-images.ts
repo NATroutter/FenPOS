@@ -6,8 +6,9 @@ import { type RemoteFetchSettings, readRemoteFetchSettings } from "@/lib/assets/
 import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
+import type { Document, Node } from "@/lib/markup/document";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
-import { parseLine, type VariableContext } from "@/lib/markup/parser";
+import { parseDocument, type VariableContext } from "@/lib/markup/parser";
 import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -45,7 +46,7 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * How many images may be resolved at once.
  *
  * **This is a bound on what a single request can make this server do, and it is the reason the
- * parallelism above is safe.** A request may carry up to `maxLines` elements — 200 by default — so
+ * parallelism above is safe.** A request may carry up to `maxLines` lines — 200 by default — so
  * resolving every reference together let one authenticated caller open 200 sockets, hold 200 buffers
  * of up to `MAX_REMOTE_IMAGE_BYTES` each before anything was decoded, and pay 200 TLS handshakes,
  * since `pinnedTransport` deliberately pools no connections. Six holds the same shape at a constant
@@ -132,7 +133,7 @@ export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
 /**
  * Resolves every image a request refers to.
  *
- * @param data the request's elements, exactly as the caller wrote them
+ * @param data the receipt, exactly as the caller wrote it
  * @param columns the target device's width in printer columns, which decides both the paper width
  *        a stored raster was synced at and the dot widths the tags ask for
  * @param variables the values `{name}` may resolve to, or null when variables are switched off. An
@@ -145,11 +146,11 @@ export const MAX_INLINE_IMAGE_CHARS = MAX_FRAME_BYTES - 64 * 1024;
  * @throws ApiError if the request names more remote URLs than {@link maxRemoteReferences} allows —
  *         or, when that setting is 0, if it names any at all — if its images come to more than
  *         {@link MAX_INLINE_IMAGE_CHARS}, if a reference names no stored image, or if a URL cannot be
- *         fetched or read as one; for the last two the element it was written on travels in
- *         `details.line`
+ *         fetched or read as one; for the last two the line and column it was written at travel in
+ *         `details`
  */
 export async function resolveImages(
-	data: readonly string[],
+	data: string,
 	columns: number,
 	variables: VariableContext | null,
 ): Promise<ResolvedImages> {
@@ -186,7 +187,7 @@ export async function resolveImages(
 
 	// Rejects with the first refusal, which is the one reported — first in time among the workers
 	// running together, not necessarily first in the receipt. Any of them is a refusal of the whole
-	// request and each names its own element, so which one arrives first changes the message and
+	// request and each names its own position, so which one arrives first changes the message and
 	// nothing else. The others are still awaited here, so a worker that fails on its way out cannot
 	// become an unhandled rejection.
 	await Promise.all(workers);
@@ -199,7 +200,7 @@ export async function resolveImages(
  *
  * A tag's body runs to the next `>` and its name to the first `=`, so an image opens as exactly
  * `<image>` or `<image=…>` and nothing else — `<image ` is a tag called "image " and is refused as
- * unknown. Anything an element does not contain, it cannot produce.
+ * unknown. Anything a receipt does not contain, it cannot produce.
  */
 const IMAGE_OPENING = /<image[=>]/i;
 
@@ -212,8 +213,10 @@ const IMAGE_OPENING = /<image[=>]/i;
  * wide it is printed. Held as a set so a logo repeated on every copy of a receipt is dithered once.
  */
 interface ImageUse {
-	/** The 1-based element the reference first appeared on, for naming it in a refusal. */
+	/** The 1-based line the reference first appeared on, for naming it in a refusal. */
 	line: number;
+	/** The 1-based column of the tag that first wrote it, for the same reason. */
+	column: number;
 	/** Every distinct printed width, in dots, this request asks for. */
 	widths: Set<number>;
 }
@@ -222,12 +225,14 @@ interface ImageUse {
  * Finds every distinct image reference in a request, and where it was first written.
  *
  * Parses with the same parser the compile will use, so the references found here are exactly the
- * ones it will meet. An element that does not parse is skipped rather than reported: the compile
- * that follows raises that failure with a column, which is a better answer than anything this
- * function could say — and until then a receipt with a broken tag has caused no network traffic.
+ * ones it will meet — including an `<image>` inside a scope that spans lines, which is why the tree
+ * is walked rather than each line read on its own. A document that does not parse is skipped rather
+ * than reported: the compile that follows raises that failure with a line and a column, which is a
+ * better answer than anything this function could say — and until then a receipt with a broken tag
+ * has caused no network traffic.
  *
- * Elements with no image tag in them are not parsed at all. Parsing is not free — a `<qr>` is
- * encoded while it is measured — and without this every job would be parsed twice for the sake of a
+ * A receipt with no image tag in it is not parsed at all. Parsing is not free — a `<qr>` is encoded
+ * while it is measured — and without this every job would be parsed twice for the sake of a
  * directive most receipts do not use. The scan is deliberately cruder than the parser and errs
  * towards parsing: it costs a wasted parse when a `<image=` turns out to be inside a QR payload,
  * and if it ever missed a real one the compile would fail loudly rather than print an image nothing
@@ -239,38 +244,41 @@ interface ImageUse {
  * needs — and the request would fail as an unknown image called `{logo}` instead of whatever `logo`
  * itself turns out to be.
  *
- * @param data the request's elements
+ * @param data the receipt
  * @param columns the target device's width in printer columns
  * @param variables the values `{name}` may resolve to, or null when variables are switched off
  * @returns each reference, mapped to how the request uses it
  */
-function collect(data: readonly string[], columns: number, variables: VariableContext | null): Map<string, ImageUse> {
+function collect(data: string, columns: number, variables: VariableContext | null): Map<string, ImageUse> {
 	const references = new Map<string, ImageUse>();
-
-	for (let index = 0; index < data.length; index++) {
-		if (!IMAGE_OPENING.test(data[index])) {
-			continue;
-		}
-
-		let directives: ReturnType<typeof parseLine>["directives"];
-		try {
-			directives = parseLine(data[index], variables).directives;
-		} catch {
-			continue;
-		}
-
-		for (const directive of directives) {
-			if (directive.kind !== "IMAGE") {
-				continue;
-			}
-			let use = references.get(directive.ref);
-			if (!use) {
-				use = { line: index + 1, widths: new Set() };
-				references.set(directive.ref, use);
-			}
-			use.widths.add(printedWidthDots(directive.widthPercent, columns));
-		}
+	if (!IMAGE_OPENING.test(data)) {
+		return references;
 	}
+
+	let document: Document;
+	try {
+		document = parseDocument(data, variables);
+	} catch {
+		// The compile reports it, with a line and a column this pre-pass has no better answer for.
+		return references;
+	}
+
+	const visit = (nodes: Node[]): void => {
+		for (const node of nodes) {
+			if (node.kind === "image") {
+				let use = references.get(node.ref);
+				if (!use) {
+					use = { line: node.line, column: node.column, widths: new Set() };
+					references.set(node.ref, use);
+				}
+				// Null means the tag carried no width, which is the whole printable width.
+				use.widths.add(printedWidthDots(node.widthPercent ?? 100, columns));
+			} else if ("children" in node) {
+				visit(node.children);
+			}
+		}
+	};
+	visit(document.nodes);
 
 	return references;
 }
@@ -301,7 +309,7 @@ function isRemote(reference: string): boolean {
  * all, and there is no reason for those to pay for a settings read that can only ever pass.
  *
  * Raised as a request-level {@link ApiError} rather than a positioned `MarkupError`, because that is
- * what it is. The count is of *distinct* references across every element, so no single tag is at
+ * what it is. The count is of *distinct* references across the whole receipt, so no single tag is at
  * fault — the one that crosses the line is merely the last one written, and pointing a column at it
  * would name an innocent tag. Same reasoning the compiler already applies to `too_many_lines` and
  * `text_too_large`, which are also whole-request refusals with no line to report.
@@ -342,13 +350,13 @@ async function requireWithinRemoteLimit(references: readonly (readonly [string, 
  * Resolves one reference, whichever kind it is.
  *
  * @param reference the text between the tags
- * @param use the element it was written on and the widths the request prints it at
+ * @param use where it was written and the widths the request prints it at
  * @param columns the target device's width in printer columns
  * @param remoteSettings pre-read remote-fetch settings, from `resolveImages`; only ever undefined
  *        when `reference` is not remote, since `resolveImages` reads them whenever the queue holds
  *        at least one remote reference
  * @returns the image's own pixel dimensions, and any dots that must travel inside the job
- * @throws ApiError carrying the element, so a caller can find the tag that failed
+ * @throws ApiError carrying the position, so a caller can find the tag that failed
  */
 async function resolveOne(
 	reference: string,
@@ -370,7 +378,7 @@ async function resolveOne(
 		}
 		return await resolveStored(reference, use.widths, columns, budget);
 	} catch (thrown) {
-		throw onLine(thrown, use.line);
+		throw positioned(thrown, use);
 	}
 }
 
@@ -530,23 +538,28 @@ async function resolveStored(
 }
 
 /**
- * Adds the element number to a refusal.
+ * Adds the position to a refusal.
  *
  * The same thing the compiler's `translate` does for a positional parse failure, and for the same
  * reason: "there is no image called 'logo'" is a different message from "line 4 has no image called
- * 'logo'" to whoever has to fix the receipt. There is no column to add — the reference is the whole
- * of the block's content, and the tag it belongs to is the only one on its element.
+ * 'logo'" to whoever has to fix the receipt. The column is the tag's own, which matters now that a
+ * line may carry more than one of them.
  *
  * Anything that is not an `ApiError` is a fault on this side and is rethrown untouched, so it stays
  * a 500 and stays visible.
  *
  * @param thrown whatever the lookup raised
- * @param line the element the reference was written on
+ * @param use where the reference was written
  * @returns the error to throw
  */
-function onLine(thrown: unknown, line: number): unknown {
+function positioned(thrown: unknown, use: ImageUse): unknown {
 	if (!(thrown instanceof ApiError)) {
 		return thrown;
 	}
-	return new ApiError(thrown.code, thrown.message, { ...thrown.details, line }, { cause: thrown });
+	return new ApiError(
+		thrown.code,
+		thrown.message,
+		{ ...thrown.details, line: use.line, column: use.column },
+		{ cause: thrown },
+	);
 }

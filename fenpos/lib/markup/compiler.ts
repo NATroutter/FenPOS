@@ -3,11 +3,13 @@ import { ApiError } from "@/lib/errors";
 import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as WireSpan } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { validateCharset } from "@/lib/markup/charset";
+import type { Document, ParseOptions } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
 import { resolveFills } from "@/lib/markup/fill";
+import { flattenLine, needsRaster, splitLines } from "@/lib/markup/flatten";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
-import { parseLine, type VariableContext } from "@/lib/markup/parser";
+import { normaliseSource, parseDocument, type VariableContext } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
 import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/supplied";
 
@@ -20,8 +22,9 @@ import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/suppl
  * caused it. A `400` naming the exact character a codepage cannot represent is worth far more
  * than a job that is accepted and then quietly fails somewhere behind a printer.
  *
- * Stages are ordered cheapest-first. Limits are enforced before any element is parsed, so an
- * oversized request is refused without doing the work it was trying to provoke.
+ * Stages are ordered cheapest-first: the request's line count is enforced before the document is
+ * parsed, so an oversized request is refused without doing the work it was trying to provoke. The
+ * character limits follow the parse, because only a parsed document knows which of its lines print.
  *
  * One thing a request may need cannot be had synchronously: how large an image is. That is why
  * `resolveImages` runs before {@link compile} rather than inside it, and its answers arrive through
@@ -42,6 +45,10 @@ const RULE_CHARACTER = "-";
  * Checked rather than ignored because the field this replaced, `wrap`, changed behaviour when
  * it was removed: a caller still sending it would have got silently wrapped output and no way
  * to find out why. The same strictness catches every other typo that used to be swallowed.
+ *
+ * `data` carries the same precedent inside itself: an array of lines is refused by name rather than
+ * joined for the caller, because a receipt whose tags now span lines would print something other
+ * than what the array asked for and nothing would say so.
  */
 const ALLOWED_FIELDS = new Set(["data", "linefeed", "variables"]);
 
@@ -92,7 +99,8 @@ export interface CompileSettings extends DeviceSettings {
 
 /** What a caller asked to print, after the request body has been read. */
 export interface PrintRequest {
-	data: string[];
+	/** The whole receipt, one printed line per line of text, with `\r\n` already normalised away. */
+	data: string;
 	linefeed: Linefeed;
 	/**
 	 * Values the caller supplied for this job — literal text, or a date for this server to compute.
@@ -102,10 +110,13 @@ export interface PrintRequest {
 }
 
 /**
- * Reads and limit-checks a request body.
+ * Reads a request body and checks what can be checked without parsing it.
  *
- * Lengths are measured on the raw strings, before markup is interpreted, so the totals a client
- * computes match the totals enforced here.
+ * The line count is one of those, and is the cheapest thing that can refuse an oversized body: it is
+ * a count of newlines in the raw string, so a caller computing it gets the same number this does.
+ * The character limits are not, and moved to {@link layOut}: a line lying inside a content tag
+ * prints nothing of its own, and which lines those are is only known once the document has been
+ * parsed.
  *
  * Takes the device's settings rather than the whole {@link CompileSettings}, because it runs before
  * the images are resolved: what a request refers to cannot be known until its markup has been read,
@@ -113,8 +124,8 @@ export interface PrintRequest {
  *
  * The `variables` field is read here rather than left for `resolveVariables`, and by a function that
  * imports nothing `server-only`: shape and per-value checks — a malformed name, a value over the
- * length cap, a control character — belong with the rest of the body's limit checks, before any
- * element is parsed and before a database is ever consulted. `readSuppliedVariables` comes from
+ * length cap, a control character — belong with the rest of the body's limit checks, before the
+ * document is parsed and before a database is ever consulted. `readSuppliedVariables` comes from
  * `@/lib/variables/supplied`, never from `resolve-variables.ts`, precisely so this file stays free of
  * Prisma; see that module's own header for why.
  *
@@ -152,39 +163,29 @@ export function readRequest(
 	if (data === undefined || data === null) {
 		throw new ApiError("missing_field", "'data' is required");
 	}
-	if (!Array.isArray(data)) {
-		throw new ApiError("invalid_type", "'data' must be an array of strings");
+	if (Array.isArray(data)) {
+		throw new ApiError(
+			"invalid_type",
+			"'data' is no longer an array of lines. Send one string, with a newline between lines.",
+		);
 	}
-	if (data.length > limits.maxLines) {
-		throw new ApiError("too_many_lines", `At most ${limits.maxLines} lines are allowed, got ${data.length}`);
+	if (typeof data !== "string") {
+		throw new ApiError(
+			"invalid_type",
+			"'data' must be a string: the receipt as markup, one printed line per line of text",
+		);
 	}
 
-	const elements: string[] = [];
-	let total = 0;
-	for (let index = 0; index < data.length; index++) {
-		const line = index + 1;
-		const element = data[index];
-
-		if (typeof element !== "string") {
-			throw new ApiError("invalid_type", "Every element of 'data' must be a string", { line });
-		}
-		if (element.length > limits.maxLineChars) {
-			throw new ApiError(
-				"line_too_long",
-				`At most ${limits.maxLineChars} characters are allowed per line, got ${element.length}`,
-				{ line },
-			);
-		}
-
-		total += element.length;
-		if (total > limits.maxTotalChars) {
-			throw new ApiError("text_too_large", `At most ${limits.maxTotalChars} characters are allowed in total`, { line });
-		}
-		elements.push(element);
+	// Normalised before anything is counted, so a caller sending Windows line endings is charged the
+	// same number of lines as one sending Unix endings for the same receipt.
+	const normalised = normaliseSource(data);
+	const lineCount = normalised.length === 0 ? 1 : normalised.split("\n").length;
+	if (lineCount > limits.maxLines) {
+		throw new ApiError("too_many_lines", `At most ${limits.maxLines} lines are allowed, got ${lineCount}`);
 	}
 
 	return {
-		data: elements,
+		data: normalised,
 		linefeed: readLinefeed(record.linefeed, settings),
 		variables: readSuppliedVariables(record.variables, maxVariableValueChars),
 	};
@@ -213,7 +214,7 @@ function readLinefeed(value: unknown, settings: DeviceSettings): Linefeed {
  * @param limits the limits to apply after wrapping
  * @param settings the device's print settings
  * @returns the compiled job
- * @throws ApiError when an element is malformed or the output exceeds a limit
+ * @throws ApiError when the markup is malformed or the output exceeds a limit
  */
 export function compile(
 	jobId: string,
@@ -222,7 +223,7 @@ export function compile(
 	limits: CompileLimits,
 	settings: CompileSettings,
 ): CompiledJob {
-	const lines = layOut(request, settings);
+	const lines = layOut(request, settings, limits);
 	requireOutputWithinLimit(lines, limits, settings);
 
 	return {
@@ -234,11 +235,16 @@ export function compile(
 }
 
 /**
- * Parses, validates and wraps each element.
+ * Parses the document, then validates and wraps each of its lines.
  *
- * Positional failures raised by the parser and the charset check are translated into
- * request-level errors carrying the element index, so a caller can point at the exact element as
- * well as the exact character.
+ * The document is built once and in one place, so every shape rule — which tag may close which,
+ * which line a scope spanning several of them styles — is settled before anything here runs. What
+ * is left is per-line work: the character limits, the symbols, the codepage, the fills and the
+ * wrapper.
+ *
+ * Positional failures raised by the parser and the charset check are translated into request-level
+ * errors carrying the line they were written on, so a caller can point at the exact line as well as
+ * the exact character.
  *
  * Exported for the paper preview, which needs a symbol's measured `heightLines` to draw it at the
  * height it was charged. That figure is deliberately absent from the wire — see {@link toWireLine}
@@ -247,18 +253,23 @@ export function compile(
  *
  * @param request the validated request
  * @param settings the device's compile settings
+ * @param limits the limits the document's characters are charged against
  * @returns one line per line of paper, with every fill already expanded, before the rule is
  *          expanded and the symbols leave for the agent
- * @throws ApiError when an element is malformed
+ * @throws ApiError when the markup is malformed or a line exceeds a character limit
  */
-export function layOut(request: PrintRequest, settings: CompileSettings): Line[] {
-	const lines: Line[] = [];
+export function layOut(request: PrintRequest, settings: CompileSettings, limits: CompileLimits): Line[] {
+	const document = parseDocumentOrTranslate(request.data, settings.variables);
+	requireCharsWithinLimits(document, limits);
 
-	for (let index = 0; index < request.data.length; index++) {
-		const lineNumber = index + 1;
+	const lines: Line[] = [];
+	for (const top of splitLines(document.nodes)) {
 		try {
-			const parsed = parseLine(request.data[index], settings.variables);
-			requireSymbolsFitThePaper(parsed, settings.columns);
+			if (needsRaster(top.nodes)) {
+				throw new Error(`line ${top.number} needs the layout engine and nothing produces such a line`);
+			}
+			const parsed = flattenLine(top.nodes);
+			requireSymbolsFitThePaper(parsed, top.number, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
 			// After this line no fill remains, which is what lets the wrapper, the wire types and
 			// the agent all stay ignorant of the tag. It runs after the charset check so that an
@@ -271,11 +282,75 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 				lines.push(filled);
 			}
 		} catch (error) {
-			throw translate(error, lineNumber);
+			throw translate(error, top.number);
 		}
 	}
 
 	return lines;
+}
+
+/**
+ * Parses a document, turning a positional failure into the API error that reports it.
+ *
+ * A parse failure ends the whole document rather than one line of it: the tree cannot be built past
+ * the point it went wrong, so there is nothing to carry on from. The line it names comes from the
+ * error itself, which is why the line passed to {@link translate} here is never read.
+ *
+ * @param data the whole receipt, as the caller wrote it
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off
+ * @param options the bounds to parse under, or the defaults
+ * @returns the document
+ * @throws ApiError when the markup is malformed
+ */
+function parseDocumentOrTranslate(
+	data: string,
+	variables: VariableContext | null,
+	options?: Partial<ParseOptions>,
+): Document {
+	try {
+		return parseDocument(data, variables, options);
+	} catch (error) {
+		throw translate(error, 0);
+	}
+}
+
+/**
+ * Charges a document's lines against the per-line and whole-request character limits.
+ *
+ * Counted from the source rather than from what prints, because a tag costs a caller characters
+ * without putting any on the paper, and a limit measured on the output would be one no client could
+ * compute for itself.
+ *
+ * A line lying inside a content tag is skipped. It produces no printed line of its own — an
+ * `<image>` reference wrapped onto its own line is the plain case — so charging it would refuse a
+ * receipt for characters that only exist because the caller broke a tag across lines.
+ *
+ * @param document the parsed document
+ * @param limits the limits to apply
+ * @throws ApiError naming the line that crossed one
+ */
+function requireCharsWithinLimits(document: Document, limits: CompileLimits): void {
+	let total = 0;
+	for (const line of document.lines) {
+		if (line.interior) {
+			continue;
+		}
+		if (line.chars > limits.maxLineChars) {
+			throw new ApiError(
+				"line_too_long",
+				`Line ${line.number} has ${line.chars} characters, more than the limit of ${limits.maxLineChars}`,
+				{ line: line.number },
+			);
+		}
+		total += line.chars;
+		if (total > limits.maxTotalChars) {
+			throw new ApiError(
+				"text_too_large",
+				`The request exceeds ${limits.maxTotalChars} characters at line ${line.number}`,
+				{ line: line.number },
+			);
+		}
+	}
 }
 
 /**
@@ -291,23 +366,24 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
  *
  * @param request the validated request
  * @param settings the device's compile settings
+ * @param limits the limits the document's characters are charged against
  * @returns the number of lines that advance the paper
  */
-export function countOutputLines(request: PrintRequest, settings: CompileSettings): number {
-	return countTextLines(layOut(request, settings), settings);
+export function countOutputLines(request: PrintRequest, settings: CompileSettings, limits: CompileLimits): number {
+	return countTextLines(layOut(request, settings, limits), settings);
 }
 
 /**
- * Collects everything wrong with a request's elements, instead of stopping at the first.
+ * Collects everything wrong with a request's lines, instead of stopping at the first.
  *
  * {@link compile} stops at the first failure, and is right to: a request either prints or it does
  * not, and doing more work on a body that is already a `400` buys nothing. The preview is read by
  * someone in the middle of fixing the markup, and handing them one mistake per round trip makes
  * four mistakes take four times as long to find.
  *
- * Only per-element failures are collected — parsing and the codepage check. Limits that apply to
- * the request as a whole are checked before this and after it, because "the whole thing is too
- * long" is not a mistake attributable to any one line.
+ * What can be collected is what belongs to one line — the symbols and the codepage check. A parse
+ * failure is not one of those however positioned it is: the tree cannot be built past the point it
+ * went wrong, so the document yields exactly one error and there is nothing after it to report.
  *
  * Takes the device's settings rather than the whole {@link CompileSettings} so that it can run
  * *before* the images are resolved, which is what it is worth: markup with an unclosed tag has no
@@ -321,24 +397,39 @@ export function countOutputLines(request: PrintRequest, settings: CompileSetting
  * @param request the validated request
  * @param settings the device's print settings
  * @param variables the values `{name}` may resolve to, or null when variables are switched off
- * @returns every element error, in element order; empty when the markup is sound
+ * @param limits the limits the document's characters are charged against
+ * @returns every error, in line order; empty when the markup is sound
  */
-export function collectElementErrors(
+export function collectDocumentErrors(
 	request: PrintRequest,
 	settings: DeviceSettings,
 	variables: VariableContext | null,
+	limits: CompileLimits,
 ): ApiError[] {
-	const errors: ApiError[] = [];
+	let document: Document;
+	try {
+		document = parseDocumentOrTranslate(request.data, variables);
+		requireCharsWithinLimits(document, limits);
+	} catch (error) {
+		if (error instanceof ApiError) {
+			return [error];
+		}
+		throw error;
+	}
 
-	for (let index = 0; index < request.data.length; index++) {
+	const errors: ApiError[] = [];
+	for (const top of splitLines(document.nodes)) {
 		try {
-			const parsed = parseLine(request.data[index], variables);
-			// Collected alongside the parse failures, so the preview shows an over-wide symbol as a
+			if (needsRaster(top.nodes)) {
+				continue;
+			}
+			const parsed = flattenLine(top.nodes);
+			// Collected alongside the charset failures, so the preview shows an over-wide symbol as a
 			// refusal while it is being written rather than only when the job is submitted.
-			requireSymbolsFitThePaper(parsed, settings.columns);
+			requireSymbolsFitThePaper(parsed, top.number, settings.columns);
 			validateCharset(parsed, settings.codepage, settings.onUnsupported);
 		} catch (error) {
-			const translated = translate(error, index + 1);
+			const translated = translate(error, top.number);
 			if (!(translated instanceof ApiError)) {
 				// Not a markup failure at all, so not something to collect and carry on from.
 				throw translated;
@@ -369,10 +460,11 @@ export function collectElementErrors(
  * reach this state.
  *
  * @param line the parsed line
+ * @param lineNumber the line of the document it was written on, for the refusal to name
  * @param columns the device's width in printer columns
  * @throws MarkupError naming the tag and its column
  */
-function requireSymbolsFitThePaper(line: Line, columns: number): void {
+function requireSymbolsFitThePaper(line: Line, lineNumber: number, columns: number): void {
 	const paper = dotWidth(columns);
 	for (const directive of line.directives) {
 		if (!("widthDots" in directive) || directive.widthDots <= paper) {
@@ -381,7 +473,7 @@ function requireSymbolsFitThePaper(line: Line, columns: number): void {
 		const tag = directive.kind.toLowerCase();
 		throw new MarkupError(
 			MARKUP_ERRORS.symbolTooWide,
-			1,
+			lineNumber,
 			directive.sourceColumn,
 			tag,
 			`This <${tag}> prints ${directive.widthDots} dots wide, more than the ${paper} this device's paper has. Shorten its content, or print it on wider paper.`,
@@ -389,11 +481,17 @@ function requireSymbolsFitThePaper(line: Line, columns: number): void {
 	}
 }
 
-/** Turns a positional failure into the API error that reports it. */
+/**
+ * Turns a positional failure into the API error that reports it.
+ *
+ * A {@link MarkupError} carries the line it was raised on, because the parser reads a whole document
+ * and knows it; the `line` passed here is only for a failure found while laying one line out, which
+ * is where an {@link UnsupportedCharacterError} comes from.
+ */
 function translate(error: unknown, line: number): unknown {
 	if (error instanceof MarkupError) {
 		return new ApiError(error.code, error.message, {
-			line,
+			line: error.line,
 			column: error.column,
 			...(error.detail === null ? {} : { detail: error.detail }),
 		});
@@ -478,7 +576,7 @@ function lineCost(line: Line, settings: CompileSettings): number {
  * Looks up what an image reference resolved to.
  *
  * A missing entry is a fault on this side rather than a bad request. The pre-pass sees every
- * reference this compile will meet — it reads the same elements with the same parser — and refuses
+ * reference this compile will meet — it reads the same document with the same parser — and refuses
  * the whole job, by name, for one it cannot resolve. So arriving here without an entry means the
  * pre-pass was skipped, and the alternative to failing is a receipt whose images were never charged
  * against the budget that was supposed to bound it.
