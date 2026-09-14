@@ -4,7 +4,7 @@ import { UnsupportedCharacterError } from "@/lib/markup/errors";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
 import { Canvas } from "@/lib/raster/canvas";
 import { builtinTypeface, bundledFace, typefaceFor } from "@/lib/raster/fonts";
-import { type InlineItem, layoutText, paintRows, type TextContext, textHeight } from "@/lib/raster/text";
+import { type InlineItem, layoutText, paintRows, type TextContext, type TextRow, textHeight } from "@/lib/raster/text";
 import { ascii } from "../../helpers/pbm";
 
 const context: TextContext = {
@@ -19,6 +19,42 @@ const run = (text: string, style: Partial<SpanStyle> = {}): InlineItem => ({
 	style: { ...PLAIN, ...style },
 	column: 1,
 });
+
+/** Lays items out unwrapped and paints them at the canvas origin. */
+const paint = (canvas: Canvas, items: InlineItem[], availableWidth = 504): TextRow[] => {
+	const rows = layoutText(items, availableWidth, false, "LEFT", context);
+	paintRows(canvas, rows, 0, 0);
+	return rows;
+};
+
+const dotsInRow = (canvas: Canvas, y: number): number => {
+	let dots = 0;
+	for (let x = 0; x < canvas.width; x++) {
+		if (canvas.get(x, y)) dots++;
+	}
+	return dots;
+};
+
+const dots = (canvas: Canvas): number => {
+	let total = 0;
+	for (let y = 0; y < canvas.height; y++) total += dotsInRow(canvas, y);
+	return total;
+};
+
+/** How many `step`-wide cells between `from` and `to` carry any ink. */
+const inkedCells = (canvas: Canvas, from: number, to: number, step: number): number => {
+	let cells = 0;
+	for (let left = from; left < to; left += step) {
+		let inked = false;
+		for (let x = left; x < left + step && !inked; x++) {
+			for (let y = 0; y < canvas.height && !inked; y++) {
+				inked = canvas.get(x, y);
+			}
+		}
+		if (inked) cells++;
+	}
+	return cells;
+};
 
 describe("layoutText", () => {
 	it("measures a run by its advances", () => {
@@ -54,6 +90,11 @@ describe("layoutText", () => {
 		const rows = layoutText([run(" abc")], 12 * 2, true, "LEFT", context);
 
 		expect(rows.map((row) => row.width)).toEqual([24, 24]);
+	});
+
+	it("drops every space at a break, not only the first", () => {
+		expect(layoutText([run("aa  bb")], 12 * 2, true, "LEFT", context).map((row) => row.width)).toEqual([24, 24]);
+		expect(layoutText([run("aa   bb")], 12 * 2, true, "LEFT", context).map((row) => row.width)).toEqual([24, 24]);
 	});
 
 	it("keeps one row and overflows under nowrap", () => {
@@ -143,5 +184,70 @@ describe("layoutText", () => {
 
 	it("reports the total height", () => {
 		expect(textHeight(layoutText([run("aaaa bbbb")], 12 * 4, true, "LEFT", context))).toBe(48);
+	});
+});
+
+describe("paintRows", () => {
+	it("thickens a bold glyph by exactly one dot on every inked row", () => {
+		const plain = new Canvas(16, 24);
+		const bold = new Canvas(16, 24);
+		paint(plain, [run("I")]);
+		paint(bold, [run("I", { bold: true })]);
+
+		expect(dots(plain)).toBeGreaterThan(0);
+		for (let y = 0; y < 24; y++) {
+			const thin = dotsInRow(plain, y);
+			expect(dotsInRow(bold, y), `row ${y}`).toBe(thin === 0 ? 0 : thin + 1);
+		}
+	});
+
+	it("stamps a fill's character once per whole cell", () => {
+		const canvas = new Canvas(72, 24);
+		const items: InlineItem[] = [run("a"), { kind: "fill", character: ".", style: PLAIN }, run("b")];
+
+		const rows = paint(canvas, items, 72);
+
+		// Slack 48 buys four whole 12-dot cells, each carrying one period.
+		expect(rows[0].cells[1].width).toBe(48);
+		expect(inkedCells(canvas, 12, 60, 12)).toBe(4);
+		// The fill neither overruns its span nor leaves a cell of it blank: a, four periods, b.
+		expect(inkedCells(canvas, 0, 72, 12)).toBe(6);
+	});
+
+	it("blits an inline image at its cell, vertically centred", () => {
+		const stamp = new Canvas(10, 5);
+		stamp.fill(0, 0, 10, 5, "solid");
+		const canvas = new Canvas(24, 24);
+
+		paint(canvas, [run("a"), { kind: "image", raster: stamp.pack() }]);
+
+		// A 5-dot stamp in a 24-dot row sits at floor((24 - 5) / 2), beside the 12-dot glyph cell.
+		const painted = ascii(canvas.pack()).split("\n");
+		expect(painted[8].slice(12, 22)).toBe(".".repeat(10));
+		for (let y = 9; y < 14; y++) {
+			expect(painted[y].slice(12, 22), `row ${y}`).toBe("#".repeat(10));
+		}
+		expect(painted[14].slice(12, 22)).toBe(".".repeat(10));
+	});
+
+	it("scales a glyph by whole dots, leaving no gaps", () => {
+		const plain = new Canvas(12, 24);
+		const scaled = new Canvas(24, 48);
+		paint(plain, [run("I")]);
+		paint(scaled, [run("I", { widthMult: 2, heightMult: 2 })]);
+
+		for (let y = 0; y < 24; y++) {
+			for (let x = 0; x < 12; x++) {
+				if (!plain.get(x, y)) continue;
+				for (let dy = 0; dy < 2; dy++) {
+					for (let dx = 0; dx < 2; dx++) {
+						expect(scaled.get(2 * x + dx, 2 * y + dy), `dot ${x},${y} block ${dx},${dy}`).toBe(true);
+					}
+				}
+			}
+		}
+
+		expect(dots(plain)).toBeGreaterThan(0);
+		expect(dots(scaled)).toBe(dots(plain) * 4);
 	});
 });

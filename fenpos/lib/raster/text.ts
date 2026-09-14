@@ -293,16 +293,27 @@ function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[]
 	let width = 0;
 	/** Index in `current` of the last space, or -1 while the row holds none. */
 	let lastSpace = -1;
+	/** Whether the empty row being filled was opened by a break rather than by the start of the line. */
+	let broken = false;
 
 	const flush = (upTo: number, resumeFrom: number): void => {
 		rows.push(current.slice(0, upTo));
 		current = current.slice(resumeFrom);
 		width = breakingWidth(current);
 		lastSpace = -1;
+		broken = true;
 	};
 
 	for (const atom of atoms) {
 		const cost = atom.kind === "fill" ? 0 : atom.width;
+
+		// A break swallows the whole run of spaces at the boundary, not just the first: the row below
+		// opens at the next word rather than however many spaces into it the author happened to type.
+		// The line's own leading spaces are indentation the author wrote and are not at a boundary,
+		// which is what `broken` tells apart.
+		if (atom.space && current.length === 0 && broken) {
+			continue;
+		}
 
 		if (atom.space && current.length > 0 && width + cost > availableWidth) {
 			// The space that does not fit is itself the break, and a break drops its space.
@@ -320,8 +331,9 @@ function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[]
 			}
 		}
 
-		// A space that opens a row is not a break candidate: breaking there would hand the row above
-		// nothing at all and leave the word below exactly where it already is.
+		// A space that opens a row — the line's own indentation, since a break's spaces never get
+		// this far — is not a break candidate: breaking there would hand the row above nothing at all
+		// and leave the word below exactly where it already is.
 		if (atom.space && current.length > 0) {
 			lastSpace = current.length;
 		}
