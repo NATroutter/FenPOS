@@ -7,6 +7,7 @@ import {
 	symbolGeometry,
 	validateSymbolContent,
 } from "@/lib/markup/blocks";
+import type { VariableContext } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import { type Directive, type Fill, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
@@ -105,16 +106,11 @@ interface OpenBlock {
 /**
  * The variable values one compile may substitute.
  *
- * Handed in rather than read, because this parser is synchronous and the values are database rows —
- * the same reason `<image>` geometry arrives through `CompileSettings`. See `resolveVariables` in
- * `lib/markup/resolve-variables.ts` for where it is built.
+ * Defined with the document model, because the tokenizer is what substitutes them and every caller
+ * that supplies them goes through it. Re-exported here so callers that ask this module for the type
+ * still get it.
  */
-export interface VariableContext {
-	/** Every name this compile can resolve, already flattened across the three layers. */
-	values: ReadonlyMap<string, string>;
-	/** How many references one element may contain. */
-	maxPerElement: number;
-}
+export type { VariableContext };
 
 /**
  * Parses one element of the request's `data` array.

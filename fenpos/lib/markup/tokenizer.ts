@@ -1,6 +1,6 @@
 import type { RawAttribute } from "@/lib/markup/attributes";
+import type { VariableContext } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
-import type { VariableContext } from "@/lib/markup/parser";
 import { hasControlCharacter, isControlCharacter, variableReferenceAt } from "@/lib/variables/definition";
 
 /**
