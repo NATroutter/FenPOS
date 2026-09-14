@@ -3,7 +3,7 @@ import type { Codepage, UnsupportedPolicy } from "@/lib/domain/enums";
 import { validateCharset } from "@/lib/markup/charset";
 import { UnsupportedCharacterError } from "@/lib/markup/errors";
 import type { Line } from "@/lib/markup/model";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseLine } from "@/lib/markup/parser";
 
 /**
  * Behavioural tests for the codepage check.
@@ -16,7 +16,7 @@ describe("validateCharset", () => {
 	const plainText = (line: Line): string => line.spans.map((span) => span.text).join("");
 
 	const validate = (markup: string, codepage: Codepage, policy: UnsupportedPolicy): Line =>
-		validateCharset(parseMarkup(markup), codepage, policy);
+		validateCharset(parseLine(markup), codepage, policy);
 
 	/** Validates and returns the error, failing the test if it was accepted. */
 	const rejection = (markup: string, codepage: Codepage): UnsupportedCharacterError => {
@@ -91,7 +91,7 @@ describe("validateCharset", () => {
 	 */
 	describe("a character that came from a variable", () => {
 		const substituted = (markup: string, value: string): UnsupportedCharacterError => {
-			const line = parseMarkup(markup, { values: new Map([["x", value]]), maxPerElement: 10 });
+			const line = parseLine(markup, { values: new Map([["x", value]]), maxPerElement: 10 });
 			try {
 				validateCharset(line, "CP437", "REJECT");
 			} catch (thrown) {

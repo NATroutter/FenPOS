@@ -9,7 +9,7 @@ import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
  * comes from. A symbol's size follows from content the parser is already holding, so `blocks.ts`
  * measures it during the parse. An image's size follows from the image's *own* dimensions, which
  * live in a database row or behind an HTTP request — so measuring one is asynchronous, and
- * `parseMarkup` is not.
+ * parsing is not.
  *
  * That split is why an `IMAGE` directive carries no height. The dimensions are resolved once per
  * request, before compiling, by `resolve-images.ts`; the resulting {@link ResolvedImages} reaches

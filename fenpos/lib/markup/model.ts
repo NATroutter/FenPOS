@@ -22,6 +22,22 @@ export interface SpanStyle {
 	widthMult: number;
 	heightMult: number;
 	font: Font;
+	/**
+	 * A configured font's name, or null for one of the printer's own.
+	 *
+	 * Null is the ordinary case and the only one the wire carries: a printer font is selected with an
+	 * ESC/POS command, so the agent draws it. A named face has no such command, so a line carrying one
+	 * is drawn into a raster here instead — which is why this field never reaches the agent.
+	 */
+	face: string | null;
+	/**
+	 * How tall a named face is drawn, in dots. Ignored while {@link SpanStyle.face} is null.
+	 *
+	 * Defaults to one printed line — `LINE_HEIGHT_DOTS` in `lib/markup/blocks.ts` — so a named face
+	 * with no height given occupies exactly the paper a printer font would have. Spelled as a number
+	 * rather than imported, to keep the render model free of the encoder's module.
+	 */
+	faceDots: number;
 }
 
 /** Unstyled text: the state a line starts and ends in. */
@@ -32,6 +48,8 @@ export const PLAIN: SpanStyle = {
 	widthMult: 1,
 	heightMult: 1,
 	font: "A",
+	face: null,
+	faceDots: 24,
 };
 
 /** A run of text sharing one style. */
@@ -158,7 +176,7 @@ export type Directive =
 	 * The one paper-consuming directive carrying no measurement, and it is the parser that cannot
 	 * supply one. A symbol's height follows from its content, which the parser holds; an image's
 	 * height follows from the image's own dimensions and the device's dot width, and the first of
-	 * those is a database row or an HTTP response. `parseMarkup` is synchronous and knows nothing
+	 * those is a database row or an HTTP response. Parsing is synchronous and knows nothing
 	 * of either, so the height is settled later — see `imageGeometry` in `lib/markup/images.ts` and
 	 * the `images` field of `CompileSettings`, which is where the compiler picks it up.
 	 *

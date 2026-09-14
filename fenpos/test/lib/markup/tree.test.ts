@@ -174,6 +174,26 @@ describe("buildDocument", () => {
 		expect(build("a<fill=.>b").nodes[1]).toEqual({ kind: "fill", character: ".", line: 1, column: 2 });
 	});
 
+	/** A fill places something on the line, so the line is no longer a fresh one an align could own. */
+	it("refuses align opened after a fill on the same line", () => {
+		expect(refusal("<fill><align=center>x</align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
+	it("refuses a close tag for a tag that stands alone", () => {
+		const thrown = refusal("</hr>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.unexpectedCloseTag);
+		expect(thrown.detail).toBe("hr");
+	});
+
+	it("names an unknown tag and the column it was written at", () => {
+		const thrown = refusal("ab <blink>x</blink>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.unknownTag);
+		expect(thrown.detail).toBe("blink");
+		expect(thrown.column).toBe(4);
+	});
+
 	it("refuses an attribute on a tag that takes none", () => {
 		const thrown = refusal("<bold weight=2>x</bold>");
 

@@ -158,8 +158,8 @@ export function variableReferenceAt(source: string, index: number): RegExpExecAr
  * C0 (including tab, whose behaviour depends on printer-side tab stops the agent does not manage),
  * DEL, and C1.
  *
- * **This is the only statement of that rule.** {@link hasControlCharacter} below and `isControl` in
- * `lib/markup/parser.ts` are both defined in terms of it, and neither restates the ranges. They used
+ * **This is the only statement of that rule.** {@link hasControlCharacter} below and the scan in
+ * `lib/markup/tokenizer.ts` are both defined in terms of it, and neither restates the ranges. They used
  * to: two spellings of the same set, in the two files that between them decide what may reach a
  * printer, with nothing asserting they agreed. They did agree — but if they ever drifted, a byte
  * refused when an author typed it into markup would become reachable by putting it in a variable's

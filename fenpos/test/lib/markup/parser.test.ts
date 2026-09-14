@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { columnAt, isDirectiveOnly, type Line, PLAIN, type Span } from "@/lib/markup/model";
-import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
+import { parseDocument, parseLine, type VariableContext } from "@/lib/markup/parser";
 
 /**
  * Leaves `symbolGeometry` real for every test but one.
@@ -29,7 +29,7 @@ vi.mock("@/lib/markup/blocks", async (importOriginal) => {
  * part clients actually use to point a user at their mistake, and it is the part most easily
  * broken by a refactor.
  */
-describe("parseMarkup", () => {
+describe("parseLine", () => {
 	/**
 	 * Text carrying a raw ESC at column 3. Built from a char code rather than a literal so the
 	 * control byte stays visible to anyone reading this file.
@@ -42,7 +42,7 @@ describe("parseMarkup", () => {
 	/** Parses and returns the error, failing the test if the parse succeeded. */
 	const error = (source: string): MarkupError => {
 		try {
-			parseMarkup(source);
+			parseLine(source);
 		} catch (thrown) {
 			if (thrown instanceof MarkupError) {
 				return thrown;
@@ -57,7 +57,7 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("parses plain text as one unstyled span", () => {
-		const line = parseMarkup("Coffee 2.50");
+		const line = parseLine("Coffee 2.50");
 
 		expect(line.spans).toHaveLength(1);
 		expect(line.spans[0].text).toBe("Coffee 2.50");
@@ -66,25 +66,25 @@ describe("parseMarkup", () => {
 	});
 
 	it("parses an empty element as a blank line", () => {
-		const line = parseMarkup("");
+		const line = parseLine("");
 
 		expect(line.spans).toHaveLength(0);
 		expect(line.directives).toHaveLength(0);
 	});
 
 	it("decodes entities into literal characters", () => {
-		expect(plainText(parseMarkup("a &lt; b &amp; c"))).toBe("a < b & c");
+		expect(plainText(parseLine("a &lt; b &amp; c"))).toBe("a < b & c");
 	});
 
 	it("treats an ampersand that starts no entity as literal", () => {
-		expect(plainText(parseMarkup("Fish & Chips 50% &x"))).toBe("Fish & Chips 50% &x");
+		expect(plainText(parseLine("Fish & Chips 50% &x"))).toBe("Fish & Chips 50% &x");
 	});
 
 	it("records where each span started", () => {
 		// Spans carry where they started so a later stage can report an exact column. Markup
 		// consumes source characters that produce no text, so the offset cannot be recovered
 		// from the parsed text alone.
-		const line = parseMarkup("<bold>ab</bold>cd");
+		const line = parseLine("<bold>ab</bold>cd");
 
 		expect(line.spans[0].sourceColumn).toBe(7);
 		expect(line.spans[1].sourceColumn).toBe(16);
@@ -93,7 +93,7 @@ describe("parseMarkup", () => {
 	it("isolates an entity into its own span so later columns stay exact", () => {
 		// An entity occupies more source characters than it produces, so a span containing one
 		// could not be measured by simple arithmetic.
-		const line = parseMarkup("a&lt;b");
+		const line = parseLine("a&lt;b");
 
 		expect(line.spans).toHaveLength(3);
 		expect(line.spans[0].sourceColumn).toBe(1);
@@ -107,7 +107,7 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("applies bold to enclosed text only", () => {
-		const line = parseMarkup("<bold>Total:</bold> 12.30");
+		const line = parseLine("<bold>Total:</bold> 12.30");
 
 		expect(line.spans).toHaveLength(2);
 		expect(line.spans[0].text).toBe("Total:");
@@ -117,36 +117,36 @@ describe("parseMarkup", () => {
 	});
 
 	it("applies nested tags cumulatively", () => {
-		const style = parseMarkup("<bold><underline>x</underline></bold>").spans[0].style;
+		const style = parseLine("<bold><underline>x</underline></bold>").spans[0].style;
 
 		expect(style.bold).toBe(true);
 		expect(style.underline).toBe(1);
 	});
 
 	it("parses size arguments as separate multipliers", () => {
-		const style = parseMarkup("<size=2,3>BIG</size>").spans[0].style;
+		const style = parseLine("<size=2,3>BIG</size>").spans[0].style;
 
 		expect(style.widthMult).toBe(2);
 		expect(style.heightMult).toBe(3);
 	});
 
 	it("parses a single size argument as both multipliers", () => {
-		const style = parseMarkup("<size=2>BIG</size>").spans[0].style;
+		const style = parseLine("<size=2>BIG</size>").spans[0].style;
 
 		expect(style.widthMult).toBe(2);
 		expect(style.heightMult).toBe(2);
 	});
 
 	it("parses underline thickness", () => {
-		expect(parseMarkup("<underline=2>x</underline>").spans[0].style.underline).toBe(2);
+		expect(parseLine("<underline=2>x</underline>").spans[0].style.underline).toBe(2);
 	});
 
 	it("parses font selection", () => {
-		expect(parseMarkup("<font=b>x</font>").spans[0].style.font).toBe("B");
+		expect(parseLine("<font=b>x</font>").spans[0].style.font).toBe("B");
 	});
 
 	it("treats tag names as case insensitive", () => {
-		expect(parseMarkup("<BOLD>x</BOLD>").spans[0].style.bold).toBe(true);
+		expect(parseLine("<BOLD>x</BOLD>").spans[0].style.bold).toBe(true);
 	});
 
 	// -----------------------------------------------------------------------
@@ -154,7 +154,7 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("makes alignment a line property rather than a span style", () => {
-		const line = parseMarkup("<align=center>RECEIPT</align>");
+		const line = parseLine("<align=center>RECEIPT</align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(plainText(line)).toBe("RECEIPT");
@@ -182,15 +182,15 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("records a fill between the spans it separates", () => {
-		const line = parseMarkup("Coffee<fill>2.50");
+		const line = parseLine("Coffee<fill>2.50");
 
 		expect(line.spans.map((span) => span.text)).toEqual(["Coffee", "2.50"]);
 		expect(line.fills).toEqual([{ afterSpans: 1, character: " ", style: PLAIN, sourceColumn: 7 }]);
 	});
 
 	it("defaults a fill to a space and takes any other character from the argument", () => {
-		expect(parseMarkup("a<fill>b").fills[0].character).toBe(" ");
-		expect(parseMarkup("a<fill=.>b").fills[0].character).toBe(".");
+		expect(parseLine("a<fill>b").fills[0].character).toBe(" ");
+		expect(parseLine("a<fill=.>b").fills[0].character).toBe(".");
 	});
 
 	/**
@@ -198,7 +198,7 @@ describe("parseMarkup", () => {
 	 * as though the caller had written two, so accepting it is what pins the code-point counting.
 	 */
 	it("accepts a fill character outside the basic plane", () => {
-		expect(parseMarkup("a<fill=🙂>b").fills[0].character).toBe("🙂");
+		expect(parseLine("a<fill=🙂>b").fills[0].character).toBe("🙂");
 	});
 
 	it("refuses a fill argument that is not exactly one character", () => {
@@ -211,13 +211,13 @@ describe("parseMarkup", () => {
 	});
 
 	it("captures the style in effect where the fill was written", () => {
-		const line = parseMarkup("<bold>Total<fill=.>5.00</bold>");
+		const line = parseLine("<bold>Total<fill=.>5.00</bold>");
 
 		expect(line.fills[0].style.bold).toBe(true);
 	});
 
 	it("records several fills in the order they were written", () => {
-		const line = parseMarkup("Qty<fill>Item<fill>Price");
+		const line = parseLine("Qty<fill>Item<fill>Price");
 
 		expect(line.fills.map((fill) => fill.afterSpans)).toEqual([1, 2]);
 	});
@@ -251,7 +251,7 @@ describe("parseMarkup", () => {
 	 * where alignment is not even a no-op.
 	 */
 	it("permits a fill inside an alignment", () => {
-		const line = parseMarkup("<align=center>a<fill>b</align>");
+		const line = parseLine("<align=center>a<fill>b</align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.fills).toHaveLength(1);
@@ -262,22 +262,22 @@ describe("parseMarkup", () => {
 	// -----------------------------------------------------------------------
 
 	it("parses a cut as a directive-only line", () => {
-		const line = parseMarkup("<cut>");
+		const line = parseLine("<cut>");
 
 		expect(line.spans).toHaveLength(0);
 		expect(line.directives).toEqual([{ kind: "CUT", mode: "FULL" }]);
 	});
 
 	it("parses a partial cut", () => {
-		expect(parseMarkup("<cut=partial>").directives).toEqual([{ kind: "CUT", mode: "PARTIAL" }]);
+		expect(parseLine("<cut=partial>").directives).toEqual([{ kind: "CUT", mode: "PARTIAL" }]);
 	});
 
 	it("parses a feed with its line count", () => {
-		expect(parseMarkup("<feed=3>").directives).toEqual([{ kind: "FEED", lines: 3 }]);
+		expect(parseLine("<feed=3>").directives).toEqual([{ kind: "FEED", lines: 3 }]);
 	});
 
 	it("parses a rule alone on its line", () => {
-		expect(parseMarkup("<hr>").directives).toEqual([{ kind: "RULE" }]);
+		expect(parseLine("<hr>").directives).toEqual([{ kind: "RULE" }]);
 	});
 
 	it("rejects a rule sharing a line with text", () => {
@@ -391,7 +391,7 @@ describe("parseMarkup", () => {
 		/** Parses with a context and returns the error, failing the test if the parse succeeded. */
 		const variableError = (source: string, variables: VariableContext): MarkupError => {
 			try {
-				parseMarkup(source, variables);
+				parseLine(source, variables);
 			} catch (thrown) {
 				if (thrown instanceof MarkupError) {
 					return thrown;
@@ -402,26 +402,26 @@ describe("parseMarkup", () => {
 		};
 
 		it("substitutes a value", () => {
-			const line = parseMarkup("Call {phone}", context({ phone: "010-1234567" }));
+			const line = parseLine("Call {phone}", context({ phone: "010-1234567" }));
 
 			expect(plainText(line)).toBe("Call 010-1234567");
 		});
 
 		it("leaves braces alone when no context is given, which is the feature switched off", () => {
-			const line = parseMarkup("Call {phone}");
+			const line = parseLine("Call {phone}");
 
 			expect(plainText(line)).toBe("Call {phone}");
 		});
 
 		it("prints a tag inside a value as characters rather than obeying it", () => {
-			const line = parseMarkup("{store}", context({ store: "<b>FenPOS</b>" }));
+			const line = parseLine("{store}", context({ store: "<b>FenPOS</b>" }));
 
 			expect(plainText(line)).toBe("<b>FenPOS</b>");
 			expect(line.spans.every((span) => span.style.bold === false)).toBe(true);
 		});
 
 		it("keeps a substituted value in its own span, carrying the reference's column", () => {
-			const line = parseMarkup("ab{x}cd", context({ x: "VALUE" }));
+			const line = parseLine("ab{x}cd", context({ x: "VALUE" }));
 
 			const substituted = line.spans.find((span) => span.text === "VALUE");
 			expect(substituted).toBeDefined();
@@ -429,21 +429,21 @@ describe("parseMarkup", () => {
 		});
 
 		it("reports the column of text after a substitution against the source, not the output", () => {
-			const line = parseMarkup("{x}tail", context({ x: "a much longer value" }));
+			const line = parseLine("{x}tail", context({ x: "a much longer value" }));
 
 			const tail = line.spans.find((span) => span.text === "tail");
 			expect(tail?.sourceColumn).toBe(4);
 		});
 
 		it("carries the style the reference was written in", () => {
-			const line = parseMarkup("<bold>{x}</bold>", context({ x: "BOLD" }));
+			const line = parseLine("<bold>{x}</bold>", context({ x: "BOLD" }));
 
 			expect(line.spans[0].text).toBe("BOLD");
 			expect(line.spans[0].style.bold).toBe(true);
 		});
 
 		it("substitutes inside a block tag, so a QR can carry a configured URL", () => {
-			const line = parseMarkup("<qr>{site}</qr>", context({ site: "https://fenpos.fi" }));
+			const line = parseLine("<qr>{site}</qr>", context({ site: "https://fenpos.fi" }));
 
 			const qr = line.directives.find((directive) => directive.kind === "QR");
 			expect(qr).toMatchObject({ content: "https://fenpos.fi" });
@@ -451,7 +451,7 @@ describe("parseMarkup", () => {
 		});
 
 		it("substitutes an image reference", () => {
-			const line = parseMarkup("<image>{brand}</image>", context({ brand: "logo" }));
+			const line = parseLine("<image>{brand}</image>", context({ brand: "logo" }));
 
 			expect(line.directives[0]).toMatchObject({ kind: "IMAGE", ref: "logo" });
 		});
@@ -465,25 +465,25 @@ describe("parseMarkup", () => {
 		});
 
 		it("leaves text that is not name-shaped alone", () => {
-			const line = parseMarkup("Table {1 of 4}", context({ phone: "010" }));
+			const line = parseLine("Table {1 of 4}", context({ phone: "010" }));
 
 			expect(plainText(line)).toBe("Table {1 of 4}");
 		});
 
 		it("leaves an unclosed brace alone", () => {
-			const line = parseMarkup("50% {off", context({ off: "x" }));
+			const line = parseLine("50% {off", context({ off: "x" }));
 
 			expect(plainText(line)).toBe("50% {off");
 		});
 
 		it("prints a literal reference written with &lbrace;", () => {
-			const line = parseMarkup("&lbrace;phone}", context({ phone: "010-1234567" }));
+			const line = parseLine("&lbrace;phone}", context({ phone: "010-1234567" }));
 
 			expect(plainText(line)).toBe("{phone}");
 		});
 
 		it("decodes &lbrace; even with no variable context", () => {
-			expect(plainText(parseMarkup("&lbrace;x}"))).toBe("{x}");
+			expect(plainText(parseLine("&lbrace;x}"))).toBe("{x}");
 		});
 
 		it("refuses a value carrying a control character, at the reference's column", () => {
@@ -500,7 +500,7 @@ describe("parseMarkup", () => {
 		});
 
 		it("counts references against the limit rather than distinct names", () => {
-			const line = parseMarkup("{x}{x}", context({ x: "a" }, 2));
+			const line = parseLine("{x}{x}", context({ x: "a" }, 2));
 
 			expect(plainText(line)).toBe("aa");
 		});
@@ -515,7 +515,7 @@ describe("parseMarkup", () => {
 		 * `spans.length`, not whether the spans hold any characters.
 		 */
 		it("substitutes an empty value without producing a phantom span", () => {
-			const line = parseMarkup("a{x}b", context({ x: "" }));
+			const line = parseLine("a{x}b", context({ x: "" }));
 
 			expect(plainText(line)).toBe("ab");
 			expect(line.spans).toHaveLength(2);
@@ -524,7 +524,7 @@ describe("parseMarkup", () => {
 
 		/** What the phantom span would cost: a rule beside an empty value stops printing and starts failing. */
 		it("lets an empty value share its element with a rule", () => {
-			const line = parseMarkup("{blank}<hr>", context({ blank: "" }));
+			const line = parseLine("{blank}<hr>", context({ blank: "" }));
 
 			expect(line.spans).toHaveLength(0);
 			expect(line.directives).toEqual([{ kind: "RULE" }]);
@@ -542,7 +542,7 @@ describe("parseMarkup", () => {
 		 * points at the character to fix.
 		 */
 		it("reports a character inside a substituted value at the reference's column, not past the element", () => {
-			const line = parseMarkup("{x}", context({ x: "Coffee ☕" }));
+			const line = parseLine("{x}", context({ x: "Coffee ☕" }));
 
 			const span = line.spans[0];
 			expect(span.text).toBe("Coffee ☕");
@@ -553,7 +553,7 @@ describe("parseMarkup", () => {
 
 		/** Text the author wrote still counts forward, which is what makes the case above a special case. */
 		it("still counts forward through a span the author typed", () => {
-			const line = parseMarkup("Coffee", context({}));
+			const line = parseLine("Coffee", context({}));
 
 			expect(line.spans[0].expandedFrom).toBeUndefined();
 			expect(columnAt(line.spans[0], 3)).toBe(4);
@@ -561,7 +561,7 @@ describe("parseMarkup", () => {
 
 		/** An entity produces exactly one character, so offset zero is the only offset and stays exact. */
 		it("leaves an entity's column exact, because one token becomes one character", () => {
-			const line = parseMarkup("ab&amp;cd");
+			const line = parseLine("ab&amp;cd");
 
 			const entity = line.spans.find((span) => span.text === "&");
 			expect(entity?.expandedFrom).toBeUndefined();
@@ -572,46 +572,46 @@ describe("parseMarkup", () => {
 
 describe("wrap tags", () => {
 	it("leaves wrap unset when no tag is present", () => {
-		expect(parseMarkup("Yhteensa 14.80").wrap).toBeNull();
+		expect(parseLine("Yhteensa 14.80").wrap).toBeNull();
 	});
 
 	it("reads <nowrap> as a refusal to wrap", () => {
-		expect(parseMarkup("<nowrap>Yhteensa 14.80</nowrap>").wrap).toBe(false);
+		expect(parseLine("<nowrap>Yhteensa 14.80</nowrap>").wrap).toBe(false);
 	});
 
 	it("reads <wrap> as a request to wrap", () => {
-		expect(parseMarkup("<wrap>A large coffee and a cinnamon bun</wrap>").wrap).toBe(true);
+		expect(parseLine("<wrap>A large coffee and a cinnamon bun</wrap>").wrap).toBe(true);
 	});
 
 	it("keeps the text and drops the tag", () => {
-		const line = parseMarkup("<nowrap>Yhteensa 14.80</nowrap>");
+		const line = parseLine("<nowrap>Yhteensa 14.80</nowrap>");
 
 		expect(line.spans.map((span) => span.text).join("")).toBe("Yhteensa 14.80");
 	});
 
 	it("nests inside alignment", () => {
-		const line = parseMarkup("<align=right><nowrap>Yhteensa 14.80</nowrap></align>");
+		const line = parseLine("<align=right><nowrap>Yhteensa 14.80</nowrap></align>");
 
 		expect(line.align).toBe("RIGHT");
 		expect(line.wrap).toBe(false);
 	});
 
 	it("nests outside alignment, which means the same thing", () => {
-		const line = parseMarkup("<nowrap><align=right>Yhteensa 14.80</align></nowrap>");
+		const line = parseLine("<nowrap><align=right>Yhteensa 14.80</align></nowrap>");
 
 		expect(line.align).toBe("RIGHT");
 		expect(line.wrap).toBe(false);
 	});
 
 	it("encloses styling tags", () => {
-		const line = parseMarkup("<nowrap><bold>Yhteensa 14.80</bold></nowrap>");
+		const line = parseLine("<nowrap><bold>Yhteensa 14.80</bold></nowrap>");
 
 		expect(line.wrap).toBe(false);
 		expect(line.spans[0].style.bold).toBe(true);
 	});
 
 	it("permits a rule, where wrapping is a no-op", () => {
-		const line = parseMarkup("<nowrap><hr></nowrap>");
+		const line = parseLine("<nowrap><hr></nowrap>");
 
 		expect(line.wrap).toBe(false);
 		expect(line.directives).toEqual([{ kind: "RULE" }]);
@@ -622,7 +622,7 @@ describe("wrap tag scope", () => {
 	/** Runs a parse and returns the error, failing the test if it succeeded. */
 	const scopeError = (source: string): MarkupError => {
 		try {
-			parseMarkup(source);
+			parseLine(source);
 		} catch (thrown) {
 			if (thrown instanceof MarkupError) {
 				return thrown;
@@ -674,7 +674,7 @@ describe("block tags", () => {
 	/** Parses and returns the error, failing the test if the parse succeeded. */
 	const blockError = (source: string): MarkupError => {
 		try {
-			parseMarkup(source);
+			parseLine(source);
 		} catch (thrown) {
 			if (thrown instanceof MarkupError) {
 				return thrown;
@@ -685,7 +685,7 @@ describe("block tags", () => {
 	};
 
 	it("parses a QR code with its default size", () => {
-		const line = parseMarkup("<qr>https://example.com/o/1</qr>");
+		const line = parseLine("<qr>https://example.com/o/1</qr>");
 
 		expect(line.directives).toEqual([
 			expect.objectContaining({ kind: "QR", content: "https://example.com/o/1", size: 6 }),
@@ -693,31 +693,31 @@ describe("block tags", () => {
 	});
 
 	it("keeps a QR code out of the spans, so the line stays directive-only", () => {
-		const line = parseMarkup("<qr>https://example.com/o/1</qr>");
+		const line = parseLine("<qr>https://example.com/o/1</qr>");
 
 		expect(line.spans).toHaveLength(0);
 		expect(isDirectiveOnly(line)).toBe(true);
 	});
 
 	it("measures a QR code with the same geometry the preview draws", () => {
-		const line = parseMarkup("<qr=6>https://example.com/o/1</qr>");
+		const line = parseLine("<qr=6>https://example.com/o/1</qr>");
 		const expected = symbolGeometry({ kind: "QR", content: "https://example.com/o/1", size: 6 });
 
 		expect(line.directives[0]).toMatchObject({ heightLines: expected.heightLines });
 	});
 
 	it("takes the module size from the argument", () => {
-		const line = parseMarkup("<qr=8>https://example.com/o/1</qr>");
+		const line = parseLine("<qr=8>https://example.com/o/1</qr>");
 
 		expect(line.directives[0]).toMatchObject({ kind: "QR", size: 8 });
 	});
 
 	it("rejects a module size outside 1-16", () => {
-		expect(() => parseMarkup("<qr=99>x</qr>")).toThrow(/1.*16/);
+		expect(() => parseLine("<qr=99>x</qr>")).toThrow(/1.*16/);
 	});
 
 	it("keeps characters that would otherwise be markup", () => {
-		const line = parseMarkup("<qr>https://example.com/o/1?a=1&amp;b=2</qr>");
+		const line = parseLine("<qr>https://example.com/o/1?a=1&amp;b=2</qr>");
 
 		expect(line.directives[0]).toMatchObject({ content: "https://example.com/o/1?a=1&b=2" });
 	});
@@ -731,7 +731,7 @@ describe("block tags", () => {
 	});
 
 	it("parses a barcode with its symbology", () => {
-		const line = parseMarkup("<barcode=EAN13>1234567890128</barcode>");
+		const line = parseLine("<barcode=EAN13>1234567890128</barcode>");
 
 		expect(line.directives[0]).toMatchObject({
 			kind: "BARCODE",
@@ -749,7 +749,7 @@ describe("block tags", () => {
 	});
 
 	it("rejects content the symbology cannot encode, at the right column", () => {
-		expect(() => parseMarkup("<barcode=EAN13>123</barcode>")).toThrow(/13/);
+		expect(() => parseLine("<barcode=EAN13>123</barcode>")).toThrow(/13/);
 		expect(blockError("<align=center><barcode=EAN13>123</barcode></align>").column).toBe(15);
 	});
 
@@ -791,7 +791,7 @@ describe("block tags", () => {
 
 		let thrown: unknown;
 		try {
-			parseMarkup("<qr>https://example.com/o/1</qr>");
+			parseLine("<qr>https://example.com/o/1</qr>");
 		} catch (caught) {
 			thrown = caught;
 		}
@@ -800,13 +800,13 @@ describe("block tags", () => {
 	});
 
 	it("parses a PDF417 symbol with its default error level", () => {
-		const line = parseMarkup("<pdf417>ORDER-1</pdf417>");
+		const line = parseLine("<pdf417>ORDER-1</pdf417>");
 
 		expect(line.directives[0]).toMatchObject({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 });
 	});
 
 	it("takes the PDF417 error level from the argument", () => {
-		expect(parseMarkup("<pdf417=4>ORDER-1</pdf417>").directives[0]).toMatchObject({ errorLevel: 4 });
+		expect(parseLine("<pdf417=4>ORDER-1</pdf417>").directives[0]).toMatchObject({ errorLevel: 4 });
 	});
 
 	it("rejects a PDF417 error level outside 0-8", () => {
@@ -814,13 +814,13 @@ describe("block tags", () => {
 	});
 
 	it("parses a drawer pulse with its default pin", () => {
-		const line = parseMarkup("<drawer>");
+		const line = parseLine("<drawer>");
 
 		expect(line.directives).toEqual([{ kind: "DRAWER", pin: 2 }]);
 	});
 
 	it("parses the second drawer pin", () => {
-		expect(parseMarkup("<drawer=5>").directives[0]).toEqual({ kind: "DRAWER", pin: 5 });
+		expect(parseLine("<drawer=5>").directives[0]).toEqual({ kind: "DRAWER", pin: 5 });
 	});
 
 	it("rejects a drawer pin that is neither 2 nor 5", () => {
@@ -828,7 +828,7 @@ describe("block tags", () => {
 	});
 
 	it("refuses a block sharing its element with text", () => {
-		expect(() => parseMarkup("Order <qr>x</qr>")).toThrow(/alone/);
+		expect(() => parseLine("Order <qr>x</qr>")).toThrow(/alone/);
 	});
 
 	it("reports the block's own column when it shares its element", () => {
@@ -843,15 +843,15 @@ describe("block tags", () => {
 	});
 
 	it("allows a drawer pulse beside text, since it prints nothing", () => {
-		expect(() => parseMarkup("Thanks<drawer>")).not.toThrow();
+		expect(() => parseLine("Thanks<drawer>")).not.toThrow();
 	});
 
 	it("allows a drawer pulse beside a block, since it prints nothing", () => {
-		expect(() => parseMarkup("<qr>x</qr><drawer>")).not.toThrow();
+		expect(() => parseLine("<qr>x</qr><drawer>")).not.toThrow();
 	});
 
 	it("permits a block inside an alignment, which owns the whole line", () => {
-		const line = parseMarkup("<align=center><qr>x</qr></align>");
+		const line = parseLine("<align=center><qr>x</qr></align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.directives[0]).toMatchObject({ kind: "QR" });
@@ -870,7 +870,7 @@ describe("the image tag", () => {
 	/** Parses and returns the error, failing the test if the parse succeeded. */
 	const imageError = (source: string): MarkupError => {
 		try {
-			parseMarkup(source);
+			parseLine(source);
 		} catch (thrown) {
 			if (thrown instanceof MarkupError) {
 				return thrown;
@@ -881,7 +881,7 @@ describe("the image tag", () => {
 	};
 
 	it("takes a stored asset name", () => {
-		expect(parseMarkup("<image>logo</image>").directives[0]).toMatchObject({
+		expect(parseLine("<image>logo</image>").directives[0]).toMatchObject({
 			kind: "IMAGE",
 			ref: "logo",
 			widthPercent: 100,
@@ -889,7 +889,7 @@ describe("the image tag", () => {
 	});
 
 	it("takes a width percentage", () => {
-		expect(parseMarkup("<image=50>logo</image>").directives[0]).toMatchObject({ widthPercent: 50 });
+		expect(parseLine("<image=50>logo</image>").directives[0]).toMatchObject({ widthPercent: 50 });
 	});
 
 	it("refuses a percentage outside 1-100", () => {
@@ -902,25 +902,25 @@ describe("the image tag", () => {
 	 * string, so an argument-shaped reference would be split at the first one.
 	 */
 	it("keeps a URL with a query string intact", () => {
-		expect(parseMarkup("<image>https://x.test/l.png?v=2</image>").directives[0]).toMatchObject({
+		expect(parseLine("<image>https://x.test/l.png?v=2</image>").directives[0]).toMatchObject({
 			ref: "https://x.test/l.png?v=2",
 		});
 	});
 
 	/** The other half of that reason: an escaped separator has to survive into the reference. */
 	it("decodes an entity inside the reference, so a two-parameter URL survives", () => {
-		expect(parseMarkup("<image>https://x.test/l.png?a=1&amp;b=2</image>").directives[0]).toMatchObject({
+		expect(parseLine("<image>https://x.test/l.png?a=1&amp;b=2</image>").directives[0]).toMatchObject({
 			ref: "https://x.test/l.png?a=1&b=2",
 		});
 	});
 
 	it("must be alone in its element", () => {
-		expect(() => parseMarkup("Logo <image>logo</image>")).toThrow(/alone/);
+		expect(() => parseLine("Logo <image>logo</image>")).toThrow(/alone/);
 		expect(imageError("Logo <image>logo</image>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
 	});
 
 	it("keeps the reference out of the spans, so the line stays directive-only", () => {
-		const line = parseMarkup("<image>logo</image>");
+		const line = parseLine("<image>logo</image>");
 
 		expect(line.spans).toHaveLength(0);
 		expect(isDirectiveOnly(line)).toBe(true);
@@ -935,13 +935,44 @@ describe("the image tag", () => {
 	});
 
 	it("carries no height, which only the compiler can know", () => {
-		expect(parseMarkup("<image>logo</image>").directives[0]).not.toHaveProperty("heightLines");
+		expect(parseLine("<image>logo</image>").directives[0]).not.toHaveProperty("heightLines");
 	});
 
 	it("obeys an alignment that owns the line", () => {
-		const line = parseMarkup("<align=center><image=25>logo</image></align>");
+		const line = parseLine("<align=center><image=25>logo</image></align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.directives[0]).toMatchObject({ kind: "IMAGE", ref: "logo", widthPercent: 25 });
+	});
+});
+
+/**
+ * The whole-document entry point, which is what every other case here is one line of.
+ *
+ * What it adds over {@link parseLine} is the line number: a document has several, and a refusal on
+ * the third of them is only worth reading if it says so.
+ */
+describe("parseDocument", () => {
+	it("normalises Windows line endings", () => {
+		expect(parseDocument("a\r\nb").lines).toHaveLength(2);
+	});
+
+	it("carries the line on an error inside a spanning scope", () => {
+		const thrown = (() => {
+			try {
+				parseDocument("<bold>\n<size=9>x</size>\n</bold>");
+			} catch (error) {
+				return error as MarkupError;
+			}
+			throw new Error("expected a refusal");
+		})();
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(thrown.line).toBe(2);
+		expect(thrown.column).toBe(1);
+	});
+
+	it("refuses parseLine on a document", () => {
+		expect(() => parseLine("a\nb")).toThrow(/one line/);
 	});
 });

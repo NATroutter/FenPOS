@@ -193,6 +193,15 @@ class Tokenizer {
 			);
 
 		this.flush();
+
+		// A tag with no `>` left on its line is unterminated, whatever the rest of it looks like.
+		// Checked before the body is read so that `<bold x` is reported as the unterminated tag it is
+		// rather than as an attribute written without a value, which is not what the author did wrong.
+		const terminator = this.source.indexOf(">", start);
+		if (terminator < 0 || terminator > this.lineEnd()) {
+			throw unterminated();
+		}
+
 		let at = start + 1;
 		const closing = this.source[at] === "/";
 		if (closing) {
@@ -203,7 +212,10 @@ class Tokenizer {
 		while (at < this.source.length && NAME_CHAR.test(this.source[at])) {
 			at += 1;
 		}
-		const name = this.source.slice(nameStart, at).toLowerCase();
+		// Kept as the author wrote it. Resolving a tag is case-insensitive and `tagByName` does that
+		// lowercasing itself, so doing it here would only throw away the spelling a refusal wants to
+		// echo: `<toString>` has to be refused as `toString`, not as `tostring`.
+		const name = this.source.slice(nameStart, at);
 		if (name.length === 0) {
 			throw unterminated();
 		}

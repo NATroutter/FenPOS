@@ -313,7 +313,7 @@ describe("dispatch with variables", () => {
 
 	/**
 	 * Not caught before the row exists, unlike the request-shape and image failures above it in this
-	 * file: `unknown_variable` is raised by `parseMarkup` inside `compile`, and `compile` needs the
+	 * file: `unknown_variable` is raised while parsing inside `compile`, and `compile` needs the
 	 * job's own id — so, like every other markup content error (an unknown tag, an unclosed one), it
 	 * can only be discovered once the row is there to fail. Settled the same way the wire's own
 	 * refusals are settled below, rather than left `QUEUED`.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { nameSchema } from "@/lib/domain/naming";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseLine } from "@/lib/markup/parser";
 import {
 	ContextSource,
 	hasControlCharacter,
@@ -283,7 +283,7 @@ describe("variableReferenceAt", () => {
 /**
  * The two spellings of "the printer would obey this" that used to exist, pinned to each other.
  *
- * `parser.ts` refuses a control character while scanning markup; `hasControlCharacter` refuses one
+ * `tokenizer.ts` refuses a control character while scanning markup; `hasControlCharacter` refuses one
  * inside a variable's value before it is substituted. They guard the same sink, and the second
  * exists only because a substituted value never passes through the first. When they were two
  * separate range expressions — `code === 0x7f || (code >= 0x80 && code <= 0x9f)` in one file,
@@ -295,7 +295,7 @@ describe("the control-character rule is one rule", () => {
 	/** Parsing markup made of this one character: whichever error it raises, or null if it parsed. */
 	const parserVerdict = (code: number): string | null => {
 		try {
-			parseMarkup(`a${String.fromCharCode(code)}b`);
+			parseLine(`a${String.fromCharCode(code)}b`);
 			return null;
 		} catch (error) {
 			return error instanceof MarkupError ? error.code : "other";

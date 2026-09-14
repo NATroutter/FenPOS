@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveFills } from "@/lib/markup/fill";
 import { lineColumns } from "@/lib/markup/model";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseLine } from "@/lib/markup/parser";
 
 /**
  * Behavioural tests for fill resolution.
@@ -18,7 +18,7 @@ describe("resolveFills", () => {
 
 	/** Parses, resolves, and flattens back to the characters that would print. */
 	const filled = (source: string, columns = COLUMNS): string =>
-		resolveFills(parseMarkup(source), columns)
+		resolveFills(parseLine(source), columns)
 			.spans.map((span) => span.text)
 			.join("");
 
@@ -27,7 +27,7 @@ describe("resolveFills", () => {
 	});
 
 	it("lands the row exactly on the paper's edge", () => {
-		expect(lineColumns(resolveFills(parseMarkup("Coffee<fill>2.50"), COLUMNS))).toBe(COLUMNS);
+		expect(lineColumns(resolveFills(parseLine("Coffee<fill>2.50"), COLUMNS))).toBe(COLUMNS);
 	});
 
 	it("repeats the character the tag named", () => {
@@ -43,7 +43,7 @@ describe("resolveFills", () => {
 	});
 
 	it("still lands on the edge when the remainder is uneven", () => {
-		expect(lineColumns(resolveFills(parseMarkup("Qty<fill>Items<fill>Price"), COLUMNS))).toBe(COLUMNS);
+		expect(lineColumns(resolveFills(parseLine("Qty<fill>Items<fill>Price"), COLUMNS))).toBe(COLUMNS);
 	});
 
 	it("emits nothing when the text already fills the paper", () => {
@@ -80,7 +80,7 @@ describe("resolveFills", () => {
 	 * slack: there are columns left over, and they stay unspent because the character will not fit.
 	 */
 	it("emits nothing when the budget is smaller than one fill character", () => {
-		const line = resolveFills(parseMarkup("X<size=2>A<fill>B</size>"), 6);
+		const line = resolveFills(parseLine("X<size=2>A<fill>B</size>"), 6);
 
 		expect(line.spans.map((span) => span.text).join("")).toBe("XAB");
 		expect(lineColumns(line)).toBe(5);
@@ -91,20 +91,20 @@ describe("resolveFills", () => {
 	 * exactly and the line lands a column short. Under the default multiplier this cannot arise.
 	 */
 	it("spends a budget in whole characters, leaving the line short under a width multiplier", () => {
-		const line = resolveFills(parseMarkup("X<size=2>A<fill>B</size>"), COLUMNS);
+		const line = resolveFills(parseLine("X<size=2>A<fill>B</size>"), COLUMNS);
 
 		expect(line.spans.map((span) => span.text).join("")).toBe(`XA${" ".repeat(18)}B`);
 		expect(lineColumns(line)).toBe(41);
 	});
 
 	it("returns a line with no fills untouched", () => {
-		const line = parseMarkup("Coffee 2.50");
+		const line = parseLine("Coffee 2.50");
 
 		expect(resolveFills(line, COLUMNS)).toBe(line);
 	});
 
 	it("empties the fills it resolved", () => {
-		expect(resolveFills(parseMarkup("a<fill>b"), COLUMNS).fills).toEqual([]);
+		expect(resolveFills(parseLine("a<fill>b"), COLUMNS).fills).toEqual([]);
 	});
 
 	it("draws a rule from a fill that is alone on its line", () => {

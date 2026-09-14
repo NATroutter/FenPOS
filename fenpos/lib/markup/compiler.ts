@@ -7,7 +7,7 @@ import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/mar
 import { resolveFills } from "@/lib/markup/fill";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
 import { isDirectiveOnly, type Line } from "@/lib/markup/model";
-import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
+import { parseLine, type VariableContext } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
 import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/supplied";
 
@@ -257,7 +257,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 	for (let index = 0; index < request.data.length; index++) {
 		const lineNumber = index + 1;
 		try {
-			const parsed = parseMarkup(request.data[index], settings.variables);
+			const parsed = parseLine(request.data[index], settings.variables);
 			requireSymbolsFitThePaper(parsed, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
 			// After this line no fill remains, which is what lets the wrapper, the wire types and
@@ -332,7 +332,7 @@ export function collectElementErrors(
 
 	for (let index = 0; index < request.data.length; index++) {
 		try {
-			const parsed = parseMarkup(request.data[index], variables);
+			const parsed = parseLine(request.data[index], variables);
 			// Collected alongside the parse failures, so the preview shows an over-wide symbol as a
 			// refusal while it is being written rather than only when the job is submitted.
 			requireSymbolsFitThePaper(parsed, settings.columns);

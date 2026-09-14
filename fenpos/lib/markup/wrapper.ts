@@ -198,7 +198,9 @@ function sameStyle(left: SpanStyle, right: SpanStyle): boolean {
 		left.invert === right.invert &&
 		left.widthMult === right.widthMult &&
 		left.heightMult === right.heightMult &&
-		left.font === right.font
+		left.font === right.font &&
+		left.face === right.face &&
+		left.faceDots === right.faceDots
 	);
 }
 

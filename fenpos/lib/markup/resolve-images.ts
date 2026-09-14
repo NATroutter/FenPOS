@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
-import { parseMarkup, type VariableContext } from "@/lib/markup/parser";
+import { parseLine, type VariableContext } from "@/lib/markup/parser";
 import { integerSetting } from "@/lib/settings/settings-service";
 
 /**
@@ -15,7 +15,7 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * charge for, and into the dots that have to travel with the job.
  *
  * **This exists because measuring an image is asynchronous and compiling is not.** A stored asset's
- * dimensions are a database row and a URL image's are an HTTP response, while `parseMarkup` takes a
+ * dimensions are a database row and a URL image's are an HTTP response, while `parseLine` takes a
  * string and `compile` returns a job — neither can wait for anything. Making them async would push
  * `await` through every caller of a pipeline that is otherwise a pure function of its input, for
  * the sake of one directive. So the waiting is done here, once, before the compile starts, and the
@@ -252,9 +252,9 @@ function collect(data: readonly string[], columns: number, variables: VariableCo
 			continue;
 		}
 
-		let directives: ReturnType<typeof parseMarkup>["directives"];
+		let directives: ReturnType<typeof parseLine>["directives"];
 		try {
-			directives = parseMarkup(data[index], variables).directives;
+			directives = parseLine(data[index], variables).directives;
 		} catch {
 			continue;
 		}

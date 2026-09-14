@@ -50,9 +50,13 @@ describe("tokenize", () => {
 		expect(tokens[2]).toEqual({ kind: "close", name: "size", line: 1, column: 12 });
 	});
 
-	it("lowercases tag names", () => {
-		expect(tokenize("<BOLD>x</Bold>", null).tokens[0]).toMatchObject({ kind: "open", name: "bold" });
-		expect(tokenize("<BOLD>x</Bold>", null).tokens[2]).toMatchObject({ kind: "close", name: "bold" });
+	/**
+	 * Resolving a tag is case-insensitive and `tagByName` lowercases for that itself, so lowercasing
+	 * here would only throw away the spelling a refusal wants to echo back at its author.
+	 */
+	it("keeps a tag name as it was written", () => {
+		expect(tokenize("<BOLD>x</Bold>", null).tokens[0]).toMatchObject({ kind: "open", name: "BOLD" });
+		expect(tokenize("<BOLD>x</Bold>", null).tokens[2]).toMatchObject({ kind: "close", name: "Bold" });
 	});
 
 	it("reads bare and quoted attributes with their columns", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Line } from "@/lib/markup/model";
-import { parseMarkup } from "@/lib/markup/parser";
+import { parseLine } from "@/lib/markup/parser";
 import { wrapLine } from "@/lib/markup/wrapper";
 
 /**
@@ -11,7 +11,7 @@ import { wrapLine } from "@/lib/markup/wrapper";
  */
 describe("wrapLine", () => {
 	const plainText = (line: Line): string => line.spans.map((span) => span.text).join("");
-	const wrap = (markup: string, columns: number): Line[] => wrapLine(parseMarkup(markup), columns);
+	const wrap = (markup: string, columns: number): Line[] => wrapLine(parseLine(markup), columns);
 	const texts = (lines: Line[]): string[] => lines.map(plainText);
 
 	it("leaves a line that fits untouched", () => {
@@ -92,7 +92,7 @@ describe("wrapLine", () => {
 	});
 
 	it("passes through a directive-only line", () => {
-		const source = parseMarkup("<cut>");
+		const source = parseLine("<cut>");
 		const wrapped = wrapLine(source, 32);
 
 		expect(wrapped).toHaveLength(1);
@@ -100,7 +100,7 @@ describe("wrapLine", () => {
 	});
 
 	it("passes through an empty line", () => {
-		const source = parseMarkup("");
+		const source = parseLine("");
 		const wrapped = wrapLine(source, 32);
 
 		expect(wrapped).toHaveLength(1);
