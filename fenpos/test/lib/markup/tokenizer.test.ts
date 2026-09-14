@@ -155,7 +155,7 @@ describe("tokenize", () => {
 	});
 
 	it("refuses a control character in a variable value at the reference", () => {
-		const thrown = refusal("x{v}", context({ v: "a\x1b" }));
+		const thrown = refusal("x{v}", context({ v: "a\x07" }));
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.controlCharacter);
 		expect(thrown.column).toBe(2);
@@ -164,6 +164,22 @@ describe("tokenize", () => {
 
 	it("does not treat a bare carriage return as a break", () => {
 		expect(refusal("a\rb").code).toBe(MARKUP_ERRORS.controlCharacter);
+	});
+
+	it("refuses a control character in a bare attribute value", () => {
+		const thrown = refusal("<box wide=ab\x07>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.controlCharacter);
+		expect(thrown.detail).toBe("wide");
+		expect(thrown.column).toBe(6);
+	});
+
+	it("refuses a control character in a quoted attribute value", () => {
+		const thrown = refusal('<box title="ab\x07">');
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.controlCharacter);
+		expect(thrown.detail).toBe("title");
+		expect(thrown.column).toBe(6);
 	});
 
 	it("reports the line on every token after a break", () => {
