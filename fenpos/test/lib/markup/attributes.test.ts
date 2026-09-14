@@ -1,0 +1,90 @@
+import { describe, expect, it } from "vitest";
+import { type AttributeTable, readAttributes } from "@/lib/markup/attributes";
+import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+
+const TABLE: AttributeTable = {
+	width: { kind: "integer", min: 1, max: 100 },
+	border: { kind: "enum", values: ["single", "double", "thick", "none"] },
+	title: { kind: "text", maxLength: 64 },
+};
+
+const refusal = (work: () => unknown): MarkupError => {
+	try {
+		work();
+	} catch (thrown) {
+		if (thrown instanceof MarkupError) {
+			return thrown;
+		}
+		throw thrown;
+	}
+	throw new Error("expected a refusal");
+};
+
+describe("readAttributes", () => {
+	it("coerces integers and keeps enums and text as strings", () => {
+		const read = readAttributes(
+			"box",
+			[
+				{ name: "width", value: "60", column: 6 },
+				{ name: "border", value: "double", column: 15 },
+				{ name: "title", value: "Sales by hour", column: 29 },
+			],
+			TABLE,
+			2,
+		);
+
+		expect(read).toEqual({ width: 60, border: "double", title: "Sales by hour" });
+	});
+
+	it("refuses an attribute the tag does not declare, at its column", () => {
+		const thrown = refusal(() => readAttributes("box", [{ name: "pad", value: "1", column: 6 }], TABLE, 4));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.unknownAttribute);
+		expect(thrown.line).toBe(4);
+		expect(thrown.column).toBe(6);
+		expect(thrown.detail).toBe("pad");
+	});
+
+	it("refuses an integer outside its range", () => {
+		const thrown = refusal(() => readAttributes("box", [{ name: "width", value: "0", column: 6 }], TABLE, 1));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.message).toMatch(/1 to 100/);
+	});
+
+	it("refuses a non-integer where an integer is declared", () => {
+		expect(refusal(() => readAttributes("box", [{ name: "width", value: "6x", column: 6 }], TABLE, 1)).code).toBe(
+			MARKUP_ERRORS.invalidAttribute,
+		);
+	});
+
+	it("refuses an enum value outside the set and names the set", () => {
+		const thrown = refusal(() => readAttributes("box", [{ name: "border", value: "dotted", column: 6 }], TABLE, 1));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.message).toMatch(/single, double, thick or none/);
+	});
+
+	it("refuses text over its length", () => {
+		expect(
+			refusal(() => readAttributes("box", [{ name: "title", value: "x".repeat(65), column: 6 }], TABLE, 1)).code,
+		).toBe(MARKUP_ERRORS.invalidAttribute);
+	});
+
+	it("refuses the same attribute twice", () => {
+		const thrown = refusal(() =>
+			readAttributes(
+				"box",
+				[
+					{ name: "width", value: "10", column: 6 },
+					{ name: "width", value: "20", column: 15 },
+				],
+				TABLE,
+				1,
+			),
+		);
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(15);
+	});
+});

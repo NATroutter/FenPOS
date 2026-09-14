@@ -160,6 +160,14 @@ export const API_ERROR_STATUS = {
 	 * all three doors share one gate in `asset-service.ts`.
 	 */
 	image_too_large: 413,
+	/** Blocks nested deeper than the install's configured block depth. See `MARKUP_ERRORS.nestingTooDeep`. */
+	nesting_too_deep: 413,
+	/** More cells in one table than the install allows. See `MARKUP_ERRORS.tooManyCells`. */
+	too_many_cells: 413,
+	/** More values in one chart series than the install allows. See `MARKUP_ERRORS.tooManyPoints`. */
+	too_many_points: 413,
+	/** A job's rasters together exceed the install's configured raster budget. See `MARKUP_ERRORS.rasterBudgetExceeded`. */
+	raster_budget_exceeded: 413,
 	/**
 	 * A receipt that compiled but is too large to hand to a printer in one message.
 	 *
@@ -305,6 +313,20 @@ export const API_ERROR_STATUS = {
 	 * produce is worse than a refusal. See `BUNDLED_LOGO_WIDTHS` in `lib/assets/bundled-logo.ts`.
 	 */
 	unbundled_logo_width: 422,
+	/** An attribute the tag does not declare. See `MARKUP_ERRORS.unknownAttribute`. */
+	unknown_attribute: 422,
+	/** An attribute value outside what the tag accepts. See `MARKUP_ERRORS.invalidAttribute`. */
+	invalid_attribute: 422,
+	/** A block where it cannot go. See `MARKUP_ERRORS.misplacedBlock`. */
+	misplaced_block: 422,
+	/** More labels than a chart has categories. See `MARKUP_ERRORS.tooManyLabels`. */
+	too_many_labels: 422,
+	/** A `<font>` naming a font that is not stored. See `MARKUP_ERRORS.unknownFont`. */
+	unknown_font: 422,
+	/** An `<image>` data URI that is not a PNG or JPEG, or not base64. See `MARKUP_ERRORS.invalidImageData`. */
+	invalid_image_data: 422,
+	/** A font upload that opentype.js cannot parse. See `MARKUP_ERRORS.invalidFont`. */
+	invalid_font: 422,
 
 	/** 429: too many attempts. Applied to sign-in, to agent pairing, and to API reads. */
 	rate_limited: 429,

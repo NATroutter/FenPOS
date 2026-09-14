@@ -1,3 +1,5 @@
+import type { AttributeTable } from "@/lib/markup/attributes";
+
 /**
  * The complete set of markup tags.
  *
@@ -18,47 +20,48 @@ export interface Tag {
 	name: string;
 	kind: TagKind;
 	argument: TagArgument;
+	attributes: AttributeTable;
 }
 
 /** Every tag, keyed by the lowercase name written in markup. */
 export const TAGS: Record<string, Tag> = {
 	/** Emphasis. */
-	bold: { name: "bold", kind: "PAIRED", argument: "NONE" },
+	bold: { name: "bold", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/** Underline, optionally selecting the printer's second weight. */
-	underline: { name: "underline", kind: "PAIRED", argument: "OPTIONAL" },
+	underline: { name: "underline", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
 	/** White on black. */
-	invert: { name: "invert", kind: "PAIRED", argument: "NONE" },
+	invert: { name: "invert", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/** Character multipliers, as `W,H` or a single value used for both. */
-	size: { name: "size", kind: "PAIRED", argument: "REQUIRED" },
+	size: { name: "size", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** Built-in font selection. */
-	font: { name: "font", kind: "PAIRED", argument: "REQUIRED" },
+	font: { name: "font", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** Line justification. Paired, and required to enclose the whole element. */
-	align: { name: "align", kind: "PAIRED", argument: "REQUIRED" },
+	align: { name: "align", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** Break this line at the paper width. Paired, and required to enclose the whole element. */
-	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE" },
+	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/** Print this line as written. Paired, and required to enclose the whole element. */
-	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE" },
+	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/**
 	 * Pad to the paper's width. Argument is the character to repeat, default a space.
 	 *
 	 * The one tag whose printed width is not knowable from the element: it stands for however many
 	 * columns are left over, which is a property of the device. See `lib/markup/fill.ts`.
 	 */
-	fill: { name: "fill", kind: "VOID", argument: "OPTIONAL" },
+	fill: { name: "fill", kind: "VOID", argument: "OPTIONAL", attributes: {} },
 	/** Cut the paper, fully by default. */
-	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL" },
+	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL", attributes: {} },
 	/** Advance the paper by a number of lines. */
-	feed: { name: "feed", kind: "VOID", argument: "REQUIRED" },
+	feed: { name: "feed", kind: "VOID", argument: "REQUIRED", attributes: {} },
 	/** A full-width horizontal rule. Required to be alone in its element. */
-	hr: { name: "hr", kind: "VOID", argument: "NONE" },
+	hr: { name: "hr", kind: "VOID", argument: "NONE", attributes: {} },
 	/** A QR code. Argument is the module size, 1-16. */
-	qr: { name: "qr", kind: "PAIRED", argument: "OPTIONAL" },
+	qr: { name: "qr", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
 	/** A linear barcode. Argument is the symbology. */
-	barcode: { name: "barcode", kind: "PAIRED", argument: "REQUIRED" },
+	barcode: { name: "barcode", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** A PDF417 symbol. Argument is the error-correction level, 0-8. */
-	pdf417: { name: "pdf417", kind: "PAIRED", argument: "OPTIONAL" },
+	pdf417: { name: "pdf417", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
 	/** A cash drawer pulse. Argument is the pin, 2 or 5. */
-	drawer: { name: "drawer", kind: "VOID", argument: "OPTIONAL" },
+	drawer: { name: "drawer", kind: "VOID", argument: "OPTIONAL", attributes: {} },
 	/**
 	 * A stored image or an `http(s)` URL. Argument is the printed width as a percentage of the
 	 * paper, 1-100.
@@ -68,7 +71,7 @@ export const TAGS: Record<string, Tag> = {
 	 * the first one. Putting it in the content reuses the `&lt;` and `&amp;` escaping every other
 	 * block already has, and adds no parsing rule of its own.
 	 */
-	image: { name: "image", kind: "PAIRED", argument: "OPTIONAL" },
+	image: { name: "image", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
 };
 
 /**

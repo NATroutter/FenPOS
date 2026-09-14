@@ -220,6 +220,7 @@ class Parser {
 			const unclosed = this.open[this.open.length - 1];
 			throw new MarkupError(
 				MARKUP_ERRORS.unclosedTag,
+				1,
 				unclosed.column,
 				unclosed.tag.name,
 				`Tag <${unclosed.tag.name}> was never closed`,
@@ -239,6 +240,7 @@ class Parser {
 		if (isControl(current)) {
 			throw new MarkupError(
 				MARKUP_ERRORS.controlCharacter,
+				1,
 				this.index + 1,
 				`U+${(current.charCodeAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`,
 				"Control characters cannot be printed; use markup tags for formatting",
@@ -307,6 +309,7 @@ class Parser {
 		if (value === undefined) {
 			throw new MarkupError(
 				MARKUP_ERRORS.unknownVariable,
+				1,
 				column,
 				name,
 				`No variable named '${name}' is defined for this printer`,
@@ -317,6 +320,7 @@ class Parser {
 		if (this.substitutions > this.variables.maxPerElement) {
 			throw new MarkupError(
 				MARKUP_ERRORS.tooManyVariableReferences,
+				1,
 				column,
 				name,
 				`At most ${this.variables.maxPerElement} variable references are allowed in one element`,
@@ -332,6 +336,7 @@ class Parser {
 		if (hasControlCharacter(value)) {
 			throw new MarkupError(
 				MARKUP_ERRORS.controlCharacter,
+				1,
 				column,
 				name,
 				`The value of '${name}' contains a control character, which cannot be printed`,
@@ -414,6 +419,7 @@ class Parser {
 		if (close < 0) {
 			throw new MarkupError(
 				MARKUP_ERRORS.unknownTag,
+				1,
 				startColumn,
 				this.source.slice(this.index),
 				"Unterminated tag; write &lt; for a literal '<'",
@@ -439,6 +445,7 @@ class Parser {
 		if (!tag) {
 			throw new MarkupError(
 				MARKUP_ERRORS.unknownTag,
+				1,
 				column,
 				name,
 				`Unknown tag '${name}'; write &lt; for a literal '<'`,
@@ -488,7 +495,7 @@ class Parser {
 	private closeTag(name: string, column: number): void {
 		const tag = tagByName(name);
 		if (!tag) {
-			throw new MarkupError(MARKUP_ERRORS.unknownTag, column, name, `Unknown tag '${name}'`);
+			throw new MarkupError(MARKUP_ERRORS.unknownTag, 1, column, name, `Unknown tag '${name}'`);
 		}
 
 		if (this.block && this.block.tag !== tag) {
@@ -498,6 +505,7 @@ class Parser {
 		if (tag.kind === "VOID") {
 			throw new MarkupError(
 				MARKUP_ERRORS.unexpectedCloseTag,
+				1,
 				column,
 				tag.name,
 				`<${tag.name}> stands alone and cannot be closed`,
@@ -521,6 +529,7 @@ class Parser {
 			const expected = current ? `expected </${current.tag.name}>` : "no tag is open";
 			throw new MarkupError(
 				MARKUP_ERRORS.unexpectedCloseTag,
+				1,
 				column,
 				tag.name,
 				`</${tag.name}> does not match: ${expected}`,
@@ -580,7 +589,13 @@ class Parser {
 
 	private openAlign(argument: string | null, column: number): void {
 		if (this.alignSeen) {
-			throw new MarkupError(MARKUP_ERRORS.invalidAlignScope, column, "align", "Only one <align> is allowed per line");
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidAlignScope,
+				1,
+				column,
+				"align",
+				"Only one <align> is allowed per line",
+			);
 		}
 		this.requireLineOwnerCanOpen("align", MARKUP_ERRORS.invalidAlignScope, column);
 
@@ -599,6 +614,7 @@ class Parser {
 		if (!current || current.tag.name !== "align") {
 			throw new MarkupError(
 				MARKUP_ERRORS.unexpectedCloseTag,
+				1,
 				column,
 				"align",
 				"</align> does not match any open <align>",
@@ -623,6 +639,7 @@ class Parser {
 		if (this.wrapSeen) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidWrapScope,
+				1,
 				column,
 				tag.name,
 				"Only one <wrap> or <nowrap> is allowed per line",
@@ -640,6 +657,7 @@ class Parser {
 		if (!current || current.tag !== tag) {
 			throw new MarkupError(
 				MARKUP_ERRORS.unexpectedCloseTag,
+				1,
 				column,
 				tag.name,
 				`</${tag.name}> does not match any open <${tag.name}>`,
@@ -660,6 +678,7 @@ class Parser {
 		if (this.closedOwner) {
 			throw new MarkupError(
 				this.closedOwner.code,
+				1,
 				column,
 				this.closedOwner.name,
 				`<${this.closedOwner.name}> must enclose the whole line, so nothing may follow </${this.closedOwner.name}>`,
@@ -681,7 +700,7 @@ class Parser {
 		const precededByContent = this.spans.length > 0 || this.directives.length > 0;
 		const nestedInsideStyling = this.open.some((entry) => !isLineOwningTag(entry.tag.name));
 		if (precededByContent || nestedInsideStyling) {
-			throw new MarkupError(code, column, name, `<${name}> must enclose the whole line, so nothing may precede it`);
+			throw new MarkupError(code, 1, column, name, `<${name}> must enclose the whole line, so nothing may precede it`);
 		}
 	}
 
@@ -776,7 +795,7 @@ class Parser {
 	private symbolDirective(block: OpenBlock, spec: SymbolSpec): Directive {
 		const refusal = validateSymbolContent(spec);
 		if (refusal) {
-			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, block.column, block.tag.name, refusal);
+			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, 1, block.column, block.tag.name, refusal);
 		}
 		return blockDirective(spec, this.measure(block, spec), block.column);
 	}
@@ -795,6 +814,7 @@ class Parser {
 		if (spec.content.length === 0) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidTagArgument,
+				1,
 				block.column,
 				block.tag.name,
 				"<image> must enclose a stored image's name or an http(s) URL",
@@ -823,6 +843,7 @@ class Parser {
 			}
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidTagArgument,
+				1,
 				block.column,
 				block.tag.name,
 				`<${block.tag.name}> cannot encode this content: ${thrown.message}`,
@@ -840,6 +861,7 @@ class Parser {
 	private refuseInsideBlock(block: OpenBlock, tag: Tag, column: number): never {
 		throw new MarkupError(
 			MARKUP_ERRORS.invalidBlockScope,
+			1,
 			column,
 			tag.name,
 			`<${block.tag.name}> encloses data rather than markup, so <${tag.name}> cannot appear inside it`,
@@ -939,6 +961,7 @@ class Parser {
 		}
 		throw new MarkupError(
 			this.soleOccupant.code,
+			1,
 			this.soleOccupant.column,
 			this.soleOccupant.name,
 			`<${this.soleOccupant.name}> takes a whole line and must be alone in its element`,
@@ -977,7 +1000,7 @@ class Parser {
 	}
 
 	private argumentError(tag: Tag, column: number, detail: string): MarkupError {
-		return new MarkupError(MARKUP_ERRORS.invalidTagArgument, column, tag.name, `<${tag.name}> ${detail}`);
+		return new MarkupError(MARKUP_ERRORS.invalidTagArgument, 1, column, tag.name, `<${tag.name}> ${detail}`);
 	}
 }
 

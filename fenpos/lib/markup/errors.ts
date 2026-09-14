@@ -1,5 +1,5 @@
 /**
- * The ways a `data` element can be malformed.
+ * The ways a `data` document can be malformed.
  *
  * Each code is part of the public API contract: clients branch on the `error` field, so these
  * strings are frozen independently of anything in the implementation. Ported verbatim from
@@ -58,30 +58,57 @@ export const MARKUP_ERRORS = {
 	tooManyVariableReferences: "too_many_variable_references",
 	/** A character that would be interpreted by the printer as a command. */
 	controlCharacter: "control_character",
+	/** Blocks nested deeper than `limits.maxBlockDepth`. */
+	nestingTooDeep: "nesting_too_deep",
+	/** An attribute the tag does not declare. */
+	unknownAttribute: "unknown_attribute",
+	/** An attribute value outside what the tag accepts, or a table whose sized columns exceed the width. */
+	invalidAttribute: "invalid_attribute",
+	/** A block where it cannot go: a row outside a table, a cell outside a row, a symbol inside a box. */
+	misplacedBlock: "misplaced_block",
+	/** More labels than a chart has categories. */
+	tooManyLabels: "too_many_labels",
+	/** A `<font>` naming a font that is not stored. */
+	unknownFont: "unknown_font",
+	/** More cells in one table than `limits.maxTableCells`. */
+	tooManyCells: "too_many_cells",
+	/** More values in one series than `limits.maxSeriesPoints`. */
+	tooManyPoints: "too_many_points",
+	/** The job's rasters together exceed `limits.maxRasterMb`. */
+	rasterBudgetExceeded: "raster_budget_exceeded",
+	/** An `<image>` data URI that is not a PNG or JPEG, or not base64. */
+	invalidImageData: "invalid_image_data",
+	/** A font upload that opentype.js cannot parse. */
+	invalidFont: "invalid_font",
 } as const;
 
 export type MarkupErrorCode = (typeof MARKUP_ERRORS)[keyof typeof MARKUP_ERRORS];
 
 /**
- * A malformed element, with where it went wrong.
+ * A malformed document, with where it went wrong.
  *
- * The column is the whole point. A `400` that says "invalid markup" makes a caller re-read
- * their own string; one that names the character and its position tells them what to change.
+ * The line and column are the whole point. A `400` that says "invalid markup" makes a caller
+ * re-read their own string; one that names the line, the character, and its position tells them
+ * what to change.
  */
 export class MarkupError extends Error {
 	/** Stable code for the API's `error` field. */
 	readonly code: MarkupErrorCode;
 
-	/** 1-based character position within the element where the problem starts. */
+	/** 1-based line of the document where the problem starts. */
+	readonly line: number;
+
+	/** 1-based column within that line where the problem starts. */
 	readonly column: number;
 
 	/** The offending token or character, or null when the error needs no further identification. */
 	readonly detail: string | null;
 
-	constructor(code: MarkupErrorCode, column: number, detail: string | null, message: string) {
+	constructor(code: MarkupErrorCode, line: number, column: number, detail: string | null, message: string) {
 		super(message);
 		this.name = "MarkupError";
 		this.code = code;
+		this.line = line;
 		this.column = column;
 		this.detail = detail;
 	}
