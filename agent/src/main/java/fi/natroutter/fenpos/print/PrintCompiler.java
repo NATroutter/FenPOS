@@ -1,6 +1,5 @@
 package fi.natroutter.fenpos.print;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -39,8 +38,17 @@ import java.util.Set;
  * lets a bad request be refused with a diagnostic before it ever reaches an agent. This pipeline
  * serves the console, where a job is composed locally and there is no server in the path.
  * <p>
- * Stages are ordered cheapest-first. Limits are enforced before any element is parsed, so an
+ * Stages are ordered cheapest-first. Limits are enforced before any line is parsed, so an
  * oversized job is refused without doing the work it was trying to provoke.
+ * <p>
+ * <b>{@code maxLineChars} is measured on the raw line, content tags included.</b> The server's
+ * compiler can afford to look inside a {@code <qr>} or a {@code <barcode>} and charge its payload
+ * against a separate budget, because it already has to parse the tag to measure the symbol it
+ * produces. This side has no such measurement to piggyback on, so a line carrying a long symbol
+ * payload is simply charged for every character it is written with, tag markup included. The
+ * practical effect is that a line wrapped only because of an unusually long symbol argument reads
+ * the same limit differently here than on the server — worth knowing, not worth a second parser
+ * pass to fix.
  */
 public final class PrintCompiler {
 
@@ -81,10 +89,10 @@ public final class PrintCompiler {
         JsonObject root = parseObject(body);
         requireKnownFields(root);
 
-        List<String> elements = readData(root, device.limits());
+        String data = readData(root, device.limits());
         Linefeed linefeed = readLinefeed(root, device.print());
 
-        List<Line> lines = layOut(elements, device, images);
+        List<Line> lines = layOut(data, device, images);
         requireOutputWithinLimit(lines, device.limits());
 
         return new CompiledJob(render(lines, device.print(), linefeed), countTextLines(lines));
@@ -107,52 +115,51 @@ public final class PrintCompiler {
     }
 
     /**
-     * Reads and limit-checks the {@code data} array.
+     * Reads and limit-checks the {@code data} document.
      * <p>
-     * Lengths are measured on the raw strings, before markup is interpreted, so the totals
-     * a client computes match the totals enforced here.
+     * Lengths are measured on the raw lines, before markup is interpreted, so the totals a
+     * client computes match the totals enforced here. Line endings are normalised the same way
+     * {@link MarkupParser} normalises them, so the line a limit is reported against is the same
+     * line the parser would later report an error against.
      */
-    private static List<String> readData(JsonObject root, LimitSettings limits)
+    private static String readData(JsonObject root, LimitSettings limits)
             throws PrintRequestException {
         JsonElement data = root.get(FIELD_DATA);
         if (data == null || data.isJsonNull()) {
             throw PrintRequestException.of("missing_field", "'data' is required");
         }
-        if (!data.isJsonArray()) {
-            throw PrintRequestException.of("invalid_type", "'data' must be an array of strings");
+        if (data.isJsonArray()) {
+            throw PrintRequestException.of("invalid_type", "'data' is no longer an array of "
+                    + "lines. Send one string, with a newline between lines.");
+        }
+        if (!data.isJsonPrimitive() || !data.getAsJsonPrimitive().isString()) {
+            throw PrintRequestException.of("invalid_type", "'data' must be a string");
         }
 
-        JsonArray array = data.getAsJsonArray();
-        if (array.size() > limits.maxLines()) {
+        String text = data.getAsString();
+        String[] lines = text.replace("\r\n", "\n").split("\n", -1);
+        if (lines.length > limits.maxLines()) {
             throw PrintRequestException.of("too_many_lines",
-                    "At most " + limits.maxLines() + " lines are allowed, got " + array.size());
+                    "At most " + limits.maxLines() + " lines are allowed, got " + lines.length);
         }
 
-        List<String> elements = new ArrayList<>(array.size());
         int total = 0;
-        for (int index = 0; index < array.size(); index++) {
-            int line = index + 1;
-            JsonElement element = array.get(index);
-            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
-                throw PrintRequestException.atLine("invalid_type", line,
-                        "Every element of 'data' must be a string");
-            }
-
-            String text = element.getAsString();
-            if (text.length() > limits.maxLineChars()) {
-                throw PrintRequestException.atLine("line_too_long", line,
+        for (int index = 0; index < lines.length; index++) {
+            int lineNumber = index + 1;
+            String raw = lines[index];
+            if (raw.length() > limits.maxLineChars()) {
+                throw PrintRequestException.atLine("line_too_long", lineNumber,
                         "At most " + limits.maxLineChars() + " characters are allowed per line, got "
-                                + text.length());
+                                + raw.length());
             }
 
-            total += text.length();
+            total += raw.length();
             if (total > limits.maxTotalChars()) {
-                throw PrintRequestException.atLine("text_too_large", line,
+                throw PrintRequestException.atLine("text_too_large", lineNumber,
                         "At most " + limits.maxTotalChars() + " characters are allowed in total");
             }
-            elements.add(text);
         }
-        return elements;
+        return text;
     }
 
     /**
@@ -194,20 +201,29 @@ public final class PrintCompiler {
     // -------------------------------------------------------------------------
 
     /**
-     * Parses, validates and wraps each element, translating the positional failures raised
-     * by the parser and the encoder into request-level errors carrying the element index.
+     * Parses the whole document, then validates and wraps each parsed line, translating the
+     * positional failures raised by the encoder into request-level errors carrying the line
+     * number. A markup failure already carries its own line, from the parser; an encoder failure
+     * does not, so it is attributed by the position of the parsed line it came from instead —
+     * the same number the parser would have used had the problem been its to report.
      */
-    private static List<Line> layOut(List<String> elements, Device device, ImageResolver images)
+    private static List<Line> layOut(String data, Device device, ImageResolver images)
             throws PrintRequestException {
         PrintSettings print = device.print();
-        List<Line> lines = new ArrayList<>(elements.size());
 
-        for (int index = 0; index < elements.size(); index++) {
+        List<Line> parsed;
+        try {
+            parsed = MarkupParser.parseDocument(data, images);
+        } catch (MarkupException e) {
+            throw PrintRequestException.at(e.error().apiCode(), e.line(), e.column(), e.getMessage());
+        }
+
+        List<Line> lines = new ArrayList<>(parsed.size());
+        for (int index = 0; index < parsed.size(); index++) {
             int lineNumber = index + 1;
             try {
-                Line parsed = MarkupParser.parse(elements.get(index), images);
                 Line checked = CharsetValidator.validate(
-                        parsed, print.codepage(), print.onUnsupported());
+                        parsed.get(index), print.codepage(), print.onUnsupported());
                 // After this line no fill remains, which is what lets the wrapper and the renderer
                 // stay ignorant of the tag. It runs after the charset check so that an unprintable
                 // fill character is reported once, at the column the caller wrote it.
@@ -216,9 +232,6 @@ public final class PrintCompiler {
                 lines.addAll(wrap
                         ? LineWrapper.wrap(filled, print.columns())
                         : List.of(filled));
-            } catch (MarkupException e) {
-                throw PrintRequestException.at(
-                        e.error().apiCode(), lineNumber, e.column(), e.getMessage());
             } catch (UnsupportedCharacterException e) {
                 throw PrintRequestException.unsupportedCharacter(
                         lineNumber, e.column(), e.character(), e.codepage(), e.getMessage());

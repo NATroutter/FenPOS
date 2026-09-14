@@ -49,9 +49,9 @@ public class PrintRequestException extends Exception {
     }
 
     /**
-     * A problem attributable to one element of the {@code data} array.
+     * A problem attributable to one line of the {@code data} document.
      *
-     * @param line 1-based index into {@code data}
+     * @param line 1-based line number within {@code data}
      */
     public static PrintRequestException atLine(String apiCode, int line, String message) {
         return new PrintRequestException(apiCode, message, line, null, null, null);
@@ -60,8 +60,8 @@ public class PrintRequestException extends Exception {
     /**
      * A problem attributable to one character.
      *
-     * @param line   1-based index into {@code data}
-     * @param column 1-based column within that element
+     * @param line   1-based line number within {@code data}
+     * @param column 1-based column within that line
      */
     public static PrintRequestException at(String apiCode, int line, int column, String message) {
         return new PrintRequestException(apiCode, message, line, column, null, null);
@@ -86,12 +86,12 @@ public class PrintRequestException extends Exception {
         return apiCode;
     }
 
-    /** Returns the 1-based index into {@code data}, or {@code null} if not positional. */
+    /** Returns the 1-based line number within {@code data}, or {@code null} if not positional. */
     public Integer line() {
         return line;
     }
 
-    /** Returns the 1-based column within the element, or {@code null} if not positional. */
+    /** Returns the 1-based column within the line, or {@code null} if not positional. */
     public Integer column() {
         return column;
     }

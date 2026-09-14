@@ -51,7 +51,7 @@ public class PrintCommand extends DeviceCommand {
     }
 
     private void submit(Device device, String text) {
-        String body = "{\"data\":[" + PrintPayloads.jsonString(text) + "]}";
+        String body = "{\"data\":" + PrintPayloads.jsonString(text) + "}";
         try {
             PrintJob job = printing.submit(device, body);
             out.println("Queued " + job.id() + " on " + device.name() + ".");

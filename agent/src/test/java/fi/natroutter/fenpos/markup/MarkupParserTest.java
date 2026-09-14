@@ -10,6 +10,7 @@ import fi.natroutter.fenpos.markup.model.Span;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -247,6 +248,7 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("ab <blink>x</blink>"));
 
         assertEquals(MarkupError.UNKNOWN_TAG, thrown.error());
+        assertEquals(1, thrown.line());
         assertEquals(4, thrown.column());
         assertEquals("blink", thrown.detail());
     }
@@ -257,6 +259,7 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("Total: <bold>12.30"));
 
         assertEquals(MarkupError.UNCLOSED_TAG, thrown.error());
+        assertEquals(1, thrown.line());
         assertEquals(8, thrown.column());
         assertEquals("bold", thrown.detail());
     }
@@ -267,6 +270,7 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("x</bold>"));
 
         assertEquals(MarkupError.UNEXPECTED_CLOSE_TAG, thrown.error());
+        assertEquals(1, thrown.line());
         assertEquals(2, thrown.column());
     }
 
@@ -694,6 +698,86 @@ class MarkupParserTest {
                 name.equals(requested) && widthPercent == requestedPercent
                         ? java.util.Optional.of(ONE_DOT)
                         : java.util.Optional.empty();
+    }
+
+    // -------------------------------------------------------------------------
+    // Documents: several lines, tags that span them
+    // -------------------------------------------------------------------------
+
+    @Test
+    void parsesOneLinePerNewline() throws MarkupException {
+        List<Line> lines = MarkupParser.parseDocument("a\nb\n\nc");
+
+        assertEquals(4, lines.size());
+        assertEquals("a", lines.get(0).spans().get(0).text());
+        assertEquals("c", lines.get(3).spans().get(0).text());
+        assertTrue(lines.get(2).spans().isEmpty());
+    }
+
+    @Test
+    void normalisesWindowsLineEndings() throws MarkupException {
+        assertEquals(2, MarkupParser.parseDocument("a\r\nb").size());
+    }
+
+    @Test
+    void carriesABoldScopeAcrossLines() throws MarkupException {
+        List<Line> lines = MarkupParser.parseDocument("<bold>a\nb</bold>");
+
+        assertTrue(lines.get(0).spans().get(0).style().bold());
+        assertTrue(lines.get(1).spans().get(0).style().bold());
+    }
+
+    @Test
+    void carriesAlignAcrossTheLinesItOwns() throws MarkupException {
+        List<Line> lines = MarkupParser.parseDocument("<align=center>a\nb</align>\nc");
+
+        assertEquals(Align.CENTER, lines.get(0).align());
+        assertEquals(Align.CENTER, lines.get(1).align());
+        assertEquals(Align.LEFT, lines.get(2).align());
+    }
+
+    @Test
+    void reportsTheLineOfAnUnclosedTag() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parseDocument("x\n  <bold>y\nz"));
+
+        assertEquals(MarkupError.UNCLOSED_TAG, thrown.error());
+        assertEquals(2, thrown.line());
+        assertEquals(3, thrown.column());
+    }
+
+    @Test
+    void refusesTextAfterAlignClosesOnTheSameLine() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parseDocument("<align=center>a</align> b"));
+
+        assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
+        assertEquals(1, thrown.line());
+        assertEquals(24, thrown.column());
+    }
+
+    @Test
+    void refusesAlignOpenedMidLineOnALaterLine() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parseDocument("ok\nx <align=center>a</align>"));
+
+        assertEquals(2, thrown.line());
+        assertEquals(3, thrown.column());
+    }
+
+    @Test
+    void trimsLineBreaksInsideAnImageReference() throws MarkupException {
+        ImageResolver images = (name, width) -> name.equals("logo")
+                ? Optional.of(ONE_DOT) : Optional.empty();
+        List<Line> lines = MarkupParser.parseDocument("<image>\nlogo\n</image>", images);
+
+        assertEquals(3, lines.size());
+        assertEquals(1, lines.stream().mapToInt(line -> line.directives().size()).sum());
+    }
+
+    @Test
+    void singleLineParseRefusesADocument() {
+        assertThrows(IllegalArgumentException.class, () -> MarkupParser.parse("a\nb"));
     }
 
     /**

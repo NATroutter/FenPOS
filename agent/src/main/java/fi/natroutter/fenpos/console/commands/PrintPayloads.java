@@ -30,9 +30,9 @@ final class PrintPayloads {
     /**
      * Builds a request body from a list of lines.
      *
-     * @param lines the {@code data} elements
+     * @param lines the lines to join into the {@code data} field, one per line of the document
      */
     static String body(List<String> lines) {
-        return "{\"data\":" + GSON.toJson(lines) + "}";
+        return "{\"data\":" + GSON.toJson(String.join("\n", lines)) + "}";
     }
 }

@@ -1,7 +1,5 @@
 package fi.natroutter.fenpos.print;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.device.LimitSettings;
@@ -109,21 +107,23 @@ class TestPageTest {
     }
 
     /**
-     * The page's elements, as the compile pipeline will see them.
+     * The page's lines, as the compile pipeline will see them.
      * <p>
      * Read back out of the JSON rather than searched for in it: Gson escapes {@code <} and
      * {@code =}, so a substring check against the body would be a check on Gson's escaping rather
-     * than on the markup.
+     * than on the markup. The {@code data} field is one string, so it is split back into lines
+     * on {@code \n} — the exact inverse of how {@link TestPage} joined them.
      */
     private static List<String> elements() {
         return elements(ImageResolver.NONE);
     }
 
     private static List<String> elements(ImageResolver images) {
-        JsonArray data = JsonParser.parseString(TestPage.bodyFor(device(), images))
+        String data = JsonParser.parseString(TestPage.bodyFor(device(), images))
                 .getAsJsonObject()
-                .getAsJsonArray("data");
-        return data.asList().stream().map(JsonElement::getAsString).toList();
+                .get("data")
+                .getAsString();
+        return List.of(data.split("\n", -1));
     }
 
     /** A 58mm printer: the narrowest paper, and so the tightest fit for the symbols. */

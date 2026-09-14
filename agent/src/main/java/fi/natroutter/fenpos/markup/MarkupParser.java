@@ -17,20 +17,22 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Turns one {@code data} element into a {@link Line} of styled spans and directives.
+ * Turns the request's {@code data} string into one {@link Line} per line of the document.
  * <p>
  * The parser is the boundary that makes the rest of the system safe: markup is the only way
  * a caller can influence printer state, and every byte the printer would read as a command
  * either comes from a recognised tag or is rejected here. A raw control character is never
  * passed through, so a request cannot desynchronise the device.
  * <p>
- * A single left-to-right pass produces spans carrying fully resolved styles. Control
- * characters are detected during that same pass rather than in a separate sweep, so the
- * reported problem is always the earliest one in the element — which is the one a user
- * needs to fix first.
+ * A single left-to-right pass over the whole document produces spans carrying fully resolved
+ * styles, splitting a new {@link Line} at every {@code \n}. Control characters are detected
+ * during that same pass rather than in a separate sweep, so the reported problem is always
+ * the earliest one in the document — which is the one a user needs to fix first. A tag such
+ * as {@code <bold>} or {@code <align>} may open on one line and close on a later one, in which
+ * case every line it covers carries its effect.
  * <p>
- * Instances are not shared: {@link #parse(String)} creates one per element, so the class
- * carries per-parse state without being thread-unsafe.
+ * Instances are not shared: {@link #parseDocument(String)} creates one per document, so the
+ * class carries per-parse state without being thread-unsafe.
  * <p>
  * A port of {@code fenpos/lib/markup/parser.ts}, and the two must not drift — a tag the panel
  * accepts and this refuses is a job that previews cleanly and then fails behind a printer. Two
@@ -104,23 +106,47 @@ public final class MarkupParser {
     /** Where the dots for an {@code <image>} come from; holds nothing when there is no device. */
     private final ImageResolver images;
 
-    private final List<Span> spans = new ArrayList<>();
-    private final List<Fill> fills = new ArrayList<>();
-    private final List<Directive> directives = new ArrayList<>();
+    private List<Span> spans = new ArrayList<>();
+    private List<Fill> fills = new ArrayList<>();
+    private List<Directive> directives = new ArrayList<>();
     private final Deque<OpenTag> open = new ArrayDeque<>();
     private final StringBuilder pending = new StringBuilder();
+
+    /** Every line finished so far, in document order. */
+    private final List<Line> lines = new ArrayList<>();
+
+    /** 1-based line of the document the scanner is currently reading. */
+    private int line = 1;
+
+    /** Index into {@link #source} where the current line began, for {@link #column()}. */
+    private int lineStart = 0;
 
     private SpanStyle style = SpanStyle.PLAIN;
     private Align align = Align.LEFT;
 
-    /** Whether an alignment tag has been seen; a second one is an error. */
+    /**
+     * Whether an alignment tag is currently open; a second one while this is true is an error.
+     * Cleared the moment the open one closes — not at the end of the line — so a later line may
+     * open its own. A second {@code <align>} written later on the same line it closed on is still
+     * refused, just by {@link #requireLineOwnerCanOpen}'s {@code closedOwnerName} check instead
+     * of this one.
+     */
     private boolean alignSeen;
 
-    /** Whether a wrap tag has been seen; {@code <wrap>} and {@code <nowrap>} share one slot. */
+    /**
+     * Whether a wrap tag is currently open; {@code <wrap>} and {@code <nowrap>} share one slot.
+     * Cleared and refused exactly as {@link #alignSeen} is.
+     */
     private boolean wrapSeen;
 
     /** What this line was asked to do about wrapping; null defers to the device. */
     private Boolean wrap;
+
+    /** Whether {@link #align} must fall back to {@link Align#LEFT} once the current line ends. */
+    private boolean pendingAlignReset;
+
+    /** Whether {@link #wrap} must fall back to {@code null} once the current line ends. */
+    private boolean pendingWrapReset;
 
     /** The line-owning tag that has closed, if any: content after it is out of scope. */
     private String closedOwnerName;
@@ -149,58 +175,136 @@ public final class MarkupParser {
     private int index;
 
     private MarkupParser(String source, ImageResolver images) {
-        this.source = source;
+        // \r\n is normalised to \n before anything else sees it, so a line boundary is always
+        // exactly one character and every column computed downstream of it is exact.
+        this.source = (source == null ? "" : source).replace("\r\n", "\n");
         this.images = images;
     }
 
     /**
-     * Parses one element of the request's {@code data} array, with no images available.
+     * Parses the request's {@code data} document, with no images available.
      * <p>
      * An {@code <image>} tag is still recognised and still checked; it simply cannot resolve, and
-     * says so. Callers holding a device should use {@link #parse(String, ImageResolver)}.
+     * says so. Callers holding a device should use {@link #parseDocument(String, ImageResolver)}.
      *
-     * @param source the element text, as supplied by the client
-     * @return the parsed line; a blank element yields a line with no spans
-     * @throws MarkupException if the element is malformed, carrying the column at fault
+     * @param source the document text, as supplied by the client: one printed line per line
+     * @return the parsed lines, one per line of the document; a blank document yields a single
+     *         line with no spans
+     * @throws MarkupException if the document is malformed, carrying the line and column at fault
+     */
+    public static List<Line> parseDocument(String source) throws MarkupException {
+        return parseDocument(source, ImageResolver.NONE);
+    }
+
+    /**
+     * Parses the request's {@code data} document.
+     *
+     * @param source the document text, as supplied by the client: one printed line per line
+     * @param images where an {@code <image>} tag's dots come from
+     * @return the parsed lines, one per line of the document; a blank document yields a single
+     *         line with no spans
+     * @throws MarkupException if the document is malformed, carrying the line and column at fault
+     */
+    public static List<Line> parseDocument(String source, ImageResolver images)
+            throws MarkupException {
+        return new MarkupParser(source, images).run();
+    }
+
+    /**
+     * Parses one line of markup, with no images available.
+     *
+     * @param source one printed line, as supplied by the client
+     * @return the parsed line; a blank line yields a line with no spans
+     * @throws MarkupException         if the line is malformed, carrying the column at fault
+     * @throws IllegalArgumentException if {@code source} holds more than one line
      */
     public static Line parse(String source) throws MarkupException {
         return parse(source, ImageResolver.NONE);
     }
 
     /**
-     * Parses one element of the request's {@code data} array.
+     * Parses one line of markup.
      *
-     * @param source the element text, as supplied by the client
+     * @param source one printed line, as supplied by the client
      * @param images where an {@code <image>} tag's dots come from
-     * @return the parsed line; a blank element yields a line with no spans
-     * @throws MarkupException if the element is malformed, carrying the column at fault
+     * @return the parsed line; a blank line yields a line with no spans
+     * @throws MarkupException         if the line is malformed, carrying the column at fault
+     * @throws IllegalArgumentException if {@code source} holds more than one line
      */
     public static Line parse(String source, ImageResolver images) throws MarkupException {
-        return new MarkupParser(source == null ? "" : source, images).run();
+        String normalised = (source == null ? "" : source).replace("\r\n", "\n");
+        if (normalised.indexOf('\n') >= 0) {
+            throw new IllegalArgumentException("parse takes one line; use parseDocument");
+        }
+        return parseDocument(normalised, images).get(0);
     }
 
-    private Line run() throws MarkupException {
+    private List<Line> run() throws MarkupException {
         while (index < source.length()) {
             char current = source.charAt(index);
             switch (current) {
                 case '<' -> readTag();
                 case '&' -> readEntity();
+                case '\n' -> endLine();
                 default -> readText(current);
             }
         }
 
-        flushPending();
-
         if (!open.isEmpty()) {
             OpenTag unclosed = open.peek();
-            throw new MarkupException(MarkupError.UNCLOSED_TAG, unclosed.column(),
+            throw new MarkupException(MarkupError.UNCLOSED_TAG, unclosed.line(), unclosed.column(),
                     unclosed.tag().tagName(),
                     "Tag <" + unclosed.tag().tagName() + "> was never closed");
         }
 
-        verifyBlockScope();
+        endLine();
 
-        return new Line(align, wrap, spans, fills, directives);
+        return List.copyOf(lines);
+    }
+
+    /**
+     * Closes out the current line: flushes any pending text, checks that a rule, a symbol or an
+     * image did not have to share this line with anything else, and records the finished
+     * {@link Line}. Called for every {@code \n} in the document, and once more after the loop for
+     * the final line, which the document does not have to end with a newline to have.
+     * <p>
+     * Resets the state that is local to one printed line — the accumulated spans, fills and
+     * directives, and the "something already claimed this line" trackers — but keeps whatever a
+     * still-open tag is doing: {@link #open}, {@link #style}, {@link #block}, and {@link #align}
+     * or {@link #wrap} while their owning tag has not closed yet. A close only schedules a
+     * fallback to the default, applied here, after the line it closed on has been recorded with
+     * the value that was actually in effect on it.
+     */
+    private void endLine() throws MarkupException {
+        flushPending();
+        verifyBlockScope();
+        lines.add(new Line(align, wrap, spans, fills, directives));
+
+        spans = new ArrayList<>();
+        fills = new ArrayList<>();
+        directives = new ArrayList<>();
+        soleOccupant = null;
+        closedOwnerName = null;
+        closedOwnerError = null;
+        pendingColumn = 1;
+
+        if (pendingAlignReset) {
+            align = Align.LEFT;
+            pendingAlignReset = false;
+        }
+        if (pendingWrapReset) {
+            wrap = null;
+            pendingWrapReset = false;
+        }
+
+        index++;
+        line++;
+        lineStart = index;
+    }
+
+    /** Returns the 1-based column of {@link #index} within the current line. */
+    private int column() {
+        return index - lineStart + 1;
     }
 
     // -------------------------------------------------------------------------
@@ -209,17 +313,17 @@ public final class MarkupParser {
 
     private void readText(char current) throws MarkupException {
         if (isControl(current)) {
-            throw new MarkupException(MarkupError.CONTROL_CHARACTER, index + 1,
+            throw new MarkupException(MarkupError.CONTROL_CHARACTER, line, column(),
                     String.format("U+%04X", (int) current),
                     "Control characters cannot be printed; use markup tags for formatting");
         }
-        requireInsideLineScope(index + 1);
+        requireInsideLineScope(column());
         if (block != null) {
             block.content().append(current);
             index++;
             return;
         }
-        beginPendingAt(index + 1);
+        beginPendingAt(column());
         pending.append(current);
         index++;
     }
@@ -256,14 +360,14 @@ public final class MarkupParser {
      * @param sourceLength  how many source characters the entity occupies
      */
     private void emitEntity(char decoded, int sourceLength) throws MarkupException {
-        requireInsideLineScope(index + 1);
+        requireInsideLineScope(column());
         if (block != null) {
             block.content().append(decoded);
             index += sourceLength;
             return;
         }
         flushPending();
-        spans.add(new Span(String.valueOf(decoded), style, index + 1));
+        spans.add(new Span(String.valueOf(decoded), style, column()));
         index += sourceLength;
     }
 
@@ -287,10 +391,10 @@ public final class MarkupParser {
     // -------------------------------------------------------------------------
 
     private void readTag() throws MarkupException {
-        int startColumn = index + 1;
+        int startColumn = column();
         int close = source.indexOf('>', index);
         if (close < 0) {
-            throw new MarkupException(MarkupError.UNKNOWN_TAG, startColumn,
+            throw new MarkupException(MarkupError.UNKNOWN_TAG, line, startColumn,
                     source.substring(index),
                     "Unterminated tag; write &lt; for a literal '<'");
         }
@@ -311,7 +415,7 @@ public final class MarkupParser {
         String argument = equals < 0 ? null : body.substring(equals + 1);
 
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
-                MarkupError.UNKNOWN_TAG, column, name,
+                MarkupError.UNKNOWN_TAG, line, column, name,
                 "Unknown tag '" + name + "'; write &lt; for a literal '<'"));
 
         if (block != null) {
@@ -350,20 +454,20 @@ public final class MarkupParser {
         }
 
         requireInsideLineScope(column);
-        open.push(new OpenTag(tag, column, style));
+        open.push(new OpenTag(tag, column, style, line));
         style = applyStyle(tag, argument, column);
     }
 
     private void closeTag(String name, int column) throws MarkupException {
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
-                MarkupError.UNKNOWN_TAG, column, name, "Unknown tag '" + name + "'"));
+                MarkupError.UNKNOWN_TAG, line, column, name, "Unknown tag '" + name + "'"));
 
         if (block != null && block.tag() != tag) {
             throw insideBlock(tag, column);
         }
 
         if (tag.kind() == Tag.Kind.VOID) {
-            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, tag.tagName(),
+            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, line, column, tag.tagName(),
                     "<" + tag.tagName() + "> stands alone and cannot be closed");
         }
 
@@ -384,7 +488,7 @@ public final class MarkupParser {
             String expected = current == null
                     ? "no tag is open"
                     : "expected </" + current.tag().tagName() + ">";
-            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, tag.tagName(),
+            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, line, column, tag.tagName(),
                     "</" + tag.tagName() + "> does not match: " + expected);
         }
 
@@ -434,7 +538,7 @@ public final class MarkupParser {
 
     private void openAlign(String argument, int column) throws MarkupException {
         if (alignSeen) {
-            throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, column, "align",
+            throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, line, column, "align",
                     "Only one <align> is allowed per line");
         }
         requireLineOwnerCanOpen("align", MarkupError.INVALID_ALIGN_SCOPE, column);
@@ -442,19 +546,21 @@ public final class MarkupParser {
         align = Enums.parse(Align.class, argument).orElseThrow(
                 () -> argumentError(Tag.ALIGN, column, "must be 'left', 'center' or 'right'"));
         alignSeen = true;
-        open.push(new OpenTag(Tag.ALIGN, column, style));
+        open.push(new OpenTag(Tag.ALIGN, column, style, line));
     }
 
     private void closeAlign(int column) throws MarkupException {
         OpenTag current = open.peek();
         if (current == null || current.tag() != Tag.ALIGN) {
-            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, "align",
+            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, line, column, "align",
                     "</align> does not match any open <align>");
         }
         open.pop();
         style = current.styleBefore();
         closedOwnerName = "align";
         closedOwnerError = MarkupError.INVALID_ALIGN_SCOPE;
+        alignSeen = false;
+        pendingAlignReset = true;
     }
 
     // -------------------------------------------------------------------------
@@ -469,26 +575,28 @@ public final class MarkupParser {
      */
     private void openWrap(Tag tag, int column) throws MarkupException {
         if (wrapSeen) {
-            throw new MarkupException(MarkupError.INVALID_WRAP_SCOPE, column, tag.tagName(),
+            throw new MarkupException(MarkupError.INVALID_WRAP_SCOPE, line, column, tag.tagName(),
                     "Only one <wrap> or <nowrap> is allowed per line");
         }
         requireLineOwnerCanOpen(tag.tagName(), MarkupError.INVALID_WRAP_SCOPE, column);
 
         wrap = tag == Tag.WRAP;
         wrapSeen = true;
-        open.push(new OpenTag(tag, column, style));
+        open.push(new OpenTag(tag, column, style, line));
     }
 
     private void closeWrap(Tag tag, int column) throws MarkupException {
         OpenTag current = open.peek();
         if (current == null || current.tag() != tag) {
-            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, column, tag.tagName(),
+            throw new MarkupException(MarkupError.UNEXPECTED_CLOSE_TAG, line, column, tag.tagName(),
                     "</" + tag.tagName() + "> does not match any open <" + tag.tagName() + ">");
         }
         open.pop();
         style = current.styleBefore();
         closedOwnerName = tag.tagName();
         closedOwnerError = MarkupError.INVALID_WRAP_SCOPE;
+        wrapSeen = false;
+        pendingWrapReset = true;
     }
 
     /**
@@ -499,7 +607,7 @@ public final class MarkupParser {
      */
     private void requireInsideLineScope(int column) throws MarkupException {
         if (closedOwnerName != null) {
-            throw new MarkupException(closedOwnerError, column, closedOwnerName,
+            throw new MarkupException(closedOwnerError, line, column, closedOwnerName,
                     "<" + closedOwnerName + "> must enclose the whole line, so nothing may follow </"
                             + closedOwnerName + ">");
         }
@@ -513,14 +621,23 @@ public final class MarkupParser {
      * line. So does opening inside a styling tag: styling adds nothing to {@code spans} or
      * {@code directives} until it closes, so without this check {@code <bold><nowrap>} would
      * slip past undetected.
+     * <p>
+     * Unlike {@link #requireInsideLineScope}, a tag already closed on this same line is reported
+     * under {@code error}/{@code name} — the tag being opened — rather than the one that closed:
+     * {@code <wrap>x</wrap><nowrap>} names {@code nowrap} as the problem, which is the one thing
+     * a caller reading the error can still do something about.
      */
     private void requireLineOwnerCanOpen(String name, MarkupError error, int column)
             throws MarkupException {
-        requireInsideLineScope(column);
+        if (closedOwnerName != null) {
+            throw new MarkupException(error, line, column, name,
+                    "<" + closedOwnerName + "> must enclose the whole line, so nothing may follow </"
+                            + closedOwnerName + ">");
+        }
         boolean precededByContent = !spans.isEmpty() || !directives.isEmpty();
         boolean nestedInsideStyling = open.stream().anyMatch(entry -> !isLineOwningTag(entry.tag()));
         if (precededByContent || nestedInsideStyling) {
-            throw new MarkupException(error, column, name,
+            throw new MarkupException(error, line, column, name,
                     "<" + name + "> must enclose the whole line, so nothing may precede it");
         }
     }
@@ -573,8 +690,8 @@ public final class MarkupParser {
                         tag, column, "must name a symbology: " + Enums.names(BarcodeSystem.class)))
                 : null;
 
-        open.push(new OpenTag(tag, column, style));
-        block = new OpenBlock(tag, column, value, system, new StringBuilder());
+        open.push(new OpenTag(tag, column, style, line));
+        block = new OpenBlock(tag, column, value, system, new StringBuilder(), line);
     }
 
     /**
@@ -589,9 +706,14 @@ public final class MarkupParser {
      * the panel: the renderer's encoder refuses that content and {@code PrintCompiler} turns the
      * refusal into a request error, so the caller is told either way rather than the rule being
      * written out twice and drifting.
+     * <p>
+     * The content is stripped before it is checked. A block may span several lines, and a line
+     * other than its first is written at column one on the page — indentation that has nothing to
+     * do with the payload and would otherwise become leading whitespace in a QR code or the name
+     * of an image.
      */
     private void closeBlock(OpenBlock finished) throws MarkupException {
-        String content = finished.content().toString();
+        String content = finished.content().toString().strip();
         Tag tag = finished.tag();
         int column = finished.column();
 
@@ -623,7 +745,7 @@ public final class MarkupParser {
     /**
      * Finds the dots for a named image, or explains that this agent does not hold them.
      * <p>
-     * The refusal is a markup error rather than a fault because it is genuinely about the element:
+     * The refusal is a markup error rather than a fault because it is genuinely about the line:
      * the name may be wrong, or the image may be one the server has not synced yet. Either way the
      * caller can see which tag, and at which column.
      */
@@ -662,7 +784,7 @@ public final class MarkupParser {
      * discarding it silently.
      */
     private MarkupException insideBlock(Tag tag, int column) {
-        return new MarkupException(MarkupError.INVALID_BLOCK_SCOPE, column, tag.tagName(),
+        return new MarkupException(MarkupError.INVALID_BLOCK_SCOPE, line, column, tag.tagName(),
                 "<" + block.tag().tagName() + "> encloses data rather than markup, so <"
                         + tag.tagName() + "> cannot appear inside it");
     }
@@ -719,7 +841,7 @@ public final class MarkupParser {
     /** Records a directive that must be the only thing printed on its line. */
     private void claimLine(String name, int column, MarkupError error) {
         if (soleOccupant == null) {
-            soleOccupant = new SoleOccupant(name, column, error);
+            soleOccupant = new SoleOccupant(name, column, error, line);
         }
     }
 
@@ -743,7 +865,8 @@ public final class MarkupParser {
         if (spans.isEmpty() && fills.isEmpty() && directives.size() == 1) {
             return;
         }
-        throw new MarkupException(soleOccupant.error(), soleOccupant.column(), soleOccupant.name(),
+        throw new MarkupException(soleOccupant.error(), soleOccupant.line(), soleOccupant.column(),
+                soleOccupant.name(),
                 "<" + soleOccupant.name() + "> takes a whole line and must be alone in its element");
     }
 
@@ -781,25 +904,26 @@ public final class MarkupParser {
     }
 
     private MarkupException argumentError(Tag tag, int column, String detail) {
-        return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, column, tag.tagName(),
+        return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, line, column, tag.tagName(),
                 "<" + tag.tagName() + "> " + detail);
     }
 
     /**
      * Returns whether a character would be consumed by the printer as a command rather than
      * printed. Covers C0 (including tab, whose behaviour depends on printer-side tab stops
-     * that the agent does not manage), DEL, and C1.
+     * that the agent does not manage), DEL, and C1. {@code \n} is excluded: it is how one line of
+     * the document ends and the next begins, handled by {@link #endLine()} rather than refused.
      */
     private static boolean isControl(char value) {
-        return value < 0x20 || value == 0x7F || (value >= 0x80 && value <= 0x9F);
+        return (value < 0x20 && value != '\n') || value == 0x7F || (value >= 0x80 && value <= 0x9F);
     }
 
     /**
-     * A paired tag currently open, remembering the style to restore when it closes.
-     * Restoring a captured style is what makes nesting work without re-deriving the style
-     * from the remaining stack.
+     * A paired tag currently open, remembering the style to restore when it closes, and the
+     * document line it was opened on, for an unclosed-tag report at end of document — by then
+     * {@link #line} has moved on to wherever parsing stopped, so the tag has to carry its own.
      */
-    private record OpenTag(Tag tag, int column, SpanStyle styleBefore) {
+    private record OpenTag(Tag tag, int column, SpanStyle styleBefore, int line) {
     }
 
     /**
@@ -808,21 +932,24 @@ public final class MarkupParser {
      * {@code content} accumulates the block's text as the scanner passes over it, which is what
      * keeps that text out of {@link #spans}: a line carrying a symbol or an image has to stay
      * directive-only, because such a line advances the paper by a picture's worth of dots rather
-     * than by one line of type.
+     * than by one line of type. A block may span several lines of the document; the newlines
+     * between them are never appended here, so {@code content} holds only what was written
+     * between the tags, one line's worth run into the next.
      *
      * @param value  the tag's argument, already resolved: a QR module size, a PDF417 error level,
      *               or an image's width percentage. Unused for a barcode, which carries a
      *               {@code system} instead.
      * @param system the symbology, for {@code <barcode>} only; null for every other block
+     * @param line   the document line the block was opened on
      */
     private record OpenBlock(Tag tag, int column, int value, BarcodeSystem system,
-                             StringBuilder content) {
+                             StringBuilder content, int line) {
     }
 
     /**
-     * A directive that must be the only thing printed on its element, remembered so the refusal
-     * can name it and point at the column it was written on.
+     * A directive that must be the only thing printed on its line, remembered so the refusal
+     * can name it and point at the line and column it was written on.
      */
-    private record SoleOccupant(String name, int column, MarkupError error) {
+    private record SoleOccupant(String name, int column, MarkupError error, int line) {
     }
 }

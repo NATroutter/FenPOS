@@ -46,7 +46,7 @@ public enum Tag {
     /**
      * Pad to the paper's width. Argument is the character to repeat, default a space.
      * <p>
-     * The one tag whose printed width is not knowable from the element: it stands for however many
+     * The one tag whose printed width is not knowable from the line: it stands for however many
      * columns are left over, which is a property of the device. See {@code FillResolver}.
      */
     FILL("fill", Kind.VOID, Argument.OPTIONAL),

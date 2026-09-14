@@ -1,5 +1,6 @@
 package fi.natroutter.fenpos.print;
 
+import com.google.gson.Gson;
 import fi.natroutter.fenpos.device.Device;
 import fi.natroutter.fenpos.device.LimitSettings;
 import fi.natroutter.fenpos.device.PrintSettings;
@@ -24,11 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PrintCompilerTest {
 
+    private static final Gson GSON = new Gson();
+
     @Test
     void compilesAValidRequestIntoAPayload() throws Exception {
-        CompiledJob job = compile("""
-                {"data": ["Kahvi 2.50", "<bold>Yht</bold>"]}
-                """);
+        CompiledJob job = compile(data("Kahvi 2.50", "<bold>Yht</bold>"));
 
         assertEquals(2, job.lines());
         assertTrue(job.bytes() > 0);
@@ -54,23 +55,28 @@ class PrintCompilerTest {
         assertEquals("missing_field", error("{}").apiCode());
     }
 
+    /**
+     * {@code data} used to be an array of lines; it is refused with a specific message pointing
+     * at the new shape, rather than the generic "must be a string" a caller would otherwise have
+     * to work out on their own.
+     */
     @Test
-    void rejectsDataThatIsNotAnArray() {
-        assertEquals("invalid_type", error("{\"data\": \"one line\"}").apiCode());
+    void rejectsTheDeprecatedArrayShape() {
+        PrintRequestException thrown = error("{\"data\": [\"one line\"]}");
+
+        assertEquals("invalid_type", thrown.apiCode());
+        assertTrue(thrown.getMessage().contains("no longer an array of lines"));
     }
 
     @Test
-    void rejectsNonStringElementAndNamesItsLine() {
-        PrintRequestException thrown = error("{\"data\": [\"ok\", 42]}");
-
-        assertEquals("invalid_type", thrown.apiCode());
-        assertEquals(2, thrown.line());
+    void rejectsDataThatIsNotAString() {
+        assertEquals("invalid_type", error("{\"data\": 42}").apiCode());
     }
 
     @Test
     void rejectsUnknownLinefeed() {
         assertEquals("invalid_linefeed",
-                error("{\"data\": [\"x\"], \"linefeed\": \"CR\"}").apiCode());
+                error("{\"data\": \"x\", \"linefeed\": \"CR\"}").apiCode());
     }
 
     // -------------------------------------------------------------------------
@@ -78,15 +84,14 @@ class PrintCompilerTest {
     // -------------------------------------------------------------------------
 
     @Test
-    void rejectsTooManyElements() {
-        String data = "\"x\",".repeat(6);
+    void rejectsTooManyLines() {
         assertEquals("too_many_lines",
-                error("{\"data\": [" + data.substring(0, data.length() - 1) + "]}").apiCode());
+                error(data("x", "x", "x", "x", "x", "x")).apiCode());
     }
 
     @Test
-    void rejectsAnElementLongerThanTheLimit() {
-        PrintRequestException thrown = error("{\"data\": [\"ok\", \"" + "a".repeat(21) + "\"]}");
+    void rejectsALineLongerThanTheLimit() {
+        PrintRequestException thrown = error(data("ok", "a".repeat(21)));
 
         assertEquals("line_too_long", thrown.apiCode());
         assertEquals(2, thrown.line());
@@ -94,9 +99,8 @@ class PrintCompilerTest {
 
     @Test
     void rejectsTotalTextLargerThanTheLimit() {
-        String line = "\"" + "a".repeat(20) + "\"";
-        assertEquals("text_too_large",
-                error("{\"data\": [" + (line + ",").repeat(2) + line + "]}").apiCode());
+        String line = "a".repeat(20);
+        assertEquals("text_too_large", error(data(line, line, line)).apiCode());
     }
 
     /**
@@ -105,9 +109,9 @@ class PrintCompilerTest {
      */
     @Test
     void rejectsTooManyLinesAfterWrapping() {
-        // Each element is within every input limit, but wraps to two lines at width 10,
+        // Each line is within every input limit, but wraps to two lines at width 10,
         // so only the post-wrap count can catch this.
-        PrintRequestException thrown = error("{\"data\": [\"ab ab ab ab\", \"cd cd cd cd\"]}");
+        PrintRequestException thrown = error(data("ab ab ab ab", "cd cd cd cd"));
 
         assertEquals("too_many_output_lines", thrown.apiCode());
     }
@@ -118,7 +122,7 @@ class PrintCompilerTest {
 
     @Test
     void reportsMarkupErrorWithLineAndColumn() {
-        PrintRequestException thrown = error("{\"data\": [\"ok\", \"a <blink>b</blink>\"]}");
+        PrintRequestException thrown = error(data("ok", "a <blink>b</blink>"));
 
         assertEquals("unknown_tag", thrown.apiCode());
         assertEquals(2, thrown.line());
@@ -127,7 +131,7 @@ class PrintCompilerTest {
 
     @Test
     void reportsUnsupportedCharacterWithEverythingNeededToFixIt() {
-        PrintRequestException thrown = error("{\"data\": [\"ok\", \"Hello 😎\"]}");
+        PrintRequestException thrown = error(data("ok", "Hello 😎"));
 
         assertEquals("unsupported_character", thrown.apiCode());
         assertEquals(2, thrown.line());
@@ -138,7 +142,7 @@ class PrintCompilerTest {
 
     @Test
     void reportsControlCharacterWithPosition() {
-        PrintRequestException thrown = error("{\"data\": [\"a\\tb\"]}");
+        PrintRequestException thrown = error(data("a\tb"));
 
         assertEquals("control_character", thrown.apiCode());
         assertEquals(1, thrown.line());
@@ -151,7 +155,7 @@ class PrintCompilerTest {
 
     @Test
     void wrapsByDefaultAccordingToTheDeviceWidth() throws Exception {
-        CompiledJob job = compile("{\"data\": [\"" + "ab ".repeat(4) + "\"]}");
+        CompiledJob job = compile(data("ab ".repeat(4)));
 
         assertEquals(2, job.lines(), "11 columns of text should wrap at width 10");
     }
@@ -163,7 +167,7 @@ class PrintCompilerTest {
      */
     @Test
     void padsAFillToTheDevicesWidth() throws Exception {
-        CompiledJob job = compile("{\"data\":[\"a<fill>b\"]}");
+        CompiledJob job = compile(data("a<fill>b"));
 
         byte[] expected = ("a" + " ".repeat(8) + "b").getBytes(Codepage.CP858.charset());
         assertTrue(indexOf(job.payload(), expected) >= 0, "the payload should carry the padded row");
@@ -176,7 +180,7 @@ class PrintCompilerTest {
      */
     @Test
     void doesNotWrapALineItFilled() throws Exception {
-        assertEquals(1, compile("{\"data\":[\"a<fill>b\"]}").lines());
+        assertEquals(1, compile(data("a<fill>b")).lines());
     }
 
     /**
@@ -185,7 +189,7 @@ class PrintCompilerTest {
      */
     @Test
     void fillsTheSameMarkupDifferentlyForANarrowerDevice() throws Exception {
-        CompiledJob job = PrintCompiler.compile("{\"data\":[\"a<fill>b\"]}", narrowDevice());
+        CompiledJob job = PrintCompiler.compile(data("a<fill>b"), narrowDevice());
 
         byte[] expected = ("a" + " ".repeat(4) + "b").getBytes(Codepage.CP858.charset());
         assertTrue(indexOf(job.payload(), expected) >= 0,
@@ -199,7 +203,7 @@ class PrintCompilerTest {
     @Test
     void checksLimitsBeforeParsingContent() {
         String tooLong = "a".repeat(21) + "<blink>";
-        assertEquals("line_too_long", error("{\"data\": [\"" + tooLong + "\"]}").apiCode());
+        assertEquals("line_too_long", error(data(tooLong)).apiCode());
     }
 
     // -------------------------------------------------------------------------
@@ -260,7 +264,7 @@ class PrintCompilerTest {
     void leavesANowrapLineIntactWhileNeighboursWrap() throws Exception {
         // At width 10, "ab ab ab ab" wraps to two lines; the tagged twin stays one.
         CompiledJob job = PrintCompiler.compile(
-                "{\"data\":[\"ab ab ab ab\",\"<nowrap>ab ab ab ab</nowrap>\"]}", wrappingDevice(true));
+                data("ab ab ab ab", "<nowrap>ab ab ab ab</nowrap>"), wrappingDevice(true));
 
         assertEquals(3, job.lines());
     }
@@ -268,7 +272,7 @@ class PrintCompilerTest {
     @Test
     void wrapsAWrapLineWhenTheDeviceDefaultIsOff() throws Exception {
         CompiledJob job = PrintCompiler.compile(
-                "{\"data\":[\"<wrap>ab ab ab ab</wrap>\"]}", wrappingDevice(false));
+                data("<wrap>ab ab ab ab</wrap>"), wrappingDevice(false));
 
         assertEquals(2, job.lines());
     }
@@ -276,15 +280,15 @@ class PrintCompilerTest {
     @Test
     void followsTheDeviceDefaultWhenNoTagIsPresent() throws Exception {
         assertEquals(1, PrintCompiler.compile(
-                "{\"data\":[\"ab ab ab ab\"]}", wrappingDevice(false)).lines());
+                data("ab ab ab ab"), wrappingDevice(false)).lines());
         assertEquals(2, PrintCompiler.compile(
-                "{\"data\":[\"ab ab ab ab\"]}", wrappingDevice(true)).lines());
+                data("ab ab ab ab"), wrappingDevice(true)).lines());
     }
 
     @Test
     void rejectsTheRemovedWrapField() {
         PrintRequestException failure = assertThrows(PrintRequestException.class,
-                () -> PrintCompiler.compile("{\"data\":[\"x\"],\"wrap\":false}", device()));
+                () -> PrintCompiler.compile("{\"data\":\"x\",\"wrap\":false}", device()));
 
         assertEquals("unknown_field", failure.apiCode());
         assertTrue(failure.getMessage().contains("<nowrap>"));
@@ -293,7 +297,7 @@ class PrintCompilerTest {
     @Test
     void rejectsAMisspelledField() {
         assertEquals("unknown_field", assertThrows(PrintRequestException.class,
-                () -> PrintCompiler.compile("{\"data\":[\"x\"],\"linefeeed\":\"LF\"}", device()))
+                () -> PrintCompiler.compile("{\"data\":\"x\",\"linefeeed\":\"LF\"}", device()))
                 .apiCode());
     }
 
@@ -307,6 +311,11 @@ class PrintCompilerTest {
         assertEquals("unknown_field", assertThrows(PrintRequestException.class,
                 () -> PrintCompiler.compile("{\"wrap\":false}", device()))
                 .apiCode());
+    }
+
+    /** Builds a {@code data} request body by joining lines with {@code \n}. */
+    private static String data(String... lines) {
+        return "{\"data\":" + GSON.toJson(String.join("\n", lines)) + "}";
     }
 
     /** Returns where {@code needle} starts in {@code haystack}, or -1 when it is absent. */

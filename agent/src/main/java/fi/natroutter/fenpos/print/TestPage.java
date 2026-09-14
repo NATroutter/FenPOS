@@ -118,7 +118,7 @@ public final class TestPage {
         lines.add("<feed=3>");
         lines.add("<cut>");
 
-        return "{\"data\":" + GSON.toJson(lines) + "}";
+        return "{\"data\":" + GSON.toJson(String.join("\n", lines)) + "}";
     }
 
     /** Builds a ruler marking every tenth column, so miscounts are obvious on paper. */
