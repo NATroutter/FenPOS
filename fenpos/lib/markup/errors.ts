@@ -10,25 +10,25 @@
 export const MARKUP_ERRORS = {
 	/** A tag name that is not in the registry. */
 	unknownTag: "unknown_tag",
-	/** A paired tag opened but never closed before the element ended. */
+	/** A paired tag opened but never closed before the document ended. */
 	unclosedTag: "unclosed_tag",
 	/** A closing tag with no matching open tag, or one closing the wrong tag. */
 	unexpectedCloseTag: "unexpected_close_tag",
 	/** A tag argument that is missing, malformed, or out of range. */
 	invalidTagArgument: "invalid_tag_argument",
-	/** An alignment tag that does not enclose the whole element, or a second one. */
+	/** An alignment tag that does not own its whole line, or a second one. */
 	invalidAlignScope: "invalid_align_scope",
-	/** A wrap tag that does not enclose the whole element, or a second one. */
+	/** A wrap tag that does not own its whole line, or a second one. */
 	invalidWrapScope: "invalid_wrap_scope",
-	/** A rule tag sharing an element with other content. */
+	/** A rule tag sharing a line with other content. */
 	invalidRuleScope: "invalid_rule_scope",
-	/** A block tag sharing an element with other content, or containing markup rather than data. */
+	/** A block tag sharing a line with other content, or containing markup rather than data. */
 	invalidBlockScope: "invalid_block_scope",
 	/**
 	 * A symbol measured wider than the device's paper.
 	 *
 	 * The one code here with no counterpart in `MarkupError.java`, and raised later than every
-	 * other code here: how wide the paper is belongs to the device rather than to the element, so
+	 * other code here: how wide the paper is belongs to the device rather than to the line, so
 	 * it is the compiler that knows, not the parser. It still arrives as a markup error because it
 	 * names a tag and a column, and because what the caller has to change is the markup — a smaller
 	 * module size, shorter content, a different symbology.
@@ -49,7 +49,7 @@ export const MARKUP_ERRORS = {
 	 */
 	unknownVariable: "unknown_variable",
 	/**
-	 * More `{name}` references in one element than `variables.maxPerElement` allows.
+	 * More `{name}` references on one line than `variables.maxPerElement` allows.
 	 *
 	 * Deliberately not the same code as the request-level `too_many_variables`, which counts entries
 	 * in the body's `variables` object. One is about how much a caller supplied, the other about how
@@ -126,12 +126,12 @@ export class UnsupportedCharacterError extends Error {
 	readonly character: string;
 
 	/**
-	 * 1-based character position within the element.
+	 * 1-based character position within the line.
 	 *
 	 * Points at the character itself for text the caller wrote. For a character that arrived by
 	 * substitution it points at the `{name}` reference instead — see `columnAt` in
 	 * `lib/markup/model.ts` for why a position inside a substituted value is not a position the
-	 * element has — and {@link UnsupportedCharacterError.variable} names which one.
+	 * line has — and {@link UnsupportedCharacterError.variable} names which one.
 	 */
 	readonly column: number;
 

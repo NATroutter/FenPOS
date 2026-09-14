@@ -20,7 +20,7 @@ const SPACE = " ";
 interface Cell {
 	character: string;
 	style: SpanStyle;
-	/** Where it came from in the original element. */
+	/** Where it came from in the original line. */
 	sourceColumn: number;
 }
 

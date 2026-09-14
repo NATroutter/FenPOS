@@ -35,16 +35,16 @@ export const TAGS: Record<string, Tag> = {
 	size: { name: "size", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** Built-in font selection. */
 	font: { name: "font", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
-	/** Line justification. Paired, and required to enclose the whole element. */
+	/** Line justification. Paired, and required to own its whole line. */
 	align: { name: "align", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
-	/** Break this line at the paper width. Paired, and required to enclose the whole element. */
+	/** Break this line at the paper width. Paired, and required to own its whole line. */
 	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE", attributes: {} },
-	/** Print this line as written. Paired, and required to enclose the whole element. */
+	/** Print this line as written. Paired, and required to own its whole line. */
 	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/**
 	 * Pad to the paper's width. Argument is the character to repeat, default a space.
 	 *
-	 * The one tag whose printed width is not knowable from the element: it stands for however many
+	 * The one tag whose printed width is not knowable from the line: it stands for however many
 	 * columns are left over, which is a property of the device. See `lib/markup/fill.ts`.
 	 */
 	fill: { name: "fill", kind: "VOID", argument: "OPTIONAL", attributes: {} },
@@ -52,7 +52,7 @@ export const TAGS: Record<string, Tag> = {
 	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL", attributes: {} },
 	/** Advance the paper by a number of lines. */
 	feed: { name: "feed", kind: "VOID", argument: "REQUIRED", attributes: {} },
-	/** A full-width horizontal rule. Required to be alone in its element. */
+	/** A full-width horizontal rule. Required to be alone on its line. */
 	hr: { name: "hr", kind: "VOID", argument: "NONE", attributes: {} },
 	/** A QR code. Argument is the module size, 1-16. */
 	qr: { name: "qr", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },

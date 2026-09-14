@@ -16,7 +16,7 @@ import { listDeviceOverrides, listVariables } from "@/lib/variables/variable-ser
  * The counterpart to `resolveImages`, and deliberately the same shape: it does the part that cannot
  * be synchronous, and hands the answer to a compile that stays a pure function of what it is given.
  * Unlike that one it touches no network — these are database rows — so it is the cheaper of the two
- * and runs first, which it must: `resolveImages` parses each element to find `<image>` references,
+ * and runs first, which it must: `resolveImages` parses the document to find `<image>` references,
  * and `<image>{logo}</image>` only names an image once this has run.
  *
  * The three layers are flattened here rather than left for the parser to walk. A parser that had to
@@ -45,7 +45,7 @@ export interface JobVariables {
  * @param now the instant to evaluate dates against; defaults to the real clock, and is a parameter
  *        so a test can pin it. One instant serves the whole job, so two date variables on one
  *        receipt cannot disagree about what time it is.
- * @returns the values and the per-element limit, or null when variables are switched off — which
+ * @returns the values and the per-line limit, or null when variables are switched off — which
  *          the parser reads as "braces are ordinary text". A defined variable that could not be
  *          evaluated is absent from the map rather than being an error for the whole job; see the
  *          catch inside for why that containment is the point.

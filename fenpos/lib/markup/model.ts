@@ -1,7 +1,7 @@
 import type { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
 
 /**
- * The render model: one element of a request's `data` array, parsed.
+ * The render model: one line of a request's `data`, parsed.
  *
  * Ported from `agent/src/main/java/fi/natroutter/fenpos/markup/model/`, which is where this
  * shape was designed and where the ESC/POS renderer still consumes it. The difference on this
@@ -57,7 +57,7 @@ export interface Span {
 	text: string;
 	style: SpanStyle;
 	/**
-	 * 1-based column in the original element where this run began.
+	 * 1-based column in the original line where this run began.
 	 *
 	 * Exact for the span's *first* character while the span is as the parser produced it: the parser
 	 * starts a new span at every entity, so a span's characters are always contiguous in the source.
@@ -75,7 +75,7 @@ export interface Span {
 	 * Absent for every span the author actually wrote, which is nearly all of them. Present only for
 	 * `{name}` substitution, and present because such a span is the one place where a character's
 	 * column cannot be computed: `{x}` occupies three columns of source and may produce two hundred
-	 * characters of output, so counting forward from `sourceColumn` runs off the end of an element
+	 * characters of output, so counting forward from `sourceColumn` runs off the end of a line
 	 * that was never that long. An entity is not marked — `&amp;` produces exactly one character, so
 	 * its only offset is zero and the arithmetic cannot overshoot.
 	 *
@@ -126,7 +126,7 @@ export interface Fill {
  *
  * `sourceColumn` travels with them for the same reason and one step further. Whether a symbol fits
  * the paper is not knowable in the parser — the paper's width belongs to the device — so the
- * refusal happens in the compiler, by which point the element text is gone. The column is what lets
+ * refusal happens in the compiler, by which point the line's text is gone. The column is what lets
  * that refusal still point at the tag the caller has to change.
  */
 export type Directive =
@@ -186,13 +186,13 @@ export type Directive =
 	 */
 	| { kind: "IMAGE"; ref: string; widthPercent: number };
 
-/** One parsed element. Alignment is a line property because ESC/POS justifies whole lines. */
+/** One parsed line. Alignment is a line property because ESC/POS justifies whole lines. */
 export interface Line {
 	align: Align;
 	/**
 	 * Whether this line is broken to the paper width.
 	 *
-	 * `null` means the element carried no wrap tag, and the device's `defaultWrap` decides. A
+	 * `null` means the line carried no wrap tag, and the device's `defaultWrap` decides. A
 	 * line property for the same reason alignment is one: a half-wrapped line is not a thing.
 	 */
 	wrap: boolean | null;
@@ -213,15 +213,15 @@ export interface Line {
  * **A substituted span reports its reference's column for every character it holds**, rather than
  * counting forward through characters the author never wrote. `{x}` is three columns of source; a
  * value of `Coffee ☕` is eight characters of output. Adding the offset would report column 8 for an
- * element only three columns long — a position that does not exist, handed to someone told this API
+ * line only three columns long — a position that does not exist, handed to someone told this API
  * points at the exact character at fault. Pointing at the reference is the honest answer: it is
- * where the caller has to look, and it is a column their element actually has. What character
+ * where the caller has to look, and it is a column their line actually has. What character
  * inside the value went wrong is carried in the error's `detail` instead, by way of
  * {@link Span.expandedFrom}.
  *
  * @param span the span
  * @param offset 0-based index into the span's text
- * @returns the corresponding column in the original element
+ * @returns the corresponding column in the original line
  */
 export function columnAt(span: Span, offset: number): number {
 	return span.expandedFrom === undefined ? span.sourceColumn + offset : span.sourceColumn;

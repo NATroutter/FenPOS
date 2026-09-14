@@ -31,7 +31,7 @@ import type { SpanStyle } from "@/lib/markup/model";
 export interface VariableContext {
 	/** Every name this compile can resolve, already flattened across the three layers. */
 	values: ReadonlyMap<string, string>;
-	/** How many references one element may contain. */
+	/** How many references one line may contain. */
 	maxPerElement: number;
 }
 
