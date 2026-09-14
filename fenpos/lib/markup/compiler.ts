@@ -317,10 +317,10 @@ function parseDocumentOrTranslate(
  * Parses a request and charges it against the character limits, in the one place both happen.
  *
  * {@link layOut} and {@link collectDocumentErrors} each need exactly this pair, in this order — a
- * document is not known to be printable until it has been charged. A caller that must refuse before
- * doing anything it cannot take back, such as fetching an `<image>` URL over the network, needs the
- * same pair and nothing more, which is what lets `dispatch.ts` call this directly rather than either
- * of the two functions built on it.
+ * document is not known to be printable until it has been charged. Both of those callers want the
+ * parse failure itself, positioned and reported like any other markup mistake — which is exactly what
+ * a caller checking a request before it has a job row to fail against must *not* raise; see
+ * {@link requireDocumentWithinLimits} for that case.
  *
  * @param request the validated request
  * @param variables the values `{name}` may resolve to, or null when variables are switched off
@@ -336,6 +336,40 @@ export function checkDocument(
 	const document = parseDocumentOrTranslate(request.data, variables);
 	requireCharsWithinLimits(document, limits);
 	return document;
+}
+
+/**
+ * Charges a request's characters against the character limits, without ever reporting that the
+ * document failed to parse.
+ *
+ * **Why a parse failure is silence here rather than a throw.** This exists for a caller that must
+ * refuse an over-limit document before doing anything it cannot take back — `dispatch.ts` calls it
+ * ahead of the `<image>` fetch and before the job row exists — but a markup mistake such as an
+ * unknown tag or an unclosed one is not this function's failure to report. That has always settled a
+ * `FAILED` job row from inside {@link compile}, once the row exists to fail, and job history and the
+ * statistics both depend on that row existing. Raising the identical `ApiError` here instead would
+ * refuse the request one step earlier and silently stop it from ever becoming that row. So when the
+ * parse itself fails, this simply has nothing to charge and returns — `compile` parses again later
+ * and raises the same error once there is a row for it to fail.
+ *
+ * @param request the validated request
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off
+ * @param limits the limits the document's characters are charged against
+ * @throws ApiError when a line or the whole request exceeds a character limit; never for a parse
+ *         failure, which this leaves for {@link compile} to raise once a job row exists
+ */
+export function requireDocumentWithinLimits(
+	request: PrintRequest,
+	variables: VariableContext | null,
+	limits: CompileLimits,
+): void {
+	let document: Document;
+	try {
+		document = parseDocumentOrTranslate(request.data, variables);
+	} catch {
+		return;
+	}
+	requireCharsWithinLimits(document, limits);
 }
 
 /**

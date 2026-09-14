@@ -21,6 +21,19 @@ vi.mock("@/lib/markup/resolve-images", async (importOriginal) => {
 });
 
 /**
+ * A second spy underneath the first: `resolveImages` is always invoked on the dispatch path, so an
+ * unparsable receipt cannot prove it costs no network traffic by going uncalled the way an
+ * over-the-limit one does. What it can prove is that it never gets as far as fetching — `collect` in
+ * `resolve-images.ts` skips a document that does not parse — so this counts the fetch itself.
+ */
+const fetchRemoteImage = vi.hoisted(() => vi.fn<(url: string) => Promise<Buffer>>());
+
+vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/assets/fetch-remote")>()),
+	fetchRemoteImage,
+}));
+
+/**
  * The one dispatch failure that costs more than the job it belongs to.
  *
  * A receipt that compiles past `MAX_FRAME_BYTES` used to be recorded `QUEUED` and then written to
@@ -46,6 +59,7 @@ describe("submitJob", () => {
 		await prisma.agent.deleteMany();
 		await prisma.setting.deleteMany({ where: { key: "jobs.maxErrorMessageChars" } });
 		vi.mocked(resolveImages).mockClear();
+		fetchRemoteImage.mockClear();
 	});
 
 	/**
@@ -117,10 +131,10 @@ describe("submitJob", () => {
 	});
 
 	/**
-	 * The property the header comment above promises: a document refused for its own shape or size
-	 * must not cost a fetch. `checkDocument` runs ahead of `resolveImages` precisely so that a
-	 * `line_too_long` receipt never reaches it — proven here by the spy never being called, not merely
-	 * by the refusal arriving.
+	 * The property the header comment above promises: a document refused for being over its own
+	 * character limit must not cost a fetch. `requireDocumentWithinLimits` runs ahead of
+	 * `resolveImages` precisely so that a `line_too_long` receipt never reaches it — proven here by
+	 * the spy never being called, not merely by the refusal arriving.
 	 */
 	it("refuses a line_too_long document without ever calling resolveImages", async () => {
 		const { deviceId } = await connectedDevice({ maxLineChars: 5 });
@@ -134,6 +148,35 @@ describe("submitJob", () => {
 		expect((thrown as ApiError).code).toBe("line_too_long");
 		expect(resolveImages).not.toHaveBeenCalled();
 		expect(await prisma.job.count()).toBe(0);
+	});
+
+	/**
+	 * The other half of that same property, for a receipt that does not parse at all rather than one
+	 * that is merely over budget. `requireDocumentWithinLimits` stays silent about the parse failure
+	 * itself — see its own doc comment — so this receipt sails past it and reaches `resolveImages`,
+	 * unlike the `line_too_long` case above: the row still gets created, and `compile` is what
+	 * discovers the unclosed tag and settles it `FAILED`, exactly as any other markup content error
+	 * does. What must still not happen is a fetch — the image reference sits inside the unclosed
+	 * scope, and `collect` in `resolve-images.ts` skips a document that does not parse, so it is never
+	 * found and never fetched.
+	 */
+	it("reaches a job row for an unparsable receipt, without ever fetching the image inside it", async () => {
+		const { deviceId } = await connectedDevice();
+
+		const thrown = await submitJob(deviceId, { data: "<bold><image>https://x.test/logo.png</image>" }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(ApiError);
+		expect((thrown as ApiError).code).toBe("unclosed_tag");
+		// Reached, unlike the over-the-limit case above — proving the row really does get created —
+		// but the fetch inside it never runs, which is the guarantee actually worth pinning here.
+		expect(resolveImages).toHaveBeenCalledTimes(1);
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
+
+		const [job] = await prisma.job.findMany();
+		expect(job).toMatchObject({ status: "FAILED", errorCode: "unclosed_tag" });
 	});
 
 	/**
@@ -344,17 +387,19 @@ describe("dispatch with variables", () => {
 	});
 
 	/**
-	 * Caught before the row exists, like the request-shape and image failures above it in this file:
-	 * `unknown_variable` is one of the document's own shape errors `checkDocument` finds by parsing,
-	 * and that runs ahead of `job.create` now, not only inside `compile`. No row is left behind for a
-	 * receipt that never became a job.
+	 * Not caught before the row exists, unlike the request-shape and image failures above it in this
+	 * file: `unknown_variable` is raised while parsing inside `compile`, and `compile` needs the
+	 * job's own id — so, like every other markup content error (an unknown tag, an unclosed one), it
+	 * can only be discovered once the row is there to fail. Settled the same way the wire's own
+	 * refusals are settled below, rather than left `QUEUED`.
 	 */
-	it("refuses a job naming a variable that does not exist, before any job row exists", async () => {
+	it("refuses a job naming a variable that does not exist, and settles the job rather than leaving it queued", async () => {
 		const deviceId = await connectedDevice();
 
 		await expect(submitJob(deviceId, { data: "{nope}" })).rejects.toMatchObject({ code: "unknown_variable" });
 
-		expect(await prisma.job.count()).toBe(0);
+		const [job] = await prisma.job.findMany();
+		expect(job).toMatchObject({ status: "FAILED", errorCode: "unknown_variable" });
 	});
 
 	/**
