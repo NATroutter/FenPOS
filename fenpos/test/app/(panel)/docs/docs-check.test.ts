@@ -53,41 +53,31 @@ const SECURITY_PAGE = readFileSync("app/(panel)/docs/security/page.tsx", "utf8")
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const LOGO_PNG = readFileSync("test/fixtures/logo.png");
 
-/**
- * The elements of the first `"data": [ … ]` array in a page's source.
- *
- * Both worked examples write their elements as a JSON array — one inside a `curl` body on the API
- * page, one as a bare `data` array on the markup page — so one extractor reads both. The array's
- * contents are pure JSON with no interpolation in them, which is what makes parsing it honest: the
- * `${base}` and `${agentName}` the API page interpolates are all outside the brackets.
- *
- * @param source the page's own text
- * @param from the offset to start looking from
- * @returns the elements, exactly as the page prints them
- */
-function dataElements(source: string, from = 0): string[] {
-	const open = source.indexOf('"data": [', from);
-	expect(open, "the page has no worked example with a data array").toBeGreaterThan(-1);
-	const start = source.indexOf("[", open);
-	const end = source.indexOf("]", start);
-	expect(end).toBeGreaterThan(start);
-
-	const elements: unknown = JSON.parse(source.slice(start, end + 1));
-	expect(Array.isArray(elements)).toBe(true);
-	return elements as string[];
+/** The `"data": "…"` string of the first worked example after `from`, decoded as JSON. */
+function dataString(source: string, from = 0): string {
+	const open = source.indexOf('"data": "', from);
+	expect(open, "the page has no worked example with a data string").toBeGreaterThan(-1);
+	const start = open + '"data": '.length;
+	// The string ends at the first unescaped quote after its opening one.
+	let end = start + 1;
+	while (end < source.length && !(source[end] === '"' && source[end - 1] !== "\\")) {
+		end += 1;
+	}
+	// The page writes `\\n` inside a template literal so the reader sees `\n`; one level of
+	// escaping is the page's, the other is JSON's.
+	const value = JSON.parse(source.slice(start, end + 1).replace(/\\\\/g, "\\"));
+	expect(typeof value).toBe("string");
+	return value;
 }
 
-/** The markup page's example, which is a bare array rather than a `data` field. */
-function markupExample(): string[] {
-	const open = MARKUP_PAGE.indexOf('<CodeBlock label="data">');
+/** The markup page's example, written as the bare receipt inside a `data` code block. */
+function markupExample(): string {
+	const open = MARKUP_PAGE.indexOf('<CodeBlock label="data">{`');
 	expect(open, "the markup page's example has been renamed or removed").toBeGreaterThan(-1);
-	const start = MARKUP_PAGE.indexOf("[", open);
-	const end = MARKUP_PAGE.indexOf("]", start);
+	const start = open + '<CodeBlock label="data">{`'.length;
+	const end = MARKUP_PAGE.indexOf("`}</CodeBlock>", start);
 	expect(end).toBeGreaterThan(start);
-
-	const elements: unknown = JSON.parse(MARKUP_PAGE.slice(start, end + 1));
-	expect(Array.isArray(elements)).toBe(true);
-	return elements as string[];
+	return MARKUP_PAGE.slice(start, end);
 }
 
 /**
@@ -452,9 +442,8 @@ describe("what the reference pages name", () => {
 describe("the worked examples", () => {
 	it("compiles the API page's receipt clean", async () => {
 		const deviceId = await device("api");
-		const elements = dataElements(API_PAGE);
 
-		const result = await preview(deviceId, elements.join("\n"));
+		const result = await preview(deviceId, dataString(API_PAGE));
 
 		expect(result.errors, `the API page's example does not compile: ${JSON.stringify(result.errors)}`).toEqual([]);
 	});
@@ -466,7 +455,7 @@ describe("the worked examples", () => {
 	 */
 	it("puts the API page's totals against the right margin", async () => {
 		const deviceId = await device("api-fill");
-		const result = await preview(deviceId, dataElements(API_PAGE).join("\n"));
+		const result = await preview(deviceId, dataString(API_PAGE));
 
 		const text = (result.lines ?? []).map((line) => line.spans.map((span) => span.text).join(""));
 		const total = text.find((line) => line.startsWith("Total"));
@@ -484,9 +473,8 @@ describe("the worked examples", () => {
 		await prisma.asset.deleteMany({ where: { name: "logo" } });
 		await createAsset("logo", LOGO_PNG);
 		const deviceId = await device("markup");
-		const elements = markupExample();
 
-		const result = await preview(deviceId, elements.join("\n"));
+		const result = await preview(deviceId, markupExample());
 
 		expect(result.errors, `the markup page's example does not compile: ${JSON.stringify(result.errors)}`).toEqual([]);
 

@@ -470,9 +470,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								A content error also carries <Mono>line</Mono> (1-based index into <Mono>data</Mono>) and, where the
-								problem is one character, <Mono>column</Mono>. An unsupported character adds <Mono>character</Mono> and{" "}
-								<Mono>codepage</Mono>.
+								A content error also carries <Mono>line</Mono>, the 1-based line of <Mono>data</Mono> it was found on,
+								and, where the problem is one character, <Mono>column</Mono>, the 1-based column on that line. An
+								unsupported character adds <Mono>character</Mono> and <Mono>codepage</Mono>.
 							</P>
 
 							<P>
@@ -595,10 +595,12 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								<Mono>data</Mono> is required; <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>,{" "}
-								<Mono>NONE</Mono>) and <Mono>variables</Mono>, below, are optional. <Mono>linefeed</Mono> defaults to
-								the device's own setting, and no field beyond these three is accepted. Whether a line is broken to the
-								paper width is decided per line, with <Mono>&lt;wrap&gt;</Mono> and <Mono>&lt;nowrap&gt;</Mono>.
+								<Mono>data</Mono> is required, and is the receipt as one string: one line of it is one printed line
+								before wrapping, and <Mono>\r\n</Mono> is accepted alongside <Mono>\n</Mono>. A tag may open on one line
+								and close on a later one. <Mono>linefeed</Mono> (<Mono>LF</Mono>, <Mono>CRLF</Mono>, <Mono>NONE</Mono>)
+								and <Mono>variables</Mono>, below, are optional. <Mono>linefeed</Mono> defaults to the device's own
+								setting, and no field beyond these three is accepted. Whether a line is broken to the paper width is
+								decided per line, with <Mono>&lt;wrap&gt;</Mono> and <Mono>&lt;nowrap&gt;</Mono>.
 							</P>
 
 							<P>
@@ -673,16 +675,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "data": [
-      "<align=center><bold>THE CORNER CAFE</bold></align>",
-      "<hr>",
-      "Coffee<fill>2.50",
-      "Pastry<fill>3.00",
-      "<hr>",
-      "<bold>Total<fill>5.50</bold>",
-      "<feed=3>",
-      "<cut>"
-    ]
+    "data": "<align=center><bold>THE CORNER CAFE</bold></align>\\n<hr>\\nCoffee<fill>2.50\\nPastry<fill>3.00\\n<hr>\\n<bold>Total<fill>5.50</bold>\\n<feed=3>\\n<cut>"
   }'`}</CodeBlock>
 
 							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
@@ -691,7 +684,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -H "Authorization: Bearer fpk_…" \\
   -H "Idempotency-Key: 5f8a1e2c-4b3d-4a91-9c2e-7d6f0a1b2c3d" \\
   -H "Content-Type: application/json" \\
-  -d '{ "data": [ "…same body…" ] }'`}</CodeBlock>
+  -d '{ "data": "…same body…" }'`}</CodeBlock>
 
 							<CodeBlock label="202 Accepted (replay)">{`Idempotent-Replay: true
 
@@ -707,7 +700,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "data": [ "Order #{order_id}" ],
+    "data": "Order #{order_id}",
     "variables": { "order_id": "1041" }
   }'`}</CodeBlock>
 
@@ -715,7 +708,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "data": [ "Return by {return_by}" ],
+    "data": "Return by {return_by}",
     "variables": {
       "return_by": {
         "pattern": "dd.MM.yyyy",
@@ -767,7 +760,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							<CodeBlock label="Request">{`curl -X POST ${base}${API_BASE}/preview/${agentName}/${deviceName} \\
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
-  -d '{ "data": [ "Coffee<fill>2.50" ] }'`}</CodeBlock>
+  -d '{ "data": "Coffee<fill>2.50" }'`}</CodeBlock>
 
 							<CodeBlock label="200 OK">{`{
   "agent": "${agentName}",

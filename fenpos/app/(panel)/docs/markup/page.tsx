@@ -36,7 +36,7 @@ export const metadata = { title: "Markup" };
  * into a rail entry that no longer matches it or an anchor that goes nowhere.
  */
 const SECTIONS = [
-	{ id: "markup", title: "Markup", note: "What a data element may contain" },
+	{ id: "markup", title: "Markup", note: "What one line of data may contain" },
 	{ id: "variables", title: "Variables", note: "Values substituted into markup when a job compiles" },
 	{ id: "blocks", title: "Blocks", note: "Symbols, images and the drawer, and the paper they cost" },
 ] as const;
@@ -64,40 +64,40 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{ syntax: "<invert>…</invert>", meaning: "White on black." },
 	{ syntax: "<size=2>…</size>", meaning: "Character multiplier, 1–8. <size=2,3> sets width and height apart." },
 	{ syntax: "<font=b>…</font>", meaning: "The printer's second built-in font, usually narrower." },
-	{ syntax: "<align=center>…</align>", meaning: "left, center or right. Must enclose the whole element." },
+	{ syntax: "<align=center>…</align>", meaning: "left, center or right. Must enclose the whole line." },
 	{
 		syntax: "<wrap>…</wrap>",
 		meaning:
-			"Break this line at the paper width, whatever the printer's default is. Must enclose the whole element, like <align>.",
+			"Break this line at the paper width, whatever the printer's default is. Must enclose the whole line, like <align>.",
 	},
 	{
 		syntax: "<nowrap>…</nowrap>",
-		meaning: "Print this line as written. Must enclose the whole element, like <align>.",
+		meaning: "Print this line as written. Must enclose the whole line, like <align>.",
 	},
 	{
 		syntax: "<fill>",
 		meaning:
 			"Pad to the paper's width, so what follows sits at the right margin. <fill=.> repeats a dot instead of a space. Several on one line split the space evenly.",
 	},
-	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its element." },
+	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its line." },
 	{
 		syntax: "<qr>…</qr>",
-		meaning: "A QR code. <qr=8> sets the module size, 1–16, default 6. ASCII only. Must be alone in its element.",
+		meaning: "A QR code. <qr=8> sets the module size, 1–16, default 6. ASCII only. Must be alone in its line.",
 	},
 	{
 		syntax: "<barcode=EAN13>…</barcode>",
 		meaning:
-			"A linear barcode. UPCA, UPCE, EAN13, EAN8, CODE39, ITF, CODABAR, CODE93 or CODE128, each with its own content rule. Must be alone in its element.",
+			"A linear barcode. UPCA, UPCE, EAN13, EAN8, CODE39, ITF, CODABAR, CODE93 or CODE128, each with its own content rule. Must be alone in its line.",
 	},
 	{
 		syntax: "<pdf417>…</pdf417>",
 		meaning:
-			"A PDF417 symbol. <pdf417=4> sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its element.",
+			"A PDF417 symbol. <pdf417=4> sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its line.",
 	},
 	{
 		syntax: "<image>name</image>",
 		meaning:
-			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. Must be alone in its element.",
+			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. Must be alone in its line.",
 	},
 	{
 		syntax: "<drawer>",
@@ -161,10 +161,11 @@ export default async function MarkupDocsPage() {
 						<Split>
 							<Col>
 								<P>
-									Each element of <Mono>data</Mono> is one line before wrapping. Tags are case-insensitive and nest,
-									except <Mono>&lt;align&gt;</Mono>, <Mono>&lt;wrap&gt;</Mono>, <Mono>&lt;nowrap&gt;</Mono> and{" "}
-									<Mono>&lt;hr&gt;</Mono>, which apply to a whole line and must therefore own it. So do the block tags,
-									which additionally admit no tags inside them, see Blocks below.
+									Each line of <Mono>data</Mono> is one printed line before wrapping. Tags are case-insensitive, nest,
+									and may open on one line and close on a later one, except <Mono>align</Mono>, <Mono>wrap</Mono>,{" "}
+									<Mono>nowrap</Mono> and <Mono>hr</Mono>, which own whole lines: they open at the start of a line and
+									close at the end of one. So do the block tags, which additionally admit no tags inside them, see
+									Blocks below.
 								</P>
 
 								<P>
@@ -182,7 +183,7 @@ export default async function MarkupDocsPage() {
 								<P>
 									Every refusal is like that one: it comes back as a code, with the <Mono>line</Mono> of{" "}
 									<Mono>data</Mono> that caused it and, where the problem is one character, the column, so a template
-									that will not print says which element to look at rather than that something was wrong somewhere. The
+									that will not print says which line to look at rather than that something was wrong somewhere. The
 									codes this page names are listed with the rest, and the body they arrive in described, under{" "}
 									<DocLink href="/docs/api#errors">Errors</DocLink>.
 								</P>
@@ -297,15 +298,15 @@ export default async function MarkupDocsPage() {
 								</P>
 
 								<P>
-									At most {maxVariableRefs} <Mono>{"{name}"}</Mono> references are allowed in one element, past which is{" "}
+									At most {maxVariableRefs} <Mono>{"{name}"}</Mono> references are allowed in one line, past which is{" "}
 									<ErrorRef code="too_many_variable_references" />, a bound on where the expansion happens, rather than
 									leaving the printed-lines limit to catch it afterwards.
 								</P>
 
 								<P>
 									An agent's own console does not expand any of this. Variables are resolved here, on the server, before
-									an element ever reaches the wire. The console parses markup with its own separate implementation,
-									which has never been taught what <Mono>{"{name}"}</Mono> means. A brace typed there stays literal.
+									a line ever reaches the wire. The console parses markup with its own separate implementation, which
+									has never been taught what <Mono>{"{name}"}</Mono> means. A brace typed there stays literal.
 								</P>
 							</Col>
 
@@ -378,7 +379,7 @@ export default async function MarkupDocsPage() {
 								<P>
 									<Mono>&lt;qr&gt;</Mono>, <Mono>&lt;barcode&gt;</Mono> and <Mono>&lt;pdf417&gt;</Mono> enclose the
 									payload of a symbology, a URL, an article number, rather than text. No tag may appear inside one,
-									since styling data changes nothing about the printed symbol, and nothing else may share the element: a
+									since styling data changes nothing about the printed symbol, and nothing else may share the line: a
 									symbol is a block of dots several lines tall, so anything beside it would overflow the line by
 									construction. <Mono>&lt;align&gt;</Mono> still applies, because it justifies the whole line and the
 									symbol with it.
@@ -387,10 +388,10 @@ export default async function MarkupDocsPage() {
 								<P>
 									<Mono>&lt;image&gt;</Mono> is the fourth block, and it names its picture rather than carrying it:
 									between the tags goes either the name of an image stored on the Assets tab or an <Mono>http(s)</Mono>{" "}
-									URL. Both rules above hold, no tag inside it, nothing else on the element.{" "}
-									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width. The argument is a
-									percentage, 1–100, defaulting to 100, rather than a number of dots, because one install can have both
-									80mm and 58mm printers behind a single agent and a dot count that fits one overruns the other.
+									URL. Both rules above hold, no tag inside it, nothing else on the line. <Mono>&lt;image=50&gt;</Mono>{" "}
+									prints at half the paper's printable width. The argument is a percentage, 1–100, defaulting to 100,
+									rather than a number of dots, because one install can have both 80mm and 58mm printers behind a single
+									agent and a dot count that fits one overruns the other.
 								</P>
 
 								<P>
@@ -469,15 +470,15 @@ export default async function MarkupDocsPage() {
 								</P>
 
 								<Aside>
-									<Mono>maxOutputLines</Mono> counts paper, not elements. A symbol costs the height it really prints ,
-									seven lines for a default-size QR code of a short URL, five for any linear barcode, and an image costs
-									the lines its dots cover, rounded up to a whole one, which at the paper's full width is the picture's
-									own proportions applied to the paper: a square logo on 32-column paper is 384 dots each way, or
-									sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of text, and can come
-									back <ErrorRef code="too_many_output_lines" />. A <Mono>&lt;hr&gt;</Mono> costs the one line it
-									prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and <Mono>&lt;drawer&gt;</Mono> cost
-									nothing, since none of them lays dots on the paper as text. The Tools tab shows what a job would spend
-									against the limit before it is sent.
+									<Mono>maxOutputLines</Mono> counts paper, not lines of <Mono>data</Mono>. A symbol costs the height it
+									really prints , seven lines for a default-size QR code of a short URL, five for any linear barcode,
+									and an image costs the lines its dots cover, rounded up to a whole one, which at the paper's full
+									width is the picture's own proportions applied to the paper: a square logo on 32-column paper is 384
+									dots each way, or sixteen lines. So a receipt of blocks spends the limit far faster than a receipt of
+									text, and can come back <ErrorRef code="too_many_output_lines" />. A <Mono>&lt;hr&gt;</Mono> costs the
+									one line it prints; <Mono>&lt;cut&gt;</Mono>, <Mono>&lt;feed&gt;</Mono> and{" "}
+									<Mono>&lt;drawer&gt;</Mono> cost nothing, since none of them lays dots on the paper as text. The Tools
+									tab shows what a job would spend against the limit before it is sent.
 								</Aside>
 							</Col>
 
@@ -505,14 +506,12 @@ export default async function MarkupDocsPage() {
 									</Table>
 								</div>
 
-								<CodeBlock label="data">{`[
-  "<align=center><image>logo</image></align>",
-  "<align=center><qr>https://natroutter.fi</qr></align>",
-  "<align=center><barcode=EAN13>5901234123457</barcode></align>",
-  "<bold>Total<fill>5.50</bold><drawer>",
-  "<feed=3>",
-  "<cut>"
-]`}</CodeBlock>
+								<CodeBlock label="data">{`<align=center><image>logo</image></align>
+<align=center><qr>https://natroutter.fi</qr></align>
+<align=center><barcode=EAN13>5901234123457</barcode></align>
+<bold>Total<fill>5.50</bold><drawer>
+<feed=3>
+<cut>`}</CodeBlock>
 							</Col>
 						</Split>
 					</DocSection>

@@ -178,7 +178,10 @@ const PREVIEW_FAULT_SCHEMA = {
 		code: { type: "string", description: "One of the codes `components.schemas.Error` documents." },
 		message: { type: "string" },
 		status: { type: "integer", description: "The status the print endpoint would answer this with." },
-		line: { type: ["integer", "null"], description: "1-based element, or null for a request-level failure." },
+		line: {
+			type: ["integer", "null"],
+			description: "1-based line of `data`, or null for a request-level failure.",
+		},
 		column: { type: ["integer", "null"] },
 	},
 	required: ["code", "message", "status", "line", "column"],
@@ -208,7 +211,10 @@ const PREVIEW_SCHEMA = {
 const PRINT_REQUEST_SCHEMA = {
 	type: "object",
 	properties: {
-		data: { type: "array", items: { type: "string" }, description: "The receipt, one markup element per line." },
+		data: {
+			type: "string",
+			description: "The receipt as markup. One line of the string is one printed line; a tag may span lines.",
+		},
 		linefeed: {
 			type: "string",
 			enum: Linefeed.values,
@@ -320,7 +326,7 @@ export function openApiDocument(publicUrl: string): object {
 				Error: {
 					type: "object",
 					description:
-						"Every non-2xx response shares this shape. `error` is the stable field to branch on; `message` is for people and is explicitly not part of the contract, so its wording may change without that being a breaking change. A content error additionally carries `line` and, where the fault is one character, `column`.",
+						"Every non-2xx response shares this shape. `error` is the stable field to branch on; `message` is for people and is explicitly not part of the contract, so its wording may change without that being a breaking change. A content error additionally carries `line`, the 1-based line of `data` it was found on, and, where the fault is one character, `column`.",
 					properties: {
 						error: {
 							type: "string",

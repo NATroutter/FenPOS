@@ -241,15 +241,7 @@ curl -X POST https://fenpos.example.com/api/v1/print/kitchen/receipt-printer \
   -H "Authorization: Bearer fpk_QYm3xR7tK2vN8pLd..." \
   -H "Content-Type: application/json" \
   -d '{
-        "data": [
-          "<align=center><size=2>KAHVILA</size></align>",
-          "<hr>",
-          "Espresso<fill>2.50",
-          "Croissant<fill>3.20",
-          "<hr>",
-          "<bold>Total<fill>5.70</bold>",
-          "<feed=3><cut>"
-        ],
+        "data": "<align=center><size=2>KAHVILA</size></align>\n<hr>\nEspresso<fill>2.50\nCroissant<fill>3.20\n<hr>\n<bold>Total<fill>5.70</bold>\n<feed=3><cut>",
         "linefeed": "LF"
       }'
 ```

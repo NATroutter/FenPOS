@@ -695,19 +695,20 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	},
 	{
 		key: "limits.maxLines",
-		label: "Elements per request",
-		description: "Most entries a request's data array may hold, before markup is interpreted.",
+		label: "Lines per request",
+		description: "Most lines the receipt may have, counted before markup is interpreted.",
 		category: "limits",
 		type: "integer",
 		min: 1,
 		max: 10_000,
 		fallback: DEFAULT_LIMITS.maxLines,
-		unit: "elements",
+		unit: "lines",
 	},
 	{
 		key: "limits.maxLineChars",
-		label: "Characters per element",
-		description: "Measured on the raw string, so the number a client counts matches the one enforced.",
+		label: "Characters per line",
+		description:
+			"Measured on the raw line, so the number a client counts matches the one enforced. Lines inside a content tag such as a wrapped image reference are not counted.",
 		category: "limits",
 		type: "integer",
 		min: 1,
@@ -718,7 +719,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "limits.maxTotalChars",
 		label: "Characters per request",
-		description: "Across every element combined.",
+		description: "Across every counted line combined.",
 		category: "limits",
 		type: "integer",
 		min: 1,
@@ -916,8 +917,7 @@ export const SETTINGS: readonly SettingDefinition[] = [
 	{
 		key: "variables.maxPerElement",
 		label: "References per line",
-		description:
-			"How many `{name}` references one element of `data` may contain. Bounds expansion where it happens, rather than leaving the printed-lines limit to catch the result after the work is done.",
+		description: "Most `{name}` references one line may hold.",
 		category: "variables",
 		type: "integer",
 		min: 1,

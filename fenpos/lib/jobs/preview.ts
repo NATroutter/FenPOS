@@ -23,7 +23,7 @@ import { printContextFor } from "@/lib/variables/formatting";
  * Compiling a receipt without printing it.
  *
  * **The same path a print takes, stopped one step short of the wire.** That is the whole value of a
- * preview: `readRequest`, variable resolution, the element checks, image resolution and `compile` all
+ * preview: `readRequest`, variable resolution, the line checks, image resolution and `compile` all
  * run exactly as they do for a real submission, so what comes back is what the printer would produce
  * rather than an approximation of it. A preview built from a second, simpler code path would agree
  * with the printer right up until the day it mattered.
@@ -42,9 +42,9 @@ export interface PreviewFault {
 	message: string;
 	/** The status the print endpoint would answer this with. */
 	status: number;
-	/** 1-based element, or null for a failure that belongs to the request rather than a line. */
+	/** 1-based line of the document, or null for a failure that belongs to the request rather than a line. */
 	line: number | null;
-	/** 1-based character within the element, or null when the failure has no position. */
+	/** 1-based column within that line, or null when the failure has no position. */
 	column: number | null;
 }
 
@@ -67,7 +67,7 @@ export interface CompiledPreview {
 	linefeed: Linefeed;
 	/** Null when the receipt did not compile. */
 	lines: CompiledLine[] | null;
-	/** Empty when it did. Every element is checked, not only the first to fail. */
+	/** Empty when it did. Every fault is checked, not only the first to fail. */
 	errors: PreviewFault[];
 }
 
@@ -165,7 +165,7 @@ export async function compilePreviewWithContext(
 		const maxVariableValueChars = await integerSetting("variables.maxValueChars");
 
 		// Request-level validation first, and on its own: it fails for the body as a whole — too many
-		// elements, too many characters — which is one problem, not one per line. The body's own
+		// lines, too many characters — which is one problem, not one per line. The body's own
 		// linefeed choice, if any, has not been validated yet at this point, so there is nothing sound
 		// to report beyond the device's default.
 		let request: PrintRequest;
