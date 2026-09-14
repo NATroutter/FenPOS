@@ -85,6 +85,15 @@ interface LineState {
 	fills: number;
 	/** Directives that consume paper. A drawer pulse is not one of them. */
 	printing: number;
+	/**
+	 * An `<align>` has already claimed this line, whether or not it is still open.
+	 *
+	 * Outlives the tag itself, because a second one written after the first has closed is the same
+	 * contradiction as a second one written inside it: the line can only be justified one way.
+	 */
+	alignSeen: boolean;
+	/** A `<wrap>` or `<nowrap>` has already claimed this line. The two share one slot. */
+	wrapSeen: boolean;
 	/** A rule or a symbol claimed the line; verified when the line ends. */
 	soleOccupant: { name: string; line: number; column: number; code: MarkupErrorCode } | null;
 	/** A line-owning tag closed; nothing else may follow on this line. */
@@ -121,8 +130,6 @@ interface Frame {
 	column: number;
 	/** The line state of the nearest scope that owns lines: a block, or the document. */
 	owner: LineState;
-	alignOpen: boolean;
-	wrapOpen: boolean;
 	content: ContentState | null;
 }
 
@@ -161,8 +168,6 @@ class DocumentBuilder {
 			line: 1,
 			column: 1,
 			owner: freshLine(),
-			alignOpen: false,
-			wrapOpen: false,
 			content: null,
 		});
 	}
@@ -267,6 +272,8 @@ class DocumentBuilder {
 		state.textSeen = false;
 		state.fills = 0;
 		state.printing = 0;
+		state.alignSeen = false;
+		state.wrapSeen = false;
 		state.soleOccupant = null;
 		state.closedOwner = null;
 	}
@@ -385,8 +392,8 @@ class DocumentBuilder {
 	}
 
 	private openAlign(token: OpenToken): void {
-		const ownerFrame = this.owningFrame();
-		if (ownerFrame.alignOpen) {
+		const state = this.frame().owner;
+		if (state.alignSeen || this.lineOwnerOpen("align")) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidAlignScope,
 				token.line,
@@ -402,7 +409,7 @@ class DocumentBuilder {
 			throw this.argumentError(TAGS.align, token.line, token.column, "must be 'left', 'center' or 'right'");
 		}
 
-		ownerFrame.alignOpen = true;
+		state.alignSeen = true;
 		this.enter(TAGS.align, token, {
 			kind: "align",
 			align: value,
@@ -416,11 +423,12 @@ class DocumentBuilder {
 	 * Opens `<wrap>` or `<nowrap>`.
 	 *
 	 * Both occupy one slot: a line either wraps or it does not, so writing both is a contradiction
-	 * rather than a refinement.
+	 * rather than a refinement. The refusal names the tag being opened, which is the one the author
+	 * has to delete.
 	 */
 	private openWrap(tag: Tag, token: OpenToken): void {
-		const ownerFrame = this.owningFrame();
-		if (ownerFrame.wrapOpen) {
+		const state = this.frame().owner;
+		if (state.wrapSeen || this.lineOwnerOpen("wrap")) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidWrapScope,
 				token.line,
@@ -431,7 +439,7 @@ class DocumentBuilder {
 		}
 		this.requireLineOwnerCanOpen(tag.name, MARKUP_ERRORS.invalidWrapScope, token.line, token.column);
 
-		ownerFrame.wrapOpen = true;
+		state.wrapSeen = true;
 		this.enter(tag, token, {
 			kind: "wrap",
 			wrap: tag.name === "wrap",
@@ -637,18 +645,17 @@ class DocumentBuilder {
 	 *
 	 * Alignment and wrapping both apply to a whole printed line, so anything after one closes would
 	 * silently inherit a property the author did not write on it. Remembering which tag closed is
-	 * what lets the refusal name the right one; clearing the flag is what lets the next line open
-	 * its own.
+	 * what lets that refusal name the right one.
+	 *
+	 * The line's claim is not released with it: `<wrap>a</wrap><nowrap>b</nowrap>` is refused as a
+	 * second wrap rather than as content after a closed one, because a second one is what the author
+	 * wrote. The claim lifts when the line ends.
 	 */
 	private releaseLineOwner(tag: Tag, kind: "align" | "wrap"): void {
-		const ownerFrame = this.owningFrame();
-		if (kind === "align") {
-			ownerFrame.alignOpen = false;
-			ownerFrame.owner.closedOwner = { name: "align", code: MARKUP_ERRORS.invalidAlignScope };
-			return;
-		}
-		ownerFrame.wrapOpen = false;
-		ownerFrame.owner.closedOwner = { name: tag.name, code: MARKUP_ERRORS.invalidWrapScope };
+		this.frame().owner.closedOwner = {
+			name: tag.name,
+			code: kind === "align" ? MARKUP_ERRORS.invalidAlignScope : MARKUP_ERRORS.invalidWrapScope,
+		};
 	}
 
 	/**
@@ -829,6 +836,26 @@ class DocumentBuilder {
 		return this.frames[0];
 	}
 
+	/**
+	 * Whether a line-owning tag of this kind is still open within the scope that owns the line.
+	 *
+	 * Read from the frames rather than from a flag, so it falls away when the tag closes without
+	 * anything having to remember to say so. It is the other half of the claim {@link LineState}
+	 * keeps: this one catches a second tag nested in the first, which may be on a later line.
+	 */
+	private lineOwnerOpen(kind: "align" | "wrap"): boolean {
+		for (let at = this.frames.length - 1; at > 0; at--) {
+			const node = this.frames[at].node;
+			if (node?.kind === "block") {
+				return false;
+			}
+			if (node?.kind === kind) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Whether a styling tag encloses this position within the scope that owns the line. */
 	private insideStyling(): boolean {
 		for (let at = this.frames.length - 1; at > 0; at--) {
@@ -852,8 +879,6 @@ class DocumentBuilder {
 			line: token.line,
 			column: token.column,
 			owner: parent.owner,
-			alignOpen: false,
-			wrapOpen: false,
 			content: null,
 		};
 		this.frames.push(frame);
@@ -888,5 +913,14 @@ class DocumentBuilder {
 
 /** A line with nothing on it yet. */
 function freshLine(): LineState {
-	return { content: false, textSeen: false, fills: 0, printing: 0, soleOccupant: null, closedOwner: null };
+	return {
+		content: false,
+		textSeen: false,
+		fills: 0,
+		printing: 0,
+		alignSeen: false,
+		wrapSeen: false,
+		soleOccupant: null,
+		closedOwner: null,
+	};
 }

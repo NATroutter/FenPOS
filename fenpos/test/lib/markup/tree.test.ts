@@ -101,6 +101,22 @@ describe("buildDocument", () => {
 		expect(refusal("<align=center>a\n<align=left>b</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
+	it("names the tag being opened when a second align follows the first on one line", () => {
+		const thrown = refusal("<align=center>a</align><align=left>b</align>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(thrown.detail).toBe("align");
+		expect(thrown.column).toBe(24);
+	});
+
+	it("names the tag being opened when nowrap follows a closed wrap on one line", () => {
+		const thrown = refusal("<wrap>a</wrap><nowrap>b</nowrap>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidWrapScope);
+		expect(thrown.detail).toBe("nowrap");
+		expect(thrown.column).toBe(15);
+	});
+
 	it("refuses wrap inside a styling scope", () => {
 		expect(refusal("<bold><nowrap>x</nowrap></bold>").code).toBe(MARKUP_ERRORS.invalidWrapScope);
 	});
