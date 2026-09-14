@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
@@ -6,8 +6,19 @@ import { submitJob } from "@/lib/jobs/dispatch";
 import type { CompiledJob } from "@/lib/link/protocol";
 import { FrameTooLargeError, JOB_LIMITS, serialiseServerFrame } from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { resolveImages } from "@/lib/markup/resolve-images";
 import { setSetting } from "@/lib/settings/settings-service";
 import { createVariable } from "@/lib/variables/variable-service";
+
+/**
+ * A spy rather than a stub: what these tests need to observe is whether the network stage was
+ * *reached* at all, not fake its answer, so every real call still resolves real images the way the
+ * rest of this file expects.
+ */
+vi.mock("@/lib/markup/resolve-images", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/markup/resolve-images")>();
+	return { ...actual, resolveImages: vi.fn(actual.resolveImages) };
+});
 
 /**
  * The one dispatch failure that costs more than the job it belongs to.
@@ -34,6 +45,7 @@ describe("submitJob", () => {
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
 		await prisma.setting.deleteMany({ where: { key: "jobs.maxErrorMessageChars" } });
+		vi.mocked(resolveImages).mockClear();
 	});
 
 	/**
@@ -97,11 +109,31 @@ describe("submitJob", () => {
 	it("dispatches a receipt that fits", async () => {
 		const { deviceId, sent } = await connectedDevice();
 
-		const job = await submitJob(deviceId, { data: ["Coffee 2.50"] });
+		const job = await submitJob(deviceId, { data: "Coffee 2.50" });
 
 		expect(job.lines).toBe(1);
 		expect(sent).toHaveLength(1);
 		expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "QUEUED" });
+	});
+
+	/**
+	 * The property the header comment above promises: a document refused for its own shape or size
+	 * must not cost a fetch. `checkDocument` runs ahead of `resolveImages` precisely so that a
+	 * `line_too_long` receipt never reaches it — proven here by the spy never being called, not merely
+	 * by the refusal arriving.
+	 */
+	it("refuses a line_too_long document without ever calling resolveImages", async () => {
+		const { deviceId } = await connectedDevice({ maxLineChars: 5 });
+
+		const thrown = await submitJob(deviceId, { data: "this line is too long" }).then(
+			() => null,
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(ApiError);
+		expect((thrown as ApiError).code).toBe("line_too_long");
+		expect(resolveImages).not.toHaveBeenCalled();
+		expect(await prisma.job.count()).toBe(0);
 	});
 
 	/**
@@ -112,7 +144,7 @@ describe("submitJob", () => {
 	it("records the compiled line count on the row, not only in the response", async () => {
 		const { deviceId } = await connectedDevice();
 
-		const job = await submitJob(deviceId, { data: ["Coffee 2.50", "Second line"] });
+		const job = await submitJob(deviceId, { data: "Coffee 2.50\nSecond line" });
 
 		const row = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
 		expect(row.lines).toBe(job.lines);
@@ -122,7 +154,7 @@ describe("submitJob", () => {
 		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
 
 		// Lawful under every limit above, and past what one frame carries once compiled.
-		const data = Array.from({ length: 700 }, () => "x".repeat(500));
+		const data = Array.from({ length: 700 }, () => "x".repeat(500)).join("\n");
 
 		const thrown = await submitJob(deviceId, { data }).then(
 			() => null,
@@ -147,7 +179,7 @@ describe("submitJob", () => {
 	 */
 	it("frees the idempotency key when a job fails before reaching the agent", async () => {
 		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
-		const data = Array.from({ length: 700 }, () => "x".repeat(500));
+		const data = Array.from({ length: 700 }, () => "x".repeat(500)).join("\n");
 
 		await submitJob(deviceId, { data }, null, { key: "order-1", hash: "hash-a" }).then(
 			() => null,
@@ -178,7 +210,7 @@ describe("submitJob", () => {
 
 		// Past the wire's 1000-line cap, inside this device's 10,000-line one, and small enough that
 		// the frame guard is not what refuses it.
-		const data = Array.from({ length: JOB_LIMITS.maxLines + 100 }, () => "x");
+		const data = Array.from({ length: JOB_LIMITS.maxLines + 100 }, () => "x").join("\n");
 
 		const thrown = await submitJob(deviceId, { data }).then(
 			() => null,
@@ -213,7 +245,7 @@ describe("submitJob", () => {
 			throw new Error("x".repeat(1000));
 		};
 
-		const thrown = await submitJob(deviceId, { data: ["Coffee 2.50"] }).then(
+		const thrown = await submitJob(deviceId, { data: "Coffee 2.50" }).then(
 			() => null,
 			(error: unknown) => error,
 		);
@@ -301,7 +333,7 @@ describe("dispatch with variables", () => {
 		const deviceId = await connectedDevice();
 		await createVariable({ ...STATIC, name: "phone", value: "010-1234567" });
 
-		const job = await submitJob(deviceId, { data: ["Call {phone}"] });
+		const job = await submitJob(deviceId, { data: "Call {phone}" });
 
 		expect(
 			sentJob()
@@ -312,19 +344,17 @@ describe("dispatch with variables", () => {
 	});
 
 	/**
-	 * Not caught before the row exists, unlike the request-shape and image failures above it in this
-	 * file: `unknown_variable` is raised while parsing inside `compile`, and `compile` needs the
-	 * job's own id — so, like every other markup content error (an unknown tag, an unclosed one), it
-	 * can only be discovered once the row is there to fail. Settled the same way the wire's own
-	 * refusals are settled below, rather than left `QUEUED`.
+	 * Caught before the row exists, like the request-shape and image failures above it in this file:
+	 * `unknown_variable` is one of the document's own shape errors `checkDocument` finds by parsing,
+	 * and that runs ahead of `job.create` now, not only inside `compile`. No row is left behind for a
+	 * receipt that never became a job.
 	 */
-	it("refuses a job naming a variable that does not exist, and settles the job rather than leaving it queued", async () => {
+	it("refuses a job naming a variable that does not exist, before any job row exists", async () => {
 		const deviceId = await connectedDevice();
 
-		await expect(submitJob(deviceId, { data: ["{nope}"] })).rejects.toMatchObject({ code: "unknown_variable" });
+		await expect(submitJob(deviceId, { data: "{nope}" })).rejects.toMatchObject({ code: "unknown_variable" });
 
-		const [job] = await prisma.job.findMany();
-		expect(job).toMatchObject({ status: "FAILED", errorCode: "unknown_variable" });
+		expect(await prisma.job.count()).toBe(0);
 	});
 
 	/**
@@ -344,7 +374,7 @@ describe("dispatch with variables", () => {
 		const deviceId = await connectedDevice();
 		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
 
-		const job = await submitJob(deviceId, { data: ["Coffee 2.50"] });
+		const job = await submitJob(deviceId, { data: "Coffee 2.50" });
 
 		expect(job.lines).toBe(1);
 		expect(
@@ -359,7 +389,7 @@ describe("dispatch with variables", () => {
 		const deviceId = await connectedDevice();
 		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
 
-		await expect(submitJob(deviceId, { data: ["Printed {bad_date}"] })).rejects.toMatchObject({
+		await expect(submitJob(deviceId, { data: "Printed {bad_date}" })).rejects.toMatchObject({
 			code: "unknown_variable",
 			status: 422,
 		});
@@ -379,7 +409,7 @@ describe("dispatch with variables", () => {
 		const deviceId = await connectedDevice();
 
 		const thrown = await submitJob(deviceId, {
-			data: ["Return by {return_by}"],
+			data: "Return by {return_by}",
 			variables: { return_by: { pattern: "" } },
 		}).then(
 			() => null,
@@ -397,7 +427,7 @@ describe("dispatch with variables", () => {
 
 		// Fails as an unknown asset, not as an unknown image reference named "{brand}" — which is what
 		// proves resolveVariables ran before resolveImages.
-		await expect(submitJob(deviceId, { data: ["<image>{brand}</image>"] })).rejects.toMatchObject({
+		await expect(submitJob(deviceId, { data: "<image>{brand}</image>" })).rejects.toMatchObject({
 			message: expect.stringContaining("logo"),
 		});
 	});

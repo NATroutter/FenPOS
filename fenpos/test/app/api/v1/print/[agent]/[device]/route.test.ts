@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
 
 /**
  * `POST /api/v1/print/{agent}/{device}` — idempotent submits.
@@ -17,6 +18,11 @@ import { prisma } from "@/lib/db";
  * `next/headers` is mocked because `getClientAddress` reads it, and calling `POST` directly here
  * (rather than through a running server) leaves no request scope for it to read — the same reason
  * `test/app/api/pair/route.test.ts` mocks it.
+ *
+ * Two cases below trade that convenience back for the real `submitJob`, on purpose: they are the
+ * point where the envelope hands a request body to the dispatcher, and what they pin is that a
+ * caller's `400` and `422` genuinely carry the words and the position the dispatcher produced,
+ * rather than trusting that this route forwards them unchanged.
  */
 vi.mock("next/headers", () => ({
 	headers: vi.fn(async () => new Headers({ "x-forwarded-for": "203.0.113.5" })),
@@ -117,7 +123,7 @@ describe("POST /api/v1/print — body size", () => {
 	it("refuses an oversized body before it is parsed, and never dispatches", async () => {
 		// Valid JSON, not malformed — a failure here can only be the size check that runs before
 		// `JSON.parse`, not a parse failure that would prove nothing about the ordering.
-		const oversized = JSON.stringify({ data: ["x".repeat(70_000)] });
+		const oversized = JSON.stringify({ data: "x".repeat(70_000) });
 
 		const response = await POST(
 			new Request(`https://fenpos.test/api/v1/print/${agentName}/kitchen`, {
@@ -136,15 +142,15 @@ describe("POST /api/v1/print — body size", () => {
 
 describe("POST /api/v1/print — Idempotency-Key", () => {
 	it("prints normally when no key is sent", async () => {
-		const response = await POST(...call({ data: ["hello"] }));
+		const response = await POST(...call({ data: "hello" }));
 
 		expect(response.status).toBe(202);
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(1);
 	});
 
 	it("prints once and replays the same answer for a repeated key", async () => {
-		const first = await POST(...call({ data: ["hello"] }, "order-1"));
-		const second = await POST(...call({ data: ["hello"] }, "order-1"));
+		const first = await POST(...call({ data: "hello" }, "order-1"));
+		const second = await POST(...call({ data: "hello" }, "order-1"));
 
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(1);
 		// Full equality, not just the jobId: the replay must reproduce the original 202 exactly —
@@ -155,15 +161,15 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	});
 
 	it("marks a replayed response, so a caller can tell it apart from a fresh print", async () => {
-		await POST(...call({ data: ["hello"] }, "order-1"));
-		const replayed = await POST(...call({ data: ["hello"] }, "order-1"));
+		await POST(...call({ data: "hello" }, "order-1"));
+		const replayed = await POST(...call({ data: "hello" }, "order-1"));
 
 		expect(replayed.headers.get("idempotent-replay")).toBe("true");
 	});
 
 	it("refuses a repeated key carrying a different body", async () => {
-		await POST(...call({ data: ["hello"] }, "order-1"));
-		const conflict = await POST(...call({ data: ["goodbye"] }, "order-1"));
+		await POST(...call({ data: "hello" }, "order-1"));
+		const conflict = await POST(...call({ data: "goodbye" }, "order-1"));
 
 		expect(conflict.status).toBe(409);
 		expect((await conflict.json()).error).toBe("idempotency_conflict");
@@ -171,8 +177,8 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	});
 
 	it("treats different keys as different receipts", async () => {
-		await POST(...call({ data: ["hello"] }, "order-1"));
-		await POST(...call({ data: ["hello"] }, "order-2"));
+		await POST(...call({ data: "hello" }, "order-1"));
+		await POST(...call({ data: "hello" }, "order-2"));
 
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(2);
 	});
@@ -189,15 +195,15 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 			},
 		});
 
-		await POST(...call({ data: ["hello"] }, "order-1"));
+		await POST(...call({ data: "hello" }, "order-1"));
 		token = otherToken;
-		await POST(...call({ data: ["hello"] }, "order-1"));
+		await POST(...call({ data: "hello" }, "order-1"));
 
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(2);
 	});
 
 	it("refuses a key longer than the header allows", async () => {
-		const response = await POST(...call({ data: ["hello"] }, "x".repeat(256)));
+		const response = await POST(...call({ data: "hello" }, "x".repeat(256)));
 
 		expect(response.status).toBe(400);
 		expect((await response.json()).error).toBe("invalid_type");
@@ -205,7 +211,7 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	});
 
 	it("refuses an empty or whitespace-only Idempotency-Key rather than treating it as absent", async () => {
-		const response = await POST(...call({ data: ["hello"] }, "   "));
+		const response = await POST(...call({ data: "hello" }, "   "));
 
 		expect(response.status).toBe(400);
 		expect((await response.json()).error).toBe("invalid_type");
@@ -224,10 +230,10 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 		});
 		await prisma.apiKeyDevice.create({ data: { apiKeyId: keyId, deviceId: bar.id } });
 
-		const kitchen = await POST(...call({ data: ["order 1041"] }, "order-1041"));
+		const kitchen = await POST(...call({ data: "order 1041" }, "order-1041"));
 		expect(kitchen.status).toBe(202);
 
-		const barResponse = await POST(...call({ data: ["order 1041"] }, "order-1041", "bar"));
+		const barResponse = await POST(...call({ data: "order 1041" }, "order-1041", "bar"));
 
 		expect(barResponse.status).toBe(409);
 		expect((await barResponse.json()).error).toBe("idempotency_conflict");
@@ -237,11 +243,11 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	it("does not record a key for a request that never became a job", async () => {
 		vi.mocked(submitJob).mockRejectedValueOnce(new Error("compile failed"));
 
-		await POST(...call({ data: ["bad"] }, "order-1"));
+		await POST(...call({ data: "bad" }, "order-1"));
 		vi.mocked(submitJob).mockClear();
 
 		// The retry re-validates rather than replaying, because nothing was ever recorded.
-		await POST(...call({ data: ["good"] }, "order-1"));
+		await POST(...call({ data: "good" }, "order-1"));
 		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(1);
 	});
 
@@ -259,8 +265,8 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	 */
 	it("resolves two concurrent submits of the same key to one job and one shared answer", async () => {
 		const [first, second] = await Promise.all([
-			POST(...call({ data: ["hello"] }, "order-1")),
-			POST(...call({ data: ["hello"] }, "order-1")),
+			POST(...call({ data: "hello" }, "order-1")),
+			POST(...call({ data: "hello" }, "order-1")),
 		]);
 
 		expect(first.status).toBe(202);
@@ -281,8 +287,8 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 	 */
 	it("resolves a concurrent double-submit with different bodies to a conflict, not a replay", async () => {
 		const [first, second] = await Promise.all([
-			POST(...call({ data: ["hello"] }, "order-1")),
-			POST(...call({ data: ["goodbye"] }, "order-1")),
+			POST(...call({ data: "hello" }, "order-1")),
+			POST(...call({ data: "goodbye" }, "order-1")),
 		]);
 
 		const statuses = [first.status, second.status].sort((a, b) => a - b);
@@ -291,5 +297,48 @@ describe("POST /api/v1/print — Idempotency-Key", () => {
 		const conflict = first.status === 409 ? first : second;
 		expect((await conflict.json()).error).toBe("idempotency_conflict");
 		expect(await prisma.job.count()).toBe(1);
+	});
+});
+
+describe("POST /api/v1/print — content refusals reach the caller unchanged", () => {
+	/** Delegates the mock straight through to the real dispatcher, for one call. */
+	async function useRealSubmitJob(): Promise<void> {
+		const real = await vi.importActual<typeof import("@/lib/jobs/dispatch")>("@/lib/jobs/dispatch");
+		vi.mocked(submitJob).mockImplementationOnce(real.submitJob);
+	}
+
+	it("refuses an array in data as invalid_type", async () => {
+		await useRealSubmitJob();
+
+		const response = await POST(...call({ data: ["x"] }));
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).message).toMatch(/no longer an array/);
+	});
+
+	it("reports a markup error with its line and column", async () => {
+		await useRealSubmitJob();
+
+		// The real dispatcher checks for a connected agent before it ever reaches the document — see
+		// `submitJob`'s ordering in `lib/jobs/dispatch.ts` — so one is registered for exactly this
+		// call and torn down straight after, rather than left for the rest of the file.
+		const link: AgentLink = {
+			agentId,
+			agentName,
+			connectedAt: new Date(),
+			address: "203.0.113.10",
+			pending: new Set<string>(),
+			send: () => true,
+			close: () => {},
+		};
+		registerLink(link);
+		try {
+			const response = await POST(...call({ data: "ok\n<bold>open" }));
+
+			expect(response.status).toBe(422);
+			expect(await response.json()).toMatchObject({ error: "unclosed_tag", line: 2, column: 1 });
+		} finally {
+			unregisterLink(link);
+		}
 	});
 });

@@ -301,12 +301,13 @@ describe("resolveImages", () => {
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
-	it("refuses an image nobody has stored, naming the element it was written on", async () => {
+	it("refuses an image nobody has stored, naming the line it was written on", async () => {
 		const thrown = await refusal(["Coffee 2.50", "<image>missing</image>"]);
 
 		expect(thrown.code).toBe("unknown_asset");
 		expect(thrown.message).toContain("missing");
 		expect(thrown.details.line).toBe(2);
+		expect(thrown.details.column).toBe(1);
 	});
 
 	/**
@@ -580,7 +581,7 @@ describe("dots that have to travel with the job", () => {
 		 * The agent matches a bundled width exactly and never scales, so the panel refuses every
 		 * other width rather than previewing a picture the paper cannot carry.
 		 */
-		it("refuses a width the agent bundles nothing for, naming the element", async () => {
+		it("refuses a width the agent bundles nothing for, naming the line", async () => {
 			const thrown = await refusal(["Coffee 2.50", "<image=50>fenpos</image>"]);
 
 			expect(thrown.code).toBe("unbundled_logo_width");

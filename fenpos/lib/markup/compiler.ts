@@ -259,8 +259,7 @@ export function compile(
  * @throws ApiError when the markup is malformed or a line exceeds a character limit
  */
 export function layOut(request: PrintRequest, settings: CompileSettings, limits: CompileLimits): Line[] {
-	const document = parseDocumentOrTranslate(request.data, settings.variables);
-	requireCharsWithinLimits(document, limits);
+	const document = checkDocument(request, settings.variables, limits);
 
 	const lines: Line[] = [];
 	for (const top of splitLines(document.nodes)) {
@@ -312,6 +311,31 @@ function parseDocumentOrTranslate(
 	} catch (error) {
 		throw translate(error, 0);
 	}
+}
+
+/**
+ * Parses a request and charges it against the character limits, in the one place both happen.
+ *
+ * {@link layOut} and {@link collectDocumentErrors} each need exactly this pair, in this order — a
+ * document is not known to be printable until it has been charged. A caller that must refuse before
+ * doing anything it cannot take back, such as fetching an `<image>` URL over the network, needs the
+ * same pair and nothing more, which is what lets `dispatch.ts` call this directly rather than either
+ * of the two functions built on it.
+ *
+ * @param request the validated request
+ * @param variables the values `{name}` may resolve to, or null when variables are switched off
+ * @param limits the limits the document's characters are charged against
+ * @returns the parsed document
+ * @throws ApiError when the markup is malformed or a line exceeds a character limit
+ */
+export function checkDocument(
+	request: PrintRequest,
+	variables: VariableContext | null,
+	limits: CompileLimits,
+): Document {
+	const document = parseDocumentOrTranslate(request.data, variables);
+	requireCharsWithinLimits(document, limits);
+	return document;
 }
 
 /**
@@ -408,8 +432,7 @@ export function collectDocumentErrors(
 ): ApiError[] {
 	let document: Document;
 	try {
-		document = parseDocumentOrTranslate(request.data, variables);
-		requireCharsWithinLimits(document, limits);
+		document = checkDocument(request, variables, limits);
 	} catch (error) {
 		if (error instanceof ApiError) {
 			return [error];

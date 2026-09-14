@@ -9,6 +9,7 @@ import { logger } from "@/lib/logger";
 import {
 	type CompileLimits,
 	type CompileSettings,
+	checkDocument,
 	compile,
 	type DeviceSettings,
 	readRequest,
@@ -32,15 +33,16 @@ import { queueJobSettled } from "@/lib/webhooks/notify";
  * like a printer taking its time.
  *
  * **Which content problems precede the row, and which do not.** Everything checked from the body
- * alone — its shape, its limits, the `variables` object, and the `<image>` fetches — is refused
- * before `job.create` runs, so those never become a job. Markup errors are not: `compile` needs the
- * job's id, and the database is what generates it, so an unknown tag, an unclosed one, a control
- * character, an unknown variable or a symbol wider than the paper can only be discovered once the
- * row is there — and each settles that row as `FAILED` with its code. This has always been true and
- * was not changed by variables; the caller gets the same refusal, with its line and column, either
- * way. Making these precede the row too means generating the id in application code first, which is
- * the same refactor the `lines: null` window below names, and it should be done for all of them at
- * once or not at all.
+ * alone — its shape, its limits, the `variables` object, the document's own shape and its
+ * characters, and the `<image>` fetches — is refused before `job.create` runs, so those never
+ * become a job. `checkDocument` is what put the document's own shape in that set: an unknown tag,
+ * an unclosed one, a control character, an unknown variable and a line over its character limit are
+ * all found by the same parse `resolveImages` needs anyway, so both run ahead of the row. What is
+ * left needs every line laid out to answer, which only `compile` does: a symbol wider than the paper
+ * and a character the codepage cannot print are found there and nowhere earlier, and `compile` needs
+ * the job's id — so those two, and only those two, settle the row as `FAILED` with their code rather
+ * than refusing before it exists. Generating the id in application code first would close that gap
+ * too, which is the same refactor the `lines: null` window below names.
  */
 
 /** A job that was accepted for printing. */
@@ -136,12 +138,17 @@ export async function submitJob(
 		supplied: request.variables,
 	});
 
+	// Parsed and charged as soon as `variables` is known, and before anything below that reaches
+	// outside this server. A receipt with an unclosed tag or a line over the character limit has no
+	// business making this server fetch a URL, so it is refused here rather than left for `compile`
+	// to find once the row exists.
+	checkDocument(request, variables, limits);
+
 	// The one stage of accepting a job that waits on something outside this server: an `<image>`
 	// naming a URL is fetched here, so a host that will not answer fails the submission — naming the
 	// element at fault — rather than a job already recorded and sent. Still before the row exists,
-	// and last among the checks that can refuse without one, so neither an oversized body nor a
-	// disconnected agent costs a fetch. The markup's own errors are not in that set: they need
-	// `compile`, which needs the job's id.
+	// and last among the checks that can refuse without one, so neither an oversized body, a
+	// malformed document, nor a disconnected agent costs a fetch.
 	const settings: CompileSettings = {
 		...deviceSettings,
 		variables,
@@ -179,13 +186,13 @@ export async function submitJob(
 		// it for a window this narrow.
 		await prisma.job.update({ where: { id: job.id }, data: { lines: compiled.lines.length } });
 	} catch (error) {
-		// Every markup content error lands here, not only the post-wrap limit: `compile` is where
-		// each element is finally parsed, so `unknown_tag`, `unclosed_tag`, `control_character`,
-		// `unknown_variable`, `symbol_too_wide` and `unsupported_character` all reach this handler,
-		// alongside `too_many_output_lines` and a failure of the write above. What was checked before
-		// the row existed is the body's shape and limits and the image fetches — not its markup. The
-		// row is settled rather than deleted so the failure is visible in the panel, with the code the
-		// caller was given.
+		// What lands here now is only what needs a whole line laid out to answer: `compile` is where
+		// each line is finally wrapped, so `symbol_too_wide` and `unsupported_character` reach this
+		// handler, alongside `too_many_output_lines` and a failure of the write above. Everything else
+		// about the document's own shape — an unknown tag, an unclosed one, a control character, an
+		// unknown variable, a line over its character limit — was already refused by `checkDocument`
+		// before this row existed. The row is settled rather than deleted so the failure is visible in
+		// the panel, with the code the caller was given.
 		await failJob(job.id, error instanceof ApiError ? error.code : "invalid_job", await message(error));
 		throw error;
 	}

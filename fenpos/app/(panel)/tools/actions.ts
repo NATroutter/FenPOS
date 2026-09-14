@@ -410,10 +410,9 @@ export async function printMarkup(
 	return panelQuery<SendResult>(
 		"tools:print",
 		async () => {
-			const data = source.split("\n");
 			// Omitted rather than sent as null when the device's setting is wanted: the body accepts
 			// exactly `data` and `linefeed`, and "absent" is how it says "whatever the device is set to".
-			const job = await submitJob(deviceId, linefeed ? { data, linefeed } : { data });
+			const job = await submitJob(deviceId, linefeed ? { data: source, linefeed } : { data: source });
 			return { error: null, message: `Queued ${job.id}.` };
 		},
 		{

@@ -65,7 +65,7 @@ beforeEach(async () => {
 
 describe("POST /api/v1/preview/{agent}/{device}", () => {
 	it("returns the lines the receipt would print", async () => {
-		const response = await POST(...call({ data: ["Total 5.50"] }));
+		const response = await POST(...call({ data: "Total 5.50" }));
 		const body = await response.json();
 
 		expect(response.status).toBe(200);
@@ -75,7 +75,7 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 	});
 
 	it("answers 200 with the fault when the markup does not compile", async () => {
-		const response = await POST(...call({ data: ["<bold>unclosed"] }));
+		const response = await POST(...call({ data: "<bold>unclosed" }));
 		const body = await response.json();
 
 		expect(response.status).toBe(200);
@@ -85,14 +85,14 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 	});
 
 	it("never creates a job", async () => {
-		await POST(...call({ data: ["Total 5.50"] }));
+		await POST(...call({ data: "Total 5.50" }));
 
 		expect(await prisma.job.count()).toBe(0);
 	});
 
 	it("works for a device whose agent is not connected, unlike printing", async () => {
 		// No link is registered anywhere in this file, so this passing *is* the assertion.
-		expect((await POST(...call({ data: ["hi"] }))).status).toBe(200);
+		expect((await POST(...call({ data: "hi" }))).status).toBe(200);
 	});
 
 	it("refuses a body that is not JSON", async () => {
@@ -112,7 +112,7 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 	it("refuses an oversized body before it is parsed", async () => {
 		// Valid JSON, not malformed — a failure here can only be the size check that runs before
 		// `JSON.parse`, not a parse failure that would prove nothing about the ordering.
-		const oversized = JSON.stringify({ data: ["x".repeat(70_000)] });
+		const oversized = JSON.stringify({ data: "x".repeat(70_000) });
 
 		const response = await POST(
 			new Request(`https://fenpos.test/api/v1/preview/${agentName}/kitchen`, {
@@ -130,11 +130,11 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 	it("refuses a key without 'jobs:submit'", async () => {
 		await prisma.apiKeyPermission.deleteMany({ where: { apiKeyId: keyId } });
 
-		expect((await POST(...call({ data: ["hi"] }))).status).toBe(403);
+		expect((await POST(...call({ data: "hi" }))).status).toBe(403);
 	});
 
 	it("reports an ungranted device as unknown", async () => {
-		const response = await POST(...call({ data: ["hi"] }, "bar"));
+		const response = await POST(...call({ data: "hi" }, "bar"));
 
 		expect(response.status).toBe(404);
 		expect((await response.json()).error).toBe("unknown_device");

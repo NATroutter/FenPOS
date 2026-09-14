@@ -48,7 +48,7 @@ const STATIC = {
 
 describe("compilePreview", () => {
 	it("returns the lines a print would produce", async () => {
-		const result = await compilePreview(deviceId, { data: ["Total 5.50"] });
+		const result = await compilePreview(deviceId, { data: "Total 5.50" });
 
 		expect(result.errors).toEqual([]);
 		expect(result.lines).not.toBeNull();
@@ -56,14 +56,14 @@ describe("compilePreview", () => {
 	});
 
 	it("wraps to the device's width, not to some other number", async () => {
-		const result = await compilePreview(deviceId, { data: ["A".repeat(30)] });
+		const result = await compilePreview(deviceId, { data: "A".repeat(30) });
 
 		expect(result.columns).toBe(20);
 		expect(result.lines?.length).toBe(2);
 	});
 
 	it("reports the measurements a caller checks their receipt against", async () => {
-		const result = await compilePreview(deviceId, { data: ["one", "two"] });
+		const result = await compilePreview(deviceId, { data: "one\ntwo" });
 
 		expect(result.outputLines).toBeGreaterThan(0);
 		expect(result.maxOutputLines).toBeGreaterThan(0);
@@ -71,7 +71,7 @@ describe("compilePreview", () => {
 	});
 
 	it("reports bad markup as an error carrying its position, and compiles nothing", async () => {
-		const result = await compilePreview(deviceId, { data: ["<bold>unclosed"] });
+		const result = await compilePreview(deviceId, { data: "<bold>unclosed" });
 
 		expect(result.lines).toBeNull();
 		expect(result.errors).toHaveLength(1);
@@ -79,27 +79,39 @@ describe("compilePreview", () => {
 		expect(result.errors[0].line).toBe(1);
 	});
 
-	it("reports every bad element, not only the first", async () => {
-		const result = await compilePreview(deviceId, { data: ["<bold>a", "<nope>b</nope>"] });
+	/**
+	 * Two independent lines, deliberately: an unclosed tag aborts the whole parse at the point it
+	 * went wrong, so a document with one of those yields exactly one error and nothing after it —
+	 * see `collectDocumentErrors`'s own doc comment. What survives per line, and so can be collected
+	 * more than once, is a per-line check like the codepage one exercised here.
+	 */
+	it("reports every bad line, not only the first", async () => {
+		const result = await compilePreview(deviceId, { data: "bad\u{1F600}one\nbad\u{1F600}two" });
 
 		expect(result.errors.length).toBeGreaterThan(1);
 	});
 
+	it("reports a fault on the line of the document that failed", async () => {
+		const preview = await compilePreview(deviceId, { data: "fine\n<size=9>x</size>" });
+
+		expect(preview.errors).toEqual([expect.objectContaining({ code: "invalid_tag_argument", line: 2, column: 1 })]);
+	});
+
 	it("reports a request-level failure without a line, because it belongs to the whole body", async () => {
-		const result = await compilePreview(deviceId, { data: "not an array" });
+		const result = await compilePreview(deviceId, {});
 
 		expect(result.errors[0].line).toBeNull();
 	});
 
 	it("creates no job row, ever", async () => {
-		await compilePreview(deviceId, { data: ["Total 5.50"] });
-		await compilePreview(deviceId, { data: ["<bold>unclosed"] });
+		await compilePreview(deviceId, { data: "Total 5.50" });
+		await compilePreview(deviceId, { data: "<bold>unclosed" });
 
 		expect(await prisma.job.count()).toBe(0);
 	});
 
 	it("reports an unknown device as an error rather than throwing", async () => {
-		const result = await compilePreview("no-such-device", { data: ["hi"] });
+		const result = await compilePreview("no-such-device", { data: "hi" });
 
 		expect(result.errors[0].code).toBe("unknown_device");
 	});
@@ -108,8 +120,8 @@ describe("compilePreview", () => {
 /**
  * The variable stage of the preview pipeline.
  *
- * It sits between `readRequest` and the element checks, and the position is load-bearing in both
- * directions: `collectElementErrors` parses every element and `unknown_variable` is one of the
+ * It sits between `readRequest` and the document checks, and the position is load-bearing in both
+ * directions: `collectDocumentErrors` parses the whole document and `unknown_variable` is one of the
  * things it must be able to report, while `resolveImages` needs `<image>{logo}</image>` already
  * substituted before it can know what to fetch.
  */
@@ -120,14 +132,14 @@ describe("compilePreview with variables", () => {
 	it("substitutes a defined value", async () => {
 		await createVariable({ ...STATIC, name: "phone", value: "010-1234" });
 
-		const result = await compilePreview(deviceId, { data: ["Call {phone}"] });
+		const result = await compilePreview(deviceId, { data: "Call {phone}" });
 
 		expect(result.errors).toEqual([]);
 		expect(textOf(result)).toBe("Call 010-1234");
 	});
 
 	it("reports an unknown name as an element error, positioned like any other markup mistake", async () => {
-		const result = await compilePreview(deviceId, { data: ["ok", "Call {phne}"] });
+		const result = await compilePreview(deviceId, { data: "ok\nCall {phne}" });
 
 		expect(result.lines).toBeNull();
 		expect(result.errors).toHaveLength(1);
@@ -135,7 +147,7 @@ describe("compilePreview with variables", () => {
 	});
 
 	it("substitutes a job-supplied value the caller sent with the body", async () => {
-		const result = await compilePreview(deviceId, { data: ["Order {order_id}"], variables: { order_id: "1041" } });
+		const result = await compilePreview(deviceId, { data: "Order {order_id}", variables: { order_id: "1041" } });
 
 		expect(textOf(result)).toBe("Order 1041");
 	});
@@ -151,7 +163,7 @@ describe("compilePreview with variables", () => {
 		await createVariable({ ...STATIC, name: "phone", value: "010-1234" });
 
 		const { preview, request, settings } = await compilePreviewWithContext(deviceId, {
-			data: ["Call {phone}"],
+			data: "Call {phone}",
 			variables: { phone: "999" },
 		});
 
@@ -172,7 +184,7 @@ describe("compilePreview with variables", () => {
 	it("previews a receipt that names nothing dynamic even with an unrenderable variable defined", async () => {
 		await prisma.variable.create({ data: { name: "bad_date", kind: "DATETIME", pattern: "YYYY-MM-DD" } });
 
-		const result = await compilePreview(deviceId, { data: ["Total 5.50"] });
+		const result = await compilePreview(deviceId, { data: "Total 5.50" });
 
 		expect(result.errors).toEqual([]);
 		expect(textOf(result)).toBe("Total 5.50");
@@ -246,7 +258,7 @@ describe("a preview and a print of the same markup", () => {
 			source: "API_KEY_NAME",
 		});
 
-		const body = { data: ["Submitted by {submitted_by} at the counter"] };
+		const body = { data: "Submitted by {submitted_by} at the counter" };
 
 		const preview = await compilePreview(deviceId, body, key.name);
 		await submitJob(deviceId, body, key.id);
@@ -269,8 +281,8 @@ describe("a preview and a print of the same markup", () => {
 			source: "API_KEY_NAME",
 		});
 
-		const preview = await compilePreview(deviceId, { data: ["by{submitted_by}!"] });
-		await submitJob(deviceId, { data: ["by{submitted_by}!"] });
+		const preview = await compilePreview(deviceId, { data: "by{submitted_by}!" });
+		await submitJob(deviceId, { data: "by{submitted_by}!" });
 
 		expect(preview.lines?.[0].spans.map((span) => span.text).join("")).toBe("by!");
 		expect(linesOf(lastJob)).toEqual(["by!"]);
@@ -290,7 +302,7 @@ describe("a preview and a print of the same markup", () => {
 	 */
 	it("produce the same lines for a date the request described", async () => {
 		const body = {
-			data: ["Return by {return_by} at the counter"],
+			data: "Return by {return_by} at the counter",
 			variables: { return_by: { pattern: "yyyy", offset: { amount: 1, unit: "DAYS" } } },
 		};
 
@@ -347,7 +359,7 @@ describe("an unexpected fault", () => {
 			data: { agentId: agent.id, name: "misconfigured", port: "COM9", columns: 0 },
 		});
 
-		const result = await compilePreview(device.id, { data: ["anything"] });
+		const result = await compilePreview(device.id, { data: "anything" });
 
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0]).toMatchObject({ code: "internal_error", status: 500, line: null, column: null });
