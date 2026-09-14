@@ -258,7 +258,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings): Line[]
 		const lineNumber = index + 1;
 		try {
 			const parsed = parseMarkup(request.data[index], settings.variables);
-			requireSymbolsFitThePaper(parsed, settings.columns, lineNumber);
+			requireSymbolsFitThePaper(parsed, settings.columns);
 			const checked = validateCharset(parsed, settings.codepage, settings.onUnsupported);
 			// After this line no fill remains, which is what lets the wrapper, the wire types and
 			// the agent all stay ignorant of the tag. It runs after the charset check so that an
@@ -335,7 +335,7 @@ export function collectElementErrors(
 			const parsed = parseMarkup(request.data[index], variables);
 			// Collected alongside the parse failures, so the preview shows an over-wide symbol as a
 			// refusal while it is being written rather than only when the job is submitted.
-			requireSymbolsFitThePaper(parsed, settings.columns, index + 1);
+			requireSymbolsFitThePaper(parsed, settings.columns);
 			validateCharset(parsed, settings.codepage, settings.onUnsupported);
 		} catch (error) {
 			const translated = translate(error, index + 1);
@@ -370,10 +370,9 @@ export function collectElementErrors(
  *
  * @param line the parsed line
  * @param columns the device's width in printer columns
- * @param lineNumber the 1-based line of the document this element occupies
  * @throws MarkupError naming the tag and its column
  */
-function requireSymbolsFitThePaper(line: Line, columns: number, lineNumber: number): void {
+function requireSymbolsFitThePaper(line: Line, columns: number): void {
 	const paper = dotWidth(columns);
 	for (const directive of line.directives) {
 		if (!("widthDots" in directive) || directive.widthDots <= paper) {
@@ -382,7 +381,7 @@ function requireSymbolsFitThePaper(line: Line, columns: number, lineNumber: numb
 		const tag = directive.kind.toLowerCase();
 		throw new MarkupError(
 			MARKUP_ERRORS.symbolTooWide,
-			lineNumber,
+			1,
 			directive.sourceColumn,
 			tag,
 			`This <${tag}> prints ${directive.widthDots} dots wide, more than the ${paper} this device's paper has. Shorten its content, or print it on wider paper.`,
@@ -394,7 +393,7 @@ function requireSymbolsFitThePaper(line: Line, columns: number, lineNumber: numb
 function translate(error: unknown, line: number): unknown {
 	if (error instanceof MarkupError) {
 		return new ApiError(error.code, error.message, {
-			line: error.line,
+			line,
 			column: error.column,
 			...(error.detail === null ? {} : { detail: error.detail }),
 		});

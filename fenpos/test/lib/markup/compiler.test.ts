@@ -136,10 +136,11 @@ describe("compile pipeline", () => {
 	// Content
 	// -----------------------------------------------------------------------
 
-	it("reports a markup error with its column", () => {
+	it("reports a markup error with its line and column", () => {
 		const thrown = error({ data: ["ok", "a <blink>b</blink>"] });
 
 		expect(thrown.code).toBe("unknown_tag");
+		expect(thrown.details.line).toBe(2);
 		expect(thrown.details.column).toBe(3);
 	});
 
