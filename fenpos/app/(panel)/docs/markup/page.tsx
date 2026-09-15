@@ -707,8 +707,9 @@ export default async function MarkupDocsPage() {
 								<P>
 									A series that asks for none of its own is given a <Mono>pattern</Mono> — solid, hatch, dot or hollow —
 									and, on a line or a scatter only, a <Mono>marker</Mono> — circle, square, triangle or cross — in turn,
-									so that several series on one chart are still told apart without an author naming every fill by hand.
-									Asking a bar or a pie for a marker is refused: neither plots a point a mark could sit on.
+									so that several series on one chart are still told apart without an author naming every fill by hand.{" "}
+									<Mono>marker=none</Mono> asks for no mark at all. Asking a bar or a pie for a marker is refused:
+									neither plots a point a mark could sit on.
 								</P>
 
 								<P>
@@ -739,12 +740,14 @@ export default async function MarkupDocsPage() {
 							<Col>
 								<P>
 									<Mono>&lt;font=a&gt;</Mono> and <Mono>&lt;font=b&gt;</Mono> select the printer's own two built-in
-									faces, drawn in its own firmware at no paper cost beyond their glyphs.{" "}
+									faces, drawn in its own firmware at no paper cost beyond their glyphs; <Mono>size</Mono> means nothing
+									on either and is refused as <ErrorRef code="invalid_attribute" />.{" "}
 									<Mono>&lt;font=name size=N&gt;</Mono> instead names a font stored on the <Mono>Assets</Mono> tab, a
 									TTF or OTF file whose kind is read from its own bytes rather than declared, and draws it{" "}
-									<Mono>size</Mono> dots tall, 24 by default, capped at {maxFontHeight}, this install's{" "}
-									<Mono>limits.maxFontHeight</Mono>. A name storing no such font is <ErrorRef code="unknown_font" />,
-									and an upload this server cannot parse as a font is <ErrorRef code="invalid_font" />.
+									<Mono>size</Mono> dots tall, from 8 to {maxFontHeight}, this install's{" "}
+									<Mono>limits.maxFontHeight</Mono>, 24 by default. A name storing no such font is{" "}
+									<ErrorRef code="unknown_font" />, and an upload this server cannot parse as a font is{" "}
+									<ErrorRef code="invalid_font" />.
 								</P>
 
 								<P>
