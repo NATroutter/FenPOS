@@ -4,7 +4,13 @@ import { prisma } from "@/lib/db";
 import { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting, setFormatting } from "@/lib/format/datetime";
-import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema, rawWriteSchema } from "@/lib/link/protocol";
+import {
+	agentSettingsSchema,
+	JOB_LIMITS,
+	jobSettingsSchema,
+	MAX_FRAME_BYTES,
+	rawWriteSchema,
+} from "@/lib/link/protocol";
 import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
 import { DEFAULT_PARSE_OPTIONS } from "@/lib/markup/document";
@@ -824,10 +830,11 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		category: "limits",
 		type: "integer",
 		min: 1,
-		// A literal for now, not yet derived from the frame cap: base64 expands by four thirds and
-		// the frame also carries the job's JSON, and today's frame is far too small for that
-		// arithmetic to land on a positive number.
-		max: 11,
+		// Derived rather than a literal: base64 expands a byte count by four thirds, and the frame
+		// also carries the job's JSON around the raster data, so a whole MiB of that headroom is
+		// set aside before the division — a job at exactly this many megabytes of raster still
+		// leaves room for the request's own structure within MAX_FRAME_BYTES.
+		max: Math.floor((MAX_FRAME_BYTES * 3) / 4 / (1024 * 1024)) - 1,
 		fallback: 4,
 		unit: "MiB",
 	},

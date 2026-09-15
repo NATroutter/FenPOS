@@ -48,6 +48,12 @@ public final class Frames {
      * would not recognise the new directive or payload, and would silently fall back to
      * printer-decided layout on a version-2 PDF417 block that omits {@code columns}, which is
      * exactly the ambiguity the field was added to remove.
+     *
+     * <p>Bumped 3 -&gt; 4 for raster lines — a block the printer cannot draw itself, or a line set
+     * in a configured font, now arrives as dots rather than as printer commands — and for the
+     * larger frame that carries them. A version-3 agent holds a frame cap and a raster-character
+     * cap a third of these, so it would refuse a receipt that only the new cap makes possible,
+     * rather than the printer producing blank paper where the raster should have been.
      */
     public static final int PROTOCOL_VERSION = 3;
 

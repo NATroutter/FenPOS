@@ -136,15 +136,19 @@ describe("rastersFor", () => {
 	 * carry has to cost only itself. Left to the frame, one tall picture would take every printer
 	 * behind this agent out of configuration — which is why the entry is checked here.
 	 *
-	 * The tall image is 384 dots wide by 2200 tall, which is 48 bytes a row — 105,600 bytes of dots,
-	 * past {@link IMAGE_LIMITS.maxRasterChars} once encoded. The small one beside it proves the
-	 * refusal is of that image rather than of the sync.
+	 * The source is only 8x170 — a thin sliver, chosen for how cheaply jimp resizes and dithers it
+	 * rather than for how it looks — but {@link requireProjectedHeight} measures every upload
+	 * against the widest paper this system can be configured for, and this sliver's aspect ratio
+	 * is as tall as that check allows. Dithered for the 1884-dot device below, it comes out
+	 * 1884x40,035: 236 bytes a row, 9,448,260 bytes of dots, past
+	 * {@link IMAGE_LIMITS.maxRasterChars} once base64 encodes it. The small logo beside it proves
+	 * the refusal is of that image rather than of the sync.
 	 */
 	it("skips an image the frame will not carry, and still sends the ones it will", async () => {
 		await createAsset("logo", PNG);
-		await createAsset("tall", await solidPng(384, 2200));
+		await createAsset("tall", await solidPng(8, 170));
 
-		const rasters = await rastersFor([device("kitchen", 32)], "agent-1");
+		const rasters = await rastersFor([device("kitchen", 157)], "agent-1");
 
 		expect(rasters.map((raster) => raster.name)).toEqual(["logo"]);
 	});

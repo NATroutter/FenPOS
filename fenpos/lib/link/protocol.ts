@@ -46,6 +46,12 @@ import {
  * required on the PDF417 directive — a version-2 agent would not recognise the new directive
  * or payload, and would silently fall back to printer-decided layout on a version-2 PDF417
  * block that omits `columns`, which is exactly the ambiguity the field was added to remove.
+ *
+ * Bumped 3 -> 4 for raster lines — a block the printer cannot draw itself, or a line set in a
+ * configured font, now arrives as dots rather than as printer commands — and for the larger
+ * frame that carries them. A version-3 agent holds a frame cap and a raster-character cap a
+ * third of these, so it would refuse a receipt that only the new cap makes possible, rather
+ * than the printer producing blank paper where the raster should have been.
  */
 export const PROTOCOL_VERSION = 3;
 
@@ -56,7 +62,7 @@ export const PROTOCOL_VERSION = 3;
  * a peer streaming an unbounded frame to exhaust the receiver's memory before any schema
  * validation can run.
  */
-export const MAX_FRAME_BYTES = 256 * 1024;
+export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 /** Bounds on a dispatched job, applied on both sides. */
 export const JOB_LIMITS = {
@@ -82,14 +88,14 @@ export const IMAGE_LIMITS = {
 	/**
 	 * Base64 characters in one raster, whether synced or carried in a job.
 	 *
-	 * 128 KB encodes 96 KB of dots, which on the widest common paper is a picture about 1500 dots
-	 * tall — some sixty lines of paper, and far more than any logo. It bounds every raster equally:
-	 * an image's dots, and a whole line the server had to draw because the printer could not. What one
-	 * job may spend on dots in total is a separate, operator-configurable bound —
-	 * `limits.maxRasterMb`, charged over every raster a job carries — which is what stops several
-	 * smaller pictures adding up to a frame nothing will send.
+	 * 12 MiB encodes 9 MiB of dots, which on the widest common paper is a picture about 131,000 dots
+	 * tall — several thousand lines of paper, and far more than any logo or drawn block needs. It
+	 * bounds every raster equally: an image's dots, and a whole line the server had to draw
+	 * because the printer could not. What one job may spend on dots in total is a separate,
+	 * operator-configurable bound — `limits.maxRasterMb`, charged over every raster a job carries
+	 * — which is what stops several smaller pictures adding up to a frame nothing will send.
 	 */
-	maxRasterChars: 128 * 1024,
+	maxRasterChars: 12 * 1024 * 1024,
 	/** Rasters one `config.sync` may carry: one per asset per distinct paper width behind an agent. */
 	maxSyncedRasters: 32,
 	/** Printed width of a raster, in dots. Well beyond the ~576 of the widest common paper. */

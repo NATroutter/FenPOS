@@ -193,9 +193,13 @@ public class SerialHandler implements PrinterPort {
         target.setParity(serial.parity().getBit());
         target.setFlowControl(serial.flowControl().getBit());
 
-        // Blocking writes bounded by the configured timeout: without a bound, a printer
-        // that stops asserting flow control would hold this device's worker thread forever
-        // and silently stall the queue behind it.
+        // Blocking writes bounded by the configured timeout, applied per chunk by
+        // ChunkedWriter rather than to the job as a whole: without a bound, a printer that
+        // stops asserting flow control would hold this device's worker thread forever and
+        // silently stall the queue behind it, and without the per-chunk split a long job
+        // would need the whole timeout to itself, forcing a choice between a stalled printer
+        // failing slowly and a slow-but-healthy printer failing a long job it would have
+        // finished.
         target.setComPortTimeouts(
                 SerialPort.TIMEOUT_WRITE_BLOCKING, 0, (int) serial.writeTimeout().toMillis());
     }
@@ -225,7 +229,8 @@ public class SerialHandler implements PrinterPort {
 
             int written;
             try {
-                written = port.writeBytes(payload, payload.length);
+                written = ChunkedWriter.write((buffer, length, offset) -> port.writeBytes(buffer, length, offset),
+                        payload);
             } catch (RuntimeException e) {
                 handleLostDevice("Write failed: " + e.getMessage());
                 throw new PrinterWriteException(

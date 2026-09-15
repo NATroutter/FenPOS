@@ -411,19 +411,17 @@ describe("agent link", () => {
 						linefeed: "LF",
 						// Every line, span and character is within what the schema permits, so what is
 						// asserted is the size guard rather than any other validation.
-						lines: Array.from({ length: 600 }, () => ({
+						lines: Array.from({ length: JOB_LIMITS.maxLines }, () => ({
 							align: "LEFT" as const,
-							spans: [
-								{
-									text: "x".repeat(JOB_LIMITS.maxSpanChars),
-									bold: false,
-									underline: 0 as const,
-									invert: false,
-									widthMult: 1,
-									heightMult: 1,
-									font: "A" as const,
-								},
-							],
+							spans: Array.from({ length: JOB_LIMITS.maxSpansPerLine }, () => ({
+								text: "x".repeat(JOB_LIMITS.maxSpanChars),
+								bold: false,
+								underline: 0 as const,
+								invert: false,
+								widthMult: 1,
+								heightMult: 1,
+								font: "A" as const,
+							})),
 							directives: [],
 						})),
 					},

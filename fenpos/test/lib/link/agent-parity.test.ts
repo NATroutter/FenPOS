@@ -27,9 +27,9 @@ const CODEC = join(__dirname, "../../../../agent/src/main/java/fi/natroutter/fen
 
 /**
  * Reads `static final int NAME = ...;` from the agent's codec, public or private. The right-hand
- * side is a literal, a multiplication of two literals, or a subtraction naming another constant
- * declared the same way, which covers every shape a bound takes there, including one derived from
- * another bound.
+ * side is a literal, a multiplication of two or three literals, or a subtraction naming another
+ * constant declared the same way, which covers every shape a bound takes there, including one
+ * derived from another bound.
  */
 function agentBound(name: string): number {
 	const source = readFileSync(CODEC, "utf8");
@@ -41,14 +41,17 @@ function agentBound(name: string): number {
 }
 
 function resolveExpression(expression: string): number {
-	const operation = expression.match(/^(.+?)\s*([-*])\s*(.+)$/);
-	if (!operation) {
+	const operands = expression.split(/\s*([-*])\s*/);
+	if (operands.length === 1) {
 		return resolveOperand(expression);
 	}
-	const [, left, operator, right] = operation;
-	const a = resolveOperand(left.trim());
-	const b = resolveOperand(right.trim());
-	return operator === "-" ? a - b : a * b;
+	let value = resolveOperand(operands[0].trim());
+	for (let index = 1; index < operands.length; index += 2) {
+		const operator = operands[index];
+		const operand = resolveOperand(operands[index + 1].trim());
+		value = operator === "-" ? value - operand : value * operand;
+	}
+	return value;
 }
 
 function resolveOperand(token: string): number {

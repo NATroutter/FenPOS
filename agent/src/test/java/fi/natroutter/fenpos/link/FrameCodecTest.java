@@ -604,13 +604,14 @@ class FrameCodecTest {
 
     @Test
     void measuresTheCapInBytesRatherThanCharacters() {
-        // Two hundred thousand two-byte characters: inside the cap if it counted characters, well
-        // past it in the bytes that actually cross the socket.
-        String multibyte = "{\"type\":\"job.cancel\",\"jobId\":\"" + "ä".repeat(200_000) + "\"}";
+        // One more three-byte character than a third of the cap: inside the cap if it counted
+        // characters, just past it in the bytes that actually cross the socket.
+        String multibyte = "€".repeat(FrameCodec.MAX_FRAME_BYTES / 3 + 1);
 
         assertTrue(multibyte.length() < FrameCodec.MAX_FRAME_BYTES);
         ProtocolException refusal = assertThrows(ProtocolException.class, () -> codec.read(multibyte));
-        assertTrue(refusal.getMessage().startsWith("frame of 400"), refusal.getMessage());
+        assertTrue(refusal.getMessage().startsWith("frame of " + (3 * (FrameCodec.MAX_FRAME_BYTES / 3 + 1))),
+                refusal.getMessage());
     }
 
     @Test
@@ -987,7 +988,7 @@ class FrameCodecTest {
     @Test
     void refusesARasterPayloadLongerThanTheLimit() {
         // Refused on the encoded length, before the array it asks for is allocated.
-        String data = "A".repeat(128 * 1024 + 4);
+        String data = "A".repeat(12 * 1024 * 1024 + 4);
         assertThrows(ProtocolException.class, () -> codec.read(
                 "{\"type\":\"config.sync\",\"devices\":[],\"assets\":["
                         + "{\"name\":\"logo\",\"widthDots\":8,\"heightDots\":1,\"data\":\"" + data + "\"}]}"));
@@ -1031,7 +1032,7 @@ class FrameCodecTest {
         int depth = 60_000;
         String nested = "{\"type\":\"job.dispatch\",\"job\":"
                 + "[".repeat(depth) + "]".repeat(depth) + "}";
-        assertTrue(nested.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 256 * 1024);
+        assertTrue(nested.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < FrameCodec.MAX_FRAME_BYTES);
 
         assertThrows(ProtocolException.class, () -> codec.read(nested));
     }

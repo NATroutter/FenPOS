@@ -62,7 +62,7 @@ public final class FrameCodec {
      * <p>Matches MAX_FRAME_BYTES on the server. Checked before parsing, so an oversized frame
      * is rejected without being turned into an object graph first.
      */
-    public static final int MAX_FRAME_BYTES = 256 * 1024;
+    public static final int MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
     /**
      * Most job identifiers one {@code hello} may carry. Mirrors MAX_OUTSTANDING_JOBS on the server.
@@ -94,7 +94,7 @@ public final class FrameCodec {
     private static final int MAX_SYNCED_RASTERS = 32;
 
     /** Longest base64 payload accepted for one raster, synced or carried in a job. */
-    private static final int MAX_RASTER_CHARS = 128 * 1024;
+    private static final int MAX_RASTER_CHARS = 12 * 1024 * 1024;
 
     /** Widest raster accepted, in dots — far beyond the ~576 of the widest common paper. */
     private static final int MAX_RASTER_WIDTH_DOTS = 4096;

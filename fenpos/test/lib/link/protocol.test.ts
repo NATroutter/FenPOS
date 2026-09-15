@@ -193,9 +193,11 @@ describe("serialiseServerFrame", () => {
 	 * every outgoing frame passes through is what makes the write impossible rather than merely
 	 * unlikely.
 	 *
-	 * Reachable without any of the per-field limits being broken: `maxTotalChars` is
-	 * operator-configurable to a million characters, so a lawful receipt on such an install can
-	 * compile to more than a frame will carry.
+	 * Reachable without any of the per-field limits being broken: `JOB_LIMITS` bounds a line, a
+	 * span and how many of each a job may carry, independently of one another, and a job built
+	 * right up to all three at once is called directly here — bypassing the compiler's own,
+	 * deliberately smaller, per-job budgets — the same way a bug in one of those budgets would
+	 * leave this as the only guard standing between a compiled job and the wire.
 	 */
 	it("refuses a frame larger than the cap rather than letting it reach the socket", () => {
 		const thrown = (() => {
@@ -206,21 +208,19 @@ describe("serialiseServerFrame", () => {
 						jobId: "job-1",
 						device: "kitchen",
 						linefeed: "LF",
-						// Each line is a full-length span, so the cap is met with lawful lines rather
-						// than by breaking any other limit.
-						lines: Array.from({ length: 600 }, () =>
+						// Every line at the maximum span count, every span at the maximum length: the
+						// cap is met with lawful lines rather than by breaking any other limit.
+						lines: Array.from({ length: JOB_LIMITS.maxLines }, () =>
 							line({
-								spans: [
-									{
-										text: "x".repeat(JOB_LIMITS.maxSpanChars),
-										bold: false,
-										underline: 0,
-										invert: false,
-										widthMult: 1,
-										heightMult: 1,
-										font: "A",
-									},
-								],
+								spans: Array.from({ length: JOB_LIMITS.maxSpansPerLine }, () => ({
+									text: "x".repeat(JOB_LIMITS.maxSpanChars),
+									bold: false,
+									underline: 0,
+									invert: false,
+									widthMult: 1,
+									heightMult: 1,
+									font: "A" as const,
+								})),
 							}),
 						),
 					},

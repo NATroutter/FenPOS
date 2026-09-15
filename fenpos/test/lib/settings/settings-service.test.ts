@@ -5,7 +5,13 @@ import { prisma } from "@/lib/db";
 import type { LogLevel } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { resetFormatting } from "@/lib/format/datetime";
-import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema, rawWriteSchema } from "@/lib/link/protocol";
+import {
+	agentSettingsSchema,
+	JOB_LIMITS,
+	jobSettingsSchema,
+	MAX_FRAME_BYTES,
+	rawWriteSchema,
+} from "@/lib/link/protocol";
 import { logger, resetMinimumLevel } from "@/lib/logger";
 
 import type { SettingKey, SettingType } from "@/lib/settings/settings-service";
@@ -184,16 +190,6 @@ describe("settings", () => {
 describe("setting definitions", () => {
 	beforeEach(async () => {
 		await prisma.setting.deleteMany();
-	});
-
-	it("bounds the raster megabyte setting at a literal ceiling, not yet derived from the frame cap", () => {
-		// Base64 expands by four thirds and the frame also carries the job's JSON, so an eventual
-		// derivation from the frame cap needs that cap raised first — today's frame is far too small for
-		// the arithmetic to produce a positive number. Until then, 11 is a literal.
-		const definition = SETTINGS.find((setting) => setting.key === "limits.maxRasterMb");
-
-		expect(definition?.type).toBe("integer");
-		expect(definition && definition.type === "integer" ? definition.max : undefined).toBe(11);
 	});
 
 	it("gives every setting a category the category table names", () => {
@@ -615,6 +611,22 @@ describe("limits.maxOutputLines bounds", () => {
 
 	it("refuses a save above the cap", async () => {
 		await expect(setSetting("limits.maxOutputLines", JOB_LIMITS.maxLines + 1)).rejects.toThrow(ApiError);
+	});
+});
+
+/**
+ * `limits.maxRasterMb` must never offer more than base64 and the job's own JSON leave room for
+ * inside `MAX_FRAME_BYTES` — a higher setting produces a raster that compiles and then a frame
+ * the wire refuses to carry. Pinned down separately because the bound is derived rather than a
+ * literal, the same reason `limits.maxOutputLines` is pinned above.
+ */
+describe("limits.maxRasterMb bounds", () => {
+	it("caps at what the frame leaves room for, rather than restating a number", () => {
+		const definition = SETTINGS.find((setting) => setting.key === "limits.maxRasterMb");
+		if (definition?.type !== "integer") {
+			throw new Error("expected limits.maxRasterMb to be an integer setting");
+		}
+		expect(definition.max).toBe(Math.floor((MAX_FRAME_BYTES * 3) / 4 / (1024 * 1024)) - 1);
 	});
 });
 
