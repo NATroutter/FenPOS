@@ -1,7 +1,10 @@
 package fi.natroutter.fenpos.markup;
 
+import fi.natroutter.fenpos.enums.Align;
+import fi.natroutter.fenpos.enums.BarcodeSystem;
+
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * The complete set of markup tags.
@@ -21,28 +24,32 @@ import java.util.Set;
 public enum Tag {
 
     /** Emphasis. */
-    BOLD("bold", Kind.PAIRED, Set.of()),
+    BOLD("bold", Kind.PAIRED, Map.of()),
 
     /** Underline; {@code weight} selects the printer's second, heavier one. */
-    UNDERLINE("underline", Kind.PAIRED, Set.of("weight")),
+    UNDERLINE("underline", Kind.PAIRED, AttributeSpec.table("weight", AttributeSpec.integer(1, 2))),
 
     /** White on black. */
-    INVERT("invert", Kind.PAIRED, Set.of()),
+    INVERT("invert", Kind.PAIRED, Map.of()),
 
     /** Character multipliers, {@code width} and {@code height}; either alone leaves the other at 1. */
-    SIZE("size", Kind.PAIRED, Set.of("width", "height")),
+    SIZE("size", Kind.PAIRED, AttributeSpec.table(
+            "width", AttributeSpec.integer(1, 8),
+            "height", AttributeSpec.integer(1, 8))),
 
     /** A face: one of the printer's own by letter. A stored font is the server's to draw. */
-    TEXT("text", Kind.PAIRED, Set.of("font", "size")),
+    TEXT("text", Kind.PAIRED, AttributeSpec.table(
+            "font", AttributeSpec.markRequired(AttributeSpec.text(64)),
+            "size", AttributeSpec.integer(8, 4096))),
 
     /** Line justification, {@code to}. Paired, and required to enclose the whole line. */
-    ALIGN("align", Kind.PAIRED, Set.of("to")),
+    ALIGN("align", Kind.PAIRED, AttributeSpec.table("to", AttributeSpec.markRequired(AttributeSpec.oneOf(Align.class)))),
 
     /** Break this line at the paper width. Paired, and required to enclose the whole line. */
-    WRAP("wrap", Kind.PAIRED, Set.of()),
+    WRAP("wrap", Kind.PAIRED, Map.of()),
 
     /** Print this line as written. Paired, and required to enclose the whole line. */
-    NOWRAP("nowrap", Kind.PAIRED, Set.of()),
+    NOWRAP("nowrap", Kind.PAIRED, Map.of()),
 
     /**
      * Pad to the paper's width with {@code char}, a space when it is left off.
@@ -50,35 +57,36 @@ public enum Tag {
      * The one tag whose printed width is not knowable from the line: it stands for however many
      * columns are left over, which is a property of the device. See {@code FillResolver}.
      */
-    FILL("fill", Kind.VOID, Set.of("char")),
+    FILL("fill", Kind.VOID, AttributeSpec.table("char", AttributeSpec.character())),
 
     /** Cut the paper, fully unless {@code mode} says partial. */
-    CUT("cut", Kind.VOID, Set.of("mode")),
+    CUT("cut", Kind.VOID, AttributeSpec.table("mode", AttributeSpec.oneOf("full", "partial"))),
 
     /** Advance the paper by {@code lines}. */
-    FEED("feed", Kind.VOID, Set.of("lines")),
+    FEED("feed", Kind.VOID, AttributeSpec.table("lines", AttributeSpec.markRequired(AttributeSpec.integer(1, 255)))),
 
     /** A full-width horizontal rule. Required to be alone on its line. */
-    HR("hr", Kind.VOID, Set.of()),
+    HR("hr", Kind.VOID, Map.of()),
 
-    /** A QR code; {@code size} is dots per module, 1-16. */
-    QR("qr", Kind.PAIRED, Set.of("size")),
+    /** A QR code; {@code size} is dots per module. */
+    QR("qr", Kind.PAIRED, AttributeSpec.table("size", AttributeSpec.integer(1, 16))),
 
     /** A linear barcode of the symbology {@code type} names. */
-    BARCODE("barcode", Kind.PAIRED, Set.of("type")),
+    BARCODE("barcode", Kind.PAIRED, AttributeSpec.table(
+            "type", AttributeSpec.markRequired(AttributeSpec.oneOf(BarcodeSystem.class)))),
 
-    /** A PDF417 symbol; {@code level} is the error-correction level, 0-8. */
-    PDF417("pdf417", Kind.PAIRED, Set.of("level")),
+    /** A PDF417 symbol; {@code level} is the error-correction level. */
+    PDF417("pdf417", Kind.PAIRED, AttributeSpec.table("level", AttributeSpec.integer(0, 8))),
 
     /**
-     * A stored image, printed {@code width} percent of the paper wide, 1-100.
+     * A stored image, printed {@code width} percent of the paper wide.
      * <p>
      * The name is the content rather than an attribute because that is the shape the panel settled
      * on, and the two grammars are ports of each other. There the content may also be an
      * {@code http(s)} URL, which routinely contains {@code =} and may contain {@code >}; here it can
      * only ever name a stored image, because this agent has no fetch path.
      */
-    IMAGE("image", Kind.PAIRED, Set.of("width"));
+    IMAGE("image", Kind.PAIRED, AttributeSpec.table("width", AttributeSpec.integer(1, 100)));
 
     /** Whether a tag wraps content or stands alone. */
     public enum Kind {
@@ -90,9 +98,9 @@ public enum Tag {
 
     private final String tagName;
     private final Kind kind;
-    private final Set<String> attributes;
+    private final Map<String, AttributeSpec> attributes;
 
-    Tag(String tagName, Kind kind, Set<String> attributes) {
+    Tag(String tagName, Kind kind, Map<String, AttributeSpec> attributes) {
         this.tagName = tagName;
         this.kind = kind;
         this.attributes = attributes;
@@ -108,8 +116,8 @@ public enum Tag {
         return kind;
     }
 
-    /** Returns the attribute names this tag accepts, lowercase; empty for a tag that takes none. */
-    public Set<String> attributes() {
+    /** Returns what each attribute this tag accepts takes, by lowercase name, in declaration order. */
+    public Map<String, AttributeSpec> attributes() {
         return attributes;
     }
 

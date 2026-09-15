@@ -639,7 +639,7 @@ public final class MarkupParser {
                             "Control characters cannot be printed; use markup tags for formatting");
                 }
             }
-            if (!tag.attributes().contains(key)) {
+            if (!tag.attributes().containsKey(key)) {
                 throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, key,
                         "<" + tag.tagName() + "> has no attribute '" + key + "'");
             }
