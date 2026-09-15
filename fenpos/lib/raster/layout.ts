@@ -87,6 +87,12 @@ interface FlowChild {
 export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 	const children: FlowChild[] = [];
 	let items: InlineItem[] = [];
+	// Whether the node just visited was itself a break, tracked across the whole walk rather than per
+	// recursive call: it is a question about document order — was the line before this one empty? —
+	// and the walk already visits nodes in that order regardless of how deep a scope or an align has
+	// nested them. Starts false, which is what keeps a block's own opening line from counting: the
+	// first break any block's children carry ends that line, not a blank one before it.
+	let previousWasBreak = false;
 
 	const closeSequence = (align: Align, wrap: boolean): void => {
 		if (items.length > 0) {
@@ -99,6 +105,7 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 		for (const node of list) {
 			switch (node.kind) {
 				case "text":
+					previousWasBreak = false;
 					items.push({
 						kind: "run",
 						text: node.text,
@@ -108,9 +115,11 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					});
 					break;
 				case "fill":
+					previousWasBreak = false;
 					items.push({ kind: "fill", character: node.character, style, column: node.column });
 					break;
 				case "image":
+					previousWasBreak = false;
 					items.push({ kind: "image", raster: rasterFor(node, context) });
 					break;
 				case "scope":
@@ -129,10 +138,12 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					closeSequence(align, node.wrap);
 					break;
 				case "rule":
+					previousWasBreak = false;
 					closeSequence(align, wrap);
 					children.push({ node: ruleNode(), align: "LEFT" });
 					break;
 				case "block":
+					previousWasBreak = false;
 					closeSequence(align, wrap);
 					children.push({ node: blockNode(node, context), align });
 					break;
@@ -154,8 +165,14 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 				case "break":
 					// Only a block's children ever carry one this far: every other caller already split at
 					// breaks before handing nodes here. Ending the sequence here is what turns each of a
-					// block's source lines into its own row.
+					// block's source lines into its own row. A break immediately after another one — with
+					// nothing placed between them — is a source line with nothing typed on it, which still
+					// holds one line of paper the way it would outside a block, so it gets a row of its own.
+					if (previousWasBreak) {
+						children.push({ node: blankRowNode(context.typeface(style).cellHeight), align: "LEFT" });
+					}
 					closeSequence(align, wrap);
+					previousWasBreak = true;
 					break;
 			}
 		}
@@ -245,6 +262,16 @@ function inlineSequence(items: InlineItem[], align: Align, wrap: boolean, contex
 		paint(canvas, x, y, availableWidth) {
 			paintRows(canvas, rowsAt(availableWidth), x, y);
 		},
+	};
+}
+
+/** A source line with nothing typed on it: draws nothing, but still holds one row of paper. */
+function blankRowNode(height: number): LayoutNode {
+	return {
+		measure(availableWidth) {
+			return { width: availableWidth, height };
+		},
+		paint() {},
 	};
 }
 

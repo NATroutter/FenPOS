@@ -112,4 +112,15 @@ describe("BoxNode", () => {
 		const raster = renderRasterLine(parseDocument("<align=center><box width=50>\nA\n</box></align>").nodes, context);
 		expectRasterToMatchGolden(raster, "box-centred");
 	});
+
+	/**
+	 * A blank source line inside a box still holds one line of paper, exactly as it would outside
+	 * one — the box's own opening and closing lines are not content lines and hold none.
+	 */
+	it("gives a blank line inside a box the height of one empty row", () => {
+		const tight = renderRasterLine(parseDocument("<box>\nA\nB\n</box>").nodes, context);
+		const spaced = renderRasterLine(parseDocument("<box>\nA\n\nB\n</box>").nodes, context);
+
+		expect(spaced.heightDots).toBe(tight.heightDots + 24);
+	});
 });
