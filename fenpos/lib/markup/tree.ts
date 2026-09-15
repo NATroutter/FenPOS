@@ -5,6 +5,7 @@ import { type SymbolSpec, validateSymbolContent } from "@/lib/markup/blocks";
 import type {
 	AlignNode,
 	BlockNode,
+	BlockTag,
 	Document,
 	ImageNode,
 	ImageSourceRef,
@@ -67,6 +68,42 @@ const MAX_IMAGE_WIDTH_PERCENT = 100;
 /** A data URI `<image>` accepts: base64 PNG or JPEG. Line breaks are trimmed out before this runs. */
 const IMAGE_DATA_URI = /^data:(image\/png|image\/jpeg);base64,([A-Za-z0-9+/=]+)$/;
 
+/** What `<chart>` can be drawn as. */
+const CHART_KINDS: readonly string[] = ["bar", "line", "pie", "scatter"];
+
+/** The charts that plot points a marker can be drawn on. */
+const MARKER_KINDS: readonly string[] = ["line", "scatter"];
+
+/** Fullest a `<bar>` gauge can be asked for, as a percentage. */
+const MAX_GAUGE_PERCENT = 100;
+
+/**
+ * The tags the printer prints for itself, which is why no block may hold one.
+ *
+ * A block is a region of dots this side draws and sends as a picture. A symbol is encoded by the
+ * printer's own firmware and a cut or a feed acts on the paper rather than marking it, so neither
+ * is something that can be drawn into a region: there is nothing to draw.
+ */
+const PRINTER_DRAWN: ReadonlySet<string> = new Set(["qr", "barcode", "pdf417", "cut", "feed", "drawer"]);
+
+/** The blocks that mean nothing on their own, and the block each belongs directly inside. */
+const REQUIRED_PARENT: ReadonlyMap<string, BlockTag> = new Map([
+	["row", "table"],
+	["cell", "row"],
+	["series", "chart"],
+	["labels", "chart"],
+] as [string, BlockTag][]);
+
+/** The blocks that hold named tags and nothing else, whitespace and line breaks apart. */
+const HOLDS_ONLY: ReadonlyMap<BlockTag, readonly string[]> = new Map([
+	["table", ["row"]],
+	["row", ["cell"]],
+	["chart", ["series", "labels"]],
+] as [BlockTag, readonly string[]][]);
+
+/** The blocks that may sit beside something else on a line, rather than owning whole lines. */
+const SHARES_A_LINE: ReadonlySet<BlockTag> = new Set(["row", "cell", "series", "labels", "bar"]);
+
 type OpenToken = Extract<Token, { kind: "open" }>;
 
 /**
@@ -103,6 +140,26 @@ interface LineState {
 	soleOccupant: { name: string; line: number; column: number; code: MarkupErrorCode } | null;
 	/** A line-owning tag closed; nothing else may follow on this line. */
 	closedOwner: { name: string; code: MarkupErrorCode } | null;
+	/**
+	 * Nothing but whitespace has been placed on this line.
+	 *
+	 * What lets a block open on a line that is indented. A block is laid out in dots rather than in
+	 * columns, so the spaces written around its tags print nothing at all and the line is still the
+	 * fresh one the block has to own; the spaces themselves are dropped when the line ends.
+	 */
+	spaceOnly: boolean;
+	/** A block's tag sits on this line, so the whitespace around it prints nothing. */
+	blockSeen: boolean;
+	/** Text holding only whitespace, and where it was pushed, in case the line turns out to be a block's. */
+	spaces: { list: Node[]; node: Node }[];
+}
+
+/** What a block is accumulating while it is open. */
+interface BlockState {
+	/** Cells opened inside this `<table>` so far, charged against the limit. */
+	cells: number;
+	/** Where a `<series>` inside this `<chart>` asked for a marker, checked when the chart closes. */
+	marker: { line: number; column: number } | null;
 }
 
 /** A tag that encloses data rather than markup, and the data read so far. */
@@ -110,8 +167,13 @@ interface ContentState {
 	tag: Tag;
 	/** One entry per text token. Line breaks contribute nothing, so they add no entry. */
 	parts: string[];
-	/** What the tag's argument said the content will become, resolved when the tag opened. */
-	shape: ContentShape;
+	/**
+	 * What the tag's argument said the content will become, resolved when the tag opened.
+	 *
+	 * Null for a block that encloses data: its numbers are read against the chart that holds them,
+	 * which is a measurement rather than a shape, so nothing about them is settled here.
+	 */
+	shape: ContentShape | null;
 }
 
 /** A content tag's argument, resolved before its content is known. */
@@ -135,6 +197,8 @@ interface Frame {
 	column: number;
 	/** The line state of the nearest scope that owns lines: a block, or the document. */
 	owner: LineState;
+	/** What this block is accumulating, on a block's frame; null on every other. */
+	block: BlockState | null;
 	content: ContentState | null;
 }
 
@@ -173,6 +237,7 @@ class DocumentBuilder {
 			line: 1,
 			column: 1,
 			owner: freshLine(),
+			block: null,
 			content: null,
 		});
 	}
@@ -223,15 +288,47 @@ class DocumentBuilder {
 			return;
 		}
 
-		frame.children.push({
+		const blank = token.text.trim().length === 0;
+		if (!blank) {
+			this.requireTextIsWelcome(token.line, token.column);
+		}
+
+		const node: Node = {
 			kind: "text",
 			text: token.text,
 			line: token.line,
 			column: token.column,
 			...(token.expandedFrom === undefined ? {} : { expandedFrom: token.expandedFrom }),
-		});
+		};
+		frame.children.push(node);
 		frame.owner.content = true;
 		frame.owner.textSeen = true;
+		if (blank) {
+			frame.owner.spaces.push({ list: frame.children, node });
+			return;
+		}
+		frame.owner.spaceOnly = false;
+	}
+
+	/**
+	 * Rejects text written straight into a block that holds tags rather than words.
+	 *
+	 * A table holds rows and a chart holds series; text between them belongs to no cell and no
+	 * plot, so there is nowhere on the paper for it to go. Whitespace is the exception, because
+	 * indenting the markup is not writing text.
+	 */
+	private requireTextIsWelcome(line: number, column: number): void {
+		const block = this.enclosingBlock();
+		const holds = block ? HOLDS_ONLY.get(block.tag) : undefined;
+		if (block && holds) {
+			throw new MarkupError(
+				MARKUP_ERRORS.misplacedBlock,
+				line,
+				column,
+				block.tag,
+				`<${block.tag}> holds ${listed(holds)} rather than text`,
+			);
+		}
 	}
 
 	/**
@@ -250,8 +347,13 @@ class DocumentBuilder {
 		frame.children.push({ kind: "break", line: token.line, column: token.column });
 	}
 
+	/** Ends the line of the scope this position is written in. */
+	private endLine(): void {
+		this.endLineOf(this.frame().owner);
+	}
+
 	/**
-	 * Verifies what the finished line holds, then clears it for the next one.
+	 * Verifies what a finished line holds, then clears it for the next one.
 	 *
 	 * A rule expands to the full paper width and a symbol is a block of dots several lines tall, so
 	 * either combined with anything else would overflow its line by construction rather than by
@@ -259,9 +361,12 @@ class DocumentBuilder {
 	 * solenoid, so it costs the line no paper and may legally sit beside anything. Fills count even
 	 * though they produce no text yet — `<hr><fill=.>` would otherwise print a line of dots, feed,
 	 * and then the rule.
+	 *
+	 * The state is an argument rather than the innermost frame's, because a block's last line ends
+	 * when the block closes: by then the frame that owned that line has been popped, and the line
+	 * still has to be checked.
 	 */
-	private endLine(): void {
-		const state = this.frame().owner;
+	private endLineOf(state: LineState): void {
 		const occupant = state.soleOccupant;
 		if (occupant && (state.textSeen || state.fills > 0 || state.printing !== 1)) {
 			throw new MarkupError(
@@ -273,6 +378,18 @@ class DocumentBuilder {
 			);
 		}
 
+		// A line whose only tags are a block's prints no text of its own: the region is drawn in dots
+		// and the spaces written around its tags are markup rather than paper. Dropped now rather than
+		// when they were read, because nothing knew then what else the line would hold.
+		if (state.blockSeen) {
+			for (const space of state.spaces) {
+				const at = space.list.indexOf(space.node);
+				if (at >= 0) {
+					space.list.splice(at, 1);
+				}
+			}
+		}
+
 		state.content = false;
 		state.textSeen = false;
 		state.fills = 0;
@@ -281,6 +398,9 @@ class DocumentBuilder {
 		state.wrapSeen = false;
 		state.soleOccupant = null;
 		state.closedOwner = null;
+		state.spaceOnly = true;
+		state.blockSeen = false;
+		state.spaces.length = 0;
 	}
 
 	// -----------------------------------------------------------------------
@@ -306,6 +426,7 @@ class DocumentBuilder {
 
 		this.requireArgumentPolicy(tag, token.argument, token.line, token.column);
 		const attributes = readAttributes(tag.name, token.attributes, tag.attributes, token.line);
+		this.requirePlacement(tag, token.line, token.column);
 
 		if (isBlockTag(tag.name)) {
 			this.openContent(tag, token);
@@ -313,6 +434,20 @@ class DocumentBuilder {
 		}
 
 		switch (tag.name) {
+			case "box":
+			case "table":
+			case "row":
+			case "cell":
+			case "chart":
+				this.openRegion(tag, token, attributes);
+				return;
+			case "series":
+			case "labels":
+				this.openDataBlock(tag, token, attributes);
+				return;
+			case "bar":
+				this.appendGauge(tag, token, attributes);
+				return;
 			case "bold":
 			case "underline":
 			case "invert":
@@ -496,11 +631,11 @@ class DocumentBuilder {
 		const shape = this.contentShape(tag, token.argument, token.line, token.column);
 		this.enter(tag, token, null).content = { tag, parts: [], shape };
 
-		// A symbol nested in a block is measured against that block's width instead, so only one at
-		// the top level is a claim on a printed line of its own. An image claims nothing at all: it is
-		// the one of these the layout engine can place beside text, in a row of glyphs sized to its own
-		// dots, and a line holding one is drawn into a raster rather than sent as columns.
-		if (tag !== TAGS.image && this.owningFrame() === this.frames[0]) {
+		// A symbol is a block of dots the printer places by itself, so it claims the printed line it
+		// is placed on. An image claims nothing: it is the one of these the layout engine can place
+		// beside text, in a row of glyphs sized to its own dots, and a line holding one is drawn into
+		// a raster rather than sent as columns.
+		if (tag !== TAGS.image) {
 			this.claimLine(tag.name, token.line, token.column, MARKUP_ERRORS.invalidBlockScope);
 		}
 	}
@@ -561,7 +696,7 @@ class DocumentBuilder {
 		const frame = this.frame();
 		frame.children.push({ kind: "fill", character, line: token.line, column: token.column });
 		frame.owner.fills += 1;
-		frame.owner.content = true;
+		this.placed(frame.owner);
 	}
 
 	private appendRule(token: OpenToken): void {
@@ -571,7 +706,7 @@ class DocumentBuilder {
 		frame.children.push({ kind: "rule", line: token.line, column: token.column });
 		this.claimLine("hr", token.line, token.column, MARKUP_ERRORS.invalidRuleScope);
 		frame.owner.printing += 1;
-		frame.owner.content = true;
+		this.placed(frame.owner);
 	}
 
 	private appendVoid(tag: Tag, token: OpenToken): void {
@@ -580,7 +715,7 @@ class DocumentBuilder {
 		const directive = this.voidDirective(tag, token.argument, token.line, token.column);
 		const frame = this.frame();
 		frame.children.push({ kind: "void", directive, line: token.line, column: token.column });
-		frame.owner.content = true;
+		this.placed(frame.owner);
 		if (directive.kind !== "DRAWER") {
 			frame.owner.printing += 1;
 		}
@@ -617,6 +752,248 @@ class DocumentBuilder {
 			return 5;
 		}
 		throw this.argumentError(TAGS.drawer, line, column, "must be pin 2 or 5");
+	}
+
+	// -----------------------------------------------------------------------
+	// Blocks
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Rejects a tag written where the block around it does not admit it.
+	 *
+	 * The shape of a region is checked here and only here, which is what lets the layout engine
+	 * descend a table without asking at every step whether the thing it has reached is a row. A
+	 * refusal names both tags, because which of the two the author has to move is not obvious from
+	 * either alone.
+	 *
+	 * @throws MarkupError if this tag cannot sit inside the block that encloses it
+	 */
+	private requirePlacement(tag: Tag, line: number, column: number): void {
+		const inside = this.enclosingBlock()?.tag ?? null;
+		const refuse = (message: string): never => {
+			throw new MarkupError(MARKUP_ERRORS.misplacedBlock, line, column, tag.name, message);
+		};
+
+		if (inside !== null && PRINTER_DRAWN.has(tag.name)) {
+			refuse(`<${tag.name}> is printed by the printer itself, so it cannot sit inside <${inside}>`);
+		}
+
+		const required = REQUIRED_PARENT.get(tag.name);
+		if (required !== undefined && inside !== required) {
+			refuse(`<${tag.name}> belongs directly inside <${required}>`);
+		}
+
+		const holds = inside === null ? undefined : HOLDS_ONLY.get(inside);
+		if (holds && !holds.includes(tag.name)) {
+			refuse(`<${inside}> holds ${listed(holds)} and nothing else`);
+		}
+	}
+
+	/**
+	 * Opens a block that encloses markup.
+	 *
+	 * `box`, `table` and `chart` own whole lines for the same reason `<align>` does: each is drawn
+	 * as a region the width of the paper offers it, so text beside one would have nowhere to go.
+	 * `row` and `cell` are the parts of a region rather than regions themselves, so they may be
+	 * written along one line — which is how a table is readable in source at all.
+	 */
+	private openRegion(tag: Tag, token: OpenToken, attributes: Attributes): void {
+		const block = tag.name as BlockTag;
+		const argument = this.blockArgument(tag, token, attributes);
+
+		if (SHARES_A_LINE.has(block)) {
+			this.requireInsideLineScope(token.line, token.column);
+		} else {
+			this.requireBlockCanOpen(tag.name, token.line, token.column);
+		}
+		if (block === "cell") {
+			this.countCell(token.line, token.column);
+		}
+		this.enterBlock(token.line, token.column);
+
+		this.enter(tag, token, {
+			kind: "block",
+			tag: block,
+			argument,
+			attributes,
+			content: null,
+			children: [],
+			line: token.line,
+			column: token.column,
+		});
+	}
+
+	/**
+	 * Opens a block that encloses data: a series' values, or a chart's labels.
+	 *
+	 * Kept verbatim rather than read into numbers here, because what the numbers have to be is a
+	 * property of the chart that plots them — how many a series may hold, how many labels the
+	 * categories leave room for — and the chart is not finished being read yet.
+	 */
+	private openDataBlock(tag: Tag, token: OpenToken, attributes: Attributes): void {
+		this.requireInsideLineScope(token.line, token.column);
+		this.rememberMarker(token, attributes);
+		this.enterBlock(token.line, token.column);
+
+		this.enter(tag, token, {
+			kind: "block",
+			tag: tag.name as BlockTag,
+			argument: token.argument,
+			attributes,
+			content: null,
+			children: [],
+			line: token.line,
+			column: token.column,
+		}).content = { tag, parts: [], shape: null };
+	}
+
+	/** Appends a gauge, which encloses nothing: how full it is drawn is its argument. */
+	private appendGauge(tag: Tag, token: OpenToken, attributes: Attributes): void {
+		this.requireInsideLineScope(token.line, token.column);
+		this.enterBlock(token.line, token.column);
+
+		const frame = this.frame();
+		frame.children.push({
+			kind: "block",
+			tag: "bar",
+			argument: this.blockArgument(tag, token, attributes),
+			attributes,
+			content: null,
+			children: [],
+			line: token.line,
+			column: token.column,
+		});
+		this.placeBlock(frame.owner, "bar");
+	}
+
+	/**
+	 * Reads a block's argument into the form the layout engine will draw it from.
+	 *
+	 * @throws MarkupError if the argument names no chart this draws, or is not a percentage
+	 */
+	private blockArgument(tag: Tag, token: OpenToken, attributes: Attributes): string | null {
+		switch (tag.name) {
+			case "chart": {
+				// Lowercased, so the layout engine matches against one spelling however the tag was
+				// written, which is the same courtesy `<align>` and `<barcode>` extend by upper-casing.
+				const kind = (token.argument ?? "").toLowerCase();
+				if (!CHART_KINDS.includes(kind)) {
+					throw this.argumentError(tag, token.line, token.column, `must name a chart: ${CHART_KINDS.join(", ")}`);
+				}
+				if (attributes.area !== undefined && kind !== "line") {
+					throw new MarkupError(
+						MARKUP_ERRORS.invalidAttribute,
+						token.line,
+						attributeColumn(token, "area"),
+						"area",
+						"<chart> area fills under a line, so it applies to a line chart only",
+					);
+				}
+				return kind;
+			}
+			case "bar":
+				this.requireInt(token.argument as string, 0, MAX_GAUGE_PERCENT, tag, token.line, token.column);
+				return token.argument;
+			default:
+				return token.argument;
+		}
+	}
+
+	/** Records where a `<series>` asked for a marker, which the chart it sits in has the final say on. */
+	private rememberMarker(token: OpenToken, attributes: Attributes): void {
+		const chart = this.frame().block;
+		if (chart && attributes.marker !== undefined) {
+			chart.marker ??= { line: token.line, column: attributeColumn(token, "marker") };
+		}
+	}
+
+	/**
+	 * Charges one cell against the table that holds it.
+	 *
+	 * Counted per table rather than per document, because the cost the limit bounds is the layout: a
+	 * table measures every cell against every other one in its column, so it is one table growing
+	 * that is expensive rather than a receipt holding several small ones.
+	 *
+	 * @throws MarkupError if this table holds more cells than the limit allows
+	 */
+	private countCell(line: number, column: number): void {
+		for (let at = this.frames.length - 1; at > 0; at--) {
+			const frame = this.frames[at];
+			if (frame.node?.kind !== "block" || frame.node.tag !== "table" || !frame.block) {
+				continue;
+			}
+			frame.block.cells += 1;
+			if (frame.block.cells > this.options.maxTableCells) {
+				throw new MarkupError(
+					MARKUP_ERRORS.tooManyCells,
+					line,
+					column,
+					String(frame.block.cells),
+					`A table may hold at most ${this.options.maxTableCells} cells`,
+				);
+			}
+			return;
+		}
+	}
+
+	/**
+	 * Rejects a block that cannot own the line it was opened on.
+	 *
+	 * The same rule `<align>` follows, and for a stronger reason: an alignment still prints the
+	 * line's own text, while a block replaces the line with a picture of itself.
+	 */
+	private requireBlockCanOpen(name: string, line: number, column: number): void {
+		this.requireInsideLineScope(line, column);
+		if (!this.frame().owner.spaceOnly || this.insideStyling()) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidBlockScope,
+				line,
+				column,
+				name,
+				`<${name}> must enclose whole lines, so nothing may precede it`,
+			);
+		}
+	}
+
+	/**
+	 * Records a finished block on the line that holds it.
+	 *
+	 * A block prints, so it costs the line paper the way a symbol does. The blocks that own their
+	 * lines close them too: what follows one on its line would be text beside a drawn region, which
+	 * is the same contradiction as text after `</align>`.
+	 */
+	private placeBlock(state: LineState, tag: BlockTag): void {
+		this.placed(state);
+		state.blockSeen = true;
+		state.printing += 1;
+		if (!SHARES_A_LINE.has(tag)) {
+			state.closedOwner = { name: tag, code: MARKUP_ERRORS.invalidBlockScope };
+		}
+	}
+
+	/**
+	 * Closes a block that encloses markup: its last line is verified, and the chart it may be is
+	 * checked against the series it turned out to hold.
+	 *
+	 * @throws MarkupError if that last line is malformed, or a marker was asked for on a chart that
+	 * plots no points
+	 */
+	private closeRegion(frame: Frame, node: BlockNode): void {
+		frame.owner.blockSeen = true;
+		this.endLineOf(frame.owner);
+
+		const marker = node.tag === "chart" ? frame.block?.marker : null;
+		if (marker && !MARKER_KINDS.includes(node.argument ?? "")) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidAttribute,
+				marker.line,
+				marker.column,
+				"marker",
+				`<series> marker draws on plotted points, so it applies to ${MARKER_KINDS.join(" and ")} charts only`,
+			);
+		}
+
+		this.placeBlock(this.frame().owner, node.tag);
 	}
 
 	// -----------------------------------------------------------------------
@@ -669,6 +1046,9 @@ class DocumentBuilder {
 		this.frames.pop();
 		const node = frame.node;
 		if (node) {
+			if (node.kind === "block") {
+				this.closeRegion(frame, node);
+			}
 			this.frame().children.push(node);
 			if (node.kind === "align" || node.kind === "wrap") {
 				this.releaseLineOwner(tag, node.kind);
@@ -709,19 +1089,34 @@ class DocumentBuilder {
 		// Line breaks are whitespace around the payload rather than part of it, so they contribute
 		// nothing and the ends are trimmed. Spaces inside it are left alone: they are as much part of
 		// a URL or an article number as any other character.
-		const node = this.contentNode(frame, content, content.parts.join("").trim());
-
+		const data = content.parts.join("").trim();
 		const parent = this.frame();
-		parent.children.push(node);
+		const block = frame.node;
+
+		if (block?.kind === "block") {
+			block.content = data;
+			parent.children.push(block);
+			this.placeBlock(parent.owner, block.tag);
+		} else {
+			parent.children.push(this.contentNode(frame, content, data));
+			parent.owner.printing += 1;
+			this.placed(parent.owner);
+		}
+
 		for (let number = frame.line + 1; number < closeLine; number++) {
 			this.lines[number - 1].interior = true;
 		}
-		parent.owner.printing += 1;
-		parent.owner.content = true;
 	}
 
 	private contentNode(frame: Frame, content: ContentState, data: string): SymbolNode | ImageNode {
-		if (content.shape.kind === "IMAGE") {
+		const shape = content.shape;
+		if (!shape) {
+			// A shape is resolved for every tag that becomes a symbol or an image; the ones with none
+			// become a block instead, and never reach here.
+			throw new Error(`Tag ${content.tag.name} encloses data that a block keeps rather than a symbol`);
+		}
+
+		if (shape.kind === "IMAGE") {
 			if (data.length === 0) {
 				throw new MarkupError(
 					MARKUP_ERRORS.invalidTagArgument,
@@ -735,18 +1130,18 @@ class DocumentBuilder {
 				kind: "image",
 				ref: data,
 				source: this.imageSource(data, frame),
-				widthPercent: content.shape.widthPercent,
+				widthPercent: shape.widthPercent,
 				line: frame.line,
 				column: frame.column,
 			};
 		}
 
 		const spec: SymbolSpec =
-			content.shape.kind === "QR"
-				? { kind: "QR", content: data, size: content.shape.size }
-				: content.shape.kind === "BARCODE"
-					? { kind: "BARCODE", content: data, system: content.shape.system }
-					: { kind: "PDF417", content: data, errorLevel: content.shape.errorLevel };
+			shape.kind === "QR"
+				? { kind: "QR", content: data, size: shape.size }
+				: shape.kind === "BARCODE"
+					? { kind: "BARCODE", content: data, system: shape.system }
+					: { kind: "PDF417", content: data, errorLevel: shape.errorLevel };
 
 		const refusal = validateSymbolContent(spec);
 		if (refusal) {
@@ -891,18 +1286,27 @@ class DocumentBuilder {
 	}
 
 	/**
-	 * The frame whose line state applies here: the nearest enclosing block, or the document.
+	 * The block this position is written directly inside, or null at the document's own level.
 	 *
-	 * A block lays out a region of the paper, so its lines are its own — text inside a cell shares
-	 * nothing with text beside the table.
+	 * Nearest rather than outermost: a block lays out a region of the paper, so what a tag may be is
+	 * decided by the region immediately around it — a `<cell>` is welcome in a row and nowhere else,
+	 * whatever the row itself sits in. Nothing but a block interrupts the walk, because a styling tag
+	 * or an alignment inside one is transparent to this: it places nothing of its own.
 	 */
-	private owningFrame(): Frame {
+	private enclosingBlock(): BlockNode | null {
 		for (let at = this.frames.length - 1; at > 0; at--) {
-			if (this.frames[at].node?.kind === "block") {
-				return this.frames[at];
+			const node = this.frames[at].node;
+			if (node?.kind === "block") {
+				return node;
 			}
 		}
-		return this.frames[0];
+		return null;
+	}
+
+	/** Records that something was placed on the line, so it is no longer the fresh one a block owns. */
+	private placed(state: LineState): void {
+		state.content = true;
+		state.spaceOnly = false;
 	}
 
 	/**
@@ -939,15 +1343,25 @@ class DocumentBuilder {
 		return false;
 	}
 
-	private enter(tag: Tag, token: OpenToken, node: ScopeNode | AlignNode | WrapNode | null): Frame {
+	/**
+	 * Pushes the frame for a tag that has just opened.
+	 *
+	 * A block gets a line state of its own, because its lines are its own: the text in a cell is laid
+	 * out against the cell's width and knows nothing of what shares the paper with the table. Every
+	 * other tag inherits the state of whatever owns the line it was written on, so that a rule written
+	 * inside two styling tags still sees what the line already holds.
+	 */
+	private enter(tag: Tag, token: OpenToken, node: ScopeNode | AlignNode | WrapNode | BlockNode | null): Frame {
 		const parent = this.frame();
+		const block = node?.kind === "block";
 		const frame: Frame = {
 			tag,
 			node,
 			children: node ? node.children : [],
 			line: token.line,
 			column: token.column,
-			owner: parent.owner,
+			owner: block ? blockLine() : parent.owner,
+			block: block ? { cells: 0, marker: null } : null,
 			content: null,
 		};
 		this.frames.push(frame);
@@ -974,7 +1388,7 @@ class DocumentBuilder {
 				line,
 				column,
 				String(depth),
-				`Blocks may be nested at most ${this.options.maxBlockDepth} deep`,
+				`Blocks nest ${depth} deep; the limit is ${this.options.maxBlockDepth}`,
 			);
 		}
 	}
@@ -991,5 +1405,26 @@ function freshLine(): LineState {
 		wrapSeen: false,
 		soleOccupant: null,
 		closedOwner: null,
+		spaceOnly: true,
+		blockSeen: false,
+		spaces: [],
 	};
+}
+
+/** A block's first line, which already carries the block's own opening tag. */
+function blockLine(): LineState {
+	const line = freshLine();
+	line.blockSeen = true;
+	return line;
+}
+
+/** An attribute's column, for a refusal the tag's own position would point vaguely at. */
+function attributeColumn(token: OpenToken, name: string): number {
+	return token.attributes.find((attribute) => attribute.name === name)?.column ?? token.column;
+}
+
+/** Tag names as a refusal reads them out: `<row>`, or `<series> and <labels>`. */
+function listed(names: readonly string[]): string {
+	const tags = names.map((name) => `<${name}>`);
+	return tags.length < 2 ? tags.join("") : `${tags.slice(0, -1).join(", ")} and ${tags[tags.length - 1]}`;
 }

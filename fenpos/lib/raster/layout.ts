@@ -125,7 +125,10 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					break;
 				case "symbol":
 				case "void": {
-					// The tree is where this belongs, since it is a shape rule rather than a drawing one.
+					// Inside a block the tree refuses these outright, which is where that rule belongs: it is
+					// about shape. What can still reach here is a line the *device* forced onto this path — a
+					// configured face, or an image beside text — where a command the printer would have run
+					// for itself has nowhere to go once the line becomes a picture.
 					const tag = (node.kind === "void" ? node.directive.kind : node.spec.kind).toLowerCase();
 					throw new MarkupError(
 						MARKUP_ERRORS.misplacedBlock,

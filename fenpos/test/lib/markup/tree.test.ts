@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PARSE_OPTIONS, type Document, type Node } from "@/lib/markup/document";
+import { type BlockNode, DEFAULT_PARSE_OPTIONS, type Document, type Node } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { needsRaster } from "@/lib/markup/flatten";
 import { tokenize } from "@/lib/markup/tokenizer";
 import { buildDocument } from "@/lib/markup/tree";
 
@@ -238,5 +239,140 @@ describe("buildDocument", () => {
 	it("refuses a data URI that is not a PNG or JPEG, or not base64", () => {
 		expect(refusal("<image>data:image/gif;base64,R0lG</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
 		expect(refusal("<image>data:image/png;base64,***</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
+	});
+});
+
+describe("block tags", () => {
+	const block = (source: string): Node => build(source).nodes[0];
+
+	it("builds a box with its attributes and children", () => {
+		expect(block("<box width=60 border=double pad=0>\nhi\n</box>")).toMatchObject({
+			kind: "block",
+			tag: "box",
+			attributes: { width: 60, border: "double", pad: 0 },
+			children: [{ kind: "break" }, { kind: "text", text: "hi" }, { kind: "break" }],
+		});
+	});
+
+	it("keeps a row of cells on one line without stray text", () => {
+		const table = block("<table>\n<row><cell>a</cell> <cell align=center>b</cell></row>\n</table>") as BlockNode;
+		const row = table.children.find((node) => node.kind === "block") as BlockNode;
+
+		expect(row.children.map((node) => node.kind)).toEqual(["block", "block"]);
+	});
+
+	it("drops the whitespace around a row written on its own line", () => {
+		const table = block("<table>\n  <row><cell>a</cell></row>  \n</table>") as BlockNode;
+
+		expect(table.children.map((node) => node.kind)).toEqual(["break", "block", "break"]);
+	});
+
+	it("refuses a box opened after text", () => {
+		const thrown = refusal("x <box>\n</box>");
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidBlockScope);
+		expect(thrown.column).toBe(3);
+	});
+
+	it("refuses text after a box closes on its line", () => {
+		expect(refusal("<box>\na\n</box> b").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	});
+
+	it("refuses a row outside a table and a cell outside a row", () => {
+		expect(refusal("<row></row>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<table>\n<cell>a</cell>\n</table>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<box>\n<row></row>\n</box>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+	});
+
+	it("refuses text directly inside a table or a row", () => {
+		expect(refusal("<table>\nloose\n</table>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<table>\n<row>loose<cell>a</cell></row>\n</table>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+	});
+
+	it("refuses a symbol or a printer command inside a block", () => {
+		expect(refusal("<box>\n<qr>x</qr>\n</box>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<box>\n<cut>\n</box>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+	});
+
+	it("lets a chart hold series and labels only", () => {
+		const chart = block(
+			"<chart=bar height=8>\n<series=Sales pattern=hatch>1,2,3</series>\n<labels>a,b,c</labels>\n</chart>",
+		) as BlockNode;
+
+		expect(chart.argument).toBe("bar");
+		expect(chart.children.filter((node) => node.kind === "block").map((node) => (node as BlockNode).content)).toEqual([
+			"1,2,3",
+			"a,b,c",
+		]);
+		expect(refusal("<chart=bar>\ntext\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<chart=bar>\n<bar=10>\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<chart=donut>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<chart=bar area=on>\n</chart>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+	});
+
+	it("allows a marker only on a chart that plots points", () => {
+		expect(() => build("<chart=scatter>\n<series marker=cross>1,2</series>\n</chart>")).not.toThrow();
+
+		const thrown = refusal("<chart=pie>\n<series marker=cross>1,2</series>\n</chart>");
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.line).toBe(2);
+	});
+
+	it("reads the gauge", () => {
+		expect(block("<bar=38 width=80>")).toMatchObject({
+			kind: "block",
+			tag: "bar",
+			argument: "38",
+			attributes: { width: 80 },
+		});
+		expect(refusal("<bar=101>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("bounds nesting depth", () => {
+		const deep = `${"<box>\n".repeat(17)}x\n${"</box>\n".repeat(17)}`;
+		const thrown = refusal(deep);
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.nestingTooDeep);
+		expect(thrown.line).toBe(17);
+		expect(() => buildDocument(tokenize(deep, null), { ...DEFAULT_PARSE_OPTIONS, maxBlockDepth: 17 })).not.toThrow();
+	});
+
+	it("bounds cells per table", () => {
+		const cells = "<cell>a</cell>".repeat(5);
+		const thrown = (() => {
+			try {
+				buildDocument(tokenize(`<table>\n<row>${cells}</row>\n</table>`, null), {
+					...DEFAULT_PARSE_OPTIONS,
+					maxTableCells: 4,
+				});
+			} catch (error) {
+				return error as MarkupError;
+			}
+			throw new Error("expected a refusal");
+		})();
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.tooManyCells);
+	});
+
+	it("lets an image sit inline inside a cell with no width", () => {
+		const cell = build("<table>\n<row><cell>08 <image>cloud</image></cell></row>\n</table>");
+		const found = JSON.stringify(cell.nodes);
+
+		expect(found).toContain('"kind":"image"');
+		expect(found).toContain('"widthPercent":null');
+	});
+
+	/** The block's last line is verified when it closes, which is the only time anything ends it. */
+	it("keeps the sole rule for a rule inside a box, to the block's last line", () => {
+		expect(() => build("<box>\n<hr>\n</box>")).not.toThrow();
+		expect(refusal("<box>\n<hr> x</box>").code).toBe(MARKUP_ERRORS.invalidRuleScope);
+	});
+
+	it("lets align own a line inside a box", () => {
+		expect(() => build("<box>\n<align=center>hi</align>\n</box>")).not.toThrow();
+		expect(refusal("<box>\nx <align=center>hi</align>\n</box>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
+	it("marks a raster line", () => {
+		expect(needsRaster(build("<box>\nx\n</box>").nodes)).toBe(true);
 	});
 });

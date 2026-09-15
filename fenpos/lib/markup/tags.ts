@@ -23,6 +23,18 @@ export interface Tag {
 	attributes: AttributeTable;
 }
 
+/**
+ * A share of the width the enclosing region offers, rather than of the paper.
+ *
+ * The same spec on every block that takes one, because a cell inside a box inside a table is
+ * measured against what encloses it at each step: a width that meant the paper would leave the
+ * author computing the nesting themselves.
+ */
+const PERCENT = { kind: "integer", min: 1, max: 100 } as const;
+
+/** The strokes a drawn edge can have. */
+const BORDER = { kind: "enum", values: ["single", "double", "thick", "none"] } as const;
+
 /** Every tag, keyed by the lowercase name written in markup. */
 export const TAGS: Record<string, Tag> = {
 	/** Emphasis. */
@@ -77,6 +89,61 @@ export const TAGS: Record<string, Tag> = {
 	 * block already has, and adds no parsing rule of its own.
 	 */
 	image: { name: "image", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
+	/** A framed region around the lines it encloses. */
+	box: {
+		name: "box",
+		kind: "PAIRED",
+		argument: "NONE",
+		attributes: { width: PERCENT, border: BORDER, pad: { kind: "integer", min: 0, max: 8 } },
+	},
+	/** A grid of rows and cells. */
+	table: {
+		name: "table",
+		kind: "PAIRED",
+		argument: "NONE",
+		attributes: { width: PERCENT, border: BORDER, group: { kind: "integer", min: 1, max: 50 } },
+	},
+	/** One row of a table. Holds cells and nothing else. */
+	row: { name: "row", kind: "PAIRED", argument: "NONE", attributes: {} },
+	/** One cell of a row. */
+	cell: {
+		name: "cell",
+		kind: "PAIRED",
+		argument: "NONE",
+		attributes: {
+			width: PERCENT,
+			align: { kind: "enum", values: ["left", "center", "right"] },
+			valign: { kind: "enum", values: ["top", "middle", "bottom"] },
+			shade: { kind: "enum", values: ["none", "light", "dark", "black"] },
+		},
+	},
+	/** A chart of the series it encloses. Argument is what it is drawn as. */
+	chart: {
+		name: "chart",
+		kind: "PAIRED",
+		argument: "REQUIRED",
+		attributes: {
+			width: PERCENT,
+			height: { kind: "integer", min: 3, max: 60 },
+			title: { kind: "text", maxLength: 64 },
+			legend: { kind: "enum", values: ["auto", "on", "off"] },
+			area: { kind: "enum", values: ["on", "off"] },
+		},
+	},
+	/** One series of a chart, its values enclosed as data. Argument is the name the legend prints. */
+	series: {
+		name: "series",
+		kind: "PAIRED",
+		argument: "OPTIONAL",
+		attributes: {
+			pattern: { kind: "enum", values: ["solid", "hatch", "dot", "hollow"] },
+			marker: { kind: "enum", values: ["circle", "square", "triangle", "cross", "none"] },
+		},
+	},
+	/** A chart's category labels, enclosed as data. */
+	labels: { name: "labels", kind: "PAIRED", argument: "NONE", attributes: {} },
+	/** A gauge. Argument is how full it is drawn, 0-100. */
+	bar: { name: "bar", kind: "VOID", argument: "REQUIRED", attributes: { width: PERCENT } },
 };
 
 /**

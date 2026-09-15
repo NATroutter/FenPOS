@@ -106,6 +106,31 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{ syntax: "<feed=3>", meaning: "Advance the paper, 1–255 lines." },
 	{ syntax: "<cut>", meaning: "Cut the paper. <cut=partial> leaves a tab." },
 	{
+		syntax: "<box>…</box>",
+		meaning:
+			"A framed region around the lines it encloses, sized by width, drawn with border and padded by pad. Opens at the start of a line and closes at the end of one.",
+	},
+	{
+		syntax: "<table>…</table>",
+		meaning: "A grid of rows, sized by width and drawn with border. Holds rows and nothing else.",
+	},
+	{ syntax: "<row>…</row>", meaning: "One row of a table. Holds cells and nothing else." },
+	{
+		syntax: "<cell>…</cell>",
+		meaning: "One cell of a row, sized by width and its content placed by align, valign and shade.",
+	},
+	{
+		syntax: "<chart=bar>…</chart>",
+		meaning:
+			"A chart of the series it encloses, drawn as bar, line, pie or scatter, sized by width and height and captioned by title.",
+	},
+	{
+		syntax: "<series>…</series>",
+		meaning: "One series of a chart, its values written as a comma-separated list. <series=Sales> names it.",
+	},
+	{ syntax: "<labels>…</labels>", meaning: "A chart's category labels, as a comma-separated list." },
+	{ syntax: "<bar=38>", meaning: "A gauge filled to a percentage, 0–100, as wide as width asks for." },
+	{
 		syntax: "&lt;, &amp; and &lbrace;",
 		meaning:
 			"A literal <, & or {. Any other ampersand is literal text. &lbrace; only matters once a variable's braces are in play, see Variables below.",
