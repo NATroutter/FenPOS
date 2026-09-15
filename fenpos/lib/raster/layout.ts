@@ -1,8 +1,9 @@
 import type { ImageRaster } from "@/lib/assets/dither";
 import type { Align } from "@/lib/domain/enums";
 import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
-import type { BlockNode, ImageNode, Node } from "@/lib/markup/document";
+import type { BlockNode, BlockTag, ImageNode, Node } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { share } from "@/lib/markup/fill";
 import { printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
 import { Canvas } from "@/lib/raster/canvas";
@@ -82,9 +83,10 @@ interface FlowChild {
  *
  * @param nodes one line's nodes, or — inside a block — every line of its content run together
  * @param context the fonts, the paper and what the pre-pass resolved
+ * @param align the justification the flow opens under, for a region that sets one for its content
  * @returns the node that draws them
  */
-export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
+export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = "LEFT"): LayoutNode {
 	const children: FlowChild[] = [];
 	let items: InlineItem[] = [];
 	// Whether the node just visited was itself a break, tracked across the whole walk rather than per
@@ -178,8 +180,8 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 		}
 	};
 
-	visit(nodes, PLAIN, "LEFT", context.defaultWrap);
-	closeSequence("LEFT", context.defaultWrap);
+	visit(nodes, PLAIN, align, context.defaultWrap);
+	closeSequence(align, context.defaultWrap);
 
 	return stack(children);
 }
@@ -299,6 +301,8 @@ function blockNode(node: BlockNode, context: LayoutContext): LayoutNode {
 	switch (node.tag) {
 		case "box":
 			return new BoxNode(node, buildFlow(node.children, context));
+		case "table":
+			return new TableNode(node, context);
 		default:
 			throw new Error(`no layout node draws <${node.tag}>`);
 	}
@@ -349,26 +353,297 @@ class BoxNode implements LayoutNode {
 		const innerWidth = Math.max(0, width - 2 * inset);
 		const height = this.flow.measure(innerWidth).height + 2 * inset;
 
-		this.paintBorder(canvas, x, y, width, height);
+		paintBorder(canvas, x, y, width, height, this.border);
 		this.flow.paint(canvas, x + inset, y + inset, innerWidth);
 	}
+}
 
-	/** Draws the outline itself: `double` is two lines with the 2-dot gap between them left blank. */
-	private paintBorder(canvas: Canvas, x: number, y: number, width: number, height: number): void {
-		switch (this.border) {
-			case "none":
-				return;
-			case "single":
-				canvas.rect(x, y, width, height, 1);
-				return;
-			case "thick":
-				canvas.rect(x, y, width, height, 3);
-				return;
-			case "double":
-				canvas.rect(x, y, width, height, 1);
-				canvas.rect(x + 3, y + 3, width - 6, height - 6, 1);
-				return;
+/** Draws an outline: `double` is two lines with the 2-dot gap between them left blank. */
+function paintBorder(canvas: Canvas, x: number, y: number, width: number, height: number, border: BorderKind): void {
+	switch (border) {
+		case "none":
+			return;
+		case "single":
+			canvas.rect(x, y, width, height, 1);
+			return;
+		case "thick":
+			canvas.rect(x, y, width, height, 3);
+			return;
+		case "double":
+			canvas.rect(x, y, width, height, 1);
+			canvas.rect(x + 3, y + 3, width - 6, height - 6, 1);
+			return;
+	}
+}
+
+/** Dots the rule between two neighbouring cells occupies. */
+const CELL_RULE_DOTS = 1;
+
+/** Dots a `group` rule occupies, drawn over the cell rule it thickens. */
+const GROUP_RULE_DOTS = 3;
+
+/** How a cell is shaded behind its own content. */
+type CellShade = "none" | "light" | "dark" | "black";
+
+/** Where a cell's content sits when the row is taller than the content is. */
+type CellVAlign = "top" | "middle" | "bottom";
+
+/** One cell: the flow it draws, and everything about how that flow is placed and shaded. */
+interface TableCell {
+	flow: LayoutNode;
+	shade: CellShade;
+	valign: CellVAlign;
+	/** The share of the table this cell's column claims, or null when it takes an equal one. */
+	widthPercent: number | null;
+	line: number;
+	column: number;
+}
+
+/** What a table settles at for one available width. */
+interface TableGrid {
+	/** Dots per column, summing to the width inside the border. */
+	columns: number[];
+	/** Dots per row, each already carrying its own padding. */
+	rows: number[];
+	width: number;
+	height: number;
+}
+
+/** One rule between two tracks: where it falls, and which track it comes before. */
+interface Rule {
+	index: number;
+	at: number;
+}
+
+/**
+ * A grid of rows and cells.
+ *
+ * **A column is a share of the table rather than a width of its own.** Nothing in a cell says how
+ * wide it should be — a receipt's paper is fixed and its columns have to fit that paper, not the
+ * other way round — so the first row's `width` attributes claim percentages and every column that
+ * claimed nothing splits what is left. That split is the same one `<fill>` performs between two
+ * padded gaps, and for the same reason: the remainder has to land somewhere, and where it lands
+ * has to be decided the same way every time.
+ *
+ * Rules run inside the columns rather than between them. A row's height is content, so the rule
+ * under it needs a dot of its own and the table grows by one; a column's width is a share of a
+ * width already fixed, so a rule that took its own dot would push the table past the paper it was
+ * cut to fit. Each column's first dot carries the rule that precedes it instead, which is inside
+ * that column's padding and so never touches its content.
+ */
+class TableNode implements LayoutNode {
+	private readonly widthPercent: number;
+	private readonly border: BorderKind;
+	private readonly group: number | null;
+	private readonly rows: TableCell[][];
+	private readonly columnCount: number;
+	private measuredAt = -1;
+	private grid: TableGrid = { columns: [], rows: [], width: 0, height: 0 };
+
+	constructor(node: BlockNode, context: LayoutContext) {
+		this.widthPercent = (node.attributes.width as number | undefined) ?? 100;
+		this.border = (node.attributes.border as BorderKind | undefined) ?? "single";
+		this.group = (node.attributes.group as number | undefined) ?? null;
+		this.rows = childBlocks(node, "row").map((row) =>
+			childBlocks(row, "cell").map((cell) => ({
+				flow: buildFlow(cell.children, context, cellAlign(cell)),
+				shade: (cell.attributes.shade as CellShade | undefined) ?? "none",
+				valign: (cell.attributes.valign as CellVAlign | undefined) ?? "middle",
+				widthPercent: (cell.attributes.width as number | undefined) ?? null,
+				line: cell.line,
+				column: cell.column,
+			})),
+		);
+		// The longest row: a short row leaves empty cells rather than widening the ones it has, so
+		// that two rows of a table line up even when one of them stops early.
+		this.columnCount = this.rows.reduce((widest, row) => Math.max(widest, row.length), 0);
+	}
+
+	measure(availableWidth: number): Size {
+		const grid = this.gridAt(availableWidth);
+		return { width: grid.width, height: grid.height };
+	}
+
+	paint(canvas: Canvas, x: number, y: number, availableWidth: number): void {
+		const grid = this.gridAt(availableWidth);
+		const inset = BORDER_INSET[this.border];
+		const left = x + inset;
+		const top = y + inset;
+		const across = grid.width - 2 * inset;
+		const down = grid.height - 2 * inset;
+
+		let cellTop = top;
+		for (const [index, row] of this.rows.entries()) {
+			let cellLeft = left;
+			for (let column = 0; column < this.columnCount; column++) {
+				const cell = row[column];
+				if (cell) {
+					paintCell(canvas, cell, cellLeft, cellTop, grid.columns[column], grid.rows[index]);
+				}
+				cellLeft += grid.columns[column];
+			}
+			cellTop += grid.rows[index] + CELL_RULE_DOTS;
 		}
+
+		const rowRules = tracks(grid.rows, top, CELL_RULE_DOTS);
+		const columnRules = tracks(grid.columns, left, 0);
+		paintBorder(canvas, x, y, grid.width, grid.height, this.border);
+		for (const rule of rowRules) {
+			canvas.hLine(left, rule.at, across, CELL_RULE_DOTS);
+		}
+		for (const rule of columnRules) {
+			canvas.vLine(rule.at, top, down, CELL_RULE_DOTS);
+		}
+
+		// Drawn last and over the plain rules, so a group's edge reads as one thick line rather than
+		// as a thin one with something beside it.
+		const group = this.group;
+		if (group === null) {
+			return;
+		}
+		for (const rule of rowRules.filter((rule) => rule.index % group === 0)) {
+			canvas.hLine(left, rule.at - 1, across, GROUP_RULE_DOTS);
+		}
+		for (const rule of columnRules.filter((rule) => rule.index % group === 0)) {
+			canvas.vLine(rule.at - 1, top, down, GROUP_RULE_DOTS);
+		}
+	}
+
+	/** The grid for this width, laid out once and kept, the way an inline sequence keeps its rows. */
+	private gridAt(availableWidth: number): TableGrid {
+		if (this.measuredAt !== availableWidth) {
+			this.grid = this.layOut(availableWidth);
+			this.measuredAt = availableWidth;
+		}
+		return this.grid;
+	}
+
+	private layOut(availableWidth: number): TableGrid {
+		const inset = BORDER_INSET[this.border];
+		const width = Math.floor((availableWidth * this.widthPercent) / 100);
+		const columns = this.columnWidths(Math.max(0, width - 2 * inset));
+		const rows = this.rows.map(
+			(row) =>
+				row.reduce(
+					(tallest, cell, index) => Math.max(tallest, cell.flow.measure(cellWidth(columns[index] ?? 0)).height),
+					0,
+				) +
+				2 * PAD_UNIT_DOTS,
+		);
+
+		return {
+			columns,
+			rows,
+			width: 2 * inset + total(columns),
+			height: 2 * inset + total(rows) + Math.max(0, rows.length - 1) * CELL_RULE_DOTS,
+		};
+	}
+
+	/**
+	 * Dots per column, from the first row's claims and an equal split of what they leave.
+	 *
+	 * @param inner the dots inside the border, which the columns divide between them
+	 * @returns one width per column, in order
+	 * @throws MarkupError when the claims come to more than the whole table
+	 */
+	private columnWidths(inner: number): number[] {
+		const claims = Array.from({ length: this.columnCount }, (_, index) => this.rows[0]?.[index]?.widthPercent ?? null);
+		let claimed = 0;
+		for (const [index, percent] of claims.entries()) {
+			claimed += percent ?? 0;
+			if (claimed > 100) {
+				const cell = this.rows[0][index];
+				throw new MarkupError(
+					MARKUP_ERRORS.invalidAttribute,
+					cell.line,
+					cell.column,
+					"width",
+					`a table has only its own width to divide up, and the sized columns add up to ${claimed}%`,
+				);
+			}
+		}
+
+		const widths = claims.map((percent) => (percent === null ? 0 : Math.floor((inner * percent) / 100)));
+		const unsized = claims.filter((percent) => percent === null).length;
+		if (unsized > 0) {
+			const equal = share(Math.max(0, inner - total(widths)), unsized);
+			let next = 0;
+			for (const [index, percent] of claims.entries()) {
+				if (percent === null) {
+					widths[index] = equal[next++];
+				}
+			}
+		}
+		return widths;
+	}
+}
+
+/** The blocks of one tag directly inside another, in source order. */
+function childBlocks(node: BlockNode, tag: BlockTag): BlockNode[] {
+	return node.children.filter((child): child is BlockNode => child.kind === "block" && child.tag === tag);
+}
+
+/** The justification a cell's content is laid out under. */
+function cellAlign(cell: BlockNode): Align {
+	return ((cell.attributes.align as string | undefined) ?? "left").toUpperCase() as Align;
+}
+
+/** The dots a cell's content has, once a half-cell of padding is charged on each side. */
+function cellWidth(columnWidth: number): number {
+	return Math.max(0, columnWidth - 2 * PAD_UNIT_DOTS);
+}
+
+function total(values: number[]): number {
+	return values.reduce((sum, value) => sum + value, 0);
+}
+
+/**
+ * Where the rules between a run of tracks fall.
+ *
+ * @param sizes the tracks' dots, in order
+ * @param start where the first track begins
+ * @param gap dots between two tracks, which a rule of its own occupies and a shared one does not
+ * @returns one rule per boundary, each carrying the index of the track it comes before
+ */
+function tracks(sizes: number[], start: number, gap: number): Rule[] {
+	const rules: Rule[] = [];
+	let at = start;
+	for (let index = 0; index < sizes.length - 1; index++) {
+		at += sizes[index];
+		rules.push({ index: index + 1, at });
+		at += gap;
+	}
+	return rules;
+}
+
+/**
+ * Draws one cell: its shading, then its content within it.
+ *
+ * `black` is two inversions around one drawing rather than white ink, because there is no white
+ * ink: a glyph is painted by setting dots. The cell is filled solid, the content rectangle is
+ * inverted back to blank so the flow has somewhere to draw, and inverting that rectangle again
+ * once the flow has drawn turns its dots into the unlit ones — white text, on the black the rest
+ * of the fill left standing.
+ */
+function paintCell(canvas: Canvas, cell: TableCell, x: number, y: number, width: number, height: number): void {
+	const innerX = x + PAD_UNIT_DOTS;
+	const innerY = y + PAD_UNIT_DOTS;
+	const innerWidth = cellWidth(width);
+	const innerHeight = Math.max(0, height - 2 * PAD_UNIT_DOTS);
+
+	if (cell.shade === "light" || cell.shade === "dark") {
+		canvas.fill(x, y, width, height, cell.shade);
+	} else if (cell.shade === "black") {
+		canvas.fill(x, y, width, height, "solid");
+		canvas.invert(innerX, innerY, innerWidth, innerHeight);
+	}
+
+	const slack = Math.max(0, innerHeight - cell.flow.measure(innerWidth).height);
+	const offset = cell.valign === "top" ? 0 : cell.valign === "bottom" ? slack : Math.floor(slack / 2);
+	cell.flow.paint(canvas, innerX, innerY + offset, innerWidth);
+
+	if (cell.shade === "black") {
+		canvas.invert(innerX, innerY, innerWidth, innerHeight);
 	}
 }
 

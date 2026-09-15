@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { parseDocument } from "@/lib/markup/parser";
 import { Canvas } from "@/lib/raster/canvas";
 import { bundledFace, typefaceFor } from "@/lib/raster/fonts";
@@ -122,5 +123,82 @@ describe("BoxNode", () => {
 		const spaced = renderRasterLine(parseDocument("<box>\nA\n\nB\n</box>").nodes, context);
 
 		expect(spaced.heightDots).toBe(tight.heightDots + 24);
+	});
+});
+
+/** What a call threw, for assertions about where an error points rather than only that it was one. */
+function thrownBy(call: () => unknown): unknown {
+	try {
+		call();
+	} catch (error) {
+		return error;
+	}
+	return null;
+}
+
+describe("TableNode", () => {
+	it("draws a grid with equal columns", () => {
+		const raster = renderRasterLine(
+			parseDocument(
+				"<table>\n<row><cell>a</cell><cell>b</cell><cell>c</cell></row>\n<row><cell>1</cell><cell>2</cell></row>\n</table>",
+			).nodes,
+			context,
+		);
+
+		expect(raster.heightDots).toBe(2 * (24 + 12) + 3);
+		expectRasterToMatchGolden(raster, "table-equal");
+	});
+
+	it("sizes columns from the first row and splits the rest", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument("<table>\n<row><cell width=50>wide</cell><cell>a</cell><cell>b</cell></row>\n</table>").nodes,
+				context,
+			),
+			"table-sized",
+		);
+	});
+
+	it("refuses sized columns over the width", () => {
+		const draw = () =>
+			renderRasterLine(
+				parseDocument("<table>\n<row><cell width=70>a</cell><cell width=40>b</cell></row>\n</table>").nodes,
+				context,
+			);
+
+		expect(draw).toThrow(MarkupError);
+		expect(draw).toThrow(/the sized columns add up to 110%/);
+		// The cell that took the table past its own width, so the caller is pointed at the one to shrink.
+		expect(thrownBy(draw)).toMatchObject({
+			code: MARKUP_ERRORS.invalidAttribute,
+			line: 2,
+			column: 29,
+			detail: "width",
+		});
+	});
+
+	it("draws a sudoku grid with group rules and shading", () => {
+		const row = (cells: string[]) =>
+			`<row>${cells.map((cell) => (cell === "." ? "<cell></cell>" : `<cell align=center shade=light>${cell}</cell>`)).join("")}</row>`;
+		const rows = Array.from({ length: 9 }, (_, index) =>
+			row(Array.from({ length: 9 }, (_, column) => ((index + column) % 3 === 0 ? String(column + 1) : "."))),
+		);
+		const raster = renderRasterLine(parseDocument(`<table group=3>\n${rows.join("\n")}\n</table>`).nodes, {
+			...context,
+			columns: 48,
+		});
+
+		expectRasterToMatchGolden(raster, "table-sudoku");
+	});
+
+	it("inverts a black cell and aligns vertically", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument("<table>\n<row><cell shade=black>on</cell><cell valign=bottom>lo\nlo</cell></row>\n</table>")
+					.nodes,
+				context,
+			),
+			"table-shade-valign",
+		);
 	});
 });
