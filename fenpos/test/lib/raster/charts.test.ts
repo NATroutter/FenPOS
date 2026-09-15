@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { BlockNode, ChartData } from "@/lib/markup/document";
 import { parseDocument } from "@/lib/markup/parser";
-import { chartFrame, ticks } from "@/lib/raster/charts";
+import { chartFrame, chartHeight, ticks } from "@/lib/raster/charts";
 import { renderRasterLine } from "@/lib/raster/layout";
 import { context } from "../../helpers/layout-context";
-import { expectRasterToMatchGolden } from "../../helpers/pbm";
+import { ascii, expectRasterToMatchGolden } from "../../helpers/pbm";
 
 const chartOf = (source: string): ChartData => (parseDocument(source).nodes[0] as BlockNode).chart as ChartData;
 
@@ -91,6 +91,35 @@ describe("pie and scatter charts", () => {
 			),
 			"chart-pie",
 		);
+	});
+
+	/**
+	 * A pie as deep as a series may be, drawn inside a request's patience.
+	 *
+	 * The number is not a benchmark so much as a floor with a great deal of air under it: the same
+	 * drawing costs a few tens of milliseconds when the circle is walked once, and seconds when it is
+	 * walked once per slice. A preview paints the same document twice, so anything that blocks here
+	 * blocks twice over.
+	 */
+	it("draws a pie of as many slices as a series may hold without stalling", () => {
+		const values = Array.from({ length: 2000 }, (_, index) => (index % 7) + 1).join(",");
+		const nodes = parseDocument(`<chart=pie height=40 legend=off>\n<series>${values}</series>\n</chart>`).nodes;
+
+		const started = performance.now();
+		const raster = renderRasterLine(nodes, context);
+		const elapsed = performance.now() - started;
+
+		// An empty raster would render instantly and prove nothing, so the ink is asserted too.
+		expect(ascii(raster)).toContain("#");
+		expect(elapsed).toBeLessThan(500);
+	});
+
+	it("stops a pie's legend where the chart ends rather than listing every slice", () => {
+		const values = Array.from({ length: 2000 }, () => 1).join(",");
+		const chart = chartOf(`<chart=pie height=10>\n<series>${values}</series>\n</chart>`);
+
+		expect(chart.series[0].values).toHaveLength(2000);
+		expect(chartFrame(chart, 384, context).legend?.height).toBeLessThanOrEqual(chartHeight(chart));
 	});
 
 	it("draws scatter points with cycling markers", () => {

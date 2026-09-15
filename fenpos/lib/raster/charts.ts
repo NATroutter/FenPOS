@@ -138,10 +138,9 @@ export function chartFrame(chart: ChartData, width: number, context: LayoutConte
 	const axisWidth = chart.type === "pie" ? 0 : widest(tickLabels(chart), context) + AXIS_GAP_DOTS;
 	const axisHeight = chart.type === "pie" ? 0 : labelHeight + AXIS_GAP_DOTS;
 
-	const entries = legendEntries(chart);
-	const entryHeight = Math.max(SWATCH_DOTS, labelHeight) + ENTRY_GAP_DOTS;
+	const entries = legendEntries(chart, context);
 	const legendWidth = entries.length === 0 ? 0 : SWATCH_DOTS + SWATCH_GAP_DOTS + widest(labelsOf(entries), context);
-	const legendHeight = entries.length * entryHeight;
+	const legendHeight = entries.length * entryHeight(context);
 	const beside =
 		entries.length > 0 && width - axisWidth - LEGEND_GAP_DOTS - Math.floor(width / 2) >= MIN_PLOT_WIDTH_DOTS;
 
@@ -233,7 +232,7 @@ export function paintChart(
 		paintScatter(canvas, chart, frame, x, y);
 	}
 	if (frame.legend) {
-		paintLegend(canvas, legendEntries(chart), frame.legend, x, y, context);
+		paintLegend(canvas, legendEntries(chart, context), frame.legend, x, y, context);
 	}
 }
 
@@ -417,6 +416,15 @@ function pointX(plot: ChartFrame["plot"], index: number, count: number): number 
  * The circle is as wide as the plot's shorter side allows rather than as wide as the paper: a pie
  * says what it has to say with angles, and an ellipse stretched to fill a landscape plot would tell
  * the reader a lie about every one of them.
+ *
+ * Dot by dot over the square the circle sits in, rather than by tracing each slice's outline and
+ * filling what it encloses: a dot's slice follows from two things it can answer on its own — how far
+ * it is from the centre, and how far round the turn it lies — and asking them needs neither an
+ * outline nor a scanline order. The square is walked once for the whole pie rather than once per
+ * slice, so the work is the circle's area and not the circle's area times the count of slices: a
+ * thousand-slice pie costs a thousand-slice pie's worth of arithmetic either way, and walking it per
+ * slice spends a thousand square roots and arc tangents on every dot to decide a thing about it that
+ * does not change.
  */
 function paintPie(canvas: Canvas, chart: ChartData, frame: ChartFrame, x: number, y: number): void {
 	const { plot } = frame;
@@ -429,56 +437,75 @@ function paintPie(canvas: Canvas, chart: ChartData, frame: ChartFrame, x: number
 
 	const centreX = x + plot.x + Math.floor(plot.width / 2);
 	const centreY = y + plot.y + Math.floor(plot.height / 2);
+	const ends = sliceEnds(values, total);
 
-	let from = 0;
-	for (const [index, value] of values.entries()) {
-		// The last slice is closed on the turn itself rather than on the sum of the shares before it,
-		// which thirds and sevenths leave a fraction of a dot short of a whole circle.
-		const to = index === values.length - 1 ? TURN : from + (value / total) * TURN;
-		paintSlice(canvas, SLICE_PATTERNS[index % SLICE_PATTERNS.length], centreX, centreY, radius, from, to);
-		const edge = rim(radius, from);
-		canvas.line(centreX, centreY, centreX + edge.dx, centreY + edge.dy);
-		from = to;
-	}
-
-	// Every dot whose distance from the centre rounds to the radius, which draws a rounder rim on a
-	// grid this coarse than stepping around the circle by angle does.
 	for (let dy = -radius; dy <= radius; dy++) {
 		for (let dx = -radius; dx <= radius; dx++) {
-			if (Math.round(Math.hypot(dx, dy)) === radius) canvas.set(centreX + dx, centreY + dy);
+			// The rim is every dot whose distance from the centre rounds to the radius, which draws a
+			// rounder circle on a grid this coarse than stepping around it by angle does.
+			const distance = Math.hypot(dx, dy);
+			if (Math.round(distance) === radius) {
+				canvas.set(centreX + dx, centreY + dy);
+			}
+			if (distance > radius) {
+				continue;
+			}
+
+			const slice = sliceAt(ends, angleOf(dx, dy));
+			if (slice < 0) {
+				continue;
+			}
+			if (patternDot(SLICE_PATTERNS[slice % SLICE_PATTERNS.length], centreX + dx, centreY + dy)) {
+				canvas.set(centreX + dx, centreY + dy);
+			}
 		}
+	}
+
+	let from = 0;
+	for (const end of ends) {
+		const edge = rim(radius, from);
+		canvas.line(centreX, centreY, centreX + edge.dx, centreY + edge.dy);
+		from = end;
 	}
 }
 
 /**
- * Inks the dots of one slice.
+ * How far round the turn each slice reaches, in order, so a dot's angle settles its slice.
  *
- * Dot by dot over the square the circle sits in, rather than by tracing the slice's outline and
- * filling what it encloses: a slice is defined by two questions a dot can answer on its own — is it
- * within the radius, and does it lie between the two angles — and asking them of every dot needs
- * neither an outline nor a scanline order.
+ * The last slice is closed on the turn itself rather than on the sum of the shares before it, which
+ * thirds and sevenths leave a fraction of a dot short of a whole circle.
  */
-function paintSlice(
-	canvas: Canvas,
-	pattern: Pattern,
-	centreX: number,
-	centreY: number,
-	radius: number,
-	from: number,
-	to: number,
-): void {
-	for (let dy = -radius; dy <= radius; dy++) {
-		for (let dx = -radius; dx <= radius; dx++) {
-			if (Math.hypot(dx, dy) > radius) {
-				continue;
-			}
-			const angle = angleOf(dx, dy);
-			if (angle < from || angle >= to) {
-				continue;
-			}
-			if (patternDot(pattern, centreX + dx, centreY + dy)) canvas.set(centreX + dx, centreY + dy);
+function sliceEnds(values: readonly number[], total: number): Float64Array {
+	const ends = new Float64Array(values.length);
+	let from = 0;
+	for (const [index, value] of values.entries()) {
+		from = index === values.length - 1 ? TURN : from + (value / total) * TURN;
+		ends[index] = from;
+	}
+	return ends;
+}
+
+/**
+ * Which slice an angle falls in: the first whose end it has not yet reached.
+ *
+ * A binary search rather than a walk, because the ends only ever climb, and a pie may hold as many
+ * numbers as a series is allowed. A slice worth nothing ends where the one before it did and so is
+ * never the first, which is what a share of no turn should come to.
+ *
+ * @returns the slice's place in the list, or -1 for an angle past the last end
+ */
+function sliceAt(ends: Float64Array, angle: number): number {
+	let low = 0;
+	let high = ends.length - 1;
+	while (low < high) {
+		const middle = (low + high) >> 1;
+		if (angle < ends[middle]) {
+			high = middle;
+		} else {
+			low = middle + 1;
 		}
 	}
+	return angle < ends[low] ? low : -1;
 }
 
 /** How far round the turn a dot lies, from straight up and going clockwise, the way a pie is read. */
@@ -578,15 +605,15 @@ function paintLegend(
 	context: LayoutContext,
 ): void {
 	const labelHeight = context.typeface(LABEL_STYLE).cellHeight;
-	const entryHeight = Math.max(SWATCH_DOTS, labelHeight) + ENTRY_GAP_DOTS;
+	const height = entryHeight(context);
 
 	for (const [index, entry] of entries.entries()) {
-		const top = y + box.y + index * entryHeight;
+		const top = y + box.y + index * height;
 		paintFilled(
 			canvas,
 			entry.pattern,
 			x + box.x,
-			top + Math.floor((entryHeight - SWATCH_DOTS) / 2),
+			top + Math.floor((height - SWATCH_DOTS) / 2),
 			SWATCH_DOTS,
 			SWATCH_DOTS,
 		);
@@ -595,7 +622,7 @@ function paintLegend(
 			canvas,
 			rowsOf(entry.label, LABEL_STYLE, width, "LEFT", context),
 			x + box.x + SWATCH_DOTS + SWATCH_GAP_DOTS,
-			top + Math.floor((entryHeight - labelHeight) / 2),
+			top + Math.floor((height - labelHeight) / 2),
 		);
 	}
 }
@@ -612,26 +639,36 @@ function paintFilled(canvas: Canvas, pattern: Fill, x: number, y: number, width:
 	canvas.fill(x, y, width, height, pattern);
 }
 
+/** The dots one legend entry stands, swatch and name alike, plus the gap to the entry below it. */
+function entryHeight(context: LayoutContext): number {
+	return Math.max(SWATCH_DOTS, context.typeface(LABEL_STYLE).cellHeight) + ENTRY_GAP_DOTS;
+}
+
 /**
  * What a chart's legend lists.
  *
  * A pie is the exception: its one series is the whole, so what the legend names is the slices — the
- * chart's own labels — rather than the series they came from.
+ * chart's own labels — rather than the series they came from. That also makes it the one chart whose
+ * legend is as long as its data: a series-per-line legend runs to a handful of lines, while a pie
+ * drawn from a thousand numbers would ask for a thousand of them. So the list stops where the
+ * chart's own dots run out — a legend taller than the chart it explains is a legend that has pushed
+ * the plot off the paper and printed itself over whatever came next.
  */
-function legendEntries(chart: ChartData): LegendEntry[] {
+function legendEntries(chart: ChartData, context: LayoutContext): LegendEntry[] {
 	if (!showsLegend(chart)) {
 		return [];
 	}
-	if (chart.type === "pie") {
-		return chart.series[0].values.map((_, index) => ({
-			label: chart.labels[index] ?? `#${index + 1}`,
-			pattern: SLICE_PATTERNS[index % SLICE_PATTERNS.length],
-		}));
-	}
-	return chart.series.map((series, index) => ({
-		label: series.label ?? String(index + 1),
-		pattern: series.pattern,
-	}));
+	const all =
+		chart.type === "pie"
+			? chart.series[0].values.map((_, index) => ({
+					label: chart.labels[index] ?? `#${index + 1}`,
+					pattern: SLICE_PATTERNS[index % SLICE_PATTERNS.length] as Fill,
+				}))
+			: chart.series.map((series, index) => ({
+					label: series.label ?? String(index + 1),
+					pattern: series.pattern as Fill,
+				}));
+	return all.slice(0, Math.max(0, Math.floor(chartHeight(chart) / entryHeight(context))));
 }
 
 /**
