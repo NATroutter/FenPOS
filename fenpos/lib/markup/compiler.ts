@@ -1,7 +1,9 @@
+import type { ImageRaster } from "@/lib/assets/dither";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import {
 	type CompiledJob,
+	IMAGE_LIMITS,
 	rasterBytes,
 	type Directive as WireDirective,
 	type Line as WireLine,
@@ -296,6 +298,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 				// deliberately: a codepage bounds what the *printer* can put on paper, and nothing on
 				// this line reaches the printer as a character.
 				const raster = renderRasterLine(top.nodes, layoutContext(settings, limits));
+				requireRasterFitsTheWire(raster, top.number);
 				lines.push({
 					align: "LEFT",
 					wrap: null,
@@ -324,6 +327,33 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 	}
 
 	return lines;
+}
+
+/**
+ * Refuses a drawn line the wire cannot carry as one raster.
+ *
+ * **The job-wide budget does not imply this one.** `IMAGE_LIMITS.maxRasterChars` bounds any *single*
+ * raster and is enforced by `imageSourceSchema` and by the agent's `FrameCodec.readRaster`, so a
+ * drawn line past it serialises to a `ZodError` at send time — a 500 for the caller and a job row
+ * stuck at `QUEUED` — while sitting comfortably inside an install's megabytes of raster budget. A
+ * line of text at a large enough font size reaches that on its own, without an `<image>` in it.
+ *
+ * Raised here rather than over the finished wire because this is where the line number still exists,
+ * and a caller told which line to shorten can act on the answer.
+ *
+ * @param raster the dots just drawn
+ * @param lineNumber the line of the document they were drawn from
+ * @throws ApiError when the raster is larger than one raster may be on this wire
+ */
+function requireRasterFitsTheWire(raster: ImageRaster, lineNumber: number): void {
+	const chars = Math.ceil(raster.packed.length / 3) * 4;
+	if (chars > IMAGE_LIMITS.maxRasterChars) {
+		throw new ApiError(
+			"image_too_large",
+			`Line ${lineNumber} draws ${raster.widthDots}x${raster.heightDots} dots, which is ${chars} characters of a job and more than the ${IMAGE_LIMITS.maxRasterChars} a single picture may carry. Shorten the line, or draw it at a smaller font size.`,
+			{ line: lineNumber, limit: IMAGE_LIMITS.maxRasterChars },
+		);
+	}
 }
 
 /**

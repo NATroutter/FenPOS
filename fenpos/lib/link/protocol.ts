@@ -83,10 +83,11 @@ export const IMAGE_LIMITS = {
 	 * Base64 characters in one raster, whether synced or carried in a job.
 	 *
 	 * 128 KB encodes 96 KB of dots, which on the widest common paper is a picture about 1500 dots
-	 * tall — some sixty lines of paper, and far more than any logo. What one job may spend on dots in
-	 * total is a separate, operator-configurable bound: `limits.maxRasterMb`, charged over every
-	 * raster a job carries, which is what stops several smaller pictures adding up to a frame nothing
-	 * will send.
+	 * tall — some sixty lines of paper, and far more than any logo. It bounds every raster equally:
+	 * an image's dots, and a whole line the server had to draw because the printer could not. What one
+	 * job may spend on dots in total is a separate, operator-configurable bound —
+	 * `limits.maxRasterMb`, charged over every raster a job carries — which is what stops several
+	 * smaller pictures adding up to a frame nothing will send.
 	 */
 	maxRasterChars: 128 * 1024,
 	/** Rasters one `config.sync` may carry: one per asset per distinct paper width behind an agent. */

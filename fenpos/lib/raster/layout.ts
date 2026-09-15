@@ -2,6 +2,7 @@ import type { ImageRaster } from "@/lib/assets/dither";
 import type { Align } from "@/lib/domain/enums";
 import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
 import type { BlockNode, ImageNode, Node } from "@/lib/markup/document";
+import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
 import { Canvas } from "@/lib/raster/canvas";
@@ -123,8 +124,17 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					children.push(blockNode(node, context));
 					break;
 				case "symbol":
-				case "void":
-					throw new Error(`a <${node.kind}> cannot be drawn into a raster line`);
+				case "void": {
+					// The tree is where this belongs, since it is a shape rule rather than a drawing one.
+					const tag = (node.kind === "void" ? node.directive.kind : node.spec.kind).toLowerCase();
+					throw new MarkupError(
+						MARKUP_ERRORS.misplacedBlock,
+						node.line,
+						node.column,
+						tag,
+						`<${tag}> is printed by the printer and cannot sit on a drawn line`,
+					);
+				}
 				case "break":
 					throw new Error("splitLines removes every break");
 			}
@@ -148,6 +158,7 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
  * @param context the fonts, the paper and what the pre-pass resolved
  * @returns the dots, packed exactly as `GS v 0` takes them
  * @throws UnsupportedCharacterError under the `REJECT` policy, when a face has no such glyph
+ * @throws MarkupError when the line carries something the printer draws for itself
  */
 export function renderRasterLine(nodes: Node[], context: LayoutContext): ImageRaster {
 	const width = dotWidth(context.columns);

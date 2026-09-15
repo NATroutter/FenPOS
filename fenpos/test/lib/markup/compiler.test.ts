@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
-import { compiledJobSchema, rasterBytes } from "@/lib/link/protocol";
+import { compiledJobSchema, IMAGE_LIMITS, rasterBytes } from "@/lib/link/protocol";
 import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
@@ -915,6 +915,34 @@ describe("a document in one string", () => {
 
 		expect(thrown.code).toBe("raster_budget_exceeded");
 		expect(thrown.details).toMatchObject({ limit: 1000 });
+	});
+
+	/**
+	 * The per-raster cap, which the job-wide budget does not imply. A line of text at a large enough
+	 * font size is a picture the wire will not carry on its own, and one that compiled cleanly here
+	 * would fail serialisation at send time — a 500 for the caller and a job stuck at `QUEUED`.
+	 */
+	it("refuses a drawn line larger than one raster may be on the wire", () => {
+		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
+		const thrown = refusal(() => compile("j", "d", request("<font=mono size=512>abcdefghij</font>"), LIMITS, settings));
+
+		expect(thrown.code).toBe("image_too_large");
+		expect(thrown.details).toMatchObject({ line: 1, limit: IMAGE_LIMITS.maxRasterChars });
+	});
+
+	/**
+	 * A cut, a feed and a drawer pulse are commands to the printer rather than dots, so there is
+	 * nothing for the layout engine to draw and no place on a drawn line for them. Reported as the
+	 * caller's mistake, with the column, rather than as a fault.
+	 */
+	it("refuses a printer command on a drawn line, naming its column", () => {
+		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
+		const thrown = refusal(() =>
+			compile("j", "d", request("<font=mono size=40>Total</font><drawer>"), LIMITS, settings),
+		);
+
+		expect(thrown.code).toBe("misplaced_block");
+		expect(thrown.details).toMatchObject({ line: 1, column: 32, detail: "drawer" });
 	});
 
 	/**
