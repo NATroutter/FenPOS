@@ -36,7 +36,7 @@ import { BarcodeSystem } from "@/lib/domain/enums";
  * The tags whose usefulness depends on something the toolbar cannot guess.
  *
  * The rest of the toolbar writes a tag and gets out of the way, because there is nothing to decide:
- * `<bold>` is `<bold>`. These seven carry a payload or a number that has to come from somewhere, and
+ * `<bold>` is `<bold>`. These ten carry a payload or a number that has to come from somewhere, and
  * typing `<barcode=CODE128></barcode>` by hand means knowing the symbology's name and that it belongs
  * in the argument rather than the content. That is what this dialog is for.
  *
@@ -44,8 +44,17 @@ import { BarcodeSystem } from "@/lib/domain/enums";
  * on the server, so the only alternative to a picker is remembering what the Assets tab calls it. A
  * variable is the same argument a second time: it too is a name defined elsewhere — on the Variables
  * tab rather than Assets — and it is not even a tag, so there is no markup to learn by heart at all.
+ *
+ * `chart` and `bar` are here for a different reason: nothing to remember, just a choice (which kind
+ * of chart) or a number (how full the gauge is) with no sensible default a button could write on its
+ * own. `font` is here because a stored font is a name off the Assets tab, exactly like an image, and
+ * asking for it also means asking what it should say — unlike the two built-in fonts, which used to
+ * write themselves straight onto the toolbar because there was nothing left to ask.
  */
-export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill";
+export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill" | "chart" | "bar" | "font";
+
+/** The four kinds of chart the toolbar offers. */
+const CHART_TYPES = ["bar", "line", "pie", "scatter"] as const;
 
 /** What the dialog asks for, and how it explains itself, per tag. */
 const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
@@ -77,6 +86,17 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
 		title: "Insert a fill",
 		description:
 			"Pads the line out to the paper's width — the space between a name on the left and a price on the right. The character is repeated to fill the gap.",
+	},
+	chart: {
+		title: "Insert a chart",
+		description:
+			"Bar, line, pie or scatter. A sample series and labels are inserted with it — replace the values and add more series by copying the tags.",
+	},
+	bar: { title: "Insert a gauge", description: "How full the gauge is drawn, 0 (empty) to 100 (full)." },
+	font: {
+		title: "Insert a font",
+		description:
+			"A or B for one of the printer's built-in fonts, or the name of a font stored on the Assets tab, drawn at the given size.",
 	},
 };
 
@@ -122,7 +142,7 @@ export function InsertDialog({
 		if (!tag) {
 			return;
 		}
-		setArgument(tag === "barcode" ? "CODE128" : "");
+		setArgument(tag === "barcode" ? "CODE128" : tag === "chart" ? "bar" : "");
 		// Only the feed starts with a value: it is the one whose argument is required, and one line
 		// is what someone reaching for it usually wants.
 		setAmount(tag === "feed" ? 1 : null);
@@ -160,9 +180,18 @@ export function InsertDialog({
 	const trimmedContent = content.trim();
 	const trimmedArgument = argument.trim();
 	/** Whether this tag's argument is the numeric one. */
-	const numeric = tag === "image" || tag === "qr" || tag === "pdf417" || tag === "feed";
-	// The void tags carry everything in their argument and enclose nothing; the rest need content.
-	const ready = tag === "feed" ? amount !== null : tag === "fill" ? true : trimmedContent !== "";
+	const numeric = tag === "image" || tag === "qr" || tag === "pdf417" || tag === "feed" || tag === "bar";
+	// The void tags carry everything in their argument and enclose nothing; a chart's type always has
+	// a value once the dialog is open, since it defaults to "bar"; a font needs a name but its text is
+	// optional, the same as any other paired tag with nothing selected; the rest need content.
+	const ready =
+		tag === "feed" || tag === "bar"
+			? amount !== null
+			: tag === "fill" || tag === "chart"
+				? true
+				: tag === "font"
+					? trimmedArgument !== ""
+					: trimmedContent !== "";
 
 	const insert = (): void => {
 		const written = numeric ? (amount === null ? "" : String(amount)) : trimmedArgument;
@@ -254,6 +283,70 @@ export function InsertDialog({
 								min={1}
 								max={255}
 							/>
+						) : null}
+
+						{tag === "chart" ? (
+							<Field>
+								<FieldLabel htmlFor="insert-chart-type">Type</FieldLabel>
+								<Select
+									items={Object.fromEntries(CHART_TYPES.map((value) => [value, value]))}
+									value={trimmedArgument}
+									onValueChange={(next) => next && setArgument(String(next))}
+								>
+									<SelectTrigger id="insert-chart-type">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{CHART_TYPES.map((value) => (
+											<SelectItem key={value} value={value} className="font-mono text-[12px]">
+												{value}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</Field>
+						) : null}
+
+						{tag === "bar" ? (
+							<NumberRow
+								label="Fill"
+								description="How full the gauge is drawn."
+								value={amount}
+								onChange={setAmount}
+								min={0}
+								max={100}
+							/>
+						) : null}
+
+						{tag === "font" ? (
+							<Field>
+								<FieldLabel htmlFor="insert-font-name">Font</FieldLabel>
+								<Input
+									id="insert-font-name"
+									value={argument}
+									placeholder="a"
+									onChange={(event) => setArgument(event.target.value)}
+								/>
+								<FieldDescription>
+									A or B for one of the printer's built-in fonts, or the name of a font stored on the Assets tab.
+								</FieldDescription>
+							</Field>
+						) : null}
+
+						{tag === "font" ? (
+							<Field>
+								<FieldLabel htmlFor="insert-font-text">Text</FieldLabel>
+								<Textarea
+									id="insert-font-text"
+									value={content}
+									rows={3}
+									placeholder="TOTAL"
+									onChange={(event) => setContent(event.target.value)}
+								/>
+								<FieldDescription>
+									The text drawn in this font. Left empty, the caret is left between the tags.
+								</FieldDescription>
+							</Field>
 						) : null}
 
 						{tag === "fill" ? (

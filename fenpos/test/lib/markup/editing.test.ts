@@ -52,4 +52,36 @@ describe("markupEdit", () => {
 	it("reports an unknown tag rather than inventing one", () => {
 		expect(markupEdit("blink", "x")).toBeUndefined();
 	});
+
+	it("wraps a selection in a box on its own lines", () => {
+		expect(markupEdit("box", "Title")).toEqual({ insert: "<box>\nTitle\n</box>", selectionFrom: 6, selectionTo: 11 });
+	});
+
+	it("inserts a table skeleton when nothing is selected", () => {
+		expect(markupEdit("table", "")?.insert).toBe("<table>\n<row><cell></cell><cell></cell></row>\n</table>");
+	});
+
+	it("ignores a selection when inserting a table, since there is nothing in it to carry over", () => {
+		expect(markupEdit("table", "some text")?.insert).toBe("<table>\n<row><cell></cell><cell></cell></row>\n</table>");
+	});
+
+	it("inserts a chart skeleton with the type", () => {
+		expect(markupEdit("chart", "", "bar")?.insert).toBe(
+			"<chart=bar height=8>\n<series=A>1,2,3</series>\n<labels>a,b,c</labels>\n</chart>",
+		);
+	});
+
+	it("reports no edit for a chart with no type", () => {
+		expect(markupEdit("chart", "")).toBeUndefined();
+	});
+
+	it("inserts a gauge and a configured font", () => {
+		expect(markupEdit("bar", "", "50")?.insert).toBe("<bar=50>");
+		expect(markupEdit("font", "Hi", "mono")?.insert).toBe("<font=mono size=24>Hi</font>");
+	});
+
+	it("writes a built-in font without a size, regardless of case", () => {
+		expect(markupEdit("font", "Hi", "a")?.insert).toBe("<font=a>Hi</font>");
+		expect(markupEdit("font", "Hi", "B")?.insert).toBe("<font=B>Hi</font>");
+	});
 });

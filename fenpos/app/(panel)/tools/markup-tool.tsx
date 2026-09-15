@@ -8,7 +8,6 @@ import {
 	Bold,
 	BookOpen,
 	Braces,
-	CaseSensitive,
 	ChevronDown,
 	CircleAlert,
 	CircleCheck,
@@ -328,12 +327,6 @@ const SIZE_CHOICES: TagChoice[] = [
 	{ label: "Triple both", tag: "size", argument: "3,3", note: "<size=3,3>" },
 ];
 
-/** The two built-in fonts. B is the narrow one, which fits more columns on the same paper. */
-const FONT_CHOICES: TagChoice[] = [
-	{ label: "Font A", tag: "font", argument: "A", note: "The default width" },
-	{ label: "Font B", tag: "font", argument: "B", note: "Narrower, more columns" },
-];
-
 /** Justification. Lowercase, matching how the examples and the docs write it. */
 const ALIGN_CHOICES: TagChoice[] = [
 	{ label: "Left", tag: "align", argument: "left", note: "<align=left>" },
@@ -351,6 +344,12 @@ const ALIGN_CHOICES: TagChoice[] = [
  *
  * Half of them go straight in; the other half open a dialog first, because they need a value the
  * toolbar has no way to guess. See {@link TagChoice.prompt}.
+ *
+ * Box, Table, Chart and Gauge belong here rather than in a menu of their own for the same reason as
+ * the rest: none of them is a style applied to text, so there is nothing for a selection to carry
+ * except, for Box alone, the lines it should frame. Font joined them too, once naming a stored font
+ * meant asking for a size as well as a name — a single button could write `<font=A>` or `<font=B>`
+ * without asking anything, but it cannot guess a name off the Assets tab.
  */
 const INSERT_CHOICES: TagChoice[] = [
 	{ label: "Horizontal rule", tag: "hr", note: "A full-width line" },
@@ -371,6 +370,11 @@ const INSERT_CHOICES: TagChoice[] = [
 	},
 	{ label: "Wrap", tag: "wrap", note: "Break this line at the paper width" },
 	{ label: "No wrap", tag: "nowrap", note: "Print this line as written" },
+	{ label: "Box", tag: "box", note: "Frame the selected lines" },
+	{ label: "Table", tag: "table", note: "A grid of cells" },
+	{ label: "Chart", tag: "chart", prompt: "chart", note: "bar, line, pie or scatter" },
+	{ label: "Gauge", tag: "bar", prompt: "bar", note: "0 to 100" },
+	{ label: "Font", tag: "font", prompt: "font", note: "a, b or a stored font" },
 ];
 
 /**
@@ -546,12 +550,6 @@ export function MarkupTool({
 							label="Size"
 							icon={<ALargeSmall className="size-3.5" />}
 							choices={SIZE_CHOICES}
-							onPick={applyTag}
-						/>
-						<TagMenu
-							label="Font"
-							icon={<CaseSensitive className="size-3.5" />}
-							choices={FONT_CHOICES}
 							onPick={applyTag}
 						/>
 						<TagMenu

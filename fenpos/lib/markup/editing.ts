@@ -20,9 +20,68 @@ export interface MarkupEdit {
 	selectionTo: number;
 }
 
-/** Opening delimiter for a tag, with its argument if it takes one. */
+/** The size, in dots, a stored font is written at when the toolbar does not ask for another. */
+const DEFAULT_FONT_SIZE = 24;
+
+/** Font names that pick one of the printer's two built-in fonts rather than a stored one. */
+const BUILTIN_FONTS = new Set(["a", "b"]);
+
+/**
+ * Opening delimiter for a tag, with its argument if it takes one.
+ *
+ * `font` is the one tag whose opening carries a second thing besides its argument: a stored font is
+ * meaningless at the printer's native size, so naming one here also writes a `size`. A built-in font
+ * has no such attribute — `A` and `B` already are a size, chosen by the hardware — so it is excluded
+ * by name rather than by the tag carrying no attributes, which `font` does have, for the stored case.
+ */
 function openingTag(tag: Tag, argument?: string): string {
-	return argument === undefined || argument === "" ? `<${tag.name}>` : `<${tag.name}=${argument}>`;
+	if (argument === undefined || argument === "") {
+		return `<${tag.name}>`;
+	}
+	if (tag.name === "font" && !BUILTIN_FONTS.has(argument.toLowerCase())) {
+		return `<${tag.name}=${argument} size=${DEFAULT_FONT_SIZE}>`;
+	}
+	return `<${tag.name}=${argument}>`;
+}
+
+/**
+ * A box wraps whatever is selected rather than replacing it, the same as any other paired tag — but
+ * on its own lines, because a box frames whole lines of a receipt and nobody writes one any other
+ * way by hand. Selecting the lines to be framed and pressing the button is exactly what "wrap a
+ * selection" already means elsewhere on the toolbar; only the line breaks are new.
+ */
+function boxEdit(selected: string): MarkupEdit {
+	const before = "<box>\n";
+	const insert = `${before}${selected}\n</box>`;
+	return { insert, selectionFrom: before.length, selectionTo: before.length + selected.length };
+}
+
+/**
+ * A table is a grid, not prose, so there is nothing in a selection worth carrying into it. This
+ * always writes the same minimal skeleton instead — one row of two empty cells, ready to be filled
+ * in and copied by hand for more — with the caret left inside the first cell, which is where typing
+ * starts.
+ */
+function tableSkeleton(): MarkupEdit {
+	const before = "<table>\n<row><cell>";
+	const insert = `${before}</cell><cell></cell></row>\n</table>`;
+	return { insert, selectionFrom: before.length, selectionTo: before.length };
+}
+
+/**
+ * A chart needs series and labels to mean anything, and nobody has sample data memorised, so like a
+ * table this ignores the selection and writes a skeleton: one named series of sample values and
+ * matching labels, at a height that fits without measuring the paper first. The chart type is the
+ * one thing no selection could ever supply, so it stays a parameter rather than part of the
+ * skeleton's fixed text.
+ *
+ * @param type "bar", "line", "pie" or "scatter"
+ */
+function chartSkeleton(type: string): MarkupEdit {
+	const before = `<chart=${type} height=8>\n<series=A>`;
+	const values = "1,2,3";
+	const insert = `${before}${values}</series>\n<labels>a,b,c</labels>\n</chart>`;
+	return { insert, selectionFrom: before.length, selectionTo: before.length + values.length };
 }
 
 /**
@@ -47,6 +106,19 @@ export function markupEdit(name: string, selected: string, argument?: string): M
 	const tag = tagByName(name);
 	if (!tag) {
 		return undefined;
+	}
+
+	// Three tags whose content is a whole structure rather than something to style — see
+	// {@link boxEdit}, {@link tableSkeleton} and {@link chartSkeleton} for why each departs from the
+	// wrap-or-append rule below. A chart with no type is not a request this function can act on.
+	if (tag.name === "box") {
+		return boxEdit(selected);
+	}
+	if (tag.name === "table") {
+		return tableSkeleton();
+	}
+	if (tag.name === "chart") {
+		return argument ? chartSkeleton(argument) : undefined;
 	}
 
 	const open = openingTag(tag, argument);

@@ -187,6 +187,25 @@ function exampleLabels(): string[] {
 }
 
 /**
+ * Just the `INSERT_CHOICES` array, for the checks that go looking for insert menu entries by label.
+ *
+ * Narrowed the same way {@link EXAMPLES_SOURCE} is, and for the same reason: `label:` is not unique
+ * to this array, so a whole-module scan would pick up the Size, Font and Align menus too.
+ */
+const INSERT_CHOICES_SOURCE = (() => {
+	const from = MARKUP_TOOL.indexOf("const INSERT_CHOICES: TagChoice[] = [");
+	const to = MARKUP_TOOL.indexOf("\n];", from);
+	expect(from, "the INSERT_CHOICES array has been renamed or removed").toBeGreaterThan(-1);
+	expect(to).toBeGreaterThan(from);
+	return MARKUP_TOOL.slice(from, to);
+})();
+
+/** Every label the Insert menu offers, read out in the order the module defines them. */
+function insertChoiceLabels(): string[] {
+	return [...INSERT_CHOICES_SOURCE.matchAll(/label: "([^"]*)"/g)].map((match) => match[1]);
+}
+
+/**
  * One example's own source, from its label up to the next one's (or the end of the file for the
  * last example).
  *
@@ -284,6 +303,21 @@ describe("the Device test page example", () => {
 		// declaration. The example is checked separately for actually using it.
 		expect(MARKUP_TOOL).toContain(`const BUNDLED_LOGO = "${javaConstant(BUNDLED_IMAGES, "NAME")}"`);
 		expect(EXAMPLE).toMatch(/<image>\$\{BUNDLED_LOGO\}<\/image>/);
+	});
+});
+
+describe("the insert menu", () => {
+	it("offers the block, chart, gauge and font entries", () => {
+		const labels = insertChoiceLabels();
+
+		for (const label of ["Box", "Table", "Chart", "Gauge", "Font"]) {
+			expect(labels, `"${label}" is missing from the insert menu`).toContain(label);
+		}
+	});
+
+	it("no longer offers the two fixed font buttons, since a font now takes a dialog", () => {
+		expect(MARKUP_TOOL).not.toContain('label: "Font A"');
+		expect(MARKUP_TOOL).not.toContain('label: "Font B"');
 	});
 });
 
