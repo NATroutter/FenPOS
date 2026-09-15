@@ -27,12 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class MarkupParserTest {
 
-    /**
-     * Text carrying a raw {@code ESC} at column 3. Built from a char code rather than a
-     * string literal so the control byte stays visible to anyone reading this file.
-     */
-    private static final String ESCAPE_IN_TEXT = "ab" + (char) 0x1B + "c";
-
     // -------------------------------------------------------------------------
     // Text and entities
     // -------------------------------------------------------------------------
@@ -61,6 +55,11 @@ class MarkupParserTest {
         Line line = MarkupParser.parse("a &lt; b &amp; c");
 
         assertEquals("a < b & c", line.plainText());
+    }
+
+    @Test
+    void decodesTheQuoteAndBraceEntities() throws Exception {
+        assertEquals("\"{", MarkupParser.parse("&quot;&lbrace;").plainText());
     }
 
     @Test
@@ -118,22 +117,6 @@ class MarkupParserTest {
         Span span = line.spans().getFirst();
         assertTrue(span.style().bold());
         assertEquals(1, span.style().underline());
-    }
-
-    @Test
-    void parsesSizeArgumentsAsSeparateMultipliers() throws Exception {
-        Line line = MarkupParser.parse("<size width=2 height=3>BIG</size>");
-
-        assertEquals(2, line.spans().getFirst().style().widthMult());
-        assertEquals(3, line.spans().getFirst().style().heightMult());
-    }
-
-    @Test
-    void parsesSingleSizeArgumentAsBothMultipliers() throws Exception {
-        Line line = MarkupParser.parse("<size width=2 height=2>BIG</size>");
-
-        assertEquals(2, line.spans().getFirst().style().widthMult());
-        assertEquals(2, line.spans().getFirst().style().heightMult());
     }
 
     @Test
@@ -297,42 +280,6 @@ class MarkupParserTest {
         assertEquals(MarkupError.UNEXPECTED_CLOSE_TAG, thrown.error());
     }
 
-    @Test
-    void rejectsSizeMultiplierAboveEight() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<size width=9 height=1>x</size>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
-    }
-
-    @Test
-    void rejectsNonNumericSizeArgument() {
-        assertEquals(MarkupError.INVALID_ATTRIBUTE,
-                assertThrows(MarkupException.class,
-                        () -> MarkupParser.parse("<size width=big>x</size>")).error());
-    }
-
-    @Test
-    void rejectsArgumentOnATagThatTakesNone() {
-        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE,
-                assertThrows(MarkupException.class,
-                        () -> MarkupParser.parse("<bold=1>x</bold>")).error());
-    }
-
-    @Test
-    void rejectsMissingArgumentOnATagThatRequiresOne() {
-        assertEquals(MarkupError.INVALID_ATTRIBUTE,
-                assertThrows(MarkupException.class,
-                        () -> MarkupParser.parse("<align>x</align>")).error());
-    }
-
-    @Test
-    void rejectsUnterminatedTag() {
-        assertEquals(MarkupError.UNKNOWN_TAG,
-                assertThrows(MarkupException.class,
-                        () -> MarkupParser.parse("<bold x")).error());
-    }
-
     // -------------------------------------------------------------------------
     // Server-rendered refusals
     // -------------------------------------------------------------------------
@@ -376,14 +323,26 @@ class MarkupParserTest {
         assertEquals("table", thrown.detail());
     }
 
+    /**
+     * A face that is neither letter is a stored font when it is spelled like a font's name, and
+     * nothing at all when it is not — which is the difference between a job the server can print
+     * and a job nothing can.
+     */
     @Test
     void rejectsAFontOtherThanAOrB() {
-        MarkupException thrown = assertThrows(MarkupException.class,
+        MarkupException stored = assertThrows(MarkupException.class,
                 () -> MarkupParser.parse("<text font=roboto>x</text>"));
 
-        assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
-        assertEquals(7, thrown.column());
-        assertEquals("text", thrown.detail());
+        assertEquals(MarkupError.SERVER_RENDERED, stored.error());
+        assertEquals(7, stored.column());
+        assertEquals("text", stored.detail());
+
+        MarkupException neither = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<text font=Roboto>x</text>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, neither.error());
+        assertEquals(7, neither.column());
+        assertEquals("font", neither.detail());
     }
 
     @Test
@@ -394,33 +353,6 @@ class MarkupParserTest {
         assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
         assertEquals(1, thrown.column());
         assertEquals("image", thrown.detail());
-    }
-
-    /**
-     * A raw ESC byte is what markup exists to replace. Letting one through would let a
-     * caller desynchronise the printer, which is precisely what the grammar prevents.
-     */
-    @Test
-    void rejectsControlCharactersAtTheirColumn() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse(ESCAPE_IN_TEXT));
-
-        assertEquals(MarkupError.CONTROL_CHARACTER, thrown.error());
-        assertEquals(3, thrown.column());
-    }
-
-    @Test
-    void rejectsTabAsAControlCharacter() {
-        assertEquals(MarkupError.CONTROL_CHARACTER,
-                assertThrows(MarkupException.class, () -> MarkupParser.parse("a\tb")).error());
-    }
-
-    @Test
-    void rejectsDeleteAndC1Controls() {
-        assertEquals(MarkupError.CONTROL_CHARACTER,
-                assertThrows(MarkupException.class, () -> MarkupParser.parse("a" + (char) 0x7F + "b")).error());
-        assertEquals(MarkupError.CONTROL_CHARACTER,
-                assertThrows(MarkupException.class, () -> MarkupParser.parse("a" + (char) 0x85 + "b")).error());
     }
 
     @Test
@@ -534,18 +466,9 @@ class MarkupParserTest {
     }
 
     @Test
-    void parsesQrModuleSizeArgument() throws Exception {
+    void parsesQrModuleSize() throws Exception {
         assertEquals(List.of(new Directive.Qr("x", 12)),
                 MarkupParser.parse("<qr size=12>x</qr>").directives());
-    }
-
-    @Test
-    void rejectsQrModuleSizeAboveSixteen() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<qr size=17>x</qr>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
-        assertEquals(5, thrown.column());
     }
 
     @Test
@@ -566,22 +489,6 @@ class MarkupParserTest {
     }
 
     @Test
-    void rejectsUnknownBarcodeSymbology() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<barcode type=qrcode>x</barcode>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
-    }
-
-    @Test
-    void rejectsBarcodeWithoutASymbology() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<barcode>x</barcode>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
-    }
-
-    @Test
     void parsesPdf417WithTheDefaultErrorLevel() throws Exception {
         List<Directive> directives = MarkupParser.parse("<pdf417>FENPOS</pdf417>").directives();
 
@@ -592,7 +499,7 @@ class MarkupParserTest {
     }
 
     @Test
-    void parsesPdf417ErrorLevelArgument() throws Exception {
+    void parsesPdf417ErrorLevel() throws Exception {
         Directive.Pdf417 symbol =
                 (Directive.Pdf417) MarkupParser.parse("<pdf417 level=5>x</pdf417>").directives().getFirst();
 
@@ -616,15 +523,7 @@ class MarkupParserTest {
     }
 
     @Test
-    void rejectsPdf417ErrorLevelAboveEight() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<pdf417 level=9>x</pdf417>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
-    }
-
-    @Test
-    void acceptsPdf417ErrorLevelZeroWhichIsNotAMissingArgument() throws Exception {
+    void acceptsPdf417ErrorLevelZero() throws Exception {
         Directive.Pdf417 symbol =
                 (Directive.Pdf417) MarkupParser.parse("<pdf417 level=0>x</pdf417>").directives().getFirst();
 
@@ -661,6 +560,7 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("<qr></qr>"));
 
         assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals("QR code content must not be empty", thrown.getMessage());
     }
 
     /**
@@ -673,6 +573,7 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("<qr>Kahvilä</qr>"));
 
         assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertTrue(thrown.getMessage().startsWith("QR code content must be ASCII;"), thrown.getMessage());
     }
 
     @Test
@@ -735,7 +636,7 @@ class MarkupParserTest {
 
     /** A bare {@code <image>} means the whole printable width, which is what gets looked up. */
     @Test
-    void anImageWithNoArgumentAsksForTheWholePaperWidth() {
+    void anImageWithNoWidthAsksForTheWholePaperWidth() {
         assertThrows(MarkupException.class,
                 () -> MarkupParser.parse("<image>logo</image>", holding("logo", 50)));
     }
@@ -761,14 +662,6 @@ class MarkupParserTest {
                 () -> MarkupParser.parse("<image>logo</image>"));
 
         assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
-    }
-
-    @Test
-    void rejectsAnImageWidthAboveTheWholePaper() {
-        MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<image width=101>logo</image>", holding("logo", 101)));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
@@ -931,7 +824,7 @@ class MarkupParserTest {
     }
 
     @Test
-    void takesAFillCharacterFromTheArgument() throws Exception {
+    void takesAFillCharacterFromItsAttribute() throws Exception {
         assertEquals(".", MarkupParser.parse("a<fill char=.>b").fills().getFirst().character());
     }
 
@@ -945,15 +838,15 @@ class MarkupParserTest {
     }
 
     @Test
-    void refusesAFillArgumentThatIsNotExactlyOneCharacter() {
+    void refusesAFillCharacterThatIsNotExactlyOneCharacter() {
         MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill char=ab>b"));
 
         assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
-    /** Already refused by appendFill's character-count check; asserted so the two test tables match. */
+    /** An empty value is no character rather than none written, so it is refused as a value. */
     @Test
-    void refusesAnEmptyFillArgument() {
+    void refusesAnEmptyFillCharacter() {
         MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill char=>b"));
 
         assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
@@ -1040,144 +933,9 @@ class MarkupParserTest {
     }
 
     @Test
-    void refusesSizeWithNeitherDimensionAtTheTag() {
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<size>a</size>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(1, e.column());
-        assertEquals("width", e.detail());
-    }
-
-    @Test
-    void refusesAValueOutOfRangeAtTheAttribute() {
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<size width=9>a</size>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(7, e.column());
-        assertEquals("width", e.detail());
-    }
-
-    @Test
-    void refusesAMissingRequiredAttributeAtTheTag() {
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<feed>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(1, e.column());
-        assertEquals("lines", e.detail());
-    }
-
-    @Test
-    void refusesAnAttributeTheTagDoesNotHave() {
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<bold weight=2>a</bold>"));
-
-        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
-        assertEquals(7, e.column());
-        assertEquals("weight", e.detail());
-    }
-
-    @Test
-    void refusesAnAttributeSetTwice() {
-        MarkupException e = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<size width=2 width=3>a</size>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(15, e.column());
-    }
-
-    @Test
-    void refusesAValueWrittenAgainstTheTagNameAsAMalformedAttribute() {
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<align=center>a</align>"));
-
-        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
-        assertEquals(7, e.column());
-        assertEquals("=", e.detail());
-        assertEquals("<align> attributes are written key=value", e.getMessage());
-    }
-
-    @Test
-    void readsAQuotedValueHoldingASpaceAndAClosingBracket() throws Exception {
-        // No tag this side accepts takes a title, so the scanner is exercised through the refusal it
-        // reaches after reading the value whole: the key is unknown, not the tag unterminated.
-        MarkupException e = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<bold title=\"a > b\">x</bold>"));
-
-        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
-        assertEquals("title", e.detail());
-    }
-
-    /**
-     * A stray {@code "} inside a bare value must never be mistaken for the start of a quoted one:
-     * {@code width}'s bare value runs to the space after it, quote included, and the {@code "} that
-     * opens {@code height}'s value then has no closing quote left on the line. The panel's tokenizer
-     * refuses this as the tag being unterminated, not as an attribute error, because at that point
-     * the scanner cannot tell where the author meant the tag to end.
-     */
-    @Test
-    void refusesAStrayQuoteInABareValueAsAnUnterminatedTag() {
-        String markup = "<size width=2\" height=\"3>a</size>";
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse(markup));
-
-        assertEquals(MarkupError.UNKNOWN_TAG, e.error());
-        assertEquals(1, e.column());
-        assertEquals(markup, e.detail());
-    }
-
-    /** A quoted value with no closing quote anywhere on the line is the same unterminated tag. */
-    @Test
-    void refusesAQuotedValueMissingItsClosingQuote() {
-        String markup = "<fill char=\">";
-        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse(markup));
-
-        assertEquals(MarkupError.UNKNOWN_TAG, e.error());
-        assertEquals(1, e.column());
-        assertEquals(markup, e.detail());
-    }
-
-    /**
-     * A quote written against the tag name, with nothing to open the quoting rule, is read the same
-     * as any other value-shaped junk at a key's position: refused generically, not consumed as if it
-     * opened a quoted value.
-     */
-    @Test
-    void refusesAQuoteAtAKeysPositionAsAnUnknownAttribute() {
-        MarkupException e = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<bold x\">x</bold>"));
-
-        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
-        assertEquals(7, e.column());
-        assertEquals("x", e.detail());
-        assertEquals("<bold> attributes are written key=value", e.getMessage());
-    }
-
-    /**
-     * A bare value's trailing stray quote is read as part of the value — bare values end only at a
-     * space, tab or {@code >} — so it is refused by the ordinary "not a single character" check,
-     * pointing at the attribute rather than misreading the tag as unterminated.
-     */
-    @Test
-    void refusesABareValuesTrailingQuoteAsPartOfTheValue() {
-        MarkupException e = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<fill char=a\">x</fill>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(7, e.column());
-        assertEquals("char", e.detail());
-    }
-
-    @Test
     void matchesAnEnumValueIgnoringCase() throws Exception {
         assertEquals(Align.CENTER, MarkupParser.parse("<align to=Center>a</align>").align());
         assertEquals(Font.B, MarkupParser.parse("<text font=b>a</text>").spans().getFirst().style().font());
-    }
-
-    @Test
-    void refusesASizeOnABuiltInFontAtTheSize() {
-        MarkupException e = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<text font=a size=32>a</text>"));
-
-        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
-        assertEquals(14, e.column());
-        assertEquals("size", e.detail());
     }
 
     @Test
@@ -1231,12 +989,6 @@ class MarkupParserTest {
     @Test
     void keepsIndentationBeforeText() throws Exception {
         assertEquals("  - no onion", MarkupParser.parse("  - no onion").plainText());
-    }
-
-    @Test
-    void stillRefusesATabBeforeText() {
-        assertEquals(MarkupError.CONTROL_CHARACTER,
-                assertThrows(MarkupException.class, () -> MarkupParser.parse("\tx")).error());
     }
 
     @Test

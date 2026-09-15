@@ -8,17 +8,15 @@ import fi.natroutter.fenpos.markup.model.Fill;
 import fi.natroutter.fenpos.markup.model.Line;
 import fi.natroutter.fenpos.markup.model.Span;
 import fi.natroutter.fenpos.markup.model.SpanStyle;
-import fi.natroutter.fenpos.util.Enums;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Turns the request's {@code data} string into one {@link Line} per line of the document.
@@ -28,43 +26,32 @@ import java.util.Set;
  * either comes from a recognised tag or is rejected here. A raw control character is never
  * passed through, so a request cannot desynchronise the device.
  * <p>
- * A single left-to-right pass over the whole document produces spans carrying fully resolved
- * styles, splitting a new {@link Line} at every {@code \n}. Control characters are detected
- * during that same pass rather than in a separate sweep, so the reported problem is always
- * the earliest one in the document — which is the one a user needs to fix first. A tag such
- * as {@code <bold>} or {@code <align>} may open on one line and close on a later one, in which
- * case every line it covers carries its effect.
+ * The document is read in two passes, as the panel reads it. {@link MarkupTokenizer} reads the whole
+ * document first and makes every refusal about how markup is written; this class then builds one
+ * {@link Line} per line of the document from those tokens, making every refusal about what the markup
+ * means. A tag such as {@code <bold>} or {@code <align>} may open on one line and close on a later
+ * one, in which case every line it covers carries its effect.
  * <p>
  * Instances are not shared: {@link #parseDocument(String)} creates one per document, so the
  * class carries per-parse state without being thread-unsafe.
  * <p>
  * A port of {@code fenpos/lib/markup/parser.ts}, and the two must not drift — a tag the panel
- * accepts and this refuses is a job that previews cleanly and then fails behind a printer. Two
+ * accepts and this refuses is a job that previews cleanly and then fails behind a printer. Three
  * differences are deliberate. {@code <drawer>} exists there and not here, so nothing printed from
- * this agent's console can fire a till. And a block tag here is emitted rather than measured:
+ * this agent's console can fire a till. The tags the server draws into a raster, and a {@code <text>}
+ * naming a stored font, are refused as server-rendered, so a caller learns which side to send the job
+ * to. And a block tag here is emitted rather than measured:
  * there is no symbol encoder and no image decoder on this side, which is why an {@code <image>}
  * resolves only against rasters the server already synced, and why {@code PrintCompiler} charges
- * a symbol nothing against its line budget. Both are documented where they bite.
+ * a symbol nothing against its line budget. Each is documented where it bites.
  */
 public final class MarkupParser {
-
-    /** Highest permitted character multiplier, imposed by ESC/POS {@code GS !}. */
-    private static final int MAX_SIZE_MULTIPLIER = 8;
-
-    /** Highest permitted feed distance, imposed by ESC/POS {@code ESC d}. */
-    private static final int MAX_FEED_LINES = 255;
 
     /** Dots per QR module when {@code <qr>}'s {@code size} is left off. Mirrors the panel's default. */
     private static final int DEFAULT_QR_MODULE_SIZE = 6;
 
-    /** Largest QR module size, imposed by ESC/POS {@code GS ( k} function 167. */
-    private static final int MAX_QR_MODULE_SIZE = 16;
-
     /** PDF417 error-correction level when {@code <pdf417>}'s {@code level} is left off. */
     private static final int DEFAULT_PDF417_ERROR_LEVEL = 1;
-
-    /** Highest PDF417 error-correction level, imposed by ESC/POS {@code GS ( k} function 069. */
-    private static final int MAX_PDF417_ERROR_LEVEL = 8;
 
     /**
      * Data columns every PDF417 written in this parser's markup is laid out with.
@@ -87,14 +74,11 @@ public final class MarkupParser {
      */
     private static final int PDF417_DATA_COLUMNS = 3;
 
-    /** Narrowest image this system will print, as a percentage of the paper. */
-    private static final int MIN_IMAGE_WIDTH_PERCENT = 1;
+    /** Printed width of {@code <image>} when its {@code width} is left off: the whole printable width. */
+    private static final int DEFAULT_IMAGE_WIDTH_PERCENT = 100;
 
-    /** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
-    private static final int MAX_IMAGE_WIDTH_PERCENT = 100;
-
-    /** Printed width of {@code <image>} when its {@code width} is left off. */
-    private static final int DEFAULT_IMAGE_WIDTH_PERCENT = MAX_IMAGE_WIDTH_PERCENT;
+    /** What a stored font's name may look like. Mirrors {@code NAME_PATTERN} in {@code lib/domain/naming.ts}. */
+    private static final Pattern FONT_NAME = Pattern.compile("[a-z0-9][a-z0-9_-]*");
 
     /**
      * Highest code point a symbol's payload may contain.
@@ -129,11 +113,8 @@ public final class MarkupParser {
     /** Every line finished so far, in document order. */
     private final List<Line> lines = new ArrayList<>();
 
-    /** 1-based line of the document the scanner is currently reading. */
+    /** 1-based document line of the token being handled. */
     private int line = 1;
-
-    /** Index into {@link #source} where the current line began, for {@link #column()}. */
-    private int lineStart = 0;
 
     private SpanStyle style = SpanStyle.PLAIN;
     private Align align = Align.LEFT;
@@ -185,8 +166,6 @@ public final class MarkupParser {
 
     /** Source column where the text currently accumulating in {@link #pending} began. */
     private int pendingColumn = 1;
-
-    private int index;
 
     private MarkupParser(String source, ImageResolver images) {
         // \r\n is normalised to \n before anything else sees it, so a line boundary is always
@@ -254,21 +233,19 @@ public final class MarkupParser {
     }
 
     private List<Line> run() throws MarkupException {
-        skipIndentation();
-        while (index < source.length()) {
-            char current = source.charAt(index);
-            switch (current) {
-                case '<' -> readTag();
-                case '&' -> readEntity();
-                case '\n' -> {
-                    if (block != null) {
-                        continueLineInsideBlock();
-                    } else {
+        for (MarkupToken token : MarkupTokenizer.tokenize(source)) {
+            line = token.line();
+            switch (token) {
+                case MarkupToken.Text text -> appendText(text);
+                case MarkupToken.Open opening -> openTag(opening);
+                case MarkupToken.Close closing -> closeTag(closing.name(), closing.column());
+                case MarkupToken.Break ignored -> {
+                    // A block spanning several lines of the document is still one printed line: the
+                    // server feeds the paper once for it, so only a break outside a block ends a line.
+                    if (block == null) {
                         endLine();
                     }
-                    skipIndentation();
                 }
-                default -> readText(current);
             }
         }
 
@@ -287,9 +264,8 @@ public final class MarkupParser {
     /**
      * Closes out the current line: flushes any pending text, checks that a rule, a symbol or an
      * image did not have to share this line with anything else, and records the finished
-     * {@link Line}. Called for every {@code \n} in the document that is not inside an open content
-     * block — see {@link #continueLineInsideBlock()} for that case — and once more after the loop
-     * for the final line, which the document does not have to end with a newline to have.
+     * {@link Line}. Called for every line break outside an open content block, and once more after
+     * the loop for the final line, which the document does not have to end with a newline to have.
      * <p>
      * Resets the state that is local to one printed line — the accumulated spans, fills and
      * directives, and the "something already claimed this line" trackers — but keeps whatever a
@@ -319,117 +295,33 @@ public final class MarkupParser {
             wrap = null;
             pendingWrapReset = false;
         }
-
-        index++;
-        line++;
-        lineStart = index;
-    }
-
-    /**
-     * Advances past a {@code \n} found while an {@link #block} is open, without ending the
-     * printed line the block belongs to.
-     * <p>
-     * A {@code <qr>}, {@code <barcode>}, {@code <pdf417>} or {@code <image>} that spans several
-     * lines of the document still becomes exactly one printed {@link Line} — the one that was
-     * current when the block opened, not one per raw line it happens to be written across. The
-     * server's renderer feeds the paper once for that line; a blank {@link Line} for each raw
-     * line swallowed by the block would feed it once per line instead. So unlike
-     * {@link #endLine()}, nothing is flushed and no {@code Line} is snapshotted here — only
-     * {@link #line} and {@link #lineStart} move, which is what keeps a problem reported after the
-     * block closes, or a tag illegally nested inside it, pointing at the raw document line it is
-     * actually on.
-     */
-    private void continueLineInsideBlock() {
-        index++;
-        line++;
-        lineStart = index;
-    }
-
-    /** Returns the 1-based column of {@link #index} within the current line. */
-    private int column() {
-        return index - lineStart + 1;
-    }
-
-    /**
-     * Skips whitespace between the start of a line and a tag.
-     * <p>
-     * Indentation is for whoever reads the markup, not for the paper, and it is skipped here, before
-     * {@link #readText} could refuse a tab in it. Only a run that ends at a {@code <} is skipped: a
-     * line that starts with text keeps every space, and a tab before text is still a control
-     * character.
-     */
-    private void skipIndentation() {
-        int at = index;
-        while (at < source.length() && (source.charAt(at) == ' ' || source.charAt(at) == '\t')) {
-            at++;
-        }
-        if (at > index && at < source.length() && source.charAt(at) == '<') {
-            index = at;
-        }
     }
 
     // -------------------------------------------------------------------------
     // Text
     // -------------------------------------------------------------------------
 
-    private void readText(char current) throws MarkupException {
-        if (isControl(current)) {
-            throw new MarkupException(MarkupError.CONTROL_CHARACTER, line, column(),
-                    String.format("U+%04X", (int) current),
-                    "Control characters cannot be printed; use markup tags for formatting");
-        }
-        requireInsideLineScope(column());
-        if (block != null) {
-            block.content().append(current);
-            index++;
-            return;
-        }
-        beginPendingAt(column());
-        pending.append(current);
-        index++;
-    }
-
     /**
-     * Decodes {@code &lt;} and {@code &amp;}. Any other ampersand is literal text, because
-     * receipts legitimately contain "Fish & Chips" and rejecting that would be surprising.
-     */
-    private void readEntity() throws MarkupException {
-        if (source.startsWith("&lt;", index)) {
-            emitEntity('<', 4);
-            return;
-        }
-        if (source.startsWith("&amp;", index)) {
-            emitEntity('&', 5);
-            return;
-        }
-        readText('&');
-    }
-
-    /**
-     * Emits one decoded entity as a span of its own.
+     * Adds printable text to the line, or to the open block's payload.
      * <p>
-     * Isolating it keeps every other span's characters contiguous in the source, which is
-     * what lets {@link Span#columnAt(int)} report an exact column: an entity consumes more
-     * source characters than it produces, so a span spanning one could not be measured by
-     * simple arithmetic.
-     * <p>
-     * Inside a block the decoded character joins the payload instead. {@code &amp;} is the only
-     * way to write an ampersand a symbology is meant to carry, so the entity has to survive into
-     * the encoded content rather than into a span.
-     *
-     * @param decoded       the character the entity stands for
-     * @param sourceLength  how many source characters the entity occupies
+     * A decoded entity becomes a span of its own, which keeps every other span's characters contiguous
+     * in the source and so lets {@link Span#columnAt(int)} report an exact column. Inside a block it
+     * joins the payload instead: {@code &amp;} is the only way to write an ampersand a symbology is
+     * meant to carry.
      */
-    private void emitEntity(char decoded, int sourceLength) throws MarkupException {
-        requireInsideLineScope(column());
+    private void appendText(MarkupToken.Text text) throws MarkupException {
+        requireInsideLineScope(text.column());
         if (block != null) {
-            block.content().append(decoded);
-            index += sourceLength;
+            block.content().append(text.text());
             return;
         }
-        flushPending();
-        spans.add(new Span(String.valueOf(decoded), style, column()));
-        index += sourceLength;
+        if (text.entity()) {
+            flushPending();
+            spans.add(new Span(text.text(), style, text.column()));
+            return;
+        }
+        beginPendingAt(text.column());
+        pending.append(text.text());
     }
 
     /** Records where the current run of text started, if it has not started already. */
@@ -463,87 +355,26 @@ public final class MarkupParser {
     }
 
     /**
-     * Reads one tag, opening or closing, starting at {@link #index}.
-     * <p>
-     * Ported from the panel's tokenizer: the guard below is a cheap, quote-blind check that some
-     * {@code >} exists on the line at all, not a decision about where this tag actually ends — that
-     * decision belongs to {@link #readAttributes}, which is the only part of the scan that knows
-     * where a quoted value is open. Deciding it here from a plain {@code indexOf} would let a stray
-     * {@code "} inside a bare value pair with a later one and make the scan treat everything between
-     * them, {@code >} included, as still inside the tag.
+     * Opens a tag, in the order the panel's tree does: its name, then whether it may appear here at
+     * all, then its attributes, then its own rules.
      */
-    private void readTag() throws MarkupException {
-        int start = index;
-        int startColumn = column();
+    private void openTag(MarkupToken.Open opening) throws MarkupException {
+        String name = opening.name();
+        int column = opening.column();
 
-        int terminator = source.indexOf('>', start);
-        if (terminator < 0 || terminator > lineEnd()) {
-            throw unterminatedTag();
-        }
-
-        int at = start + 1;
-        boolean closing = at < source.length() && source.charAt(at) == '/';
-        if (closing) {
-            at++;
-        }
-
-        int nameStart = at;
-        while (at < source.length() && isNameChar(source.charAt(at))) {
-            at++;
-        }
-        String name = source.substring(nameStart, at);
-        if (name.isEmpty()) {
-            throw unterminatedTag();
-        }
-
-        if (closing) {
-            if (at >= source.length() || source.charAt(at) != '>') {
-                throw unterminatedTag();
-            }
-            index = at + 1;
-            closeTag(name, startColumn);
-            return;
-        }
-
-        requireNotServerTag(name, startColumn);
+        requireNotServerTag(name, column);
 
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
-                MarkupError.UNKNOWN_TAG, line, startColumn, name,
+                MarkupError.UNKNOWN_TAG, line, column, name,
                 "Unknown tag '" + name + "'; write &lt; for a literal '<'"));
 
         if (block != null) {
-            throw insideBlock(tag, startColumn);
+            throw insideBlock(tag, column);
         }
 
-        Map<String, Attribute> attributes = readAttributes(tag, at);
-        openTag(tag, attributes, startColumn);
-    }
+        Attributes attributes = AttributeReader.read(tag.tagName(), opening.attributes(), tag.attributes(),
+                line, column);
 
-    /**
-     * Builds the {@code UNKNOWN_TAG} refusal for a tag that never reaches a {@code >} of its own.
-     * <p>
-     * Callable from anywhere in {@link #readTag} or {@link #readAttributes}: neither ever moves
-     * {@link #index} until the tag is fully read, so it still names the opening {@code <} and the
-     * text after it however far the scan got.
-     */
-    private MarkupException unterminatedTag() {
-        return new MarkupException(MarkupError.UNKNOWN_TAG, line, column(),
-                source.substring(index, lineEnd()),
-                "Unterminated tag; write &lt; for a literal '<'");
-    }
-
-    private int lineEnd() {
-        int end = source.indexOf('\n', index);
-        return end < 0 ? source.length() : end;
-    }
-
-    private static boolean isNameChar(char value) {
-        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
-                || (value >= '0' && value <= '9') || value == '_' || value == '-';
-    }
-
-    /** Dispatches an opening tag once its name and attributes have both been read. */
-    private void openTag(Tag tag, Map<String, Attribute> attributes, int column) throws MarkupException {
         // Void, but not a directive: a fill is a position in the text rather than a printer action,
         // so it never reaches appendDirective.
         if (tag == Tag.FILL) {
@@ -576,84 +407,6 @@ public final class MarkupParser {
         requireInsideLineScope(column);
         open.push(new OpenTag(tag, column, style, line));
         style = applyStyle(tag, attributes, column);
-    }
-
-    /**
-     * Reads the {@code key=value} pairs after a tag's name, exactly as the panel's tokenizer does,
-     * then advances {@link #index} past the tag's closing {@code >}.
-     * <p>
-     * A key is a run of name characters followed by {@code =}; a value is double-quoted and runs to
-     * the closing quote, or bare and runs to the next space, tab or {@code >} — so a bare value can
-     * never read past the tag it belongs to. Quoting begins only where a value starts, right after a
-     * key's {@code =}, and nowhere else in the tag, so a {@code "} inside a bare value cannot make
-     * the scanner believe a quote it never opened is still open. Anything at a key's position that
-     * cannot start one — the {@code =} of a value written against the tag name, say — is refused with
-     * the same generic message the panel gives, so a caller sees one refusal wherever the markup is
-     * parsed. A quoted value left open past the end of the line is refused as the tag being
-     * unterminated: at that point the scan cannot tell where the author meant the tag to end, so
-     * there is no attribute-shaped error to give instead.
-     */
-    private Map<String, Attribute> readAttributes(Tag tag, int from) throws MarkupException {
-        Map<String, Attribute> read = new LinkedHashMap<>();
-        int at = from;
-        while (at < source.length() && source.charAt(at) != '>') {
-            char current = source.charAt(at);
-            if (current == '\n') {
-                throw unterminatedTag();
-            }
-            if (current == ' ' || current == '\t') {
-                at++;
-                continue;
-            }
-            int keyColumn = at - lineStart + 1;
-            int keyStart = at;
-            while (at < source.length() && isNameChar(source.charAt(at))) {
-                at++;
-            }
-            String key = source.substring(keyStart, at).toLowerCase(Locale.ROOT);
-            if (key.isEmpty() || at >= source.length() || source.charAt(at) != '=') {
-                String shown = key.isEmpty() ? source.substring(keyStart, keyStart + 1) : key;
-                throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, shown,
-                        "<" + tag.tagName() + "> attributes are written key=value");
-            }
-            at++;
-            String value;
-            if (at < source.length() && source.charAt(at) == '"') {
-                int close = source.indexOf('"', at + 1);
-                if (close < 0 || close > lineEnd()) {
-                    throw unterminatedTag();
-                }
-                value = source.substring(at + 1, close);
-                at = close + 1;
-            } else {
-                int valueStart = at;
-                while (at < source.length() && source.charAt(at) != ' ' && source.charAt(at) != '\t'
-                        && source.charAt(at) != '>' && source.charAt(at) != '\n') {
-                    at++;
-                }
-                value = source.substring(valueStart, at);
-            }
-            for (int i = 0; i < value.length(); i++) {
-                if (isControl(value.charAt(i))) {
-                    throw new MarkupException(MarkupError.CONTROL_CHARACTER, line, keyColumn, key,
-                            "Control characters cannot be printed; use markup tags for formatting");
-                }
-            }
-            if (!tag.attributes().containsKey(key)) {
-                throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, key,
-                        "<" + tag.tagName() + "> has no attribute '" + key + "'");
-            }
-            if (read.containsKey(key)) {
-                throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, keyColumn, key,
-                        "<" + tag.tagName() + "> sets '" + key + "' twice");
-            }
-            read.put(key, new Attribute(value, keyColumn));
-        }
-        if (at >= source.length() || source.charAt(at) != '>') {
-            throw unterminatedTag();
-        }
-        index = at + 1;
-        return read;
     }
 
     private void closeTag(String name, int column) throws MarkupException {
@@ -700,69 +453,67 @@ public final class MarkupParser {
         }
     }
 
-    /**
-     * Applies a tag's effect to the current style.
-     *
-     * @throws MarkupException if an attribute is malformed or out of range
-     */
-    private SpanStyle applyStyle(Tag tag, Map<String, Attribute> attributes, int column)
-            throws MarkupException {
+    /** Applies a tag's effect to the current style. */
+    private SpanStyle applyStyle(Tag tag, Attributes attributes, int column) throws MarkupException {
         return switch (tag) {
             case BOLD -> style.withBold(true);
             case INVERT -> style.withInvert(true);
-            case UNDERLINE -> style.withUnderline(optionalInt(tag, attributes, "weight", 1, 2, 1));
+            case UNDERLINE -> style.withUnderline(attributes.integer("weight", 1));
             case SIZE -> applySize(attributes, column);
-            case TEXT -> applyText(attributes, column);
+            case TEXT -> applyText(attributes);
             case ALIGN, WRAP, NOWRAP, FILL, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
                     throw new IllegalStateException("Tag " + tag + " does not carry a span style");
         };
     }
 
-    private SpanStyle applySize(Map<String, Attribute> attributes, int column) throws MarkupException {
-        if (!attributes.containsKey("width") && !attributes.containsKey("height")) {
+    private SpanStyle applySize(Attributes attributes, int column) throws MarkupException {
+        if (!attributes.has("width") && !attributes.has("height")) {
             throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, column, "width",
                     "<size> needs width or height, or both");
         }
-        int width = optionalInt(Tag.SIZE, attributes, "width", 1, MAX_SIZE_MULTIPLIER, 1);
-        int height = optionalInt(Tag.SIZE, attributes, "height", 1, MAX_SIZE_MULTIPLIER, 1);
-        return style.withSize(width, height);
+        return style.withSize(attributes.integer("width", 1), attributes.integer("height", 1));
     }
 
     /**
      * Selects one of the printer's two faces.
      * <p>
-     * A name that is not {@code a} or {@code b} is a stored font, which only the server can draw;
-     * refused as such rather than as unknown, so the caller learns which side to send the job to.
+     * Checked as the panel checks it: a letter is a built-in face and takes no size; anything else must
+     * look like a stored font's name. A stored font is refused as server-rendered rather than as
+     * unknown, so the caller learns which side to send the job to.
      */
-    private SpanStyle applyText(Map<String, Attribute> attributes, int column) throws MarkupException {
-        Attribute font = require(Tag.TEXT, attributes, "font", column);
-        Optional<Font> builtIn = Enums.parse(Font.class, font.value());
-        if (builtIn.isEmpty()) {
-            throw new MarkupException(MarkupError.SERVER_RENDERED, line, font.column(), "text",
-                    "<text font=name> uses a stored font the server renders; the console has a and b");
+    private SpanStyle applyText(Attributes attributes) throws MarkupException {
+        String font = attributes.string("font");
+        Font builtIn = font.equalsIgnoreCase("a") ? Font.A : font.equalsIgnoreCase("b") ? Font.B : null;
+
+        if (builtIn != null) {
+            if (attributes.has("size")) {
+                throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, attributes.column("size"), "size",
+                        "<text> size applies to a stored font, not to the printer's own");
+            }
+            return style.withFont(builtIn);
         }
-        Attribute size = attributes.get("size");
-        if (size != null) {
-            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, size.column(), "size",
-                    "<text> size applies to a stored font, not to the printer's own");
+
+        if (!FONT_NAME.matcher(font).matches()) {
+            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, attributes.column("font"), "font",
+                    "<text> font '" + font + "' is not a built-in font or a font name");
         }
-        return style.withFont(builtIn.get());
+
+        throw new MarkupException(MarkupError.SERVER_RENDERED, line, attributes.column("font"), "text",
+                "<text font=name> uses a stored font the server renders; the console has a and b");
     }
 
     // -------------------------------------------------------------------------
     // Alignment
     // -------------------------------------------------------------------------
 
-    private void openAlign(Map<String, Attribute> attributes, int column) throws MarkupException {
+    private void openAlign(Attributes attributes, int column) throws MarkupException {
         if (alignSeen) {
             throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, line, column, "align",
                     "Only one <align> is allowed per line");
         }
         requireLineOwnerCanOpen("align", MarkupError.INVALID_ALIGN_SCOPE, column);
 
-        Attribute to = require(Tag.ALIGN, attributes, "to", column);
-        align = Enums.parse(Align.class, to.value()).orElseThrow(
-                () -> attributeError(Tag.ALIGN, "to", to, "left, center or right"));
+        align = Align.valueOf(attributes.string("to"));
         alignSeen = true;
         open.push(new OpenTag(Tag.ALIGN, column, style, line));
     }
@@ -885,25 +636,18 @@ public final class MarkupParser {
      * Its attributes are resolved here rather than when the block closes, so a bad one is refused at
      * the position it was written and before the rest of the element has been scanned.
      */
-    private void openBlock(Tag tag, Map<String, Attribute> attributes, int column) throws MarkupException {
+    private void openBlock(Tag tag, Attributes attributes, int column) throws MarkupException {
         requireInsideLineScope(column);
 
         int value = switch (tag) {
-            case QR -> optionalInt(tag, attributes, "size", 1, MAX_QR_MODULE_SIZE, DEFAULT_QR_MODULE_SIZE);
-            case PDF417 -> optionalInt(tag, attributes, "level", 0, MAX_PDF417_ERROR_LEVEL,
-                    DEFAULT_PDF417_ERROR_LEVEL);
-            case IMAGE -> optionalInt(tag, attributes, "width", MIN_IMAGE_WIDTH_PERCENT,
-                    MAX_IMAGE_WIDTH_PERCENT, DEFAULT_IMAGE_WIDTH_PERCENT);
+            case QR -> attributes.integer("size", DEFAULT_QR_MODULE_SIZE);
+            case PDF417 -> attributes.integer("level", DEFAULT_PDF417_ERROR_LEVEL);
+            case IMAGE -> attributes.integer("width", DEFAULT_IMAGE_WIDTH_PERCENT);
             case BARCODE -> 0;
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
 
-        BarcodeSystem system = null;
-        if (tag == Tag.BARCODE) {
-            Attribute type = require(tag, attributes, "type", column);
-            system = Enums.parse(BarcodeSystem.class, type.value()).orElseThrow(() -> attributeError(
-                    tag, "type", type, "a symbology: " + Enums.names(BarcodeSystem.class)));
-        }
+        BarcodeSystem system = tag == Tag.BARCODE ? BarcodeSystem.valueOf(attributes.string("type")) : null;
 
         open.push(new OpenTag(tag, column, style, line));
         block = new OpenBlock(tag, column, value, system, new StringBuilder(), line);
@@ -933,18 +677,21 @@ public final class MarkupParser {
         int column = finished.column();
 
         if (content.isEmpty()) {
-            throw argumentError(tag, column, tag == Tag.IMAGE
-                    ? "must enclose the name of a stored image"
-                    : "must enclose the content to encode");
+            throw switch (tag) {
+                case QR -> symbolError(finished, "QR code content must not be empty");
+                case PDF417 -> symbolError(finished, "PDF417 content must not be empty");
+                case IMAGE -> argumentError(tag, column, "must enclose the name of a stored image");
+                default -> argumentError(tag, column, "must enclose the content to encode");
+            };
         }
 
         Directive directive = switch (tag) {
             case QR -> {
-                requireSymbolAscii(tag, column, content);
+                requireSymbolAscii(finished, "QR code", content);
                 yield new Directive.Qr(content, finished.value());
             }
             case PDF417 -> {
-                requireSymbolAscii(tag, column, content);
+                requireSymbolAscii(finished, "PDF417", content);
                 yield new Directive.Pdf417(content, finished.value(), PDF417_DATA_COLUMNS);
             }
             case BARCODE -> new Directive.Barcode(finished.system(), content);
@@ -983,18 +730,23 @@ public final class MarkupParser {
     }
 
     /**
-     * Rejects a symbol payload outside ASCII.
+     * Rejects a symbol payload outside ASCII, with the panel's message.
      * <p>
-     * The renderer declares a symbol's length in characters and writes it as UTF-8 bytes, so
-     * anything wider encodes to more bytes than were declared and prints as a symbol that scans
-     * wrongly. Refusing beats printing something that looks right and is not.
+     * The renderer declares a symbol's length in characters and writes it as UTF-8 bytes, so anything
+     * wider encodes to more bytes than were declared and prints as a symbol that scans wrongly.
      */
-    private void requireSymbolAscii(Tag tag, int column, String content) throws MarkupException {
+    private void requireSymbolAscii(OpenBlock finished, String kind, String content) throws MarkupException {
         if (content.chars().anyMatch(codePoint -> codePoint > SYMBOL_MAX_CODE_POINT)) {
-            throw argumentError(tag, column, "content must be ASCII; the symbol's length is"
-                    + " declared in characters and sent as UTF-8 bytes, so anything else prints as"
-                    + " a symbol that scans wrongly");
+            throw symbolError(finished, kind + " content must be ASCII; the agent declares the symbol's length"
+                    + " in characters but sends it as UTF-8 bytes, so anything else prints as a symbol that"
+                    + " scans wrongly");
         }
+    }
+
+    /** A refusal of what a symbol encloses, at the tag that opened it, as the panel reports one. */
+    private MarkupException symbolError(OpenBlock finished, String message) {
+        return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, finished.line(), finished.column(),
+                finished.tag().tagName(), message);
     }
 
     /**
@@ -1014,13 +766,13 @@ public final class MarkupParser {
     // Directives
     // -------------------------------------------------------------------------
 
-    private void appendDirective(Tag tag, Map<String, Attribute> attributes, int column)
+    private void appendDirective(Tag tag, Attributes attributes, int column)
             throws MarkupException {
         requireInsideLineScope(column);
         switch (tag) {
-            case CUT -> directives.add(new Directive.Cut(cutMode(attributes)));
-            case FEED -> directives.add(new Directive.Feed(
-                    requiredInt(Tag.FEED, attributes, "lines", 1, MAX_FEED_LINES, column)));
+            case CUT -> directives.add(new Directive.Cut(
+                    "partial".equals(attributes.string("mode")) ? Directive.Cut.Mode.PARTIAL : Directive.Cut.Mode.FULL));
+            case FEED -> directives.add(new Directive.Feed(attributes.integer("lines", 1)));
             case HR -> {
                 claimLine("hr", column, MarkupError.INVALID_RULE_SCOPE);
                 directives.add(new Directive.Rule());
@@ -1036,30 +788,13 @@ public final class MarkupParser {
      * a span yet, so without it {@code Coffee<fill>2.50} would record {@code afterSpans = 0} and pad
      * the wrong side of the word.
      */
-    private void appendFill(Map<String, Attribute> attributes, int column) throws MarkupException {
+    private void appendFill(Attributes attributes, int column) throws MarkupException {
         requireInsideLineScope(column);
 
-        Attribute written = attributes.get("char");
-        String character = written == null ? " " : written.value();
-        // Code points, not chars: an astral character is one character and two chars, and measuring
-        // chars would refuse a legitimate single character as though it were two.
-        if (character.codePointCount(0, character.length()) != 1) {
-            throw attributeError(Tag.FILL, "char", written, "a single character");
-        }
+        String character = attributes.has("char") ? attributes.string("char") : " ";
 
         flushPending();
         fills.add(new Fill(spans.size(), character, style, column));
-    }
-
-    private Directive.Cut.Mode cutMode(Map<String, Attribute> attributes) throws MarkupException {
-        Attribute mode = attributes.get("mode");
-        if (mode == null || mode.value().equalsIgnoreCase("full")) {
-            return Directive.Cut.Mode.FULL;
-        }
-        if (mode.value().equalsIgnoreCase("partial")) {
-            return Directive.Cut.Mode.PARTIAL;
-        }
-        throw attributeError(Tag.CUT, "mode", mode, "full or partial");
     }
 
     /** Records a directive that must be the only thing printed on its line. */
@@ -1098,66 +833,9 @@ public final class MarkupParser {
     // Shared checks
     // -------------------------------------------------------------------------
 
-    /** Reads an integer attribute, or {@code fallback} when it was left off. */
-    private int optionalInt(Tag tag, Map<String, Attribute> attributes, String key, int min, int max,
-                            int fallback) throws MarkupException {
-        Attribute attribute = attributes.get(key);
-        return attribute == null ? fallback : intValue(tag, key, attribute, min, max);
-    }
-
-    /** Reads an integer attribute the tag cannot do without. */
-    private int requiredInt(Tag tag, Map<String, Attribute> attributes, String key, int min, int max,
-                            int tagColumn) throws MarkupException {
-        return intValue(tag, key, require(tag, attributes, key, tagColumn), min, max);
-    }
-
-    private Attribute require(Tag tag, Map<String, Attribute> attributes, String key, int tagColumn)
-            throws MarkupException {
-        Attribute attribute = attributes.get(key);
-        if (attribute == null) {
-            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, tagColumn, key,
-                    "<" + tag.tagName() + "> requires " + key);
-        }
-        return attribute;
-    }
-
-    private int intValue(Tag tag, String key, Attribute attribute, int min, int max)
-            throws MarkupException {
-        int parsed;
-        try {
-            parsed = Integer.parseInt(attribute.value().strip());
-        } catch (NumberFormatException e) {
-            throw attributeError(tag, key, attribute, "a whole number from " + min + " to " + max);
-        }
-        if (parsed < min || parsed > max) {
-            throw attributeError(tag, key, attribute, "a whole number from " + min + " to " + max);
-        }
-        return parsed;
-    }
-
-    private MarkupException attributeError(Tag tag, String key, Attribute attribute, String expected) {
-        return new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, attribute.column(), key,
-                "<" + tag.tagName() + "> " + key + "=" + attribute.value() + " is not accepted; expected "
-                        + expected);
-    }
-
     private MarkupException argumentError(Tag tag, int column, String detail) {
         return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, line, column, tag.tagName(),
                 "<" + tag.tagName() + "> " + detail);
-    }
-
-    /**
-     * Returns whether a character would be consumed by the printer as a command rather than
-     * printed. Covers C0 (including tab, whose behaviour depends on printer-side tab stops
-     * that the agent does not manage), DEL, and C1. {@code \n} is excluded: it is how one line of
-     * the document ends and the next begins, handled by {@link #endLine()} rather than refused.
-     */
-    private static boolean isControl(char value) {
-        return (value < 0x20 && value != '\n') || value == 0x7F || (value >= 0x80 && value <= 0x9F);
-    }
-
-    /** One attribute as the author wrote it, and the column its key starts at. */
-    private record Attribute(String value, int column) {
     }
 
     /**
@@ -1178,8 +856,8 @@ public final class MarkupParser {
      * between them are never appended here, so {@code content} holds only what was written
      * between the tags, one line's worth run into the next.
      *
-     * @param value  the tag's attribute, already resolved: a QR module size, a PDF417 error level,
-     *               or an image's width percentage. Unused for a barcode, which carries a
+     * @param value  the tag's attribute, already checked: a QR module size, a PDF417 error level, or
+     *               an image's width percentage. Unused for a barcode, which carries a
      *               {@code system} instead.
      * @param system the symbology, for {@code <barcode>} only; null for every other block
      * @param line   the document line the block was opened on
