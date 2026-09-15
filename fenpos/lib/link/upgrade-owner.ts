@@ -21,8 +21,14 @@ import type { Duplex } from "node:stream";
  *
  * Rather than argue with the listener after the fact, this keeps the server's upgrade event
  * single-owner: the given listener is registered, and any other upgrade listener added later is
- * removed the moment it is. The process entry point already forwards upgrades that are not the
- * agent link to Next's own handler, so Next loses nothing it would have done.
+ * removed the moment it is — and handed back, so the owner can still call it for the upgrades
+ * that are Next's to answer. Handing it back is what keeps that half working, because
+ * `getUpgradeHandler()` is not a substitute for it: behind a custom server that method resolves
+ * to `handleUpgrade` on the node server, which has no body. The listener removed here is the only
+ * thing in the process that serves `/_next/hmr`, and in development that socket carries more than
+ * hot reload — React's debug channel rides it, and the flight payload for every page references
+ * rows that arrive only over it. Drop it and pages render, hydrate never completes, and the
+ * browser reports neither an error nor a request.
  *
  * Plain module on purpose, with no `server-only` guard: `server.ts` runs under tsx, outside
  * Next's bundler, and imports this directly.
@@ -41,12 +47,21 @@ type ListenerAdded = (event: string | symbol, listener: (...args: unknown[]) => 
  * No upgrade can be dispatched in between: the emitter attaches the listener synchronously after
  * `newListener` returns, and an upgrade only arrives from the event loop.
  *
+ * The returned accessor is read at dispatch time rather than once, because Next registers its
+ * listener lazily — the first ordinary request through its handler — which is after this runs.
+ * It is empty until then, and an upgrade arriving in that window is one no listener of Next's
+ * would have seen either.
+ *
  * @param server the HTTP server whose upgrade requests the listener owns
  * @param listener the one upgrade listener the server will ever run
+ * @returns the most recently displaced listener, or undefined while none has been
  */
-export function ownUpgrades(server: Server, listener: UpgradeListener): void {
+export function ownUpgrades(server: Server, listener: UpgradeListener): () => UpgradeListener | undefined {
+	let displaced: UpgradeListener | undefined;
+
 	const guard: ListenerAdded = (event, added) => {
 		if (event === "upgrade" && added !== listener) {
+			displaced = added as UpgradeListener;
 			process.nextTick(() => {
 				server.removeListener("upgrade", added);
 			});
@@ -55,4 +70,6 @@ export function ownUpgrades(server: Server, listener: UpgradeListener): void {
 
 	server.on("newListener", guard);
 	server.on("upgrade", listener);
+
+	return () => displaced;
 }

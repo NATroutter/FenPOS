@@ -274,9 +274,15 @@ async function main(): Promise<void> {
 	// listener of its own to this same server and ends any agent's socket before the link can
 	// answer it. See lib/link/upgrade-owner.ts for the whole story; the short version is that a
 	// production build with that listener in place refuses every agent, silently.
+	//
+	// That displaced listener is also the only thing that answers anything of Next's, so what is
+	// not the link is dispatched straight back to it. `getUpgradeHandler()` reads like the way to
+	// do that and is not: behind a custom server it resolves to an empty `handleUpgrade`, which
+	// accepts the socket and never speaks on it. It stays only as the answer for an upgrade that
+	// arrives before Next has registered anything.
 	const upgradeToNext = app.getUpgradeHandler();
 
-	ownUpgrades(server, (request, socket, head) => {
+	const nextsOwnListener = ownUpgrades(server, (request, socket, head) => {
 		const path = new URL(request.url ?? "/", "http://localhost").pathname;
 
 		if (path === AGENT_LINK_PATH) {
@@ -289,6 +295,12 @@ async function main(): Promise<void> {
 				socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
 				socket.destroy();
 			}
+			return;
+		}
+
+		const handleAsNext = nextsOwnListener();
+		if (handleAsNext) {
+			handleAsNext(request, socket, head);
 			return;
 		}
 

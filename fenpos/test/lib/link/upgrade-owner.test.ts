@@ -25,12 +25,12 @@ describe("ownUpgrades", () => {
 	});
 
 	/** Sends a raw upgrade request and returns what came back before the peer closed. */
-	async function rawUpgrade(port: number): Promise<string> {
+	async function rawUpgrade(port: number, path = "/api/agent-link"): Promise<string> {
 		return new Promise((resolve, reject) => {
 			let received = "";
 			const socket = connect(port, "127.0.0.1", () => {
 				socket.write(
-					"GET /api/agent-link HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+					`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
 						"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
 				);
 			});
@@ -65,6 +65,37 @@ describe("ownUpgrades", () => {
 		const port = await listen(server);
 		expect(await rawUpgrade(port)).toMatch(/^HTTP\/1\.1 401/);
 		expect(server.listenerCount("upgrade")).toBe(1);
+	});
+
+	it("hands back the listener it displaced, so an upgrade of Next's own can still reach it", async () => {
+		server = createServer();
+		let served = "";
+
+		const nextsOwnListener = ownUpgrades(server, (request, socket, head) => {
+			if (request.url === "/api/agent-link") {
+				socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+				socket.destroy();
+				return;
+			}
+
+			// Everything that is not the link belongs to Next, and the listener it registered is
+			// the only thing that serves it: the handler `getUpgradeHandler()` returns does nothing
+			// at all behind a custom server.
+			nextsOwnListener()?.(request, socket, head);
+		});
+
+		// What Next does from inside its request handler, after the server is already serving.
+		server.on("upgrade", (request, socket) => {
+			served = request.url ?? "";
+			socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\n\r\n");
+			socket.destroy();
+		});
+		await delay(0);
+
+		const port = await listen(server);
+		expect(await rawUpgrade(port, "/_next/hmr?id=abc")).toMatch(/^HTTP\/1\.1 101/);
+		expect(served).toBe("/_next/hmr?id=abc");
+		expect(await rawUpgrade(port)).toMatch(/^HTTP\/1\.1 401/);
 	});
 
 	it("still runs the owner for every upgrade", async () => {
