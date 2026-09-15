@@ -2,7 +2,7 @@ import type { Align } from "@/lib/domain/enums";
 import { LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
 import type { ChartData, Series } from "@/lib/markup/document";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
-import type { Canvas, Pattern } from "@/lib/raster/canvas";
+import { type Canvas, type Pattern, patternDot } from "@/lib/raster/canvas";
 import type { LayoutContext } from "@/lib/raster/layout";
 import { layoutText, paintRows, type TextRow } from "@/lib/raster/text";
 
@@ -71,8 +71,23 @@ const TITLE_STYLE: SpanStyle = { ...PLAIN, font: "A" };
 /** Everything else's face: the smaller built-in font, so labels stay out of the drawing's way. */
 const LABEL_STYLE: SpanStyle = { ...PLAIN, font: "B" };
 
-/** The fills a pie's slices take, since one series' single pattern cannot tell them apart. */
-const SLICE_PATTERNS: readonly Series["pattern"][] = ["solid", "hatch", "dot", "hollow"];
+/**
+ * The fills a pie's slices take, since one series' single pattern cannot tell them apart.
+ *
+ * Every one of them inks something, unlike the fills a series may ask for: `hollow` says to draw a
+ * shape's outline instead of its inside, and a slice already has its edges and the rim drawn for it,
+ * so a hollow slice would be a slice that is simply not there.
+ */
+const SLICE_PATTERNS: readonly Pattern[] = ["solid", "hatch", "dot", "light", "dark"];
+
+/** Dots between the plot's nearest edge and the pie in it, so the rim is not drawn against it. */
+const PIE_MARGIN_DOTS = 2;
+
+/** A whole turn, which is what a pie divides up. */
+const TURN = 2 * Math.PI;
+
+/** What a shape is drawn with: what a series asked for, or one of the fills a pie's slices take. */
+type Fill = Series["pattern"] | Pattern;
 
 /** What a chart's parts are given of the width and height it occupies. */
 export interface ChartFrame {
@@ -84,7 +99,7 @@ export interface ChartFrame {
 /** One line of a legend: a fill, and the name printed beside it. */
 interface LegendEntry {
 	label: string;
-	pattern: Series["pattern"];
+	pattern: Fill;
 }
 
 /**
@@ -211,6 +226,12 @@ export function paintChart(
 	if (chart.type === "line") {
 		paintLines(canvas, chart, frame, x, y);
 	}
+	if (chart.type === "pie") {
+		paintPie(canvas, chart, frame, x, y);
+	}
+	if (chart.type === "scatter") {
+		paintScatter(canvas, chart, frame, x, y);
+	}
 	if (frame.legend) {
 		paintLegend(canvas, legendEntries(chart), frame.legend, x, y, context);
 	}
@@ -239,6 +260,7 @@ function paintAxes(
 	canvas.hLine(x + plot.x, y + at(zeroOf(chart)), plot.width);
 
 	const gutter = Math.max(0, plot.x - AXIS_GAP_DOTS);
+	const under = y + plot.y + plot.height + AXIS_GAP_DOTS;
 	const labelHeight = context.typeface(LABEL_STYLE).cellHeight;
 	for (const mark of marks) {
 		canvas.hLine(x + plot.x - TICK_DOTS, y + at(mark), TICK_DOTS);
@@ -246,15 +268,43 @@ function paintAxes(
 		paintRows(canvas, rows, x, y + at(mark) - Math.floor(labelHeight / 2));
 	}
 
+	if (chart.type === "scatter") {
+		// A scatter's horizontal axis measures rather than names: its points carry an x of their own
+		// instead of falling into categories, so the axis is marked the way the value axis is and the
+		// chart's labels, which name categories, have nothing under a scatter to name.
+		const columns = acrossTicks(chart);
+		const across = acrossScale(columns, plot.x, plot.width);
+		for (const mark of columns) {
+			const column = across(mark);
+			canvas.vLine(x + column, y + plot.y + plot.height, TICK_DOTS);
+			paintUnder(canvas, format(mark), column, x, under, width, context);
+		}
+		return;
+	}
+
 	const slot = chart.labels.length === 0 ? 0 : Math.floor(plot.width / chart.labels.length);
 	for (const [index, label] of chart.labels.entries()) {
-		const rows = rowsOf(elide(label, slot, context), LABEL_STYLE, slot, "LEFT", context);
-		const drawn = rowWidth(rows);
-		// Held inside the chart rather than centred come what may: the last point of a line sits on the
-		// plot's last dot, and a label centred under it would run half of itself off the paper.
-		const left = Math.max(0, Math.min(labelCentre(chart, plot, index) - Math.floor(drawn / 2), width - drawn));
-		paintRows(canvas, rows, x + left, y + plot.y + plot.height + AXIS_GAP_DOTS);
+		paintUnder(canvas, elide(label, slot, context), labelCentre(chart, plot, index), x, under, width, context, slot);
 	}
+}
+
+/** Writes one name or number under the plot, centred on the dot of the axis it belongs to. */
+function paintUnder(
+	canvas: Canvas,
+	text: string,
+	centre: number,
+	x: number,
+	top: number,
+	width: number,
+	context: LayoutContext,
+	room = width,
+): void {
+	const rows = rowsOf(text, LABEL_STYLE, room, "LEFT", context);
+	const drawn = rowWidth(rows);
+	// Held inside the chart rather than centred come what may: the last point of a line sits on the
+	// plot's last dot, and a label centred under it would run half of itself off the paper.
+	const left = Math.max(0, Math.min(centre - Math.floor(drawn / 2), width - drawn));
+	paintRows(canvas, rows, x + left, top);
 }
 
 /**
@@ -362,6 +412,103 @@ function pointX(plot: ChartFrame["plot"], index: number, count: number): number 
 }
 
 /**
+ * Draws the one series of a pie as slices of a circle.
+ *
+ * The circle is as wide as the plot's shorter side allows rather than as wide as the paper: a pie
+ * says what it has to say with angles, and an ellipse stretched to fill a landscape plot would tell
+ * the reader a lie about every one of them.
+ */
+function paintPie(canvas: Canvas, chart: ChartData, frame: ChartFrame, x: number, y: number): void {
+	const { plot } = frame;
+	const values = chart.series[0].values;
+	const total = values.reduce((sum, value) => sum + value, 0);
+	const radius = Math.floor(Math.min(plot.width, plot.height) / 2) - PIE_MARGIN_DOTS;
+	if (radius < 1 || total <= 0) {
+		return;
+	}
+
+	const centreX = x + plot.x + Math.floor(plot.width / 2);
+	const centreY = y + plot.y + Math.floor(plot.height / 2);
+
+	let from = 0;
+	for (const [index, value] of values.entries()) {
+		// The last slice is closed on the turn itself rather than on the sum of the shares before it,
+		// which thirds and sevenths leave a fraction of a dot short of a whole circle.
+		const to = index === values.length - 1 ? TURN : from + (value / total) * TURN;
+		paintSlice(canvas, SLICE_PATTERNS[index % SLICE_PATTERNS.length], centreX, centreY, radius, from, to);
+		const edge = rim(radius, from);
+		canvas.line(centreX, centreY, centreX + edge.dx, centreY + edge.dy);
+		from = to;
+	}
+
+	// Every dot whose distance from the centre rounds to the radius, which draws a rounder rim on a
+	// grid this coarse than stepping around the circle by angle does.
+	for (let dy = -radius; dy <= radius; dy++) {
+		for (let dx = -radius; dx <= radius; dx++) {
+			if (Math.round(Math.hypot(dx, dy)) === radius) canvas.set(centreX + dx, centreY + dy);
+		}
+	}
+}
+
+/**
+ * Inks the dots of one slice.
+ *
+ * Dot by dot over the square the circle sits in, rather than by tracing the slice's outline and
+ * filling what it encloses: a slice is defined by two questions a dot can answer on its own — is it
+ * within the radius, and does it lie between the two angles — and asking them of every dot needs
+ * neither an outline nor a scanline order.
+ */
+function paintSlice(
+	canvas: Canvas,
+	pattern: Pattern,
+	centreX: number,
+	centreY: number,
+	radius: number,
+	from: number,
+	to: number,
+): void {
+	for (let dy = -radius; dy <= radius; dy++) {
+		for (let dx = -radius; dx <= radius; dx++) {
+			if (Math.hypot(dx, dy) > radius) {
+				continue;
+			}
+			const angle = angleOf(dx, dy);
+			if (angle < from || angle >= to) {
+				continue;
+			}
+			if (patternDot(pattern, centreX + dx, centreY + dy)) canvas.set(centreX + dx, centreY + dy);
+		}
+	}
+}
+
+/** How far round the turn a dot lies, from straight up and going clockwise, the way a pie is read. */
+function angleOf(dx: number, dy: number): number {
+	const angle = Math.atan2(dx, -dy);
+	return angle < 0 ? angle + TURN : angle;
+}
+
+/** The dot on the rim at one angle, as an offset from the centre, with y counted down the paper. */
+function rim(radius: number, angle: number): { dx: number; dy: number } {
+	return { dx: Math.round(radius * Math.sin(angle)), dy: -Math.round(radius * Math.cos(angle)) };
+}
+
+/** Draws each series' points as its own mark, with nothing joining them: a scatter plots pairs. */
+function paintScatter(canvas: Canvas, chart: ChartData, frame: ChartFrame, x: number, y: number): void {
+	const { plot } = frame;
+	if (plot.width <= 0) {
+		return;
+	}
+
+	const across = acrossScale(acrossTicks(chart), plot.x, plot.width);
+	const at = scale(chartTicks(chart), plot.y, plot.height);
+	for (const series of chart.series) {
+		for (const [valueX, valueY] of series.points ?? []) {
+			paintMarker(canvas, series.marker, x + across(valueX), y + at(valueY));
+		}
+	}
+}
+
+/**
  * Fills the ground between a line and the value axis' zero.
  *
  * Column by column rather than as one shape: the region under a run of segments is not a rectangle
@@ -454,14 +601,7 @@ function paintLegend(
 }
 
 /** A rectangle a series claims: its pattern laid inside it, or the outline `hollow` draws instead. */
-function paintFilled(
-	canvas: Canvas,
-	pattern: Series["pattern"],
-	x: number,
-	y: number,
-	width: number,
-	height: number,
-): void {
+function paintFilled(canvas: Canvas, pattern: Fill, x: number, y: number, width: number, height: number): void {
 	if (width <= 0 || height <= 0) {
 		return;
 	}
@@ -469,7 +609,7 @@ function paintFilled(
 		canvas.rect(x, y, width, height, 1);
 		return;
 	}
-	canvas.fill(x, y, width, height, pattern as Pattern);
+	canvas.fill(x, y, width, height, pattern);
 }
 
 /**
@@ -484,7 +624,7 @@ function legendEntries(chart: ChartData): LegendEntry[] {
 	}
 	if (chart.type === "pie") {
 		return chart.series[0].values.map((_, index) => ({
-			label: chart.labels[index] ?? String(index + 1),
+			label: chart.labels[index] ?? `#${index + 1}`,
 			pattern: SLICE_PATTERNS[index % SLICE_PATTERNS.length],
 		}));
 	}
@@ -515,6 +655,12 @@ function chartTicks(chart: ChartData): number[] {
 	return ticks(Math.min(0, ...values), Math.max(0, ...values), TICK_COUNT);
 }
 
+/** The marks a scatter's horizontal axis carries, read off the x of every point it plots. */
+function acrossTicks(chart: ChartData): number[] {
+	const values = chart.series.flatMap((series) => (series.points ?? []).map(([value]) => value));
+	return ticks(Math.min(0, ...values), Math.max(0, ...values), TICK_COUNT);
+}
+
 /**
  * The value the horizontal axis is drawn at, and the value a bar or an area is measured from.
  *
@@ -537,6 +683,20 @@ function scale(marks: number[], top: number, height: number): (value: number) =>
 	const high = marks[marks.length - 1];
 	const span = high - low || 1;
 	return (value) => top + height - Math.round(((value - low) / span) * height);
+}
+
+/**
+ * Where a value sits across the plot, with the lowest mark at its left edge and the highest at its
+ * right.
+ *
+ * The last dot of the plot rather than the one past it, where a line chart puts its last point, so
+ * that the two kinds of chart put the top of a range in the same place.
+ */
+function acrossScale(marks: number[], left: number, width: number): (value: number) => number {
+	const low = marks[0];
+	const high = marks[marks.length - 1];
+	const span = high - low || 1;
+	return (value) => left + Math.round(((value - low) / span) * Math.max(0, width - 1));
 }
 
 /** A mark as it is printed: the noise binary fractions leave behind is not part of the number. */

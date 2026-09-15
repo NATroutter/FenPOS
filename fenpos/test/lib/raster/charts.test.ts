@@ -79,3 +79,28 @@ describe("bar and line charts", () => {
 		expect(raster.heightDots).toBe(6 * 24);
 	});
 });
+
+describe("pie and scatter charts", () => {
+	it("draws a pie with a legend", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument(
+					'<chart=pie height=10 title="Share">\n<series>50,30,20</series>\n<labels>Coffee,Tea,Water</labels>\n</chart>',
+				).nodes,
+				context,
+			),
+			"chart-pie",
+		);
+	});
+
+	it("draws scatter points with cycling markers", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument("<chart=scatter height=8>\n<series=A>1:2,2:3,3:5</series>\n<series=B>1:4,2:1</series>\n</chart>")
+					.nodes,
+				context,
+			),
+			"chart-scatter",
+		);
+	});
+});

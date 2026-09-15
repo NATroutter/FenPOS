@@ -356,6 +356,15 @@ describe("block tags", () => {
 		expect(refusal("<chart=bar>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
 	});
 
+	it("refuses a pie slice that is not worth a share", () => {
+		const thrown = refusal("<chart=pie>\n<series>3,0,1</series>\n</chart>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(thrown.line).toBe(2);
+		expect(refusal("<chart=pie>\n<series>3,-1</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(() => build("<chart=bar>\n<series>3,0,-1</series>\n</chart>")).not.toThrow();
+	});
+
 	it("assigns patterns and markers by order", () => {
 		const chart = block(
 			"<chart=bar>\n<series>1</series>\n<series>2</series>\n<series>3</series>\n<series>4</series>\n<series>5</series>\n</chart>",

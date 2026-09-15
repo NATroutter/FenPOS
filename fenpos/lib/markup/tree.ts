@@ -1044,14 +1044,13 @@ class DocumentBuilder {
 	 * @param node the chart, with its series and labels already closed beneath it
 	 * @returns what the layout engine draws from
 	 * @throws MarkupError if a value is not a number, or the chart holds nothing to plot, more series
-	 * than it can draw, or more labels than it has points to name
+	 * than it can draw, a pie slice that is not above zero, or more labels than it has points to name
 	 */
 	private readChart(node: BlockNode): ChartData {
 		const type = node.argument as ChartType;
 		const blocks = node.children.filter((child): child is BlockNode => child.kind === "block");
-		const series = blocks
-			.filter((child) => child.tag === "series")
-			.map((child, index) => this.readSeries(child, type, index));
+		const seriesBlocks = blocks.filter((child) => child.tag === "series");
+		const series = seriesBlocks.map((child, index) => this.readSeries(child, type, index));
 		const labelBlocks = blocks.filter((child) => child.tag === "labels");
 		const labels = labelBlocks.flatMap((child) =>
 			(child.content ?? "")
@@ -1076,6 +1075,20 @@ class DocumentBuilder {
 				node.column,
 				"chart",
 				"<chart> draws what its series hold, so it needs a <series> with at least one value",
+			);
+		}
+
+		// A slice is a share of the whole, and nothing is a share of a whole unless it is more than
+		// none of it: a zero takes no angle to draw and a negative one would take an angle back off
+		// the slices around it, so neither can be drawn and neither is refused quietly.
+		const unshareable = type === "pie" ? series[0].values.find((value) => value <= 0) : undefined;
+		if (unshareable !== undefined) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				seriesBlocks[0].line,
+				seriesBlocks[0].column,
+				String(unshareable),
+				`a pie divides a whole into shares, so <series> holds values above zero, and ${unshareable} is not one`,
 			);
 		}
 
