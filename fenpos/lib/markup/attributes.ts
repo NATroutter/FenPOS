@@ -1,10 +1,15 @@
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 
-/** What one attribute accepts. */
-export type AttributeSpec =
+/** What one attribute accepts, and whether the tag can do without it. */
+export type AttributeSpec = (
 	| { kind: "integer"; min: number; max: number }
 	| { kind: "enum"; values: readonly string[] }
-	| { kind: "text"; maxLength: number };
+	| { kind: "text"; maxLength: number }
+	| { kind: "char" }
+) & {
+	/** The tag means nothing without this attribute, so leaving it off is refused. */
+	required?: true;
+};
 
 /** The attributes a tag declares, by lowercase name. An empty table means the tag takes none. */
 export type AttributeTable = Readonly<Record<string, AttributeSpec>>;
@@ -24,14 +29,22 @@ const INTEGER = /^-?\d+$/;
 /**
  * Checks a tag's attributes against its table.
  *
- * Every refusal names the attribute and points at its own column, because a tag can carry
- * several and "invalid attribute on line 3" would send the author counting.
+ * Every refusal names the attribute. A bad value points at the attribute's own column, because a
+ * tag can carry several and "invalid attribute on line 3" would send the author counting; a
+ * missing one has no column of its own and points at the tag.
+ *
+ * @param tag the tag's name, for the message
+ * @param raw the attributes as the tokenizer read them
+ * @param table what this tag declares
+ * @param line the tag's line
+ * @param column the tag's column, where a missing required attribute is reported
  */
 export function readAttributes(
 	tag: string,
 	raw: readonly RawAttribute[],
 	table: AttributeTable,
 	line: number,
+	column: number,
 ): Attributes {
 	const read: Record<string, string | number> = {};
 
@@ -56,6 +69,12 @@ export function readAttributes(
 			);
 		}
 		read[attribute.name] = coerce(tag, attribute, spec, line);
+	}
+
+	for (const [name, spec] of Object.entries(table)) {
+		if (spec.required && !Object.hasOwn(read, name)) {
+			throw new MarkupError(MARKUP_ERRORS.invalidAttribute, line, column, name, `<${tag}> requires ${name}`);
+		}
 	}
 
 	return read;
@@ -83,15 +102,27 @@ function coerce(tag: string, attribute: RawAttribute, spec: AttributeSpec, line:
 			return value;
 		}
 		case "enum": {
-			if (!spec.values.includes(attribute.value)) {
+			// Ignoring case, and returning the table's own spelling: the layout engine and the compiler
+			// match one spelling, and an author should not have to know which.
+			const wanted = attribute.value.toLowerCase();
+			const match = spec.values.find((value) => value.toLowerCase() === wanted);
+			if (match === undefined) {
 				const listed = spec.values.slice(0, -1).join(", ");
 				throw refuse(`${listed} or ${spec.values[spec.values.length - 1]}`);
 			}
-			return attribute.value;
+			return match;
 		}
 		case "text": {
 			if (attribute.value.length > spec.maxLength) {
 				throw refuse(`at most ${spec.maxLength} characters`);
+			}
+			return attribute.value;
+		}
+		case "char": {
+			// Code points, not UTF-16 units: an astral character is one character and two units, and
+			// measuring units would refuse a legitimate single character as though it were two.
+			if ([...attribute.value].length !== 1) {
+				throw refuse("a single character");
 			}
 			return attribute.value;
 		}

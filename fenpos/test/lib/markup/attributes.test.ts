@@ -6,6 +6,8 @@ const TABLE: AttributeTable = {
 	width: { kind: "integer", min: 1, max: 100 },
 	border: { kind: "enum", values: ["single", "double", "thick", "none"] },
 	title: { kind: "text", maxLength: 64 },
+	lines: { kind: "integer", min: 1, max: 255, required: true },
+	char: { kind: "char" },
 };
 
 const refusal = (work: () => unknown): MarkupError => {
@@ -28,16 +30,18 @@ describe("readAttributes", () => {
 				{ name: "width", value: "60", column: 6 },
 				{ name: "border", value: "double", column: 15 },
 				{ name: "title", value: "Sales by hour", column: 29 },
+				{ name: "lines", value: "3", column: 40 },
 			],
 			TABLE,
 			2,
+			1,
 		);
 
-		expect(read).toEqual({ width: 60, border: "double", title: "Sales by hour" });
+		expect(read).toEqual({ width: 60, border: "double", title: "Sales by hour", lines: 3 });
 	});
 
 	it("refuses an attribute the tag does not declare, at its column", () => {
-		const thrown = refusal(() => readAttributes("box", [{ name: "pad", value: "1", column: 6 }], TABLE, 4));
+		const thrown = refusal(() => readAttributes("box", [{ name: "pad", value: "1", column: 6 }], TABLE, 4, 1));
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.unknownAttribute);
 		expect(thrown.line).toBe(4);
@@ -46,20 +50,20 @@ describe("readAttributes", () => {
 	});
 
 	it("refuses an integer outside its range", () => {
-		const thrown = refusal(() => readAttributes("box", [{ name: "width", value: "0", column: 6 }], TABLE, 1));
+		const thrown = refusal(() => readAttributes("box", [{ name: "width", value: "0", column: 6 }], TABLE, 1, 1));
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
 		expect(thrown.message).toMatch(/1 to 100/);
 	});
 
 	it("refuses a non-integer where an integer is declared", () => {
-		expect(refusal(() => readAttributes("box", [{ name: "width", value: "6x", column: 6 }], TABLE, 1)).code).toBe(
+		expect(refusal(() => readAttributes("box", [{ name: "width", value: "6x", column: 6 }], TABLE, 1, 1)).code).toBe(
 			MARKUP_ERRORS.invalidAttribute,
 		);
 	});
 
 	it("refuses an enum value outside the set and names the set", () => {
-		const thrown = refusal(() => readAttributes("box", [{ name: "border", value: "dotted", column: 6 }], TABLE, 1));
+		const thrown = refusal(() => readAttributes("box", [{ name: "border", value: "dotted", column: 6 }], TABLE, 1, 1));
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
 		expect(thrown.message).toMatch(/single, double, thick or none/);
@@ -67,7 +71,7 @@ describe("readAttributes", () => {
 
 	it("refuses text over its length", () => {
 		expect(
-			refusal(() => readAttributes("box", [{ name: "title", value: "x".repeat(65), column: 6 }], TABLE, 1)).code,
+			refusal(() => readAttributes("box", [{ name: "title", value: "x".repeat(65), column: 6 }], TABLE, 1, 1)).code,
 		).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
@@ -81,10 +85,59 @@ describe("readAttributes", () => {
 				],
 				TABLE,
 				1,
+				1,
 			),
 		);
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
 		expect(thrown.column).toBe(15);
+	});
+
+	it("refuses a required attribute that was left off, at the tag's own column", () => {
+		const thrown = refusal(() => readAttributes("feed", [], TABLE, 3, 5));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.line).toBe(3);
+		expect(thrown.column).toBe(5);
+		expect(thrown.detail).toBe("lines");
+		expect(thrown.message).toBe("<feed> requires lines");
+	});
+
+	it("matches an enum value ignoring case and keeps the table's spelling", () => {
+		const read = readAttributes(
+			"box",
+			[
+				{ name: "border", value: "Double", column: 6 },
+				{ name: "lines", value: "1", column: 20 },
+			],
+			TABLE,
+			1,
+			1,
+		);
+
+		expect(read.border).toBe("double");
+	});
+
+	it("takes one character for a char attribute, counted in code points", () => {
+		const read = readAttributes(
+			"fill",
+			[
+				{ name: "char", value: "😀", column: 7 },
+				{ name: "lines", value: "1", column: 14 },
+			],
+			TABLE,
+			1,
+			1,
+		);
+
+		expect(read.char).toBe("😀");
+	});
+
+	it("refuses a char attribute holding more than one character", () => {
+		const thrown = refusal(() => readAttributes("fill", [{ name: "char", value: "ab", column: 7 }], TABLE, 1, 1));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(7);
+		expect(thrown.message).toBe("<fill> char=ab is not accepted; expected a single character");
 	});
 });
