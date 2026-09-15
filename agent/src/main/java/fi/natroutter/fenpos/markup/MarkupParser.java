@@ -14,7 +14,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Turns the request's {@code data} string into one {@link Line} per line of the document.
@@ -100,6 +102,16 @@ public final class MarkupParser {
      * scans wrongly. Refused here, at a column, rather than on paper.
      */
     private static final int SYMBOL_MAX_CODE_POINT = 0x7F;
+
+    /**
+     * Tags the server draws into a raster rather than sends as printer commands.
+     * <p>
+     * None of these are in {@link Tag}: this agent has no table, chart or symbol layout engine,
+     * so there is nothing for them to mean here. Checked ahead of {@link Tag#byName} so the
+     * refusal names what the tag actually is, rather than reporting it as merely unknown.
+     */
+    private static final Set<String> SERVER_TAGS =
+            Set.of("box", "table", "row", "cell", "chart", "series", "labels", "bar");
 
     private final String source;
 
@@ -417,6 +429,17 @@ public final class MarkupParser {
     // Tags
     // -------------------------------------------------------------------------
 
+    /**
+     * Rejects a tag by name that the server draws into a raster rather than sends as printer
+     * commands, before {@link Tag#byName} has a chance to report it as merely unknown.
+     */
+    private void requireNotServerTag(String name, int column) throws MarkupException {
+        if (name != null && SERVER_TAGS.contains(name.toLowerCase(Locale.ROOT))) {
+            throw new MarkupException(MarkupError.SERVER_RENDERED, line, column, name,
+                    "<" + name + "> is drawn by the server into a raster; the console prints text only");
+        }
+    }
+
     private void readTag() throws MarkupException {
         int startColumn = column();
         int close = source.indexOf('>', index);
@@ -440,6 +463,8 @@ public final class MarkupParser {
         int equals = body.indexOf('=');
         String name = equals < 0 ? body : body.substring(0, equals);
         String argument = equals < 0 ? null : body.substring(equals + 1);
+
+        requireNotServerTag(name, column);
 
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
                 MarkupError.UNKNOWN_TAG, line, column, name,
@@ -486,6 +511,8 @@ public final class MarkupParser {
     }
 
     private void closeTag(String name, int column) throws MarkupException {
+        requireNotServerTag(name, column);
+
         Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
                 MarkupError.UNKNOWN_TAG, line, column, name, "Unknown tag '" + name + "'"));
 
@@ -540,7 +567,8 @@ public final class MarkupParser {
                     argument == null ? 1 : requireInt(argument, 1, 2, tag, column));
             case SIZE -> applySize(argument, column);
             case FONT -> style.withFont(Enums.parse(Font.class, argument).orElseThrow(
-                    () -> argumentError(tag, column, "must be 'a' or 'b'")));
+                    () -> new MarkupException(MarkupError.SERVER_RENDERED, line, column, tag.tagName(),
+                            "<font=name> uses a stored font the server renders; the console has a and b")));
             case ALIGN, WRAP, NOWRAP, FILL, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
                     throw new IllegalStateException(
                             "Tag " + tag + " does not carry a span style");
@@ -760,7 +788,13 @@ public final class MarkupParser {
                 yield new Directive.Pdf417(content, finished.value(), PDF417_DATA_COLUMNS);
             }
             case BARCODE -> new Directive.Barcode(finished.system(), content);
-            case IMAGE -> syncedImage(content, finished.value(), column);
+            case IMAGE -> {
+                if (content.startsWith("data:")) {
+                    throw new MarkupException(MarkupError.SERVER_RENDERED, line, column, tag.tagName(),
+                            "<image> data is decoded by the server; the console prints stored images by name");
+                }
+                yield syncedImage(content, finished.value(), column);
+            }
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
 

@@ -34,7 +34,10 @@ public enum MarkupError {
     INVALID_BLOCK_SCOPE("invalid_block_scope"),
 
     /** A character that would be interpreted by the printer as a command. */
-    CONTROL_CHARACTER("control_character");
+    CONTROL_CHARACTER("control_character"),
+
+    /** A tag the server draws into a raster; the agent has no renderer. */
+    SERVER_RENDERED("server_rendered");
 
     private final String apiCode;
 

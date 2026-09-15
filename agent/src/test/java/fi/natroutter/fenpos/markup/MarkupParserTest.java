@@ -333,6 +333,69 @@ class MarkupParserTest {
                         () -> MarkupParser.parse("<bold x")).error());
     }
 
+    // -------------------------------------------------------------------------
+    // Server-rendered refusals
+    // -------------------------------------------------------------------------
+
+    /**
+     * Every block tag the server draws into a raster: this agent has no table, chart or
+     * symbol layout engine, so none of them are in {@link Tag} at all.
+     */
+    @Test
+    void rejectsEveryServerRenderedBlockTag() {
+        for (String name : List.of("box", "table", "row", "cell", "chart", "series", "labels", "bar")) {
+            MarkupException thrown = assertThrows(MarkupException.class,
+                    () -> MarkupParser.parse("<" + name + ">x</" + name + ">"), name);
+
+            assertEquals(MarkupError.SERVER_RENDERED, thrown.error(), name);
+        }
+    }
+
+    @Test
+    void rejectsAServerRenderedBlockTagAtItsColumnNamingIt() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("ab <table>x</table>"));
+
+        assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
+        assertEquals(1, thrown.line());
+        assertEquals(4, thrown.column());
+        assertEquals("table", thrown.detail());
+    }
+
+    /**
+     * A closing tag for a server-rendered block reached with no matching open tag still names
+     * the tag rather than falling through to "unknown", since the close path checks the same
+     * set independently of the open path.
+     */
+    @Test
+    void rejectsAServerRenderedBlockTagsCloseTagWithNoOpen() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("</table>"));
+
+        assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
+        assertEquals("table", thrown.detail());
+    }
+
+    @Test
+    void rejectsAFontOtherThanAOrB() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<font=roboto>x</font>"));
+
+        assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
+        assertEquals(1, thrown.column());
+        assertEquals("font", thrown.detail());
+    }
+
+    @Test
+    void rejectsImageContentThatIsInlineData() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<image>data:image/png;base64,AAAA</image>"));
+
+        assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
+        assertEquals(1, thrown.column());
+        assertEquals("image", thrown.detail());
+    }
+
     /**
      * A raw ESC byte is what markup exists to replace. Letting one through would let a
      * caller desynchronise the printer, which is precisely what the grammar prevents.
