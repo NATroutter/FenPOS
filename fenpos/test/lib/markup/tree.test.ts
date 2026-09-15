@@ -326,8 +326,46 @@ describe("block tags", () => {
 		expect(refusal("<chart=bar area=on>\n</chart>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
+	it("parses series values, scatter pairs and labels", () => {
+		const chart = block(
+			"<chart=scatter>\n<series=A>1:2, 3:4\n5:6</series>\n<labels>x,y</labels>\n</chart>",
+		) as BlockNode;
+
+		expect(chart.chart?.series[0].points).toEqual([
+			[1, 2],
+			[3, 4],
+			[5, 6],
+		]);
+		expect(chart.chart?.labels).toEqual(["x", "y"]);
+		expect(chart.chart?.series[0].marker).toBe("circle");
+	});
+
+	it("refuses a value that is not a number, too many points and too many labels", () => {
+		expect(refusal("<chart=bar>\n<series>1,two</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<chart=bar>\n<series>1,2</series>\n<labels>a,b,c</labels>\n</chart>").code).toBe(
+			MARKUP_ERRORS.tooManyLabels,
+		);
+		const many = Array.from({ length: 2001 }, (_, index) => index).join(",");
+		expect(refusal(`<chart=line>\n<series>${many}</series>\n</chart>`).code).toBe(MARKUP_ERRORS.tooManyPoints);
+	});
+
+	it("requires one series for a pie and at least one series for any chart", () => {
+		expect(refusal("<chart=pie>\n<series>1</series>\n<series>2</series>\n</chart>").code).toBe(
+			MARKUP_ERRORS.invalidTagArgument,
+		);
+		expect(refusal("<chart=bar>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("assigns patterns and markers by order", () => {
+		const chart = block(
+			"<chart=bar>\n<series>1</series>\n<series>2</series>\n<series>3</series>\n<series>4</series>\n<series>5</series>\n</chart>",
+		) as BlockNode;
+
+		expect(chart.chart?.series.map((series) => series.pattern)).toEqual(["solid", "hatch", "dot", "hollow", "solid"]);
+	});
+
 	it("allows a marker only on a chart that plots points", () => {
-		expect(() => build("<chart=scatter>\n<series marker=cross>1,2</series>\n</chart>")).not.toThrow();
+		expect(() => build("<chart=scatter>\n<series marker=cross>1:2,3:4</series>\n</chart>")).not.toThrow();
 
 		const thrown = refusal("<chart=pie>\n<series marker=cross>1,2</series>\n</chart>");
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);

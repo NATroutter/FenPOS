@@ -181,6 +181,43 @@ export interface ImageNode extends Located {
 /** The tags that lay out a region of the paper rather than a run of text. */
 export type BlockTag = "box" | "table" | "row" | "cell" | "chart" | "series" | "labels" | "bar";
 
+/** What a `<chart>` is drawn as. */
+export type ChartType = "bar" | "line" | "pie" | "scatter";
+
+/**
+ * One series of a chart, read from the text a `<series>` enclosed.
+ *
+ * `values` always holds the numbers the series plots; `points` holds the same numbers paired up for
+ * a scatter, and is null for every other chart. Both rather than one, so a caller that only needs
+ * the magnitudes — the y axis, the legend — reads them the same way whatever the chart is.
+ */
+export interface Series {
+	/** What the legend prints for this series, or null when the tag carried no argument. */
+	label: string | null;
+	pattern: "solid" | "hatch" | "dot" | "hollow";
+	marker: "circle" | "square" | "triangle" | "cross" | "none";
+	values: number[];
+	points: [number, number][] | null;
+}
+
+/**
+ * Everything a chart plots, read off its tags once the whole chart is known.
+ *
+ * Kept apart from the attributes it came from because a chart's shape is a fact about all of its
+ * tags together — how many series there are decides whether the legend is drawn, how long the
+ * longest one is decides how many labels fit — and none of that can be settled one tag at a time.
+ */
+export interface ChartData {
+	type: ChartType;
+	title: string | null;
+	/** Printed lines the whole chart occupies, including its title and axes. */
+	height: number;
+	legend: "auto" | "on" | "off";
+	area: boolean;
+	series: Series[];
+	labels: string[];
+}
+
 /**
  * A laid-out region and everything it encloses.
  *
@@ -194,6 +231,8 @@ export interface BlockNode extends Located {
 	attributes: Attributes;
 	content: string | null;
 	children: Node[];
+	/** What this chart plots, on a `chart` block; absent on every other. */
+	chart?: ChartData;
 }
 
 /** Anything a document can hold. */

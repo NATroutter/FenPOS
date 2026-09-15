@@ -6,6 +6,8 @@ import type {
 	AlignNode,
 	BlockNode,
 	BlockTag,
+	ChartData,
+	ChartType,
 	Document,
 	ImageNode,
 	ImageSourceRef,
@@ -14,6 +16,7 @@ import type {
 	ParseOptions,
 	ScopeNode,
 	ScopeTag,
+	Series,
 	SymbolNode,
 	VoidDirective,
 	WrapNode,
@@ -73,6 +76,21 @@ const CHART_KINDS: readonly string[] = ["bar", "line", "pie", "scatter"];
 
 /** The charts that plot points a marker can be drawn on. */
 const MARKER_KINDS: readonly string[] = ["line", "scatter"];
+
+/** Printed lines a `<chart>` stands, when the tag does not say. */
+const DEFAULT_CHART_HEIGHT = 10;
+
+/** The fills series are drawn with, in the order series that asked for none are given them. */
+const SERIES_PATTERNS = ["solid", "hatch", "dot", "hollow"] as const;
+
+/** The marks plotted points are drawn with, in the order series that asked for none are given them. */
+const SERIES_MARKERS = ["circle", "square", "triangle", "cross"] as const;
+
+/** Splits a list of values: a line break separates one from the next as a comma does. */
+const VALUE_SEPARATOR = /[\s,]+/;
+
+/** Splits a list of labels, which may hold spaces of their own and so are cut on commas alone. */
+const LABEL_SEPARATOR = /[,\n]/;
 
 /** Fullest a `<bar>` gauge can be asked for, as a percentage. */
 const MAX_GAUGE_PERCENT = 100;
@@ -350,6 +368,12 @@ class DocumentBuilder {
 	private readBreak(token: Extract<Token, { kind: "break" }>): void {
 		const frame = this.frame();
 		if (frame.content) {
+			// A block that encloses data holds a list, so a break ends one entry and begins the next the
+			// way a comma does and has to survive into the content. A symbology's payload is one string
+			// instead, and a break in it is the author's margin rather than part of what is encoded.
+			if (frame.node?.kind === "block") {
+				frame.content.parts.push("\n");
+			}
 			return;
 		}
 		this.endLine();
@@ -985,7 +1009,7 @@ class DocumentBuilder {
 	 * checked against the series it turned out to hold.
 	 *
 	 * @throws MarkupError if that last line is malformed, or a marker was asked for on a chart that
-	 * plots no points
+	 * plots no points, or the chart's own numbers do not hold together
 	 */
 	private closeRegion(frame: Frame, node: BlockNode): void {
 		frame.owner.blockSeen = true;
@@ -1002,7 +1026,162 @@ class DocumentBuilder {
 			);
 		}
 
+		if (node.tag === "chart") {
+			node.chart = this.readChart(node);
+		}
+
 		this.placeBlock(this.frame().owner, node.tag);
+	}
+
+	/**
+	 * Reads a finished chart's tags into the numbers it plots.
+	 *
+	 * Read here rather than as each tag closed, because every question worth asking about a chart is
+	 * about all of its tags at once: whether a pie was given the one series it can draw, whether the
+	 * categories outnumber the points there are categories for, which fill a series takes when it
+	 * asked for none. None of those has an answer while the chart is still open.
+	 *
+	 * @param node the chart, with its series and labels already closed beneath it
+	 * @returns what the layout engine draws from
+	 * @throws MarkupError if a value is not a number, or the chart holds nothing to plot, more series
+	 * than it can draw, or more labels than it has points to name
+	 */
+	private readChart(node: BlockNode): ChartData {
+		const type = node.argument as ChartType;
+		const blocks = node.children.filter((child): child is BlockNode => child.kind === "block");
+		const series = blocks
+			.filter((child) => child.tag === "series")
+			.map((child, index) => this.readSeries(child, type, index));
+		const labelBlocks = blocks.filter((child) => child.tag === "labels");
+		const labels = labelBlocks.flatMap((child) =>
+			(child.content ?? "")
+				.split(LABEL_SEPARATOR)
+				.map((label) => label.trim())
+				.filter((label) => label.length > 0),
+		);
+
+		if (type === "pie" && series.length !== 1) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				node.line,
+				node.column,
+				"chart",
+				`a pie divides one whole up, so <chart=pie> draws exactly one <series>, not ${series.length}`,
+			);
+		}
+		if (!series.some((one) => one.values.length > 0)) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				node.line,
+				node.column,
+				"chart",
+				"<chart> draws what its series hold, so it needs a <series> with at least one value",
+			);
+		}
+
+		// The longest series rather than every one of them: a short series leaves its later categories
+		// empty the way a short table row leaves its later columns empty, so a label is only surplus
+		// when no series reaches that far.
+		const plotted = series.reduce((longest, one) => Math.max(longest, one.values.length), 0);
+		if (labels.length > plotted) {
+			throw new MarkupError(
+				MARKUP_ERRORS.tooManyLabels,
+				labelBlocks[0].line,
+				labelBlocks[0].column,
+				String(labels.length),
+				`<labels> names the points a chart plots, and ${labels.length} labels name more than the ${plotted} plotted`,
+			);
+		}
+
+		return {
+			type,
+			title: (node.attributes.title as string | undefined) ?? null,
+			height: (node.attributes.height as number | undefined) ?? DEFAULT_CHART_HEIGHT,
+			legend: (node.attributes.legend as ChartData["legend"] | undefined) ?? "auto",
+			area: node.attributes.area === "on",
+			series,
+			labels,
+		};
+	}
+
+	/**
+	 * Reads one series' text into the numbers it plots.
+	 *
+	 * A scatter's values are pairs and every other chart's are single numbers, but both end up in
+	 * `values`: what a series holds is one magnitude per point whatever fixes where that point sits,
+	 * so the axis and the legend read the same field for a scatter as for a bar.
+	 *
+	 * @param node the series, with the text it enclosed
+	 * @param type what the chart that holds it is drawn as
+	 * @param index where it sits among the chart's series, which decides what it is drawn with
+	 * @returns the series
+	 * @throws MarkupError if a value is not a number, or the series holds more than the limit allows
+	 */
+	private readSeries(node: BlockNode, type: ChartType, index: number): Series {
+		const tokens = (node.content ?? "").split(VALUE_SEPARATOR).filter((token) => token.length > 0);
+		// Counted before any of them is read, so a series far past the limit is refused for its size
+		// rather than for whichever of its thousands of values happens to be malformed.
+		if (tokens.length > this.options.maxSeriesPoints) {
+			throw new MarkupError(
+				MARKUP_ERRORS.tooManyPoints,
+				node.line,
+				node.column,
+				String(tokens.length),
+				`A series may hold at most ${this.options.maxSeriesPoints} values`,
+			);
+		}
+
+		const points = type === "scatter" ? tokens.map((token) => this.readPoint(node, token)) : null;
+		const values = points ? points.map(([, y]) => y) : tokens.map((token) => this.readValue(node, token, token));
+
+		return {
+			label: node.argument,
+			pattern:
+				(node.attributes.pattern as Series["pattern"] | undefined) ?? SERIES_PATTERNS[index % SERIES_PATTERNS.length],
+			marker:
+				(node.attributes.marker as Series["marker"] | undefined) ??
+				(type === "scatter" ? SERIES_MARKERS[index % SERIES_MARKERS.length] : "none"),
+			values,
+			points,
+		};
+	}
+
+	/** Reads one `x:y` pair of a scatter. @throws MarkupError if it is not one */
+	private readPoint(node: BlockNode, token: string): [number, number] {
+		const halves = token.split(":");
+		if (halves.length !== 2) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				node.line,
+				node.column,
+				token,
+				`a scatter plots a point at an x and a y, so <series> holds x:y pairs and '${token}' is not one`,
+			);
+		}
+		return [this.readValue(node, halves[0], token), this.readValue(node, halves[1], token)];
+	}
+
+	/**
+	 * Reads one number a series plots.
+	 *
+	 * @param node the series it was written in, which the refusal points at
+	 * @param text the number itself
+	 * @param token what the author wrote, which is the pair rather than the half of it at fault
+	 * @returns the number
+	 * @throws MarkupError if it is not a finite number
+	 */
+	private readValue(node: BlockNode, text: string, token: string): number {
+		const value = Number(text);
+		if (text.length === 0 || !Number.isFinite(value)) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidTagArgument,
+				node.line,
+				node.column,
+				token,
+				`<series> plots numbers, and '${token}' is not one`,
+			);
+		}
+		return value;
 	}
 
 	// -----------------------------------------------------------------------

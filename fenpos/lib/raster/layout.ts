@@ -1,12 +1,13 @@
 import type { ImageRaster } from "@/lib/assets/dither";
 import type { Align } from "@/lib/domain/enums";
 import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
-import type { BlockNode, BlockTag, ImageNode, Node } from "@/lib/markup/document";
+import type { BlockNode, BlockTag, ChartData, ImageNode, Node } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { share } from "@/lib/markup/fill";
 import { printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
 import { Canvas } from "@/lib/raster/canvas";
+import { chartHeight, paintChart } from "@/lib/raster/charts";
 import { type InlineItem, layoutText, paintRows, type TextContext, type TextRow, textHeight } from "@/lib/raster/text";
 
 /**
@@ -305,6 +306,8 @@ function blockNode(node: BlockNode, context: LayoutContext): LayoutNode {
 			return new TableNode(node, context);
 		case "bar":
 			return new GaugeNode(node, context);
+		case "chart":
+			return new ChartNode(node, context);
 		default:
 			throw new Error(`no layout node draws <${node.tag}>`);
 	}
@@ -620,6 +623,43 @@ class GaugeNode implements LayoutNode {
 
 		const textTop = y + Math.floor((LINE_HEIGHT_DOTS - textHeight(this.numberRows)) / 2);
 		paintRows(canvas, this.numberRows, x + barWidth + GAUGE_GAP_DOTS, textTop);
+	}
+}
+
+/**
+ * A plotted chart.
+ *
+ * The height is the author's rather than the content's: a chart is a picture of numbers, and how
+ * tall it stands says how prominent it is on the receipt rather than how much there is to draw. So
+ * unlike a box or a table, nothing about what it holds can change what it costs.
+ */
+class ChartNode implements LayoutNode {
+	private readonly widthPercent: number;
+	private readonly chart: ChartData;
+
+	constructor(
+		node: BlockNode,
+		private readonly context: LayoutContext,
+	) {
+		this.widthPercent = (node.attributes.width as number | undefined) ?? 100;
+		if (!node.chart) {
+			// Every chart the tree builds carries its data: it is read when the chart closes, from the
+			// same tags this node is built from. A chart without it was assembled by hand.
+			throw new Error("a <chart> reached the layout without the series the tree reads on its close");
+		}
+		this.chart = node.chart;
+	}
+
+	measure(availableWidth: number): Size {
+		return { width: this.width(availableWidth), height: chartHeight(this.chart) };
+	}
+
+	paint(canvas: Canvas, x: number, y: number, availableWidth: number): void {
+		paintChart(canvas, this.chart, x, y, this.width(availableWidth), this.context);
+	}
+
+	private width(availableWidth: number): number {
+		return Math.floor((availableWidth * this.widthPercent) / 100);
 	}
 }
 
