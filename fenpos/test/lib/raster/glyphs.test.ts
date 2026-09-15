@@ -1,7 +1,15 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { type GlyphBitmap, hasGlyph, InvalidFontError, parseFace, rasterizeGlyph } from "@/lib/raster/glyphs";
+import opentype from "opentype.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+	type FontFace,
+	type GlyphBitmap,
+	hasGlyph,
+	InvalidFontError,
+	parseFace,
+	rasterizeGlyph,
+} from "@/lib/raster/glyphs";
 
 const FACE = parseFace("dejavu", readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf")));
 
@@ -18,6 +26,52 @@ const art = (glyph: GlyphBitmap): string => {
 describe("parseFace", () => {
 	it("refuses bytes that are not a font", () => {
 		expect(() => parseFace("x", Buffer.from("not a font"))).toThrow(InvalidFontError);
+	});
+
+	/**
+	 * A font whose metrics are a lie about its size.
+	 *
+	 * Sixteen units to the em with coordinates near the end of the signed short range describes a
+	 * glyph two thousand ems tall. Nothing downstream would question it: the bitmap is sized from the
+	 * outline and the cell height from the ascender, so the numbers a stranger uploaded decide how
+	 * much memory the process is about to ask for.
+	 */
+	it("refuses a face whose declared outlines run far outside its em", () => {
+		const absurd = {
+			numGlyphs: 200,
+			unitsPerEm: 16,
+			ascender: 32767,
+			descender: -32768,
+			tables: { head: { xMin: -32768, xMax: 32767, yMin: -32768, yMax: 32767 } },
+		} as unknown as opentype.Font;
+		const parse = vi.spyOn(opentype, "parse").mockReturnValue(absurd);
+
+		try {
+			expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
+		} finally {
+			parse.mockRestore();
+		}
+	});
+
+	it("refuses a face whose head box alone is outsized, with a plausible line height", () => {
+		const absurd = {
+			numGlyphs: 200,
+			unitsPerEm: 1000,
+			ascender: 800,
+			descender: -200,
+			tables: { head: { xMin: -20000, xMax: 20000, yMin: -200, yMax: 800 } },
+		} as unknown as opentype.Font;
+		const parse = vi.spyOn(opentype, "parse").mockReturnValue(absurd);
+
+		try {
+			expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
+		} finally {
+			parse.mockRestore();
+		}
+	});
+
+	it("keeps accepting a real face", () => {
+		expect(FACE.font.numGlyphs).toBeGreaterThan(2);
 	});
 });
 
@@ -51,6 +105,36 @@ describe("rasterizeGlyph", () => {
 		const middle = glyph.bits[Math.floor(glyph.height / 2) * glyph.width + Math.floor(glyph.width / 2)];
 
 		expect(middle).toBe(0);
+	});
+
+	/**
+	 * The last line of defence, past the metrics {@link parseFace} reads.
+	 *
+	 * A glyph whose scaled outline is hundreds of times the em it was asked for would otherwise size
+	 * a bitmap of tens of thousands of dots a side. Treating it as missing costs one character; the
+	 * allocation costs the request.
+	 */
+	it("treats a glyph far larger than the em it was drawn at as missing", () => {
+		const face = {
+			id: "absurd",
+			font: {
+				unitsPerEm: 2048,
+				charToGlyphIndex: () => 1,
+				charToGlyph: () => ({
+					advanceWidth: 2048,
+					getPath: () => ({
+						commands: [
+							{ type: "M", x: 0, y: 0 },
+							{ type: "L", x: 60000, y: 0 },
+							{ type: "L", x: 60000, y: 60000 },
+							{ type: "Z" },
+						],
+					}),
+				}),
+			},
+		} as unknown as FontFace;
+
+		expect(rasterizeGlyph(face, 0x41, 24)).toBeNull();
 	});
 
 	it("returns null for a code point the face lacks", () => {

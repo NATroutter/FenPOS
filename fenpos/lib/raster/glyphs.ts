@@ -22,7 +22,30 @@ export class InvalidFontError extends Error {
 	}
 }
 
-/** Parses TTF or OTF bytes. Anything opentype.js cannot read, or a font with no glyphs, is refused. */
+/**
+ * The most a face may stand, or reach across, in ems.
+ *
+ * A face is scaled by its em, so every dot it costs is an outline coordinate divided by
+ * `unitsPerEm`. A font that declares a small em and then carries coordinates at the far end of the
+ * signed short range claims a glyph thousands of ems tall, and nothing downstream questions it: the
+ * rasterizer would size a bitmap from the outline it was handed, and a typeface would take a cell
+ * height from the ascender and descender. Four ems is far past anything a real face needs — a
+ * swash, an accent stack and a descender together stay inside two — and well short of the sizes
+ * that turn a glyph into an allocation the process cannot make.
+ */
+const MAX_EM_SPAN = 4;
+
+/** Dots allowed past the bound before a rasterized glyph is treated as missing rather than drawn. */
+const GLYPH_MARGIN_DOTS = 8;
+
+/**
+ * Parses TTF or OTF bytes.
+ *
+ * Anything opentype.js cannot read, a font with no glyphs, and a font whose own metrics say its
+ * outlines run far outside its em are all refused. The last of those is not a matter of taste: the
+ * metrics are the only thing that says how large a glyph of this face is about to be rasterized,
+ * and they are read from the file rather than from anything this process decided.
+ */
 export function parseFace(id: string, bytes: Buffer): FontFace {
 	let font: opentype.Font;
 	try {
@@ -33,7 +56,23 @@ export function parseFace(id: string, bytes: Buffer): FontFace {
 	if (font.numGlyphs < 2 || font.unitsPerEm < 16) {
 		throw new InvalidFontError("the font has no usable glyphs");
 	}
+	requireSaneOutlines(font);
 	return { id, font };
+}
+
+/** Refuses a face whose line height or outline box runs past {@link MAX_EM_SPAN} of its own em. */
+function requireSaneOutlines(font: opentype.Font): void {
+	const em = font.unitsPerEm;
+	const bound = MAX_EM_SPAN * em;
+	const head = font.tables.head as { xMin?: number; xMax?: number; yMin?: number; yMax?: number } | undefined;
+	const spans = [
+		font.ascender - font.descender,
+		(head?.yMax ?? 0) - (head?.yMin ?? 0),
+		(head?.xMax ?? 0) - (head?.xMin ?? 0),
+	];
+	if (spans.some((span) => span > bound)) {
+		throw new InvalidFontError("the font's outlines run far outside its em");
+	}
 }
 
 export function hasGlyph(face: FontFace, codepoint: number): boolean {
@@ -56,6 +95,12 @@ const CURVE_STEPS = 8;
  * The outline is flattened to edges, then for every dot row the crossings at the row's centre
  * are paired off: between an odd and the next even crossing is ink. That is even-odd fill,
  * which is what a counter needs to come out hollow whichever way the contours wind.
+ *
+ * A glyph whose flattened outline is far larger than the em it was asked for is treated as missing
+ * rather than drawn. {@link parseFace} reads the metrics and refuses a face that declares outlines
+ * like that, but the metrics are only a declaration: this is measured off the outline itself, after
+ * it has been scaled, and it is what stands between one malformed glyph and a bitmap the process
+ * cannot allocate.
  */
 export function rasterizeGlyph(face: FontFace, codepoint: number, emDots: number): GlyphBitmap | null {
 	if (!hasGlyph(face, codepoint)) {
@@ -83,6 +128,10 @@ export function rasterizeGlyph(face: FontFace, codepoint: number, emDots: number
 	const top = Math.floor(minY);
 	const width = Math.max(1, Math.ceil(maxX) - left);
 	const height = Math.max(1, Math.ceil(maxY) - top);
+	const bound = MAX_EM_SPAN * emDots + GLYPH_MARGIN_DOTS;
+	if (width > bound || height > bound) {
+		return null;
+	}
 	const bits = new Uint8Array(width * height);
 
 	for (let row = 0; row < height; row++) {
