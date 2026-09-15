@@ -61,6 +61,7 @@ vi.mock("@/lib/link/agent-connection", () => ({ pushConfigToEveryAgent }));
 const { removeAsset, uploadAsset } = await import("@/app/(panel)/assets/actions");
 
 const PNG = readFileSync("test/fixtures/logo.png");
+const FONT = readFileSync("public/fonts/DejaVuSansMono.ttf");
 
 /**
  * Builds the form the upload action reads.
@@ -88,9 +89,15 @@ beforeEach(async () => {
 
 describe("uploadAsset", () => {
 	it("stores the file", async () => {
-		expect(await uploadAsset(upload("logo", PNG))).toEqual({ error: null });
+		expect(await uploadAsset(upload("logo", PNG))).toEqual({ error: null, kind: "IMAGE" });
 
 		expect(await prisma.asset.count()).toBe(1);
+	});
+
+	it("stores a font and reports it as one", async () => {
+		expect(await uploadAsset(upload("roboto", FONT))).toEqual({ error: null, kind: "FONT" });
+
+		expect(await prisma.asset.findFirstOrThrow()).toMatchObject({ kind: "FONT" });
 	});
 
 	it("refuses a file past the cap this product enforces", async () => {
@@ -120,7 +127,7 @@ describe("uploadAsset", () => {
 	 * between deferring the work and merely moving the line it sits on.
 	 */
 	it("schedules the agent sync after the response rather than blocking on it", async () => {
-		expect(await uploadAsset(upload("logo", PNG))).toEqual({ error: null });
+		expect(await uploadAsset(upload("logo", PNG))).toEqual({ error: null, kind: "IMAGE" });
 
 		expect(pushConfigToEveryAgent).not.toHaveBeenCalled();
 		expect(scheduled).toHaveLength(1);

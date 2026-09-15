@@ -71,6 +71,36 @@ describe("openApiDocument", () => {
 	});
 
 	/**
+	 * An asset is an image or a font sharing one namespace, and `width`/`height` are the property that
+	 * differs between them: real pixels for an image, `null` for a font. A reader of this document who
+	 * assumed a plain `integer` would treat a font's row as malformed rather than as the other kind.
+	 */
+	it("declares an asset's width and height nullable, for a font", () => {
+		const assetSummarySchema = (
+			DOCUMENT.paths[`${API_BASE}/assets`].get as {
+				responses: {
+					200: { content: { "application/json": { schema: { properties: { assets: { items: unknown } } } } } };
+				};
+			}
+		).responses[200].content["application/json"].schema.properties.assets.items as {
+			properties: { width: { type: string[] }; height: { type: string[] } };
+		};
+
+		expect(assetSummarySchema.properties.width.type).toEqual(["integer", "null"]);
+		expect(assetSummarySchema.properties.height.type).toEqual(["integer", "null"]);
+	});
+
+	it("tells a reader deleting an asset what a receipt naming it afterwards fails with", () => {
+		const deleteOperation = DOCUMENT.paths[`${API_BASE}/assets/{name}`].delete as {
+			summary: string;
+			description: string;
+		};
+
+		expect(deleteOperation.summary).toBe("Remove a stored asset.");
+		expect(deleteOperation.description).toContain("unknown_font");
+	});
+
+	/**
 	 * The header promises every enumerated value and every numeric bound in this document is read
 	 * from the constant that defines it rather than typed out a second time. Nothing at the type
 	 * level checks that promise — the properties below are hand-built object literals — so this is

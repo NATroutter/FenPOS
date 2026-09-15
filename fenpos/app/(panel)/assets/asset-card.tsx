@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Image as ImageIcon, Pencil, Trash2, Upload } from "lucide-react";
+import { Check, Copy, Type as FontIcon, Image as ImageIcon, Pencil, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { removeAsset } from "@/app/(panel)/assets/actions";
@@ -25,39 +25,48 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent, CardHeader } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import type { AssetKind } from "@/lib/domain/enums";
 import { formatDate } from "@/lib/format/datetime";
 
-/** An image as this component needs it, serialised for the client boundary. */
+/** An asset as this component needs it, serialised for the client boundary. */
 export interface AssetCardData {
 	id: string;
+	kind: AssetKind;
 	name: string;
-	/** Pixels across and down, as uploaded. Not what is previewed — see {@link previewDots}. */
-	width: number;
-	height: number;
+	/** Pixels across and down, as uploaded — null for a font, which has no pixels to report. */
+	width: number | null;
+	height: number | null;
 	mimeType: string;
 	/** Where it was imported from, or null when it was uploaded. Provenance only. */
 	sourceUrl: string | null;
 	createdAt: string;
 	/**
-	 * The dithered raster as a PNG data URI, or null when it could not be rendered.
+	 * A PNG data URI: the dithered raster for an image, or the rendered specimen for a font. Null
+	 * when it could not be rendered.
 	 *
-	 * Dithered on the server by the same code the printer's raster comes from, so what is on screen
-	 * is what comes off the paper. Never re-derived here.
+	 * Drawn on the server by the same code the printer's raster comes from, so what is on screen is
+	 * what comes off the paper. Never re-derived here.
 	 */
 	preview: string | null;
-	/** The paper width, in printer dots, the preview was dithered for. */
+	/** The paper width, in printer dots, the preview was rendered for. */
 	previewDots: number;
+	/** A font's own name from its `name` table, or null for an image or a nameless face. */
+	family: string | null;
+	/** A font's glyph count, from opentype.js. Null for an image. */
+	glyphs: number | null;
 }
 
 /** How long the copied tick stays up. Long enough to be seen, short enough to stop meaning "just now". */
 const COPIED_TICK_MS = 2000;
 
 /**
- * One stored image: what it will look like printed, and what to do with it.
+ * One stored asset — an image or a font — what it will look like printed, and what to do with it.
  *
- * The preview is the reason this card is a card rather than a table row. An operator choosing
- * between two logos is choosing between two pictures, and the only picture worth showing is the
- * dithered one — the smooth original is a promise a thermal head cannot keep.
+ * The preview is the reason this card is a card rather than a table row. An operator choosing between
+ * two logos is choosing between two pictures, and the only picture worth showing is the dithered one
+ * — the smooth original is a promise a thermal head cannot keep. A font has no picture to choose
+ * between until it draws one, which is what its specimen is: the same sentence, rendered by the same
+ * pipeline a receipt naming it would use.
  */
 export function AssetCard({
 	asset,
@@ -92,13 +101,19 @@ export function AssetCard({
 		resetAt.current = setTimeout(() => setCopied(false), COPIED_TICK_MS);
 	};
 
-	/** What a receipt writes to print this image. The tag is paired; see the Docs tab. */
-	const reference = `<image>${asset.name}</image>`;
+	const isFont = asset.kind === "FONT";
+
+	/** What a receipt writes to reach this asset. Tags are paired; see the Docs tab. */
+	const reference = isFont ? `<font=${asset.name}>text</font>` : `<image>${asset.name}</image>`;
 
 	return (
 		<Card className="flex flex-col">
 			<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
-				<ImageIcon className="size-4.5 shrink-0 text-subtle-foreground" />
+				{isFont ? (
+					<FontIcon className="size-4.5 shrink-0 text-subtle-foreground" />
+				) : (
+					<ImageIcon className="size-4.5 shrink-0 text-subtle-foreground" />
+				)}
 				<div className="min-w-0 flex-1">
 					<div className="truncate font-mono text-[13.5px] font-medium">{asset.name}</div>
 					{/* `title` because an imported URL is routinely longer than the card is wide, and a
@@ -139,7 +154,9 @@ export function AssetCard({
 							    See `ditherFilterFor`. */}
 								<DitheredImage
 									src={asset.preview}
-									alt={`${asset.name}, dithered as it will print`}
+									alt={
+										isFont ? `${asset.name}'s specimen, as it will print` : `${asset.name}, dithered as it will print`
+									}
 									className="max-h-64 w-full object-contain"
 								/>
 							</button>
@@ -147,15 +164,26 @@ export function AssetCard({
 					/>
 				) : (
 					<p className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-subtle-foreground">
-						This image could not be rendered. It is still stored, and still printable if the failure was temporary.
+						{isFont
+							? "This font's specimen could not be rendered. It is still stored, and still printable if the failure was temporary."
+							: "This image could not be rendered. It is still stored, and still printable if the failure was temporary."}
 					</p>
 				)}
 
 				<dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-					<Detail label="Pixels" value={`${asset.width}×${asset.height}`} />
-					{/* Stated because the preview is not the source: an operator comparing the speckle
-					    against their paper needs to know which paper it was dithered for. */}
-					<Detail label="Previewed at" value={`${asset.previewDots} dots`} />
+					{isFont ? (
+						<>
+							<Detail label="Family" value={asset.family ?? "—"} />
+							<Detail label="Glyphs" value={asset.glyphs === null ? "—" : String(asset.glyphs)} />
+						</>
+					) : (
+						<>
+							<Detail label="Pixels" value={`${asset.width}×${asset.height}`} />
+							{/* Stated because the preview is not the source: an operator comparing the speckle
+							    against their paper needs to know which paper it was dithered for. */}
+							<Detail label="Previewed at" value={`${asset.previewDots} dots`} />
+						</>
+					)}
 					<Detail label="Added" value={formatDate(asset.createdAt)} />
 				</dl>
 
@@ -169,11 +197,11 @@ export function AssetCard({
 						onClick={() => {
 							void navigator.clipboard.writeText(reference);
 							confirmCopied();
-							toast.success("Markup reference copied.");
+							toast.success("Markup tag copied.");
 						}}
 					>
 						{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-						Copy reference
+						Copy tag
 					</Button>
 
 					<div className="flex-1" />
@@ -182,8 +210,8 @@ export function AssetCard({
 					    reference, replace moves the picture, delete takes both away. The destructive one
 					    is last and set apart by colour, so the two ordinary edits are not sitting next to
 					    it looking equally final. Each is its own permission, so the row thins out rather
-					    than disappearing — Copy reference is always there, and it is the one thing an
-					    operator holding `assets:read` alone actually came for. */}
+					    than disappearing — Copy tag is always there, and it is the one thing an operator
+					    holding `assets:read` alone actually came for. */}
 					{!permits["assets:rename"] ? null : (
 						<RenameDialog
 							assetId={asset.id}
@@ -207,6 +235,7 @@ export function AssetCard({
 						<ReplaceDialog
 							assetId={asset.id}
 							assetName={asset.name}
+							kind={asset.kind}
 							maxBytes={maxBytes}
 							acceptedFormats={acceptedFormats}
 							trigger={
@@ -214,8 +243,8 @@ export function AssetCard({
 									variant="outline"
 									size="icon"
 									className="size-8"
-									title="Replace the image"
-									aria-label={`Replace the image for ${asset.name}`}
+									title={isFont ? "Replace the font" : "Replace the image"}
+									aria-label={isFont ? `Replace the font for ${asset.name}` : `Replace the image for ${asset.name}`}
 									disabled={pending}
 								>
 									<Upload className="size-3.5" />
@@ -234,7 +263,7 @@ export function AssetCard({
 										size="icon"
 										className="size-8 border-destructive/40 text-destructive hover:bg-destructive/10"
 										title="Delete"
-										aria-label="Delete image"
+										aria-label={isFont ? "Delete font" : "Delete image"}
 									>
 										{pending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
 									</Button>
@@ -245,7 +274,7 @@ export function AssetCard({
 									<AlertDialogTitle>Delete {asset.name}?</AlertDialogTitle>
 									<AlertDialogDescription>
 										Any receipt that says <span className="font-mono">{reference}</span> is refused until it is changed,
-										or until an image of that name is stored again. This cannot be undone.
+										or until {isFont ? "a font" : "an image"} of that name is stored again. This cannot be undone.
 									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>
@@ -276,12 +305,13 @@ export function AssetCard({
 }
 
 /**
- * Names an image's format the way an operator would.
+ * Names an asset's format the way an operator would.
  *
- * The stored MIME type is the decoder's own answer rather than what the upload claimed, so it is
- * the honest thing to show — but `image/jpeg` in a badge is a header, not a word.
+ * The stored MIME type is the decoder's or the parser's own answer rather than what the upload
+ * claimed, so it is the honest thing to show — but `image/jpeg` or `font/ttf` in a badge is a
+ * header, not a word.
  *
- * @param mimeType what the decoder reported
+ * @param mimeType what the decoder or `detectAssetKind` reported
  * @returns a short label
  */
 function formatLabel(mimeType: string): string {
@@ -290,6 +320,10 @@ function formatLabel(mimeType: string): string {
 			return "PNG";
 		case "image/jpeg":
 			return "JPEG";
+		case "font/ttf":
+			return "TTF";
+		case "font/otf":
+			return "OTF";
 		default:
 			return mimeType;
 	}

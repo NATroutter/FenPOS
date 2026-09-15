@@ -4,7 +4,7 @@ import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { importAsset, uploadAsset } from "@/app/(panel)/assets/actions";
 import { ImageSourceTabs, useImageSource } from "@/app/(panel)/assets/image-source";
-import { type AcceptedFormats, acceptedFormatsPhrase } from "@/app/(panel)/assets/prose";
+import { type AcceptedFormats, acceptedFormatsPhrase, assetStoredMessage } from "@/app/(panel)/assets/prose";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,13 +24,18 @@ import { toNameCandidate } from "@/lib/domain/naming";
 import { describeBytes } from "@/lib/format/bytes";
 
 /**
- * Adds an image, from a file or from a URL.
+ * Adds an asset — an image or a font — from a file, or an image from a URL.
  *
  * **One dialog rather than two.** The choice between uploading a file and fetching a URL is a
  * detail of where the bytes come from; everything else — the name markup will use, the limits, the
  * refusals — is identical, and splitting it in two would put the same form on screen twice and
  * invite them to drift. The two sources are tabs, so the exclusivity is stated before the fact
  * rather than discovered when one field greys out the other — see `image-source.tsx`.
+ *
+ * **Which kind a File-tab upload becomes is not this dialog's decision.** `createAsset` reads it from
+ * the bytes, and the toast after a save says which it turned out to be — see {@link assetStoredMessage}.
+ * The URL tab has no such question: `importAssetFromUrl` only ever fetches an image, which is why its
+ * own tab says so.
  *
  * A URL is fetched **once, now**, and the bytes are stored. `sourceUrl` is kept as provenance and
  * never fetched again, which is worth saying in the dialog: an operator who expects the logo to
@@ -67,21 +72,29 @@ export function UploadDialog({
 		const finalName = toNameCandidate(name);
 
 		startSave(async () => {
-			let result: { error: string | null };
 			if (source.tab === "file" && source.file) {
 				const form = new FormData();
 				form.set("name", finalName);
 				form.set("file", source.file);
-				result = await uploadAsset(form);
+				const result = await uploadAsset(form);
+				if (result.error) {
+					source.setError(result.error);
+					return;
+				}
+				// `result.kind` is null only alongside an error, already handled above — asserted
+				// rather than defaulted, so a future refusal path that forgets to set it fails loudly
+				// instead of mislabelling what was stored.
+				toast.success(assetStoredMessage(finalName, result.kind ?? "IMAGE"));
 			} else {
-				result = await importAsset(finalName, source.trimmedUrl);
+				// The URL tab fetches an image and nothing else — see `importAssetFromUrl` — so there
+				// is no kind to report here the way there is for a file.
+				const result = await importAsset(finalName, source.trimmedUrl);
+				if (result.error) {
+					source.setError(result.error);
+					return;
+				}
+				toast.success(`${finalName} added.`);
 			}
-
-			if (result.error) {
-				source.setError(result.error);
-				return;
-			}
-			toast.success(`${finalName} added.`);
 			setOpen(false);
 		});
 	};
@@ -115,10 +128,11 @@ export function UploadDialog({
 			<DialogTrigger render={trigger} />
 			<DialogContent className="sm:max-w-[560px]">
 				<DialogHeader>
-					<DialogTitle>Add an image</DialogTitle>
+					<DialogTitle>Add an asset</DialogTitle>
 					<DialogDescription>
-						{acceptedFormatsPhrase(acceptedFormats)}, up to {describeBytes(maxBytes)}. It is stored as uploaded and
-						dithered for each printer's own paper width, so the same image suits 58mm and 80mm alike.
+						{acceptedFormatsPhrase(acceptedFormats)}, up to {describeBytes(maxBytes)}. It is stored as uploaded — an
+						image is dithered for each printer's own paper width and a font is drawn the same way on the fly, so either
+						suits 58mm and 80mm alike.
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
@@ -133,8 +147,9 @@ export function UploadDialog({
 								onChange={(event) => setName(toNameCandidate(event.target.value, { keepTrailingSeparator: true }))}
 							/>
 							<FieldDescription>
-								What markup refers to it by: <span className="font-mono">&lt;image&gt;logo&lt;/image&gt;</span>. A slug,
-								for the same reason printer names are.
+								What markup refers to it by: <span className="font-mono">&lt;image&gt;logo&lt;/image&gt;</span> or{" "}
+								<span className="font-mono">&lt;font=name&gt;text&lt;/font&gt;</span>, depending on what you upload. A
+								slug, for the same reason printer names are.
 							</FieldDescription>
 						</Field>
 
@@ -159,7 +174,7 @@ export function UploadDialog({
 					</Button>
 					<Button type="button" disabled={saving || !ready} onClick={add}>
 						{saving ? <Spinner className="size-3.5" /> : null}
-						Add image
+						Add asset
 					</Button>
 				</DialogFooter>
 			</DialogContent>

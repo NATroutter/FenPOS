@@ -10,7 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeBytes } from "@/lib/format/bytes";
 
 /**
- * Where an image's bytes come from: a file on this machine, or a URL this server fetches.
+ * Where an asset's bytes come from: a file on this machine, or a URL this server fetches. The File
+ * tab's picker takes either an image or a font; the URL tab only ever fetches an image — see its own
+ * description below.
  *
  * **Tabs rather than two fields that disable each other.** The earlier form put both on screen and
  * let a value in one grey out the other, which said the right thing but said it by taking a control
@@ -201,8 +203,8 @@ export function ImageSourceTabs({
 						onChange={(event) => source.setUrl(event.target.value)}
 					/>
 					<FieldDescription>
-						Fetched once, now, by this server. The image is stored; the address is kept only to record where it came
-						from, and is never fetched again.
+						Images only. Fetched once, now, by this server. The image is stored; the address is kept only to record
+						where it came from, and is never fetched again.
 					</FieldDescription>
 				</Field>
 			</TabsContent>

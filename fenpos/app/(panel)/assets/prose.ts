@@ -17,13 +17,27 @@
 export type AcceptedFormats = "png+jpeg" | "png";
 
 /**
+ * The MIME types and extensions a TTF or OTF font may declare itself as, for the file picker's
+ * `accept` attribute. Extensions alongside MIME types because a browser reading a font from local
+ * disk routinely has no MIME type for it at all — unlike an image, which every operating system
+ * already knows `image/png` for — so the attribute has to say `.ttf`/`.otf` to filter the picker on
+ * anything but Chrome, which is the one browser that fills the MIME type in for a font by itself.
+ */
+const FONT_ACCEPT = ".ttf,.otf,font/ttf,font/otf";
+
+/**
  * The file picker's `accept` attribute, matching the configured `assets.acceptedFormats`.
  *
+ * **A font is always offered, regardless of the setting.** `assets.acceptedFormats` narrows which
+ * *image* formats an install accepts — PNG-only shops exist — and says nothing about fonts, which
+ * have exactly two flavours and no equivalent setting to narrow them by.
+ *
  * @param formats the configured `assets.acceptedFormats`
- * @returns a comma-separated list of MIME types for the `accept` attribute
+ * @returns a comma-separated list of MIME types and extensions for the `accept` attribute
  */
 export function acceptAttributeFor(formats: AcceptedFormats): string {
-	return formats === "png" ? "image/png" : "image/png,image/jpeg";
+	const images = formats === "png" ? "image/png" : "image/png,image/jpeg";
+	return `${images},${FONT_ACCEPT}`;
 }
 
 /**
@@ -36,8 +50,27 @@ export function acceptAttributeFor(formats: AcceptedFormats): string {
  * `"PNG or JPEG"` was hardcoded here until JPEG became something an install could turn off.
  *
  * @param formats the configured `assets.acceptedFormats`
- * @returns "PNG or JPEG", or "PNG" when JPEG is turned off
+ * @returns "PNG or JPEG images, and TTF or OTF fonts", or "PNG images, and TTF or OTF fonts" when
+ *          JPEG is turned off
  */
 export function acceptedFormatsPhrase(formats: AcceptedFormats): string {
-	return formats === "png" ? "PNG" : "PNG or JPEG";
+	const images = formats === "png" ? "PNG" : "PNG or JPEG";
+	return `${images} images, and TTF or OTF fonts`;
+}
+
+/**
+ * The toast the Add dialog's File tab shows on success, naming what was actually stored.
+ *
+ * Worth a sentence of its own rather than a fixed "added": the operator chose a file, not a kind, and
+ * `createAsset` is what settled which one it turned out to be — from the bytes, not from anything the
+ * file picker's filter promised. Saying so is what tells them their upload of `logo.ttf` landed as a
+ * font and not as an image that happened to be named like one. The URL tab never calls this: it only
+ * ever fetches an image, so there is no answer worth reporting.
+ *
+ * @param name what markup will refer to it by
+ * @param kind what the stored bytes turned out to be — `AssetKind`, in `lib/domain/enums.ts`
+ * @returns "logo stored as an image.", or "roboto stored as a font."
+ */
+export function assetStoredMessage(name: string, kind: "IMAGE" | "FONT"): string {
+	return `${name} stored as ${kind === "FONT" ? "a font" : "an image"}.`;
 }

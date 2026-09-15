@@ -139,8 +139,8 @@ const ASSET_SUMMARY_SCHEMA = {
 	properties: {
 		name: { type: "string" },
 		kind: { type: "string", enum: AssetKind.values },
-		width: { type: ["integer", "null"], description: "Pixels across for an image, and null for a font." },
-		height: { type: ["integer", "null"], description: "Pixels down for an image, and null for a font." },
+		width: { type: ["integer", "null"], description: "Pixels for an image; null for a font." },
+		height: { type: ["integer", "null"], description: "Pixels for an image; null for a font." },
 		mimeType: { type: "string" },
 		sourceUrl: { type: ["string", "null"], description: "The URL it was imported from, or null for an upload." },
 		createdAt: { type: "string", format: "date-time" },
@@ -654,10 +654,10 @@ export function openApiDocument(publicUrl: string): object {
 
 			[`${API_BASE}/assets/{name}`]: {
 				delete: {
-					summary: "Remove a stored image or font.",
+					summary: "Remove a stored asset.",
 					operationId: "deleteAsset",
 					description:
-						"Requires the `assets:write` permission — a delete is a write. A receipt still naming this asset will fail to compile afterwards.",
+						"Requires the `assets:write` permission — a delete is a write. A receipt still naming this asset fails to compile afterwards, with `unknown_asset` for a deleted image or `unknown_font` for a deleted font.",
 					security: BEARER_AUTH,
 					parameters: [{ name: "name", in: "path", required: true, schema: { type: "string" } }],
 					responses: {

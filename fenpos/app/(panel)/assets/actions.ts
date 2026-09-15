@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import type { ActionState } from "@/app/(panel)/agents/action-state";
+import type { AssetSummary } from "@/lib/assets/asset-service";
 import {
 	createAsset,
 	deleteAsset,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/assets/asset-service";
 import { type PanelActionOptions, panelAction } from "@/lib/auth/panel-action";
 import type { PanelActionId } from "@/lib/auth/panel-actions";
+import type { AssetKind } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { pushConfigToEveryAgent } from "@/lib/link/agent-connection";
 import { logger } from "@/lib/logger";
@@ -85,8 +87,14 @@ async function assetAction(
 	return state;
 }
 
+/** What {@link uploadAsset} reports back, alongside whether it failed. */
+export interface UploadResult extends ActionState {
+	/** What was stored, so the dialog's toast can name it. Null on a refusal or a failure. */
+	kind: AssetKind | null;
+}
+
 /**
- * Stores an uploaded image.
+ * Stores an uploaded image or font.
  *
  * The size is checked here, from what the browser declared, before this action reads the file's
  * bytes into a second, its own copy — Next has already buffered the whole request body to build
@@ -96,26 +104,41 @@ async function assetAction(
  * own body limit deliberately higher than this, so that the limit this product enforces is the one
  * written in code rather than one inherited from a default nobody would find.
  *
+ * `createAsset` decides which of the two this turned out to be, from the bytes rather than from
+ * anything the file picker's filter promised — see `kind.ts`. The dialog's toast names the answer,
+ * which is why it is carried back through {@link UploadResult} rather than dropped once storage
+ * succeeds.
+ *
  * @param formData a `name` and a `file`
- * @returns the state to render
+ * @returns the state to render, and what was stored
  */
-export async function uploadAsset(formData: FormData): Promise<ActionState> {
+export async function uploadAsset(formData: FormData): Promise<UploadResult> {
 	const name = formData.get("name");
-	return assetAction(
+	// Captured from inside the gated body rather than returned by it: `assetAction` reports back as
+	// plain `ActionState`, shared with every other action in this file, so what it stored is read out
+	// of this closure instead of widening that shared return type for one caller's sake. A property on
+	// a held object, not a bare `let`: TypeScript stops narrowing a bare variable's type the moment a
+	// nested closure writes to it, and reading it back afterwards as `AssetSummary | null` needs that
+	// write to be on something a closure can mutate without the outer read losing its declared type.
+	const captured: { asset: AssetSummary | null } = { asset: null };
+
+	const state = await assetAction(
 		"assets:upload",
 		async () => {
 			const file = formData.get("file");
 			if (!(file instanceof File) || file.size === 0) {
-				throw new ApiError("missing_field", "Choose an image to upload.");
+				throw new ApiError("missing_field", "Choose an image or a font to upload.");
 			}
 			await requireWithinByteCap(file.size);
 
-			await createAsset(typeof name === "string" ? name : "", Buffer.from(await file.arrayBuffer()));
+			captured.asset = await createAsset(typeof name === "string" ? name : "", Buffer.from(await file.arrayBuffer()));
 		},
 		// The name and nothing else. The bytes are already in the asset table, and a base64 slice of
-		// an image in an append-only record is neither readable nor worth keeping.
+		// an image or a font in an append-only record is neither readable nor worth keeping.
 		{ target: { kind: "asset", label: typeof name === "string" ? name : null } },
 	);
+
+	return { ...state, kind: captured.asset?.kind ?? null };
 }
 
 /**
