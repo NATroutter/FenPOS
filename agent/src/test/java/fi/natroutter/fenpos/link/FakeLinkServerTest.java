@@ -44,7 +44,7 @@ class FakeLinkServerTest {
         String hello = server.awaitFrame(PATIENCE);
         assertNotNull(hello, "no hello arrived");
         assertTrue(hello.contains("\"type\":\"hello\""), hello);
-        assertTrue(hello.contains("\"protocolVersion\":3"), hello);
+        assertTrue(hello.contains("\"protocolVersion\":" + Frames.PROTOCOL_VERSION), hello);
     }
 
     @Test

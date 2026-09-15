@@ -139,7 +139,7 @@ class PrintServiceTest {
         FakePrinterPort port = port("kitchen");
         apply(device("kitchen", 10, false));
 
-        service.submit(registry.device("kitchen").orElseThrow(), "{\"data\":[\"hello\"]}");
+        service.submit(registry.device("kitchen").orElseThrow(), "{\"data\":\"hello\"}");
 
         assertTrue(port.awaitWrites(5000));
     }

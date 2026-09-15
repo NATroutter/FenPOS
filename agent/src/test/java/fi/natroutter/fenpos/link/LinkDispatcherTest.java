@@ -278,7 +278,7 @@ class LinkDispatcherTest {
     void doesNotReportJobsTheServerNeverIssued() throws Exception {
         FakePrinterPort port = configure("kitchen");
 
-        printing.submit(registry.device("kitchen").orElseThrow(), "{\"data\":[\"local\"]}");
+        printing.submit(registry.device("kitchen").orElseThrow(), "{\"data\":\"local\"}");
         assertTrue(port.awaitWrites(5000));
         Thread.sleep(150);
 
