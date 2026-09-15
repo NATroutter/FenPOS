@@ -64,7 +64,13 @@ const PAPER_DOTS = 504;
  * these cases are about images, not substitution. The lines are joined as a caller sends them, one
  * string with a newline between lines.
  */
-const resolve = (lines: string[]) => resolveImages(lines.join("\n"), COLUMNS, null);
+/**
+ * The raster budget these cases resolve under: the install's own default, which is far above what
+ * any fixture here needs. The one case that is about the budget states its own.
+ */
+const RASTER_BUDGET = DEFAULT_LIMITS.maxRasterBytes;
+
+const resolve = (lines: string[]) => resolveImages(lines.join("\n"), COLUMNS, null, RASTER_BUDGET);
 
 /**
  * A receipt naming `count` distinct URLs, one per line.
@@ -124,8 +130,19 @@ function headerClaiming(width: number, height: number): Buffer {
  * @returns the error, having asserted it is an ApiError
  */
 async function refusal(data: string[]): Promise<ApiError> {
+	return await refusalWithin(data, RASTER_BUDGET);
+}
+
+/**
+ * The same, under a stated raster budget.
+ *
+ * @param data the lines to resolve
+ * @param rasterBudgetBytes the budget to resolve under
+ * @returns the error, having asserted it is an ApiError
+ */
+async function refusalWithin(data: string[], rasterBudgetBytes: number): Promise<ApiError> {
 	try {
-		await resolve(data);
+		await resolveImages(data.join("\n"), COLUMNS, null, rasterBudgetBytes);
 	} catch (thrown) {
 		expect(thrown).toBeInstanceOf(ApiError);
 		return thrown as ApiError;
@@ -380,14 +397,16 @@ describe("resolveImages", () => {
 
 	it("finds an image whose name is wrapped onto its own line", async () => {
 		await createAsset("logo", PNG);
-		const resolved = await resolveImages("<image>\nlogo\n</image>", 42, null);
+		const resolved = await resolveImages("<image>\nlogo\n</image>", 42, null, RASTER_BUDGET);
 
 		expect(resolved.has("logo")).toBe(true);
 	});
 
 	it("finds an image inside a spanning scope", async () => {
 		await createAsset("logo", PNG);
-		expect((await resolveImages("<bold>\n<image>logo</image>\n</bold>", 42, null)).has("logo")).toBe(true);
+		expect((await resolveImages("<bold>\n<image>logo</image>\n</bold>", 42, null, RASTER_BUDGET)).has("logo")).toBe(
+			true,
+		);
 	});
 
 	it("resolves nothing at all for a receipt with no images", async () => {
@@ -458,30 +477,78 @@ describe("dots that have to travel with the job", () => {
 
 	/**
 	 * The bound that keeps a compiled job sendable. A job is one WebSocket message with a hard byte
-	 * cap, so a receipt whose dots exceed what the frame can hold has to be refused as a request —
-	 * with the tag named — rather than accepted, recorded, and then found unsendable.
+	 * cap, so a receipt whose dots exceed what the install's raster budget allows has to be refused as
+	 * a request rather than accepted, recorded, and then found unsendable.
+	 *
+	 * Checked here as well as over the finished wire, because this is where the decoding happens: a
+	 * receipt asking for far more than it may have stops at the image that crosses the line instead of
+	 * dithering the rest of them first.
 	 *
 	 * Two tall images, either of which fits alone. Asserted that way on purpose: a per-image check
-	 * would pass both, and the frame would still be one nothing could send.
+	 * would pass both, and the job would still be one nothing could send.
 	 */
-	it("refuses a receipt whose images together exceed what one job can carry", async () => {
+	it("stops decoding once a receipt's rasters pass the budget", async () => {
 		fetchRemoteImage.mockResolvedValue(await solidPng(504, 1400));
 
-		const thrown = await refusal(["<image>https://x.test/one.png</image>", "<image>https://x.test/two.png</image>"]);
+		const thrown = await refusalWithin(
+			["<image>https://x.test/one.png</image>", "<image>https://x.test/two.png</image>"],
+			100 * 1024,
+		);
 
-		expect(thrown.code).toBe("image_too_large");
-		expect(thrown.details.line).toBe(2);
+		expect(thrown.code).toBe("raster_budget_exceeded");
+		expect(thrown.details).toMatchObject({ limit: 100 * 1024 });
 	});
 
 	/**
-	 * The *other* image limit, which this budget does not imply.
+	 * A data URI has no name to look up and no host to fetch from: the bytes are already in the
+	 * document, so all that is left is to decode them at the widths the receipt prints them at.
+	 */
+	it("decodes a data URI at the paper's width, keyed by the URI itself", async () => {
+		const uri = `data:image/png;base64,${PNG.toString("base64")}`;
+
+		const images = await resolve([`<image>${uri}</image>`]);
+
+		expect(images.get(uri)).toMatchObject({ width: 128, height: 40 });
+		expect(images.get(uri)?.inline?.get(PAPER_DOTS)?.widthDots).toBe(PAPER_DOTS);
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+
+	it("reports bytes in a data URI that will not decode, naming the line", async () => {
+		const nonsense = Buffer.from("not a picture at all").toString("base64");
+
+		const thrown = await refusal(["Coffee 2.50", `<image>data:image/png;base64,${nonsense}</image>`]);
+
+		expect(thrown.code).toBe("invalid_image_data");
+		expect(thrown.details).toMatchObject({ line: 2, column: 1 });
+	});
+
+	/**
+	 * An image drawn beside text is placed by this server rather than by the printer, and at its own
+	 * size rather than at a share of the paper — so it needs a raster nothing else asks for.
+	 */
+	it("resolves an image inside a raster line at its natural width", async () => {
+		await createAsset("logo", PNG);
+
+		const images = await resolve(["<bold>x<image>logo</image></bold>"]);
+
+		expect(images.get("logo")?.natural?.widthDots).toBe(128);
+	});
+
+	it("resolves no natural raster for a whole-line image, which the printer draws itself", async () => {
+		await createAsset("logo", PNG);
+
+		expect((await resolve(["<image>logo</image>"])).get("logo")?.natural).toBeUndefined();
+	});
+
+	/**
+	 * The *other* image limit, which the raster budget does not imply.
 	 *
-	 * There are two, and only one was checked here. `MAX_INLINE_IMAGE_CHARS` bounds what a whole
+	 * There are two, and only one was checked here. `limits.maxRasterMb` bounds what a whole
 	 * request may spend; `IMAGE_LIMITS.maxRasterChars` bounds any single raster, and both
 	 * `imageSourceSchema` and the agent's `FrameCodec.readRaster` enforce it. The image below sits in
-	 * the gap: 504x1600 dots is about 134 KB of base64, past the 128 KB per-raster cap and inside the
-	 * 192 KB request allowance. It used to compile, be recorded as a job, and then fail serialisation
-	 * with a `ZodError` — a 500 for the caller and a job stuck at `QUEUED`.
+	 * the gap: 504x1600 dots is about 134 KB of base64, past the 128 KB per-raster cap and well inside
+	 * the install's raster budget. It used to compile, be recorded as a job, and then fail
+	 * serialisation with a `ZodError` — a 500 for the caller and a job stuck at `QUEUED`.
 	 *
 	 * Both bounds are asserted, because a check that had simply been tightened to the per-raster cap
 	 * would pass the first of these and break the second: two images of 100 KB each are lawful
@@ -522,7 +589,7 @@ describe("dots that have to travel with the job", () => {
 	it("keys a raster by the printed width, which follows the device's paper", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolveImages("<image>https://x.test/l.png</image>", 32, null);
+		const images = await resolveImages("<image>https://x.test/l.png</image>", 32, null, RASTER_BUDGET);
 
 		expect([...(images.get("https://x.test/l.png")?.inline?.keys() ?? [])]).toEqual([384]);
 	});
@@ -602,6 +669,7 @@ describe("dots that have to travel with the job", () => {
 				defaultWrap: true,
 				defaultLinefeed: "LF",
 				images,
+				fonts: new Map(),
 				variables: null,
 			};
 			const limits = { ...DEFAULT_LIMITS, maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };

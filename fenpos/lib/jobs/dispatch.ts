@@ -14,6 +14,7 @@ import {
 	readRequest,
 	requireDocumentWithinLimits,
 } from "@/lib/markup/compiler";
+import { resolveFonts } from "@/lib/markup/resolve-fonts";
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
@@ -149,7 +150,12 @@ export async function submitJob(
 	const settings: CompileSettings = {
 		...deviceSettings,
 		variables,
-		images: await resolveImages(request.data, deviceSettings.columns, variables),
+		// Fonts before images, and for the same shape of reason variables come before both: a stored
+		// face is a local read of a row this process probably already holds parsed, while an image may
+		// be a URL on the other side of the world. A receipt naming a font nobody uploaded should be
+		// told so without this server fetching anything on its behalf.
+		fonts: await resolveFonts(request.data, variables, limits),
+		images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes),
 	};
 
 	const job = await prisma.job.create({

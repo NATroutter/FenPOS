@@ -15,6 +15,7 @@ import {
 	readRequest,
 } from "@/lib/markup/compiler";
 import type { VariableContext } from "@/lib/markup/parser";
+import { resolveFonts } from "@/lib/markup/resolve-fonts";
 import { resolveImages } from "@/lib/markup/resolve-images";
 import { resolveVariables } from "@/lib/markup/resolve-variables";
 import { globalLimits, integerSetting } from "@/lib/settings/settings-service";
@@ -222,7 +223,8 @@ export async function compilePreviewWithContext(
 			settings = {
 				...deviceSettings,
 				variables,
-				images: await resolveImages(request.data, deviceSettings.columns, variables),
+				fonts: await resolveFonts(request.data, variables, limits),
+				images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes),
 			};
 		} catch (error) {
 			return {

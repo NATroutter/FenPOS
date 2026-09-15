@@ -1,16 +1,25 @@
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
-import type { CompiledJob, Directive as WireDirective, Line as WireLine, Span as WireSpan } from "@/lib/link/protocol";
-import { dotWidth } from "@/lib/markup/blocks";
+import {
+	type CompiledJob,
+	rasterBytes,
+	type Directive as WireDirective,
+	type Line as WireLine,
+	type Span as WireSpan,
+} from "@/lib/link/protocol";
+import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
 import { validateCharset } from "@/lib/markup/charset";
 import type { Document, ParseOptions } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, UnsupportedCharacterError } from "@/lib/markup/errors";
 import { resolveFills } from "@/lib/markup/fill";
 import { flattenLine, needsRaster, splitLines } from "@/lib/markup/flatten";
 import { type ImageSource, imageGeometry, type ResolvedImages } from "@/lib/markup/images";
-import { isDirectiveOnly, type Line } from "@/lib/markup/model";
+import { isDirectiveOnly, type Line, type SpanStyle } from "@/lib/markup/model";
 import { normaliseSource, parseDocument, type VariableContext } from "@/lib/markup/parser";
+import type { ResolvedFonts } from "@/lib/markup/resolve-fonts";
 import { wrapLine } from "@/lib/markup/wrapper";
+import { builtinTypeface, type Typeface, typefaceFor } from "@/lib/raster/fonts";
+import { type LayoutContext, renderRasterLine } from "@/lib/raster/layout";
 import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/supplied";
 
 /**
@@ -90,6 +99,15 @@ export interface DeviceSettings {
  */
 export interface CompileSettings extends DeviceSettings {
 	images: ResolvedImages;
+	/**
+	 * The faces `<font=name>` may select, as `resolveFonts` loaded them.
+	 *
+	 * Here for the same reason `images` is: a stored font is a database row and parsing it walks the
+	 * font's tables, neither of which a synchronous compile can wait for. Required rather than
+	 * optional for the same reason too — a missing face is not a line drawn in some other font, it is
+	 * a line this server cannot draw at all — and `new Map()` is how a caller says "none".
+	 */
+	fonts: ResolvedFonts;
 	/**
 	 * The values `{name}` may resolve to, or null when variables are switched off.
 	 *
@@ -231,11 +249,14 @@ export function compile(
 	const lines = layOut(request, settings, limits);
 	requireOutputWithinLimit(lines, limits, settings);
 
+	const wire = lines.map((line) => toWireLine(line, settings));
+	requireRasterBudget(wire, limits);
+
 	return {
 		jobId,
 		device: deviceName,
 		linefeed: request.linefeed,
-		lines: lines.map((line) => toWireLine(line, settings)),
+		lines: wire,
 	};
 }
 
@@ -270,7 +291,19 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 	for (const top of splitLines(document.nodes)) {
 		try {
 			if (needsRaster(top.nodes)) {
-				throw new Error(`line ${top.number} needs the layout engine and nothing produces such a line`);
+				// Drawn here rather than by the printer, and therefore charged by the paper it occupies
+				// rather than by the one line its text would have cost. The charset check is skipped
+				// deliberately: a codepage bounds what the *printer* can put on paper, and nothing on
+				// this line reaches the printer as a character.
+				const raster = renderRasterLine(top.nodes, layoutContext(settings, limits));
+				lines.push({
+					align: "LEFT",
+					wrap: null,
+					spans: [],
+					fills: [],
+					directives: [{ kind: "RASTER", raster, heightLines: Math.ceil(raster.heightDots / LINE_HEIGHT_DOTS) }],
+				});
+				continue;
 			}
 			const parsed = flattenLine(top.nodes);
 			requireSymbolsFitThePaper(parsed, top.number, settings.columns);
@@ -291,6 +324,40 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 	}
 
 	return lines;
+}
+
+/**
+ * Everything the layout engine needs, assembled from what this compile was handed.
+ *
+ * The one piece of work here is `typeface`: it is what closes over the faces the pre-pass loaded, so
+ * nothing downstream of this has to know that a font is a database row. A name with no face is a
+ * fault rather than a refusal — `resolveFonts` sees exactly the tags this compile will meet, and
+ * refuses the whole job for one it cannot load — so arriving here without it means that pre-pass was
+ * skipped.
+ *
+ * @param settings the device's compile settings, carrying the paper, the faces and the images
+ * @param limits the limits the drawn line's contents are charged against
+ * @returns the context to draw with
+ */
+function layoutContext(settings: CompileSettings, limits: CompileLimits): LayoutContext {
+	return {
+		columns: settings.columns,
+		images: settings.images,
+		defaultWrap: settings.defaultWrap,
+		onUnsupported: settings.onUnsupported,
+		codepage: settings.codepage,
+		limits: { maxTableCells: limits.maxTableCells, maxSeriesPoints: limits.maxSeriesPoints },
+		typeface: (style: SpanStyle): Typeface => {
+			if (style.face === null) {
+				return builtinTypeface(style.font);
+			}
+			const face = settings.fonts.get(style.face);
+			if (!face) {
+				throw new Error(`The font '${style.face}' was not resolved before compiling; resolveFonts must run first`);
+			}
+			return typefaceFor(face, style.faceDots);
+		},
+	};
 }
 
 /**
@@ -338,7 +405,7 @@ export function checkDocument(
 	variables: VariableContext | null,
 	limits: CompileLimits,
 ): Document {
-	const document = parseDocumentOrTranslate(request.data, variables);
+	const document = parseDocumentOrTranslate(request.data, variables, limits);
 	requireCharsWithinLimits(document, limits);
 	return document;
 }
@@ -370,7 +437,7 @@ export function requireDocumentWithinLimits(
 ): void {
 	let document: Document;
 	try {
-		document = parseDocumentOrTranslate(request.data, variables);
+		document = parseDocumentOrTranslate(request.data, variables, limits);
 	} catch {
 		return;
 	}
@@ -573,6 +640,58 @@ function translate(error: unknown, line: number): unknown {
 	return error;
 }
 
+/**
+ * How many bytes of dots a job's lines carry.
+ *
+ * Measured on the finished wire rather than on anything upstream of it, because that is the only
+ * place all of them are in one shape: an `<image>` that had to send its dots, the application's own
+ * logo, and a whole line drawn here because the printer could not draw it are three different things
+ * until they become `INLINE` sources, and a budget that missed one of them would be a budget the
+ * receipt could walk around. Dots named by reference cost nothing, because they are already on the
+ * agent.
+ *
+ * Counted as packed bytes rather than base64 characters so the figure means the same thing as
+ * `limits.maxRasterMb`, which an operator sets in megabytes of dots.
+ *
+ * @param lines the compiled job's lines
+ * @returns the bytes of dots they carry
+ */
+export function rasterBytesOf(lines: WireLine[]): number {
+	let total = 0;
+	for (const line of lines) {
+		for (const directive of line.directives) {
+			if (directive.type === "IMAGE" && directive.source.kind === "INLINE") {
+				total += rasterBytes(directive.source.widthDots, directive.source.heightDots);
+			}
+		}
+	}
+	return total;
+}
+
+/**
+ * Refuses a job carrying more dots than this device allows.
+ *
+ * **A job is one WebSocket message.** Dots that ride inside it spend from an allowance the receipt's
+ * text also draws on, and a job that compiles past what the link will carry is a 500 for something
+ * that was a property of the request all along, plus a job row left claiming to be queued. The
+ * pre-pass stops early on the same budget while it is still decoding; this is the decision, because
+ * only here is every raster the job actually carries in one place.
+ *
+ * @param lines the compiled job's lines
+ * @param limits the limits to apply
+ * @throws ApiError when the dots come to more than `limits.maxRasterMb`
+ */
+function requireRasterBudget(lines: WireLine[], limits: CompileLimits): void {
+	const spent = rasterBytesOf(lines);
+	if (spent > limits.maxRasterBytes) {
+		throw new ApiError(
+			"raster_budget_exceeded",
+			`The dots this receipt has to send come to ${spent} bytes, more than the ${limits.maxRasterBytes} this device allows one job to carry. Print its images smaller, or draw less of it in a configured font.`,
+			{ limit: limits.maxRasterBytes, spent },
+		);
+	}
+}
+
 function requireOutputWithinLimit(lines: Line[], limits: CompileLimits, settings: CompileSettings): void {
 	const printed = countTextLines(lines, settings);
 	if (printed > limits.maxOutputLines) {
@@ -614,6 +733,8 @@ function lineCost(line: Line, settings: CompileSettings): number {
 	let hasRule = false;
 	for (const directive of line.directives) {
 		if (directive.kind === "QR" || directive.kind === "BARCODE" || directive.kind === "PDF417") {
+			blockHeight += directive.heightLines;
+		} else if (directive.kind === "RASTER") {
 			blockHeight += directive.heightLines;
 		} else if (directive.kind === "IMAGE") {
 			blockHeight += imageGeometry(
@@ -722,6 +843,19 @@ function toWireLine(line: Line, settings: CompileSettings): WireLine {
 			directives.push({ type: "DRAWER", pin: directive.pin });
 		} else if (directive.kind === "IMAGE") {
 			directives.push(toWireImage(directive.ref, directive.widthPercent, settings));
+		} else if (directive.kind === "RASTER") {
+			// The one directive whose dots were produced here rather than described. It crosses as an
+			// image because that is what it is by the time the agent sees it: the line's own text,
+			// alignment and fonts were all spent drawing it.
+			directives.push({
+				type: "IMAGE",
+				source: {
+					kind: "INLINE",
+					widthDots: directive.raster.widthDots,
+					heightDots: directive.raster.heightDots,
+					data: directive.raster.packed.toString("base64"),
+				},
+			});
 		}
 	}
 

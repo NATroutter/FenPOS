@@ -104,9 +104,9 @@ describe("layoutText", () => {
 	it("splits slack between fills with the same remainder rule as native text", () => {
 		const items: InlineItem[] = [
 			run("a"),
-			{ kind: "fill", character: " ", style: PLAIN },
+			{ kind: "fill", character: " ", style: PLAIN, column: 1 },
 			run("b"),
-			{ kind: "fill", character: " ", style: PLAIN },
+			{ kind: "fill", character: " ", style: PLAIN, column: 1 },
 			run("c"),
 		];
 
@@ -164,6 +164,30 @@ describe("layoutText", () => {
 		}
 	});
 
+	/**
+	 * A fill's character is a character the caller wrote, at a column their line really has, so it
+	 * answers to the unsupported policy exactly as a run's does rather than quietly buying nothing.
+	 */
+	it("applies the unsupported policy to a fill's character too", () => {
+		const items: InlineItem[] = [run("a"), { kind: "fill", character: "\u{1F600}", style: PLAIN, column: 3 }];
+
+		try {
+			layoutText(items, 504, false, "LEFT", context);
+			expect.unreachable("expected the fill's character to be rejected");
+		} catch (error) {
+			expect(error).toBeInstanceOf(UnsupportedCharacterError);
+			expect((error as UnsupportedCharacterError).column).toBe(3);
+		}
+
+		const widthUnder = (onUnsupported: UnsupportedPolicy): number =>
+			layoutText(items, 504, false, "LEFT", { ...context, onUnsupported })[0].cells[1].width;
+
+		// The replacement is a real glyph and buys whole cells of the width left over; stripping it
+		// leaves the fill with no character to stamp, so it buys nothing at all.
+		expect(widthUnder("REPLACE")).toBe(492);
+		expect(widthUnder("STRIP")).toBe(0);
+	});
+
 	it("replaces under REPLACE and strips under STRIP", () => {
 		const widthUnder = (onUnsupported: UnsupportedPolicy): number =>
 			layoutText([run("a\u{1F600}")], 504, false, "LEFT", { ...context, onUnsupported })[0].width;
@@ -203,7 +227,7 @@ describe("paintRows", () => {
 
 	it("stamps a fill's character once per whole cell", () => {
 		const canvas = new Canvas(72, 24);
-		const items: InlineItem[] = [run("a"), { kind: "fill", character: ".", style: PLAIN }, run("b")];
+		const items: InlineItem[] = [run("a"), { kind: "fill", character: ".", style: PLAIN, column: 1 }, run("b")];
 
 		const rows = paint(canvas, items, 72);
 

@@ -39,6 +39,8 @@ export interface InlineFill {
 	kind: "fill";
 	character: string;
 	style: SpanStyle;
+	/** Where the tag was written in the source line, for naming a character the face cannot draw. */
+	column: number;
 }
 
 /** An image already dithered to the width it will occupy. */
@@ -204,10 +206,13 @@ function measure(items: InlineItem[], context: TextContext): Atom[] {
 		const height = typeface.cellHeight * item.style.heightMult;
 
 		if (item.kind === "fill") {
-			// A fill has no source column to name, so a character the face lacks cannot be reported
-			// against one. It buys nothing instead and leaves its slack blank, which is the same
-			// outcome as a budget too small for one repetition.
-			const glyph = cachedGlyph(typeface.face, codePointOf(item.character), typeface.emDots);
+			// The character is one the caller wrote, at a column their line really has, so it answers to
+			// the unsupported policy exactly as a run's does. Under `STRIP` there is then nothing to
+			// stamp, and the fill buys nothing and leaves its slack blank — the same outcome as a budget
+			// too small for one repetition.
+			const glyph =
+				cachedGlyph(typeface.face, codePointOf(item.character), typeface.emDots) ??
+				substitute(item.character, item.column, undefined, typeface, context);
 			atoms.push({
 				kind: "fill",
 				glyph,
@@ -225,9 +230,12 @@ function measure(items: InlineItem[], context: TextContext): Atom[] {
 		// pass would have reported for the same character.
 		let offset = 0;
 		for (const character of item.text) {
+			// A substituted run reports its reference's column for every character it holds: counting
+			// forward through characters the author never wrote names a column their line does not have.
+			const column = item.expandedFrom === undefined ? item.column + offset : item.column;
 			const glyph =
 				cachedGlyph(typeface.face, codePointOf(character), typeface.emDots) ??
-				substitute(character, item, offset, typeface, context);
+				substitute(character, column, item.expandedFrom, typeface, context);
 			if (glyph !== null) {
 				atoms.push({
 					kind: "glyph",
@@ -249,21 +257,23 @@ function measure(items: InlineItem[], context: TextContext): Atom[] {
 /**
  * Applies the unsupported-character policy to a character the face has no glyph for.
  *
+ * @param character the character the face lacks
+ * @param column where to say it was written
+ * @param expandedFrom the variable whose value carried it, or undefined when the caller typed it
+ * @param typeface the face that lacks it, which is also the one the replacement is drawn from
+ * @param context the policy and the codepage the refusal names
  * @returns the glyph to draw instead, or null when the character is to be dropped
  * @throws UnsupportedCharacterError under the `REJECT` policy
  */
 function substitute(
 	character: string,
-	run: InlineRun,
-	offset: number,
+	column: number,
+	expandedFrom: string | undefined,
 	typeface: Typeface,
 	context: TextContext,
 ): GlyphBitmap | null {
 	if (context.onUnsupported === "REJECT") {
-		// A substituted run reports its reference's column for every character it holds: counting
-		// forward through characters the author never wrote names a column their line does not have.
-		const column = run.expandedFrom === undefined ? run.column + offset : run.column;
-		throw new UnsupportedCharacterError(character, column, context.codepage, run.expandedFrom ?? null);
+		throw new UnsupportedCharacterError(character, column, context.codepage, expandedFrom ?? null);
 	}
 	if (context.onUnsupported === "STRIP") {
 		return null;

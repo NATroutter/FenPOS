@@ -150,11 +150,10 @@ export const API_ERROR_STATUS = {
 	 *   the decode.
 	 * - **A shape that projects to a raster taller than `IMAGE_LIMITS.maxHeightDots`.** A 4x1024
 	 *   source is small by every other measure and derives a 384x98,304 raster.
-	 * - **More dots than one job can carry.** Only dots that must travel inside the job are
-	 *   counted — a URL image, or a stored one printed at a width the agent was not synced at. A
-	 *   stored image at the paper's own width costs nothing against this, because its dots reached
-	 *   the agent with the printer's configuration. See `MAX_INLINE_IMAGE_CHARS` in
-	 *   `lib/markup/resolve-images.ts`.
+	 * - **More dots than the wire will carry in one raster.** `IMAGE_LIMITS.maxRasterChars`, which
+	 *   bounds any single picture however small the rest of the receipt is. What a whole job may
+	 *   spend on dots is a different bound with its own code — see `raster_budget_exceeded` and
+	 *   `limits.maxRasterMb`.
 	 *
 	 * The first two are reachable from an upload and a URL import as well as from `<image>`, since
 	 * all three doors share one gate in `asset-service.ts`.

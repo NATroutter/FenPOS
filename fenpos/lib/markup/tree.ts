@@ -253,9 +253,9 @@ class DocumentBuilder {
 	/**
 	 * Verifies what the finished line holds, then clears it for the next one.
 	 *
-	 * A rule expands to the full paper width, and a symbol or an image is a block of dots several
-	 * lines tall, so either combined with anything else would overflow its line by construction
-	 * rather than by accident. `<drawer>` is exempt because it prints nothing at all: it pulses a
+	 * A rule expands to the full paper width and a symbol is a block of dots several lines tall, so
+	 * either combined with anything else would overflow its line by construction rather than by
+	 * accident. `<drawer>` is exempt because it prints nothing at all: it pulses a
 	 * solenoid, so it costs the line no paper and may legally sit beside anything. Fills count even
 	 * though they produce no text yet — `<hr><fill=.>` would otherwise print a line of dots, feed,
 	 * and then the rule.
@@ -497,8 +497,10 @@ class DocumentBuilder {
 		this.enter(tag, token, null).content = { tag, parts: [], shape };
 
 		// A symbol nested in a block is measured against that block's width instead, so only one at
-		// the top level is a claim on a printed line of its own.
-		if (this.owningFrame() === this.frames[0]) {
+		// the top level is a claim on a printed line of its own. An image claims nothing at all: it is
+		// the one of these the layout engine can place beside text, in a row of glyphs sized to its own
+		// dots, and a line holding one is drawn into a raster rather than sent as columns.
+		if (tag !== TAGS.image && this.owningFrame() === this.frames[0]) {
 			this.claimLine(tag.name, token.line, token.column, MARKUP_ERRORS.invalidBlockScope);
 		}
 	}

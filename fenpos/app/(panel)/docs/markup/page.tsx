@@ -97,7 +97,7 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{
 		syntax: "<image>name</image>",
 		meaning:
-			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. Must be alone in its line.",
+			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. May share a line with text.",
 	},
 	{
 		syntax: "<drawer>",
@@ -388,10 +388,11 @@ export default async function MarkupDocsPage() {
 								<P>
 									<Mono>&lt;image&gt;</Mono> is the fourth block, and it names its picture rather than carrying it:
 									between the tags goes either the name of an image stored on the Assets tab or an <Mono>http(s)</Mono>{" "}
-									URL. Both rules above hold, no tag inside it, nothing else on the line. <Mono>&lt;image=50&gt;</Mono>{" "}
-									prints at half the paper's printable width. The argument is a percentage, 1–100, defaulting to 100,
-									rather than a number of dots, because one install can have both 80mm and 58mm printers behind a single
-									agent and a dot count that fits one overruns the other.
+									URL. No tag may appear inside it either, but unlike a symbol it may share its line: text beside a
+									picture is a line this server draws and sends as dots rather than one the printer sets in columns.{" "}
+									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width. The argument is a
+									percentage, 1–100, defaulting to 100, rather than a number of dots, because one install can have both
+									80mm and 58mm printers behind a single agent and a dot count that fits one overruns the other.
 								</P>
 
 								<P>

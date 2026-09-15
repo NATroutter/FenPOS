@@ -1,3 +1,4 @@
+import type { ImageRaster } from "@/lib/assets/dither";
 import type { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
 
 /**
@@ -184,7 +185,20 @@ export type Directive =
 	 * 58mm printers behind a single agent. A dot count would print a logo that fits one of them and
 	 * overruns the other, which is the very problem storing the source image exists to avoid.
 	 */
-	| { kind: "IMAGE"; ref: string; widthPercent: number };
+	| { kind: "IMAGE"; ref: string; widthPercent: number }
+	/**
+	 * A whole line the printer cannot draw, already drawn here into dots.
+	 *
+	 * The one directive whose content was produced rather than described. A configured face has no
+	 * ESC/POS command to select it, a block is a region rather than a run of text, and an image beside
+	 * text has to be placed against that text — so the line is laid out on this side and what crosses
+	 * the link is the picture of it.
+	 *
+	 * `heightLines` is what it costs the line budget, rounded up from the raster's own height because
+	 * paper advances by whole lines. It is a compile-time figure like every other one here and does not
+	 * travel: the agent is handed a raster and prints exactly the dots it was given.
+	 */
+	| { kind: "RASTER"; raster: ImageRaster; heightLines: number };
 
 /** One parsed line. Alignment is a line property because ESC/POS justifies whole lines. */
 export interface Line {

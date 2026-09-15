@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { symbolGeometry } from "@/lib/markup/blocks";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { needsRaster } from "@/lib/markup/flatten";
 import { columnAt, isDirectiveOnly, type Line, PLAIN, type Span } from "@/lib/markup/model";
 import { parseDocument, parseLine, type VariableContext } from "@/lib/markup/parser";
 
@@ -914,9 +915,14 @@ describe("the image tag", () => {
 		});
 	});
 
-	it("must be alone in its element", () => {
-		expect(() => parseLine("Logo <image>logo</image>")).toThrow(/alone/);
-		expect(imageError("Logo <image>logo</image>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
+	/**
+	 * The one content tag that may share its line, because it is the one the layout engine can place
+	 * beside text. A `<qr>` still cannot: nothing draws a symbol into a row of glyphs.
+	 */
+	it("may sit beside text, which makes the line one to draw rather than print", () => {
+		expect(() => parseLine("Logo <image>logo</image>")).not.toThrow();
+		expect(needsRaster(parseDocument("Logo <image>logo</image>").nodes)).toBe(true);
+		expect(imageError("Logo <qr>x</qr>").code).toBe(MARKUP_ERRORS.invalidBlockScope);
 	});
 
 	it("keeps the reference out of the spans, so the line stays directive-only", () => {

@@ -45,6 +45,18 @@ export interface ImageSource {
 	 * otherwise.
 	 */
 	inline?: ReadonlyMap<number, ImageRaster>;
+	/**
+	 * The image at its own size, for a line drawn into a raster rather than printed.
+	 *
+	 * A whole-line `<image>` is a share of the paper, so its width follows the tag's percentage. An
+	 * image beside text is not: it sits in a row of glyphs and has to be the size it actually is, or a
+	 * logo written next to a price would print as tall as the paper is wide. Capped at the paper's
+	 * width all the same, since nothing wider can be printed.
+	 *
+	 * Absent unless a line the pre-pass walked needed the layout engine, which is the only thing that
+	 * draws one.
+	 */
+	natural?: ImageRaster;
 }
 
 /**

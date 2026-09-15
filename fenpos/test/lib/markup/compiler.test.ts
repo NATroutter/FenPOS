@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema, rasterBytes } from "@/lib/link/protocol";
-import { dotWidth, pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
+import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
 	type CompileSettings,
@@ -14,6 +14,7 @@ import {
 	readRequest,
 } from "@/lib/markup/compiler";
 import type { ResolvedImages } from "@/lib/markup/images";
+import { bundledFace } from "@/lib/raster/fonts";
 import { DEFAULT_LIMITS } from "@/lib/settings/settings-service";
 
 /** The value-length cap `readRequest` enforces on a supplied `variables` field. Not itself under test here. */
@@ -38,14 +39,18 @@ function refusal(run: () => unknown): ApiError {
 }
 
 /**
- * One image as the pre-pass would hand it over: 40x20 dots of solid ink, at 42 columns of paper.
+ * One stored image as the pre-pass would hand it over, on 42 columns of paper.
+ *
+ * No entry in `inline`, which is what a stored asset printed at the paper's own width looks like:
+ * its dots reached the agent with the device's configuration, so the job names them rather than
+ * carrying them. `natural` is the 40x20 the source itself is, for a line that draws it beside text.
  *
  * @param name the reference the receipt writes
  * @returns the resolved images a compile can be handed
  */
 function imagesFor(name: string): ResolvedImages {
-	const raster = { widthDots: 40, heightDots: 20, packed: Buffer.alloc(rasterBytes(40, 20), 0xff) };
-	return new Map([[name, { width: 40, height: 20, inline: new Map([[dotWidth(42), raster]]) }]]);
+	const natural = { widthDots: 40, heightDots: 20, packed: Buffer.alloc(rasterBytes(40, 20), 0xff) };
+	return new Map([[name, { width: 40, height: 20, natural, inline: new Map() }]]);
 }
 
 /**
@@ -64,6 +69,7 @@ describe("compile pipeline", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: new Map(),
+		fonts: new Map(),
 		variables: null,
 	};
 
@@ -453,6 +459,7 @@ describe("block line budget", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: IMAGES,
+		fonts: new Map(),
 		variables: null,
 	};
 
@@ -701,6 +708,7 @@ describe("images on the wire", () => {
 			// A URL, whose dots can never be pre-synced.
 			["https://x.test/l.png", { width: 240, height: 120, inline: new Map([[120, raster(120, 60)]]) }],
 		]),
+		fonts: new Map(),
 		variables: null,
 	};
 
@@ -778,6 +786,7 @@ describe("compiling with variables", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: new Map(),
+		fonts: new Map(),
 		variables: null,
 	});
 
@@ -836,6 +845,7 @@ describe("a document in one string", () => {
 		defaultWrap: true,
 		defaultLinefeed: "LF",
 		images: new Map(),
+		fonts: new Map(),
 		variables: null,
 	};
 
@@ -866,6 +876,56 @@ describe("a document in one string", () => {
 			{ text: "a", bold: true },
 			{ text: "b", bold: true },
 		]);
+	});
+
+	/**
+	 * A configured face has no ESC/POS command to select it, so the printer cannot draw the line and
+	 * this server does — as dots, sent inline, charged against the line budget by the paper they
+	 * occupy rather than by the one line the text would have cost.
+	 */
+	it("emits a raster line as an inline image on the wire, charged by height", () => {
+		const job = compile(
+			"j",
+			"d",
+			request("<font=mono size=40>Hi</font>"),
+			LIMITS,
+			settingsWith({ fonts: new Map([["mono", bundledFace()]]) }),
+		);
+
+		expect(job.lines[0].spans).toEqual([]);
+		expect(job.lines[0].directives[0]).toMatchObject({ type: "IMAGE", source: { kind: "INLINE", widthDots: 504 } });
+		expect(
+			countOutputLines(
+				request("<font=mono size=40>Hi</font>"),
+				settingsWith({ fonts: new Map([["mono", bundledFace()]]) }),
+				LIMITS,
+			),
+		).toBe(2);
+	});
+
+	/**
+	 * The budget is over the whole job rather than over any one raster, because a receipt whose dots
+	 * together exceed what a frame carries is unsendable however lawful each picture is on its own.
+	 */
+	it("refuses a job whose rasters exceed the budget", () => {
+		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
+		const thrown = refusal(() =>
+			compile("j", "d", request("<font=mono size=200>A</font>"), { ...LIMITS, maxRasterBytes: 1000 }, settings),
+		);
+
+		expect(thrown.code).toBe("raster_budget_exceeded");
+		expect(thrown.details).toMatchObject({ limit: 1000 });
+	});
+
+	/**
+	 * The printer draws a whole-line image itself, so nothing is gained by drawing it here — and a
+	 * great deal is lost: a stored asset at the paper's width would stop naming the raster the agent
+	 * already holds and start carrying its dots on every receipt.
+	 */
+	it("keeps a whole-line image on the native path", () => {
+		const job = compile("j", "d", request("<image>logo</image>"), LIMITS, settingsWith({ images: imagesFor("logo") }));
+
+		expect(job.lines[0].directives[0]).toMatchObject({ type: "IMAGE", source: { kind: "REF" } });
 	});
 
 	/**
