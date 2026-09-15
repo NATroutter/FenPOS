@@ -462,46 +462,74 @@ public final class MarkupParser {
         }
     }
 
+    /**
+     * Reads one tag, opening or closing, starting at {@link #index}.
+     * <p>
+     * Ported from the panel's tokenizer: the guard below is a cheap, quote-blind check that some
+     * {@code >} exists on the line at all, not a decision about where this tag actually ends — that
+     * decision belongs to {@link #readAttributes}, which is the only part of the scan that knows
+     * where a quoted value is open. Deciding it here from a plain {@code indexOf} was the bug this
+     * replaced: a stray {@code "} inside a bare value could pair with a later one and make the scan
+     * treat everything between them, {@code >} included, as still inside the tag.
+     */
     private void readTag() throws MarkupException {
+        int start = index;
         int startColumn = column();
-        int close = tagEnd(index);
-        if (close < 0) {
-            throw new MarkupException(MarkupError.UNKNOWN_TAG, line, startColumn,
-                    source.substring(index, lineEnd()),
-                    "Unterminated tag; write &lt; for a literal '<'");
+
+        int terminator = source.indexOf('>', start);
+        if (terminator < 0 || terminator > lineEnd()) {
+            throw unterminatedTag();
         }
 
-        String body = source.substring(index + 1, close);
-        int bodyStart = index + 1;
-        index = close + 1;
-
-        if (body.startsWith("/")) {
-            closeTag(body.substring(1), startColumn);
-        } else {
-            openTag(body, bodyStart, startColumn);
+        int at = start + 1;
+        boolean closing = at < source.length() && source.charAt(at) == '/';
+        if (closing) {
+            at++;
         }
+
+        int nameStart = at;
+        while (at < source.length() && isNameChar(source.charAt(at))) {
+            at++;
+        }
+        String name = source.substring(nameStart, at);
+        if (name.isEmpty()) {
+            throw unterminatedTag();
+        }
+
+        if (closing) {
+            if (at >= source.length() || source.charAt(at) != '>') {
+                throw unterminatedTag();
+            }
+            index = at + 1;
+            closeTag(name, startColumn);
+            return;
+        }
+
+        requireNotServerTag(name, startColumn);
+
+        Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
+                MarkupError.UNKNOWN_TAG, line, startColumn, name,
+                "Unknown tag '" + name + "'; write &lt; for a literal '<'"));
+
+        if (block != null) {
+            throw insideBlock(tag, startColumn);
+        }
+
+        Map<String, Attribute> attributes = readAttributes(tag, at);
+        openTag(tag, attributes, startColumn);
     }
 
     /**
-     * Finds the {@code >} that ends the tag opening at {@code from}, or -1 when its line has none.
+     * Builds the {@code UNKNOWN_TAG} refusal for a tag that never reaches a {@code >} of its own.
      * <p>
-     * Walked rather than found with {@code indexOf}, because a quoted attribute value may hold a
-     * {@code >} of its own, and a tag has to end on the line it opened on.
+     * Callable from anywhere in {@link #readTag} or {@link #readAttributes}: neither ever moves
+     * {@link #index} until the tag is fully read, so it still names the opening {@code <} and the
+     * text after it however far the scan got.
      */
-    private int tagEnd(int from) {
-        boolean quoted = false;
-        for (int at = from + 1; at < source.length(); at++) {
-            char current = source.charAt(at);
-            if (current == '\n') {
-                return -1;
-            }
-            if (current == '"') {
-                quoted = !quoted;
-            } else if (current == '>' && !quoted) {
-                return at;
-            }
-        }
-        return -1;
+    private MarkupException unterminatedTag() {
+        return new MarkupException(MarkupError.UNKNOWN_TAG, line, column(),
+                source.substring(index, lineEnd()),
+                "Unterminated tag; write &lt; for a literal '<'");
     }
 
     private int lineEnd() {
@@ -514,25 +542,8 @@ public final class MarkupParser {
                 || (value >= '0' && value <= '9') || value == '_' || value == '-';
     }
 
-    private void openTag(String body, int bodyStart, int column) throws MarkupException {
-        int at = 0;
-        while (at < body.length() && isNameChar(body.charAt(at))) {
-            at++;
-        }
-        String name = body.substring(0, at);
-
-        requireNotServerTag(name, column);
-
-        Tag tag = Tag.byName(name).orElseThrow(() -> new MarkupException(
-                MarkupError.UNKNOWN_TAG, line, column, name,
-                "Unknown tag '" + name + "'; write &lt; for a literal '<'"));
-
-        if (block != null) {
-            throw insideBlock(tag, column);
-        }
-
-        Map<String, Attribute> attributes = readAttributes(tag, body, at, bodyStart);
-
+    /** Dispatches an opening tag once its name and attributes have both been read. */
+    private void openTag(Tag tag, Map<String, Attribute> attributes, int column) throws MarkupException {
         // Void, but not a directive: a fill is a position in the text rather than a printer action,
         // so it never reaches appendDirective.
         if (tag == Tag.FILL) {
@@ -568,47 +579,59 @@ public final class MarkupParser {
     }
 
     /**
-     * Reads the {@code key=value} pairs after a tag's name, exactly as the panel's tokenizer does.
+     * Reads the {@code key=value} pairs after a tag's name, exactly as the panel's tokenizer does,
+     * then advances {@link #index} past the tag's closing {@code >}.
      * <p>
      * A key is a run of name characters followed by {@code =}; a value is double-quoted and runs to
-     * the closing quote, or bare and runs to the next space or tab. Anything at a key's position
-     * that cannot start one — the {@code =} of a value written against the tag name, say — is refused
-     * with the same generic message the panel gives, so a caller sees one refusal wherever the
-     * markup is parsed.
+     * the closing quote, or bare and runs to the next space, tab or {@code >} — so a bare value can
+     * never read past the tag it belongs to. Quoting begins only where a value starts, right after a
+     * key's {@code =}, and nowhere else in the tag, so a {@code "} inside a bare value cannot make
+     * the scanner believe a quote it never opened is still open. Anything at a key's position that
+     * cannot start one — the {@code =} of a value written against the tag name, say — is refused with
+     * the same generic message the panel gives, so a caller sees one refusal wherever the markup is
+     * parsed. A quoted value left open past the end of the line is refused as the tag being
+     * unterminated: at that point the scan cannot tell where the author meant the tag to end, so
+     * there is no attribute-shaped error to give instead.
      */
-    private Map<String, Attribute> readAttributes(Tag tag, String body, int from, int bodyStart)
-            throws MarkupException {
+    private Map<String, Attribute> readAttributes(Tag tag, int from) throws MarkupException {
         Map<String, Attribute> read = new LinkedHashMap<>();
         int at = from;
-        while (at < body.length()) {
-            char current = body.charAt(at);
+        while (at < source.length() && source.charAt(at) != '>') {
+            char current = source.charAt(at);
+            if (current == '\n') {
+                throw unterminatedTag();
+            }
             if (current == ' ' || current == '\t') {
                 at++;
                 continue;
             }
-            int keyColumn = bodyStart + at - lineStart + 1;
+            int keyColumn = at - lineStart + 1;
             int keyStart = at;
-            while (at < body.length() && isNameChar(body.charAt(at))) {
+            while (at < source.length() && isNameChar(source.charAt(at))) {
                 at++;
             }
-            String key = body.substring(keyStart, at).toLowerCase(Locale.ROOT);
-            if (key.isEmpty() || at >= body.length() || body.charAt(at) != '=') {
-                String shown = key.isEmpty() ? body.substring(keyStart, keyStart + 1) : key;
+            String key = source.substring(keyStart, at).toLowerCase(Locale.ROOT);
+            if (key.isEmpty() || at >= source.length() || source.charAt(at) != '=') {
+                String shown = key.isEmpty() ? source.substring(keyStart, keyStart + 1) : key;
                 throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, shown,
                         "<" + tag.tagName() + "> attributes are written key=value");
             }
             at++;
             String value;
-            if (at < body.length() && body.charAt(at) == '"') {
-                int end = body.indexOf('"', at + 1);
-                value = body.substring(at + 1, end);
-                at = end + 1;
+            if (at < source.length() && source.charAt(at) == '"') {
+                int close = source.indexOf('"', at + 1);
+                if (close < 0 || close > lineEnd()) {
+                    throw unterminatedTag();
+                }
+                value = source.substring(at + 1, close);
+                at = close + 1;
             } else {
                 int valueStart = at;
-                while (at < body.length() && body.charAt(at) != ' ' && body.charAt(at) != '\t') {
+                while (at < source.length() && source.charAt(at) != ' ' && source.charAt(at) != '\t'
+                        && source.charAt(at) != '>' && source.charAt(at) != '\n') {
                     at++;
                 }
-                value = body.substring(valueStart, at);
+                value = source.substring(valueStart, at);
             }
             for (int i = 0; i < value.length(); i++) {
                 if (isControl(value.charAt(i))) {
@@ -626,6 +649,10 @@ public final class MarkupParser {
             }
             read.put(key, new Attribute(value, keyColumn));
         }
+        if (at >= source.length() || source.charAt(at) != '>') {
+            throw unterminatedTag();
+        }
+        index = at + 1;
         return read;
     }
 

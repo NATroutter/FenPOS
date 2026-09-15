@@ -1105,6 +1105,65 @@ class MarkupParserTest {
         assertEquals("title", e.detail());
     }
 
+    /**
+     * A stray {@code "} inside a bare value must never be mistaken for the start of a quoted one:
+     * {@code width}'s bare value runs to the space after it, quote included, and the {@code "} that
+     * opens {@code height}'s value then has no closing quote left on the line. The panel's tokenizer
+     * refuses this as the tag being unterminated, not as an attribute error, because at that point
+     * the scanner cannot tell where the author meant the tag to end.
+     */
+    @Test
+    void refusesAStrayQuoteInABareValueAsAnUnterminatedTag() {
+        String markup = "<size width=2\" height=\"3>a</size>";
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse(markup));
+
+        assertEquals(MarkupError.UNKNOWN_TAG, e.error());
+        assertEquals(1, e.column());
+        assertEquals(markup, e.detail());
+    }
+
+    /** A quoted value with no closing quote anywhere on the line is the same unterminated tag. */
+    @Test
+    void refusesAQuotedValueMissingItsClosingQuote() {
+        String markup = "<fill char=\">";
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse(markup));
+
+        assertEquals(MarkupError.UNKNOWN_TAG, e.error());
+        assertEquals(1, e.column());
+        assertEquals(markup, e.detail());
+    }
+
+    /**
+     * A quote written against the tag name, with nothing to open the quoting rule, is read the same
+     * as any other value-shaped junk at a key's position: refused generically, not consumed as if it
+     * opened a quoted value.
+     */
+    @Test
+    void refusesAQuoteAtAKeysPositionAsAnUnknownAttribute() {
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<bold x\">x</bold>"));
+
+        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
+        assertEquals(7, e.column());
+        assertEquals("x", e.detail());
+        assertEquals("<bold> attributes are written key=value", e.getMessage());
+    }
+
+    /**
+     * A bare value's trailing stray quote is read as part of the value — bare values end only at a
+     * space, tab or {@code >} — so it is refused by the ordinary "not a single character" check,
+     * pointing at the attribute rather than misreading the tag as unterminated.
+     */
+    @Test
+    void refusesABareValuesTrailingQuoteAsPartOfTheValue() {
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<fill char=a\">x</fill>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(7, e.column());
+        assertEquals("char", e.detail());
+    }
+
     @Test
     void matchesAnEnumValueIgnoringCase() throws Exception {
         assertEquals(Align.CENTER, MarkupParser.parse("<align to=Center>a</align>").align());
