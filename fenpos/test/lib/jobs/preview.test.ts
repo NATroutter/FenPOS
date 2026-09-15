@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAsset } from "@/lib/assets/asset-service";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
@@ -13,6 +13,17 @@ import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
 import { resolveFonts } from "@/lib/markup/resolve-fonts";
 import { typefaceFor } from "@/lib/raster/fonts";
 import { createVariable } from "@/lib/variables/variable-service";
+
+/**
+ * A spy rather than a stub, for the same reason `dispatch.test.ts` uses one: what a preview must
+ * never do for an over-limit receipt is *reach* the network, not fake what it finds there.
+ */
+const fetchRemoteImage = vi.hoisted(() => vi.fn<(url: string) => Promise<Buffer>>());
+
+vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/assets/fetch-remote")>()),
+	fetchRemoteImage,
+}));
 
 /** The face `resolve-fonts.test.ts` also uploads, real enough to expose a missing glyph. */
 const FONT = readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf"));
@@ -37,6 +48,7 @@ beforeEach(async () => {
 	await prisma.agent.deleteMany();
 	await prisma.setting.deleteMany();
 	await prisma.asset.deleteMany();
+	fetchRemoteImage.mockClear();
 
 	const agent = await prisma.agent.create({ data: { name: `helsinki-${Date.now()}` } });
 	const device = await prisma.device.create({
@@ -124,6 +136,22 @@ describe("compilePreview", () => {
 		const result = await compilePreview("no-such-device", { data: "hi" });
 
 		expect(result.errors[0].code).toBe("unknown_device");
+	});
+
+	/**
+	 * The property `requireDocumentWithinLimits`'s own doc comment promises, checked from this side:
+	 * a receipt over its character limit has no business making this server fetch a URL, whether it
+	 * is a print or a preview asking. This is charged before fonts and images are resolved below —
+	 * see `compilePreviewWithContext`'s own comment on why — so an over-length line that also names a
+	 * remote image must be refused without ever reaching that fetch.
+	 */
+	it("refuses an over-length line before fetching a remote image it also names", async () => {
+		const result = await compilePreview(deviceId, {
+			data: `${"x".repeat(300)}\n<image>https://x.test/logo.png</image>`,
+		});
+
+		expect(result.errors).toEqual([expect.objectContaining({ code: "line_too_long", line: 1 })]);
+		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 });
 

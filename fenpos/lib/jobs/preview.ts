@@ -15,6 +15,7 @@ import {
 	type PrintRequest,
 	rasterBytesOf,
 	readRequest,
+	requireDocumentWithinLimits,
 } from "@/lib/markup/compiler";
 import type { VariableContext } from "@/lib/markup/parser";
 import { resolveFonts } from "@/lib/markup/resolve-fonts";
@@ -219,14 +220,32 @@ export async function compilePreviewWithContext(
 			};
 		}
 
-		// Resolved before the document's own errors now, and that trades one property for another. A
-		// drawn line's faults — a face missing a glyph, a block sitting where text was expected — can
-		// only be found by laying it out for real, which needs the same faces and rasters `compile`
-		// itself uses; collecting them alongside every other line's faults is what this buys. What is
-		// given up is narrower than it looks: `resolveFonts` and `resolveImages` both parse the receipt
-		// themselves and return nothing rather than throwing when it fails to parse at all, so a body
-		// that is not markup still costs neither a font load nor a fetch. Only a document that parses
-		// but turns out to have some other fault now pays for images it did not need to.
+		// Charged as soon as `variables` is known, and before anything below reaches outside this
+		// server — exactly where `dispatch.ts` charges it, right after its own `resolveVariables` —
+		// so a line or a receipt over its character limit has no business making this server fetch a
+		// URL or load a font. Stays quiet about a parse failure of its own: that is `collectDocumentErrors`'s
+		// to raise below, once fonts and images are in hand to check a drawn line's faults too.
+		try {
+			requireDocumentWithinLimits(request, variables, limits);
+		} catch (error) {
+			return {
+				preview: { ...measured(request.linefeed), errors: [faultOf(error)] },
+				request,
+				settings: null,
+				limits,
+			};
+		}
+
+		// Resolved before the document's remaining errors now, and that trades one property for
+		// another. A drawn line's faults — a face missing a glyph, a block sitting where text was
+		// expected — can only be found by laying it out for real, which needs the same faces and
+		// rasters `compile` itself uses; collecting them alongside every other line's faults is what
+		// this buys. The character limits above are what keep this bounded: a receipt over them is
+		// refused before either resolves, exactly as `requireDocumentWithinLimits`'s own doc comment
+		// promises, so what is left to pay for unnecessarily is narrower than it looks — only a
+		// document within its character limits but wrong some other way now pays for images it did
+		// not need to; one that fails to parse at all pays for neither, since `resolveFonts` and
+		// `resolveImages` both tolerate a parse failure by returning nothing rather than throwing.
 		let settings: CompileSettings;
 		try {
 			settings = {
