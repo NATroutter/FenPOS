@@ -18,7 +18,7 @@ public enum MarkupError {
     /** A closing tag with no matching open tag, or one closing the wrong tag. */
     UNEXPECTED_CLOSE_TAG("unexpected_close_tag"),
 
-    /** A tag argument that is missing, malformed, or out of range. */
+    /** What a tag encloses is missing or malformed: a symbol's payload, or the name of an image. */
     INVALID_TAG_ARGUMENT("invalid_tag_argument"),
 
     /** An alignment tag that does not enclose the whole element, or a second one. */
@@ -32,6 +32,12 @@ public enum MarkupError {
 
     /** A block tag sharing an element with other content, or containing markup rather than data. */
     INVALID_BLOCK_SCOPE("invalid_block_scope"),
+
+    /** An attribute the tag does not declare. */
+    UNKNOWN_ATTRIBUTE("unknown_attribute"),
+
+    /** An attribute that is required and missing, set twice, or given a value outside what the tag accepts. */
+    INVALID_ATTRIBUTE("invalid_attribute"),
 
     /** A character that would be interpreted by the printer as a command. */
     CONTROL_CHARACTER("control_character"),

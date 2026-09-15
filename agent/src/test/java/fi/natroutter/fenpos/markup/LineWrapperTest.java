@@ -61,7 +61,7 @@ class LineWrapperTest {
      */
     @Test
     void doubleWidthTextWrapsAtHalfTheColumns() throws Exception {
-        List<Line> wrapped = wrap("<size=2>HELLO WORLD</size>", 20);
+        List<Line> wrapped = wrap("<size width=2 height=2>HELLO WORLD</size>", 20);
 
         assertEquals(List.of("HELLO", "WORLD"), plainTexts(wrapped));
     }
@@ -101,7 +101,7 @@ class LineWrapperTest {
 
     @Test
     void everyFragmentInheritsTheLineAlignment() throws Exception {
-        List<Line> wrapped = wrap("<align=center>aaaa bbbb</align>", 4);
+        List<Line> wrapped = wrap("<align to=center>aaaa bbbb</align>", 4);
 
         assertEquals(2, wrapped.size());
         wrapped.forEach(line -> assertEquals(Align.CENTER, line.align()));
@@ -113,7 +113,7 @@ class LineWrapperTest {
      */
     @Test
     void directivesAttachToTheLastFragmentOnly() throws Exception {
-        List<Line> wrapped = wrap("aaaa bbbb<feed=2>", 4);
+        List<Line> wrapped = wrap("aaaa bbbb<feed lines=2>", 4);
 
         assertEquals(2, wrapped.size());
         assertTrue(wrapped.get(0).directives().isEmpty());
@@ -144,7 +144,7 @@ class LineWrapperTest {
      */
     @Test
     void emitsACharacterThatIsWiderThanTheWholeLine() throws Exception {
-        List<Line> wrapped = wrap("<size=8>ab</size>", 4);
+        List<Line> wrapped = wrap("<size width=8 height=8>ab</size>", 4);
 
         assertEquals(List.of("a", "b"), plainTexts(wrapped));
     }

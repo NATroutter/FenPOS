@@ -42,7 +42,7 @@ class FillResolverTest {
 
     @Test
     void repeatsTheCharacterTheTagNamed() throws Exception {
-        assertEquals("Coffee" + ".".repeat(32) + "2.50", filled("Coffee<fill=.>2.50"));
+        assertEquals("Coffee" + ".".repeat(32) + "2.50", filled("Coffee<fill char=.>2.50"));
     }
 
     @Test
@@ -97,19 +97,19 @@ class FillResolverTest {
      */
     @Test
     void emitsNothingWhenTheBudgetIsSmallerThanOneFillCharacter() throws Exception {
-        Line line = FillResolver.resolve(MarkupParser.parse("X<size=2>A<fill>B</size>"), 6);
+        Line line = FillResolver.resolve(MarkupParser.parse("X<size width=2 height=2>A<fill>B</size>"), 6);
 
         assertEquals("XAB", line.plainText());
         assertEquals(5, line.columns());
     }
 
     /**
-     * A fill inside {@code <size=2>} spends two columns per character, so an odd budget cannot be
+     * A fill inside {@code <size width=2 height=2>} spends two columns per character, so an odd budget cannot be
      * spent exactly and the line lands a column short. Under the default multiplier it cannot arise.
      */
     @Test
     void spendsABudgetInWholeCharactersUnderAWidthMultiplier() throws Exception {
-        Line line = FillResolver.resolve(MarkupParser.parse("X<size=2>A<fill>B</size>"), COLUMNS);
+        Line line = FillResolver.resolve(MarkupParser.parse("X<size width=2 height=2>A<fill>B</size>"), COLUMNS);
 
         assertEquals("XA" + " ".repeat(18) + "B", line.plainText());
         assertEquals(41, line.columns());
@@ -129,7 +129,7 @@ class FillResolverTest {
 
     @Test
     void drawsARuleFromAFillThatIsAloneOnItsLine() throws Exception {
-        assertEquals("-".repeat(42), filled("<fill=->"));
+        assertEquals("-".repeat(42), filled("<fill char=->"));
     }
 
     @Test

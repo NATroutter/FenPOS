@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.markup;
 
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The complete set of markup tags.
@@ -20,64 +21,64 @@ import java.util.Optional;
 public enum Tag {
 
     /** Emphasis. */
-    BOLD("bold", Kind.PAIRED, Argument.NONE),
+    BOLD("bold", Kind.PAIRED, Set.of()),
 
-    /** Underline, optionally selecting the printer's second weight. */
-    UNDERLINE("underline", Kind.PAIRED, Argument.OPTIONAL),
+    /** Underline; {@code weight} selects the printer's second, heavier one. */
+    UNDERLINE("underline", Kind.PAIRED, Set.of("weight")),
 
     /** White on black. */
-    INVERT("invert", Kind.PAIRED, Argument.NONE),
+    INVERT("invert", Kind.PAIRED, Set.of()),
 
-    /** Character multipliers, as {@code W,H} or a single value used for both. */
-    SIZE("size", Kind.PAIRED, Argument.REQUIRED),
+    /** Character multipliers, {@code width} and {@code height}; either alone leaves the other at 1. */
+    SIZE("size", Kind.PAIRED, Set.of("width", "height")),
 
-    /** Built-in font selection. */
-    FONT("font", Kind.PAIRED, Argument.REQUIRED),
+    /** A face: one of the printer's own by letter. A stored font is the server's to draw. */
+    TEXT("text", Kind.PAIRED, Set.of("font", "size")),
 
-    /** Line justification. Paired, and required to enclose the whole line. */
-    ALIGN("align", Kind.PAIRED, Argument.REQUIRED),
+    /** Line justification, {@code to}. Paired, and required to enclose the whole line. */
+    ALIGN("align", Kind.PAIRED, Set.of("to")),
 
     /** Break this line at the paper width. Paired, and required to enclose the whole line. */
-    WRAP("wrap", Kind.PAIRED, Argument.NONE),
+    WRAP("wrap", Kind.PAIRED, Set.of()),
 
     /** Print this line as written. Paired, and required to enclose the whole line. */
-    NOWRAP("nowrap", Kind.PAIRED, Argument.NONE),
+    NOWRAP("nowrap", Kind.PAIRED, Set.of()),
 
     /**
-     * Pad to the paper's width. Argument is the character to repeat, default a space.
+     * Pad to the paper's width with {@code char}, a space when it is left off.
      * <p>
      * The one tag whose printed width is not knowable from the line: it stands for however many
      * columns are left over, which is a property of the device. See {@code FillResolver}.
      */
-    FILL("fill", Kind.VOID, Argument.OPTIONAL),
+    FILL("fill", Kind.VOID, Set.of("char")),
 
-    /** Cut the paper, fully by default. */
-    CUT("cut", Kind.VOID, Argument.OPTIONAL),
+    /** Cut the paper, fully unless {@code mode} says partial. */
+    CUT("cut", Kind.VOID, Set.of("mode")),
 
-    /** Advance the paper by a number of lines. */
-    FEED("feed", Kind.VOID, Argument.REQUIRED),
+    /** Advance the paper by {@code lines}. */
+    FEED("feed", Kind.VOID, Set.of("lines")),
 
     /** A full-width horizontal rule. Required to be alone on its line. */
-    HR("hr", Kind.VOID, Argument.NONE),
+    HR("hr", Kind.VOID, Set.of()),
 
-    /** A QR code. Argument is the module size, 1-16. */
-    QR("qr", Kind.PAIRED, Argument.OPTIONAL),
+    /** A QR code; {@code size} is dots per module, 1-16. */
+    QR("qr", Kind.PAIRED, Set.of("size")),
 
-    /** A linear barcode. Argument is the symbology. */
-    BARCODE("barcode", Kind.PAIRED, Argument.REQUIRED),
+    /** A linear barcode of the symbology {@code type} names. */
+    BARCODE("barcode", Kind.PAIRED, Set.of("type")),
 
-    /** A PDF417 symbol. Argument is the error-correction level, 0-8. */
-    PDF417("pdf417", Kind.PAIRED, Argument.OPTIONAL),
+    /** A PDF417 symbol; {@code level} is the error-correction level, 0-8. */
+    PDF417("pdf417", Kind.PAIRED, Set.of("level")),
 
     /**
-     * A stored image. Argument is the printed width as a percentage of the paper, 1-100.
+     * A stored image, printed {@code width} percent of the paper wide, 1-100.
      * <p>
-     * Paired rather than {@code <image=logo>} because that is the shape the panel settled on, and
-     * the two grammars are ports of each other. There the content may also be an {@code http(s)}
-     * URL, which routinely contains {@code =} and may contain {@code >}; here it can only ever
-     * name a stored image, because this agent has no fetch path.
+     * The name is the content rather than an attribute because that is the shape the panel settled
+     * on, and the two grammars are ports of each other. There the content may also be an
+     * {@code http(s)} URL, which routinely contains {@code =} and may contain {@code >}; here it can
+     * only ever name a stored image, because this agent has no fetch path.
      */
-    IMAGE("image", Kind.PAIRED, Argument.OPTIONAL);
+    IMAGE("image", Kind.PAIRED, Set.of("width"));
 
     /** Whether a tag wraps content or stands alone. */
     public enum Kind {
@@ -87,24 +88,14 @@ public enum Tag {
         VOID
     }
 
-    /** Whether a tag accepts a {@code =value} argument. */
-    public enum Argument {
-        /** Supplying one is an error. */
-        NONE,
-        /** May be supplied; a documented default applies when it is not. */
-        OPTIONAL,
-        /** Omitting one is an error. */
-        REQUIRED
-    }
-
     private final String tagName;
     private final Kind kind;
-    private final Argument argument;
+    private final Set<String> attributes;
 
-    Tag(String tagName, Kind kind, Argument argument) {
+    Tag(String tagName, Kind kind, Set<String> attributes) {
         this.tagName = tagName;
         this.kind = kind;
-        this.argument = argument;
+        this.attributes = attributes;
     }
 
     /** Returns the lowercase name as written in markup. */
@@ -117,9 +108,9 @@ public enum Tag {
         return kind;
     }
 
-    /** Returns whether this tag accepts a {@code =value} argument. */
-    public Argument argument() {
-        return argument;
+    /** Returns the attribute names this tag accepts, lowercase; empty for a tag that takes none. */
+    public Set<String> attributes() {
+        return attributes;
     }
 
     /**

@@ -12,7 +12,7 @@ import java.util.List;
  * <p>
  * Wrapping works on individual characters rather than on the line's text, because a
  * character's cost in columns depends on the width multiplier of the span it belongs to:
- * under {@code <size=2>} each character occupies two columns, so the same text has to wrap
+ * under {@code <size width=2>} each character occupies two columns, so the same text has to wrap
  * at half the paper width. Measuring {@code String.length()} would overflow the paper on
  * every enlarged line.
  * <p>

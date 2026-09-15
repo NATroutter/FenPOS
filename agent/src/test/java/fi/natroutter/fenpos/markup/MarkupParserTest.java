@@ -122,7 +122,7 @@ class MarkupParserTest {
 
     @Test
     void parsesSizeArgumentsAsSeparateMultipliers() throws Exception {
-        Line line = MarkupParser.parse("<size=2,3>BIG</size>");
+        Line line = MarkupParser.parse("<size width=2 height=3>BIG</size>");
 
         assertEquals(2, line.spans().getFirst().style().widthMult());
         assertEquals(3, line.spans().getFirst().style().heightMult());
@@ -130,7 +130,7 @@ class MarkupParserTest {
 
     @Test
     void parsesSingleSizeArgumentAsBothMultipliers() throws Exception {
-        Line line = MarkupParser.parse("<size=2>BIG</size>");
+        Line line = MarkupParser.parse("<size width=2 height=2>BIG</size>");
 
         assertEquals(2, line.spans().getFirst().style().widthMult());
         assertEquals(2, line.spans().getFirst().style().heightMult());
@@ -138,13 +138,13 @@ class MarkupParserTest {
 
     @Test
     void parsesUnderlineThickness() throws Exception {
-        assertEquals(2, MarkupParser.parse("<underline=2>x</underline>")
+        assertEquals(2, MarkupParser.parse("<underline weight=2>x</underline>")
                 .spans().getFirst().style().underline());
     }
 
     @Test
     void parsesFontSelection() throws Exception {
-        assertEquals(Font.B, MarkupParser.parse("<font=b>x</font>")
+        assertEquals(Font.B, MarkupParser.parse("<text font=b>x</text>")
                 .spans().getFirst().style().font());
     }
 
@@ -159,7 +159,7 @@ class MarkupParserTest {
 
     @Test
     void alignmentBecomesALinePropertyRatherThanASpanStyle() throws Exception {
-        Line line = MarkupParser.parse("<align=center>RECEIPT</align>");
+        Line line = MarkupParser.parse("<align to=center>RECEIPT</align>");
 
         assertEquals(Align.CENTER, line.align());
         assertEquals("RECEIPT", line.plainText());
@@ -168,7 +168,7 @@ class MarkupParserTest {
     @Test
     void rejectsAlignmentThatDoesNotEncloseTheWholeLine() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<align=center>x</align> trailing"));
+                () -> MarkupParser.parse("<align to=center>x</align> trailing"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
@@ -176,7 +176,7 @@ class MarkupParserTest {
     @Test
     void rejectsASecondAlignmentTag() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<align=left><align=right>x</align></align>"));
+                () -> MarkupParser.parse("<align to=left><align to=right>x</align></align>"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
@@ -189,11 +189,11 @@ class MarkupParserTest {
     @Test
     void rejectsAlignReopenedAfterTheFirstClosedOnTheSameLine() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<align=center>a</align><align=left>b</align>"));
+                () -> MarkupParser.parse("<align to=center>a</align><align to=left>b</align>"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
         assertEquals("align", thrown.detail());
-        assertEquals(24, thrown.column());
+        assertEquals(27, thrown.column());
     }
 
     /**
@@ -204,7 +204,7 @@ class MarkupParserTest {
     @Test
     void rejectsAlignmentOpenedInsideAStylingTagSameAsWrap() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<bold><align=right>x</align></bold>"));
+                () -> MarkupParser.parse("<bold><align to=right>x</align></bold>"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
@@ -224,12 +224,12 @@ class MarkupParserTest {
     @Test
     void parsesPartialCut() throws Exception {
         assertEquals(List.of(new Directive.Cut(Directive.Cut.Mode.PARTIAL)),
-                MarkupParser.parse("<cut=partial>").directives());
+                MarkupParser.parse("<cut mode=partial>").directives());
     }
 
     @Test
     void parsesFeedWithLineCount() throws Exception {
-        assertEquals(List.of(new Directive.Feed(3)), MarkupParser.parse("<feed=3>").directives());
+        assertEquals(List.of(new Directive.Feed(3)), MarkupParser.parse("<feed lines=3>").directives());
     }
 
     @Test
@@ -300,28 +300,28 @@ class MarkupParserTest {
     @Test
     void rejectsSizeMultiplierAboveEight() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<size=9,1>x</size>"));
+                () -> MarkupParser.parse("<size width=9 height=1>x</size>"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
     void rejectsNonNumericSizeArgument() {
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT,
+        assertEquals(MarkupError.INVALID_ATTRIBUTE,
                 assertThrows(MarkupException.class,
-                        () -> MarkupParser.parse("<size=big>x</size>")).error());
+                        () -> MarkupParser.parse("<size width=big>x</size>")).error());
     }
 
     @Test
     void rejectsArgumentOnATagThatTakesNone() {
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT,
+        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE,
                 assertThrows(MarkupException.class,
                         () -> MarkupParser.parse("<bold=1>x</bold>")).error());
     }
 
     @Test
     void rejectsMissingArgumentOnATagThatRequiresOne() {
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT,
+        assertEquals(MarkupError.INVALID_ATTRIBUTE,
                 assertThrows(MarkupException.class,
                         () -> MarkupParser.parse("<align>x</align>")).error());
     }
@@ -379,11 +379,11 @@ class MarkupParserTest {
     @Test
     void rejectsAFontOtherThanAOrB() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<font=roboto>x</font>"));
+                () -> MarkupParser.parse("<text font=roboto>x</text>"));
 
         assertEquals(MarkupError.SERVER_RENDERED, thrown.error());
-        assertEquals(1, thrown.column());
-        assertEquals("font", thrown.detail());
+        assertEquals(7, thrown.column());
+        assertEquals("text", thrown.detail());
     }
 
     @Test
@@ -440,8 +440,8 @@ class MarkupParserTest {
 
     @Test
     void nestsWithAlignmentInEitherOrder() throws Exception {
-        Line inner = MarkupParser.parse("<align=right><nowrap>x</nowrap></align>");
-        Line outer = MarkupParser.parse("<nowrap><align=right>x</align></nowrap>");
+        Line inner = MarkupParser.parse("<align to=right><nowrap>x</nowrap></align>");
+        Line outer = MarkupParser.parse("<nowrap><align to=right>x</align></nowrap>");
 
         assertEquals(Align.RIGHT, inner.align());
         assertEquals(Boolean.FALSE, inner.wrap());
@@ -536,29 +536,29 @@ class MarkupParserTest {
     @Test
     void parsesQrModuleSizeArgument() throws Exception {
         assertEquals(List.of(new Directive.Qr("x", 12)),
-                MarkupParser.parse("<qr=12>x</qr>").directives());
+                MarkupParser.parse("<qr size=12>x</qr>").directives());
     }
 
     @Test
     void rejectsQrModuleSizeAboveSixteen() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<qr=17>x</qr>"));
+                () -> MarkupParser.parse("<qr size=17>x</qr>"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
-        assertEquals(1, thrown.column());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
+        assertEquals(5, thrown.column());
     }
 
     @Test
     void parsesBarcodeSymbology() throws Exception {
         assertEquals(List.of(new Directive.Barcode(BarcodeSystem.CODE39, "FENPOS")),
-                MarkupParser.parse("<barcode=code39>FENPOS</barcode>").directives());
+                MarkupParser.parse("<barcode type=code39>FENPOS</barcode>").directives());
     }
 
     @Test
     void acceptsEverySymbologyThePanelOffers() throws Exception {
         for (BarcodeSystem system : BarcodeSystem.values()) {
             Line line = MarkupParser.parse(
-                    "<barcode=" + system.name().toLowerCase() + ">12345670</barcode>");
+                    "<barcode type=" + system.name().toLowerCase() + ">12345670</barcode>");
 
             assertEquals(List.of(new Directive.Barcode(system, "12345670")), line.directives(),
                     "symbology " + system);
@@ -568,9 +568,9 @@ class MarkupParserTest {
     @Test
     void rejectsUnknownBarcodeSymbology() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<barcode=qrcode>x</barcode>"));
+                () -> MarkupParser.parse("<barcode type=qrcode>x</barcode>"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
@@ -578,7 +578,7 @@ class MarkupParserTest {
         MarkupException thrown = assertThrows(MarkupException.class,
                 () -> MarkupParser.parse("<barcode>x</barcode>"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
@@ -594,7 +594,7 @@ class MarkupParserTest {
     @Test
     void parsesPdf417ErrorLevelArgument() throws Exception {
         Directive.Pdf417 symbol =
-                (Directive.Pdf417) MarkupParser.parse("<pdf417=5>x</pdf417>").directives().getFirst();
+                (Directive.Pdf417) MarkupParser.parse("<pdf417 level=5>x</pdf417>").directives().getFirst();
 
         assertEquals(5, symbol.errorLevel());
     }
@@ -618,15 +618,15 @@ class MarkupParserTest {
     @Test
     void rejectsPdf417ErrorLevelAboveEight() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<pdf417=9>x</pdf417>"));
+                () -> MarkupParser.parse("<pdf417 level=9>x</pdf417>"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
     void acceptsPdf417ErrorLevelZeroWhichIsNotAMissingArgument() throws Exception {
         Directive.Pdf417 symbol =
-                (Directive.Pdf417) MarkupParser.parse("<pdf417=0>x</pdf417>").directives().getFirst();
+                (Directive.Pdf417) MarkupParser.parse("<pdf417 level=0>x</pdf417>").directives().getFirst();
 
         assertEquals(0, symbol.errorLevel());
     }
@@ -703,7 +703,7 @@ class MarkupParserTest {
 
     @Test
     void permitsAlignmentAroundABlock() throws Exception {
-        Line line = MarkupParser.parse("<align=center><qr>x</qr></align>");
+        Line line = MarkupParser.parse("<align to=center><qr>x</qr></align>");
 
         assertEquals(Align.CENTER, line.align());
         assertEquals(List.of(new Directive.Qr("x", 6)), line.directives());
@@ -743,7 +743,7 @@ class MarkupParserTest {
     @Test
     void passesTheWidthPercentageToTheResolver() throws Exception {
         assertEquals(List.of(ONE_DOT),
-                MarkupParser.parse("<image=40>logo</image>", holding("logo", 40)).directives());
+                MarkupParser.parse("<image width=40>logo</image>", holding("logo", 40)).directives());
     }
 
     @Test
@@ -766,9 +766,9 @@ class MarkupParserTest {
     @Test
     void rejectsAnImageWidthAboveTheWholePaper() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parse("<image=101>logo</image>", holding("logo", 101)));
+                () -> MarkupParser.parse("<image width=101>logo</image>", holding("logo", 101)));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
@@ -822,7 +822,7 @@ class MarkupParserTest {
 
     @Test
     void carriesAlignAcrossTheLinesItOwns() throws MarkupException {
-        List<Line> lines = MarkupParser.parseDocument("<align=center>a\nb</align>\nc");
+        List<Line> lines = MarkupParser.parseDocument("<align to=center>a\nb</align>\nc");
 
         assertEquals(Align.CENTER, lines.get(0).align());
         assertEquals(Align.CENTER, lines.get(1).align());
@@ -842,17 +842,17 @@ class MarkupParserTest {
     @Test
     void refusesTextAfterAlignClosesOnTheSameLine() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parseDocument("<align=center>a</align> b"));
+                () -> MarkupParser.parseDocument("<align to=center>a</align> b"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
         assertEquals(1, thrown.line());
-        assertEquals(24, thrown.column());
+        assertEquals(27, thrown.column());
     }
 
     @Test
     void refusesAlignOpenedMidLineOnALaterLine() {
         MarkupException thrown = assertThrows(MarkupException.class,
-                () -> MarkupParser.parseDocument("ok\nx <align=center>a</align>"));
+                () -> MarkupParser.parseDocument("ok\nx <align to=center>a</align>"));
 
         assertEquals(2, thrown.line());
         assertEquals(3, thrown.column());
@@ -932,7 +932,7 @@ class MarkupParserTest {
 
     @Test
     void takesAFillCharacterFromTheArgument() throws Exception {
-        assertEquals(".", MarkupParser.parse("a<fill=.>b").fills().getFirst().character());
+        assertEquals(".", MarkupParser.parse("a<fill char=.>b").fills().getFirst().character());
     }
 
     /**
@@ -941,22 +941,22 @@ class MarkupParserTest {
      */
     @Test
     void acceptsAFillCharacterOutsideTheBasicPlane() throws Exception {
-        assertEquals("🙂", MarkupParser.parse("a<fill=🙂>b").fills().getFirst().character());
+        assertEquals("🙂", MarkupParser.parse("a<fill char=🙂>b").fills().getFirst().character());
     }
 
     @Test
     void refusesAFillArgumentThatIsNotExactlyOneCharacter() {
-        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill=ab>b"));
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill char=ab>b"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
-    /** Already refused by requireArgumentPolicy; asserted so the two test tables match. */
+    /** Already refused by appendFill's character-count check; asserted so the two test tables match. */
     @Test
     void refusesAnEmptyFillArgument() {
-        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill=>b"));
+        MarkupException thrown = assertThrows(MarkupException.class, () -> MarkupParser.parse("a<fill char=>b"));
 
-        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, thrown.error());
     }
 
     @Test
@@ -968,7 +968,7 @@ class MarkupParserTest {
 
     @Test
     void capturesTheStyleInEffectWhereTheFillWasWritten() throws Exception {
-        Line line = MarkupParser.parse("<bold>Total<fill=.>5.00</bold>");
+        Line line = MarkupParser.parse("<bold>Total<fill char=.>5.00</bold>");
 
         assertTrue(line.fills().getFirst().style().bold());
     }
@@ -1008,7 +1008,7 @@ class MarkupParserTest {
     @Test
     void refusesAFillAfterALineOwningTagHasClosed() {
         MarkupException thrown =
-                assertThrows(MarkupException.class, () -> MarkupParser.parse("<align=right>x</align><fill>"));
+                assertThrows(MarkupException.class, () -> MarkupParser.parse("<align to=right>x</align><fill>"));
 
         assertEquals(MarkupError.INVALID_ALIGN_SCOPE, thrown.error());
     }
@@ -1021,9 +1021,170 @@ class MarkupParserTest {
      */
     @Test
     void permitsAFillInsideAnAlignment() throws Exception {
-        Line line = MarkupParser.parse("<align=center>a<fill>b</align>");
+        Line line = MarkupParser.parse("<align to=center>a<fill>b</align>");
 
         assertEquals(Align.CENTER, line.align());
         assertEquals(1, line.fills().size());
+    }
+
+    // -------------------------------------------------------------------------
+    // Attributes
+    // -------------------------------------------------------------------------
+
+    @Test
+    void readsSizeFromWidthAndHeightEitherAloneLeavingTheOtherAtOne() throws Exception {
+        assertEquals(2, MarkupParser.parse("<size width=2 height=3>a</size>").spans().getFirst().style().widthMult());
+        assertEquals(3, MarkupParser.parse("<size width=2 height=3>a</size>").spans().getFirst().style().heightMult());
+        assertEquals(1, MarkupParser.parse("<size width=2>a</size>").spans().getFirst().style().heightMult());
+        assertEquals(1, MarkupParser.parse("<size height=3>a</size>").spans().getFirst().style().widthMult());
+    }
+
+    @Test
+    void refusesSizeWithNeitherDimensionAtTheTag() {
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<size>a</size>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(1, e.column());
+        assertEquals("width", e.detail());
+    }
+
+    @Test
+    void refusesAValueOutOfRangeAtTheAttribute() {
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<size width=9>a</size>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(7, e.column());
+        assertEquals("width", e.detail());
+    }
+
+    @Test
+    void refusesAMissingRequiredAttributeAtTheTag() {
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<feed>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(1, e.column());
+        assertEquals("lines", e.detail());
+    }
+
+    @Test
+    void refusesAnAttributeTheTagDoesNotHave() {
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<bold weight=2>a</bold>"));
+
+        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
+        assertEquals(7, e.column());
+        assertEquals("weight", e.detail());
+    }
+
+    @Test
+    void refusesAnAttributeSetTwice() {
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<size width=2 width=3>a</size>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(15, e.column());
+    }
+
+    @Test
+    void refusesAValueWrittenAgainstTheTagNameAsAMalformedAttribute() {
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<align=center>a</align>"));
+
+        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
+        assertEquals(7, e.column());
+        assertEquals("=", e.detail());
+        assertEquals("<align> attributes are written key=value", e.getMessage());
+    }
+
+    @Test
+    void readsAQuotedValueHoldingASpaceAndAClosingBracket() throws Exception {
+        // No tag this side accepts takes a title, so the scanner is exercised through the refusal it
+        // reaches after reading the value whole: the key is unknown, not the tag unterminated.
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<bold title=\"a > b\">x</bold>"));
+
+        assertEquals(MarkupError.UNKNOWN_ATTRIBUTE, e.error());
+        assertEquals("title", e.detail());
+    }
+
+    @Test
+    void matchesAnEnumValueIgnoringCase() throws Exception {
+        assertEquals(Align.CENTER, MarkupParser.parse("<align to=Center>a</align>").align());
+        assertEquals(Font.B, MarkupParser.parse("<text font=b>a</text>").spans().getFirst().style().font());
+    }
+
+    @Test
+    void refusesASizeOnABuiltInFontAtTheSize() {
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<text font=a size=32>a</text>"));
+
+        assertEquals(MarkupError.INVALID_ATTRIBUTE, e.error());
+        assertEquals(14, e.column());
+        assertEquals("size", e.detail());
+    }
+
+    @Test
+    void reportsAStoredFontAsServerRendered() {
+        MarkupException e = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("<text font=mono size=32>a</text>"));
+
+        assertEquals(MarkupError.SERVER_RENDERED, e.error());
+    }
+
+    @Test
+    void readsTheDirectivesFromTheirAttributes() throws Exception {
+        assertEquals(Directive.Cut.Mode.PARTIAL,
+                ((Directive.Cut) MarkupParser.parse("<cut mode=partial>").directives().getFirst()).mode());
+        assertEquals(Directive.Cut.Mode.FULL,
+                ((Directive.Cut) MarkupParser.parse("<cut>").directives().getFirst()).mode());
+        assertEquals(3, ((Directive.Feed) MarkupParser.parse("<feed lines=3>").directives().getFirst()).lines());
+        assertEquals(".", MarkupParser.parse("a<fill char=.>b").fills().getFirst().character());
+        assertEquals(" ", MarkupParser.parse("a<fill>b").fills().getFirst().character());
+    }
+
+    @Test
+    void readsTheBlocksShapesFromTheirAttributes() throws Exception {
+        assertEquals(8, ((Directive.Qr) MarkupParser.parse("<qr size=8>x</qr>").directives().getFirst()).size());
+        assertEquals(4, ((Directive.Pdf417) MarkupParser.parse("<pdf417 level=4>x</pdf417>").directives().getFirst())
+                .errorLevel());
+        assertEquals(BarcodeSystem.EAN13, ((Directive.Barcode) MarkupParser
+                .parse("<barcode type=ean13>5901234123457</barcode>").directives().getFirst()).system());
+        MarkupException e = assertThrows(MarkupException.class, () -> MarkupParser.parse("<barcode>1</barcode>"));
+        assertEquals("type", e.detail());
+    }
+
+    // -------------------------------------------------------------------------
+    // Indentation
+    // -------------------------------------------------------------------------
+
+    @Test
+    void dropsIndentationBeforeATagAndKeepsItsColumnExact() throws Exception {
+        Line line = MarkupParser.parse("  <bold>a</bold>");
+
+        assertEquals(1, line.spans().size());
+        assertEquals("a", line.spans().getFirst().text());
+        assertEquals(9, line.spans().getFirst().sourceColumn());
+    }
+
+    @Test
+    void letsAnIndentedAlignOwnItsLine() throws Exception {
+        assertEquals(Align.CENTER, MarkupParser.parse("\t<align to=center>a</align>").align());
+    }
+
+    @Test
+    void keepsIndentationBeforeText() throws Exception {
+        assertEquals("  - no onion", MarkupParser.parse("  - no onion").plainText());
+    }
+
+    @Test
+    void stillRefusesATabBeforeText() {
+        assertEquals(MarkupError.CONTROL_CHARACTER,
+                assertThrows(MarkupException.class, () -> MarkupParser.parse("\tx")).error());
+    }
+
+    @Test
+    void dropsIndentationBeforeAClosingTagOnALaterLine() throws Exception {
+        List<Line> lines = MarkupParser.parseDocument("<bold>a\n  </bold>");
+
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(1).spans().isEmpty());
     }
 }

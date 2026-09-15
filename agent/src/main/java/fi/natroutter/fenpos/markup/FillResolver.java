@@ -48,8 +48,8 @@ public final class FillResolver {
             spans.addAll(line.spans().subList(next, fill.afterSpans()));
             next = fill.afterSpans();
 
-            // The budget is spent in whole characters, so a fill inside <size=N> can leave up to
-            // N - 1 columns unspent and the line lands that much short of the edge. Under the
+            // The budget is spent in whole characters, so a fill inside <size width=N> can leave up
+            // to N - 1 columns unspent and the line lands that much short of the edge. Under the
             // default multiplier of one — every ordinary receipt row — that cannot happen.
             int count = budgets[index] / fill.style().widthMult();
             if (count > 0) {

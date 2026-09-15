@@ -13,8 +13,10 @@ import fi.natroutter.fenpos.util.Enums;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -52,13 +54,13 @@ public final class MarkupParser {
     /** Highest permitted feed distance, imposed by ESC/POS {@code ESC d}. */
     private static final int MAX_FEED_LINES = 255;
 
-    /** Dots per QR module when {@code <qr>} carries no argument. Mirrors the panel's default. */
+    /** Dots per QR module when {@code <qr>}'s {@code size} is left off. Mirrors the panel's default. */
     private static final int DEFAULT_QR_MODULE_SIZE = 6;
 
     /** Largest QR module size, imposed by ESC/POS {@code GS ( k} function 167. */
     private static final int MAX_QR_MODULE_SIZE = 16;
 
-    /** PDF417 error-correction level when {@code <pdf417>} carries no argument. */
+    /** PDF417 error-correction level when {@code <pdf417>}'s {@code level} is left off. */
     private static final int DEFAULT_PDF417_ERROR_LEVEL = 1;
 
     /** Highest PDF417 error-correction level, imposed by ESC/POS {@code GS ( k} function 069. */
@@ -91,7 +93,7 @@ public final class MarkupParser {
     /** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
     private static final int MAX_IMAGE_WIDTH_PERCENT = 100;
 
-    /** Printed width of {@code <image>} when it carries no argument. */
+    /** Printed width of {@code <image>} when its {@code width} is left off. */
     private static final int DEFAULT_IMAGE_WIDTH_PERCENT = MAX_IMAGE_WIDTH_PERCENT;
 
     /**
@@ -252,6 +254,7 @@ public final class MarkupParser {
     }
 
     private List<Line> run() throws MarkupException {
+        skipIndentation();
         while (index < source.length()) {
             char current = source.charAt(index);
             switch (current) {
@@ -263,6 +266,7 @@ public final class MarkupParser {
                     } else {
                         endLine();
                     }
+                    skipIndentation();
                 }
                 default -> readText(current);
             }
@@ -344,6 +348,24 @@ public final class MarkupParser {
     /** Returns the 1-based column of {@link #index} within the current line. */
     private int column() {
         return index - lineStart + 1;
+    }
+
+    /**
+     * Skips whitespace between the start of a line and a tag.
+     * <p>
+     * Indentation is for whoever reads the markup, not for the paper, and it is skipped here, before
+     * {@link #readText} could refuse a tab in it. Only a run that ends at a {@code <} is skipped: a
+     * line that starts with text keeps every space, and a tab before text is still a control
+     * character.
+     */
+    private void skipIndentation() {
+        int at = index;
+        while (at < source.length() && (source.charAt(at) == ' ' || source.charAt(at) == '\t')) {
+            at++;
+        }
+        if (at > index && at < source.length() && source.charAt(at) == '<') {
+            index = at;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -442,27 +464,62 @@ public final class MarkupParser {
 
     private void readTag() throws MarkupException {
         int startColumn = column();
-        int close = source.indexOf('>', index);
+        int close = tagEnd(index);
         if (close < 0) {
             throw new MarkupException(MarkupError.UNKNOWN_TAG, line, startColumn,
-                    source.substring(index),
+                    source.substring(index, lineEnd()),
                     "Unterminated tag; write &lt; for a literal '<'");
         }
 
         String body = source.substring(index + 1, close);
+        int bodyStart = index + 1;
         index = close + 1;
 
         if (body.startsWith("/")) {
             closeTag(body.substring(1), startColumn);
         } else {
-            openTag(body, startColumn);
+            openTag(body, bodyStart, startColumn);
         }
     }
 
-    private void openTag(String body, int column) throws MarkupException {
-        int equals = body.indexOf('=');
-        String name = equals < 0 ? body : body.substring(0, equals);
-        String argument = equals < 0 ? null : body.substring(equals + 1);
+    /**
+     * Finds the {@code >} that ends the tag opening at {@code from}, or -1 when its line has none.
+     * <p>
+     * Walked rather than found with {@code indexOf}, because a quoted attribute value may hold a
+     * {@code >} of its own, and a tag has to end on the line it opened on.
+     */
+    private int tagEnd(int from) {
+        boolean quoted = false;
+        for (int at = from + 1; at < source.length(); at++) {
+            char current = source.charAt(at);
+            if (current == '\n') {
+                return -1;
+            }
+            if (current == '"') {
+                quoted = !quoted;
+            } else if (current == '>' && !quoted) {
+                return at;
+            }
+        }
+        return -1;
+    }
+
+    private int lineEnd() {
+        int end = source.indexOf('\n', index);
+        return end < 0 ? source.length() : end;
+    }
+
+    private static boolean isNameChar(char value) {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
+                || (value >= '0' && value <= '9') || value == '_' || value == '-';
+    }
+
+    private void openTag(String body, int bodyStart, int column) throws MarkupException {
+        int at = 0;
+        while (at < body.length() && isNameChar(body.charAt(at))) {
+            at++;
+        }
+        String name = body.substring(0, at);
 
         requireNotServerTag(name, column);
 
@@ -474,24 +531,24 @@ public final class MarkupParser {
             throw insideBlock(tag, column);
         }
 
-        requireArgumentPolicy(tag, argument, column);
+        Map<String, Attribute> attributes = readAttributes(tag, body, at, bodyStart);
 
         // Void, but not a directive: a fill is a position in the text rather than a printer action,
         // so it never reaches appendDirective.
         if (tag == Tag.FILL) {
-            appendFill(argument, column);
+            appendFill(attributes, column);
             return;
         }
 
         if (tag.kind() == Tag.Kind.VOID) {
-            appendDirective(tag, argument, column);
+            appendDirective(tag, attributes, column);
             return;
         }
 
         flushPending();
 
         if (tag == Tag.ALIGN) {
-            openAlign(argument, column);
+            openAlign(attributes, column);
             return;
         }
 
@@ -501,13 +558,75 @@ public final class MarkupParser {
         }
 
         if (tag.isBlock()) {
-            openBlock(tag, argument, column);
+            openBlock(tag, attributes, column);
             return;
         }
 
         requireInsideLineScope(column);
         open.push(new OpenTag(tag, column, style, line));
-        style = applyStyle(tag, argument, column);
+        style = applyStyle(tag, attributes, column);
+    }
+
+    /**
+     * Reads the {@code key=value} pairs after a tag's name, exactly as the panel's tokenizer does.
+     * <p>
+     * A key is a run of name characters followed by {@code =}; a value is double-quoted and runs to
+     * the closing quote, or bare and runs to the next space or tab. Anything at a key's position
+     * that cannot start one — the {@code =} of a value written against the tag name, say — is refused
+     * with the same generic message the panel gives, so a caller sees one refusal wherever the
+     * markup is parsed.
+     */
+    private Map<String, Attribute> readAttributes(Tag tag, String body, int from, int bodyStart)
+            throws MarkupException {
+        Map<String, Attribute> read = new LinkedHashMap<>();
+        int at = from;
+        while (at < body.length()) {
+            char current = body.charAt(at);
+            if (current == ' ' || current == '\t') {
+                at++;
+                continue;
+            }
+            int keyColumn = bodyStart + at - lineStart + 1;
+            int keyStart = at;
+            while (at < body.length() && isNameChar(body.charAt(at))) {
+                at++;
+            }
+            String key = body.substring(keyStart, at).toLowerCase(Locale.ROOT);
+            if (key.isEmpty() || at >= body.length() || body.charAt(at) != '=') {
+                String shown = key.isEmpty() ? body.substring(keyStart, keyStart + 1) : key;
+                throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, shown,
+                        "<" + tag.tagName() + "> attributes are written key=value");
+            }
+            at++;
+            String value;
+            if (at < body.length() && body.charAt(at) == '"') {
+                int end = body.indexOf('"', at + 1);
+                value = body.substring(at + 1, end);
+                at = end + 1;
+            } else {
+                int valueStart = at;
+                while (at < body.length() && body.charAt(at) != ' ' && body.charAt(at) != '\t') {
+                    at++;
+                }
+                value = body.substring(valueStart, at);
+            }
+            for (int i = 0; i < value.length(); i++) {
+                if (isControl(value.charAt(i))) {
+                    throw new MarkupException(MarkupError.CONTROL_CHARACTER, line, keyColumn, key,
+                            "Control characters cannot be printed; use markup tags for formatting");
+                }
+            }
+            if (!tag.attributes().contains(key)) {
+                throw new MarkupException(MarkupError.UNKNOWN_ATTRIBUTE, line, keyColumn, key,
+                        "<" + tag.tagName() + "> has no attribute '" + key + "'");
+            }
+            if (read.containsKey(key)) {
+                throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, keyColumn, key,
+                        "<" + tag.tagName() + "> sets '" + key + "' twice");
+            }
+            read.put(key, new Attribute(value, keyColumn));
+        }
+        return read;
     }
 
     private void closeTag(String name, int column) throws MarkupException {
@@ -557,49 +676,66 @@ public final class MarkupParser {
     /**
      * Applies a tag's effect to the current style.
      *
-     * @throws MarkupException if the argument is malformed or out of range
+     * @throws MarkupException if an attribute is malformed or out of range
      */
-    private SpanStyle applyStyle(Tag tag, String argument, int column) throws MarkupException {
+    private SpanStyle applyStyle(Tag tag, Map<String, Attribute> attributes, int column)
+            throws MarkupException {
         return switch (tag) {
             case BOLD -> style.withBold(true);
             case INVERT -> style.withInvert(true);
-            case UNDERLINE -> style.withUnderline(
-                    argument == null ? 1 : requireInt(argument, 1, 2, tag, column));
-            case SIZE -> applySize(argument, column);
-            case FONT -> style.withFont(Enums.parse(Font.class, argument).orElseThrow(
-                    () -> new MarkupException(MarkupError.SERVER_RENDERED, line, column, tag.tagName(),
-                            "<font=name> uses a stored font the server renders; the console has a and b")));
+            case UNDERLINE -> style.withUnderline(optionalInt(tag, attributes, "weight", 1, 2, 1));
+            case SIZE -> applySize(attributes, column);
+            case TEXT -> applyText(attributes, column);
             case ALIGN, WRAP, NOWRAP, FILL, CUT, FEED, HR, QR, BARCODE, PDF417, IMAGE ->
-                    throw new IllegalStateException(
-                            "Tag " + tag + " does not carry a span style");
+                    throw new IllegalStateException("Tag " + tag + " does not carry a span style");
         };
     }
 
-    private SpanStyle applySize(String argument, int column) throws MarkupException {
-        String[] parts = argument.split(",", -1);
-        if (parts.length > 2) {
-            throw argumentError(Tag.SIZE, column, "expected W or W,H");
+    private SpanStyle applySize(Map<String, Attribute> attributes, int column) throws MarkupException {
+        if (!attributes.containsKey("width") && !attributes.containsKey("height")) {
+            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, column, "width",
+                    "<size> needs width or height, or both");
         }
-        int width = requireInt(parts[0], 1, MAX_SIZE_MULTIPLIER, Tag.SIZE, column);
-        int height = parts.length == 1
-                ? width
-                : requireInt(parts[1], 1, MAX_SIZE_MULTIPLIER, Tag.SIZE, column);
+        int width = optionalInt(Tag.SIZE, attributes, "width", 1, MAX_SIZE_MULTIPLIER, 1);
+        int height = optionalInt(Tag.SIZE, attributes, "height", 1, MAX_SIZE_MULTIPLIER, 1);
         return style.withSize(width, height);
+    }
+
+    /**
+     * Selects one of the printer's two faces.
+     * <p>
+     * A name that is not {@code a} or {@code b} is a stored font, which only the server can draw;
+     * refused as such rather than as unknown, so the caller learns which side to send the job to.
+     */
+    private SpanStyle applyText(Map<String, Attribute> attributes, int column) throws MarkupException {
+        Attribute font = require(Tag.TEXT, attributes, "font", column);
+        Optional<Font> builtIn = Enums.parse(Font.class, font.value());
+        if (builtIn.isEmpty()) {
+            throw new MarkupException(MarkupError.SERVER_RENDERED, line, font.column(), "text",
+                    "<text font=name> uses a stored font the server renders; the console has a and b");
+        }
+        Attribute size = attributes.get("size");
+        if (size != null) {
+            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, size.column(), "size",
+                    "<text> size applies to a stored font, not to the printer's own");
+        }
+        return style.withFont(builtIn.get());
     }
 
     // -------------------------------------------------------------------------
     // Alignment
     // -------------------------------------------------------------------------
 
-    private void openAlign(String argument, int column) throws MarkupException {
+    private void openAlign(Map<String, Attribute> attributes, int column) throws MarkupException {
         if (alignSeen) {
             throw new MarkupException(MarkupError.INVALID_ALIGN_SCOPE, line, column, "align",
                     "Only one <align> is allowed per line");
         }
         requireLineOwnerCanOpen("align", MarkupError.INVALID_ALIGN_SCOPE, column);
 
-        align = Enums.parse(Align.class, argument).orElseThrow(
-                () -> argumentError(Tag.ALIGN, column, "must be 'left', 'center' or 'right'"));
+        Attribute to = require(Tag.ALIGN, attributes, "to", column);
+        align = Enums.parse(Align.class, to.value()).orElseThrow(
+                () -> attributeError(Tag.ALIGN, "to", to, "left, center or right"));
         alignSeen = true;
         open.push(new OpenTag(Tag.ALIGN, column, style, line));
     }
@@ -719,31 +855,28 @@ public final class MarkupParser {
      * {@link #block} field: while it is set the scanner writes into the block's content instead of
      * into a span.
      * <p>
-     * The argument is resolved here rather than when the block closes, so a bad one is refused at
+     * Its attributes are resolved here rather than when the block closes, so a bad one is refused at
      * the position it was written and before the rest of the element has been scanned.
      */
-    private void openBlock(Tag tag, String argument, int column) throws MarkupException {
+    private void openBlock(Tag tag, Map<String, Attribute> attributes, int column) throws MarkupException {
         requireInsideLineScope(column);
 
         int value = switch (tag) {
-            case QR -> argument == null
-                    ? DEFAULT_QR_MODULE_SIZE
-                    : requireInt(argument, 1, MAX_QR_MODULE_SIZE, tag, column);
-            case PDF417 -> argument == null
-                    ? DEFAULT_PDF417_ERROR_LEVEL
-                    : requireInt(argument, 0, MAX_PDF417_ERROR_LEVEL, tag, column);
-            case IMAGE -> argument == null
-                    ? DEFAULT_IMAGE_WIDTH_PERCENT
-                    : requireInt(argument, MIN_IMAGE_WIDTH_PERCENT, MAX_IMAGE_WIDTH_PERCENT,
-                            tag, column);
+            case QR -> optionalInt(tag, attributes, "size", 1, MAX_QR_MODULE_SIZE, DEFAULT_QR_MODULE_SIZE);
+            case PDF417 -> optionalInt(tag, attributes, "level", 0, MAX_PDF417_ERROR_LEVEL,
+                    DEFAULT_PDF417_ERROR_LEVEL);
+            case IMAGE -> optionalInt(tag, attributes, "width", MIN_IMAGE_WIDTH_PERCENT,
+                    MAX_IMAGE_WIDTH_PERCENT, DEFAULT_IMAGE_WIDTH_PERCENT);
             case BARCODE -> 0;
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
 
-        BarcodeSystem system = tag == Tag.BARCODE
-                ? Enums.parse(BarcodeSystem.class, argument).orElseThrow(() -> argumentError(
-                        tag, column, "must name a symbology: " + Enums.names(BarcodeSystem.class)))
-                : null;
+        BarcodeSystem system = null;
+        if (tag == Tag.BARCODE) {
+            Attribute type = require(tag, attributes, "type", column);
+            system = Enums.parse(BarcodeSystem.class, type.value()).orElseThrow(() -> attributeError(
+                    tag, "type", type, "a symbology: " + Enums.names(BarcodeSystem.class)));
+        }
 
         open.push(new OpenTag(tag, column, style, line));
         block = new OpenBlock(tag, column, value, system, new StringBuilder(), line);
@@ -854,12 +987,13 @@ public final class MarkupParser {
     // Directives
     // -------------------------------------------------------------------------
 
-    private void appendDirective(Tag tag, String argument, int column) throws MarkupException {
+    private void appendDirective(Tag tag, Map<String, Attribute> attributes, int column)
+            throws MarkupException {
         requireInsideLineScope(column);
         switch (tag) {
-            case CUT -> directives.add(new Directive.Cut(cutMode(argument, column)));
+            case CUT -> directives.add(new Directive.Cut(cutMode(attributes)));
             case FEED -> directives.add(new Directive.Feed(
-                    requireInt(argument, 1, MAX_FEED_LINES, Tag.FEED, column)));
+                    requiredInt(Tag.FEED, attributes, "lines", 1, MAX_FEED_LINES, column)));
             case HR -> {
                 claimLine("hr", column, MarkupError.INVALID_RULE_SCOPE);
                 directives.add(new Directive.Rule());
@@ -875,28 +1009,30 @@ public final class MarkupParser {
      * a span yet, so without it {@code Coffee<fill>2.50} would record {@code afterSpans = 0} and pad
      * the wrong side of the word.
      */
-    private void appendFill(String argument, int column) throws MarkupException {
+    private void appendFill(Map<String, Attribute> attributes, int column) throws MarkupException {
         requireInsideLineScope(column);
 
-        String character = argument == null ? " " : argument;
+        Attribute written = attributes.get("char");
+        String character = written == null ? " " : written.value();
         // Code points, not chars: an astral character is one character and two chars, and measuring
         // chars would refuse a legitimate single character as though it were two.
         if (character.codePointCount(0, character.length()) != 1) {
-            throw argumentError(Tag.FILL, column, "takes a single character, written <fill=x>");
+            throw attributeError(Tag.FILL, "char", written, "a single character");
         }
 
         flushPending();
         fills.add(new Fill(spans.size(), character, style, column));
     }
 
-    private Directive.Cut.Mode cutMode(String argument, int column) throws MarkupException {
-        if (argument == null || argument.equalsIgnoreCase("full")) {
+    private Directive.Cut.Mode cutMode(Map<String, Attribute> attributes) throws MarkupException {
+        Attribute mode = attributes.get("mode");
+        if (mode == null || mode.value().equalsIgnoreCase("full")) {
             return Directive.Cut.Mode.FULL;
         }
-        if (argument.equalsIgnoreCase("partial")) {
+        if (mode.value().equalsIgnoreCase("partial")) {
             return Directive.Cut.Mode.PARTIAL;
         }
-        throw argumentError(Tag.CUT, column, "must be 'full' or 'partial'");
+        throw attributeError(Tag.CUT, "mode", mode, "full or partial");
     }
 
     /** Records a directive that must be the only thing printed on its line. */
@@ -921,7 +1057,7 @@ public final class MarkupParser {
         if (soleOccupant == null) {
             return;
         }
-        // Fills count towards sharing even though they produce no span yet. `<hr><fill=.>` would
+        // Fills count towards sharing even though they produce no span yet. `<hr><fill char=.>` would
         // otherwise print a line of dots, feed, and then the rule — one element, two lines of paper.
         if (spans.isEmpty() && fills.isEmpty() && directives.size() == 1) {
             return;
@@ -935,33 +1071,47 @@ public final class MarkupParser {
     // Shared checks
     // -------------------------------------------------------------------------
 
-    private void requireArgumentPolicy(Tag tag, String argument, int column) throws MarkupException {
-        boolean supplied = argument != null;
-        if (supplied && tag.argument() == Tag.Argument.NONE) {
-            throw argumentError(tag, column, "takes no argument");
-        }
-        if (!supplied && tag.argument() == Tag.Argument.REQUIRED) {
-            throw argumentError(tag, column, "requires an argument, written <"
-                    + tag.tagName() + "=value>");
-        }
-        if (supplied && argument.isEmpty()) {
-            throw argumentError(tag, column, "has an empty argument");
-        }
+    /** Reads an integer attribute, or {@code fallback} when it was left off. */
+    private int optionalInt(Tag tag, Map<String, Attribute> attributes, String key, int min, int max,
+                            int fallback) throws MarkupException {
+        Attribute attribute = attributes.get(key);
+        return attribute == null ? fallback : intValue(tag, key, attribute, min, max);
     }
 
-    private int requireInt(String value, int min, int max, Tag tag, int column)
+    /** Reads an integer attribute the tag cannot do without. */
+    private int requiredInt(Tag tag, Map<String, Attribute> attributes, String key, int min, int max,
+                            int tagColumn) throws MarkupException {
+        return intValue(tag, key, require(tag, attributes, key, tagColumn), min, max);
+    }
+
+    private Attribute require(Tag tag, Map<String, Attribute> attributes, String key, int tagColumn)
+            throws MarkupException {
+        Attribute attribute = attributes.get(key);
+        if (attribute == null) {
+            throw new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, tagColumn, key,
+                    "<" + tag.tagName() + "> requires " + key);
+        }
+        return attribute;
+    }
+
+    private int intValue(Tag tag, String key, Attribute attribute, int min, int max)
             throws MarkupException {
         int parsed;
         try {
-            parsed = Integer.parseInt(value.strip());
+            parsed = Integer.parseInt(attribute.value().strip());
         } catch (NumberFormatException e) {
-            throw argumentError(tag, column, "'" + value + "' is not a number");
+            throw attributeError(tag, key, attribute, "a whole number from " + min + " to " + max);
         }
         if (parsed < min || parsed > max) {
-            throw argumentError(tag, column, "must be between " + min + " and " + max
-                    + ", got " + parsed);
+            throw attributeError(tag, key, attribute, "a whole number from " + min + " to " + max);
         }
         return parsed;
+    }
+
+    private MarkupException attributeError(Tag tag, String key, Attribute attribute, String expected) {
+        return new MarkupException(MarkupError.INVALID_ATTRIBUTE, line, attribute.column(), key,
+                "<" + tag.tagName() + "> " + key + "=" + attribute.value() + " is not accepted; expected "
+                        + expected);
     }
 
     private MarkupException argumentError(Tag tag, int column, String detail) {
@@ -977,6 +1127,10 @@ public final class MarkupParser {
      */
     private static boolean isControl(char value) {
         return (value < 0x20 && value != '\n') || value == 0x7F || (value >= 0x80 && value <= 0x9F);
+    }
+
+    /** One attribute as the author wrote it, and the column its key starts at. */
+    private record Attribute(String value, int column) {
     }
 
     /**
@@ -997,7 +1151,7 @@ public final class MarkupParser {
      * between them are never appended here, so {@code content} holds only what was written
      * between the tags, one line's worth run into the next.
      *
-     * @param value  the tag's argument, already resolved: a QR module size, a PDF417 error level,
+     * @param value  the tag's attribute, already resolved: a QR module size, a PDF417 error level,
      *               or an image's width percentage. Unused for a barcode, which carries a
      *               {@code system} instead.
      * @param system the symbology, for {@code <barcode>} only; null for every other block
