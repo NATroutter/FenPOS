@@ -270,8 +270,8 @@ function paintAxes(
 
 	if (chart.type === "scatter") {
 		// A scatter's horizontal axis measures rather than names: its points carry an x of their own
-		// instead of falling into categories, so the axis is marked the way the value axis is and the
-		// chart's labels, which name categories, have nothing under a scatter to name.
+		// instead of falling into categories, so it is marked the way the value axis is. Labels name
+		// categories, and a scatter carrying any is refused long before it reaches the paper.
 		const columns = acrossTicks(chart);
 		const across = acrossScale(columns, plot.x, plot.width);
 		for (const mark of columns) {

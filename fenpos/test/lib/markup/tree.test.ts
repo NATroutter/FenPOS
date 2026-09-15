@@ -327,17 +327,26 @@ describe("block tags", () => {
 	});
 
 	it("parses series values, scatter pairs and labels", () => {
-		const chart = block(
-			"<chart=scatter>\n<series=A>1:2, 3:4\n5:6</series>\n<labels>x,y</labels>\n</chart>",
-		) as BlockNode;
+		const scatter = block("<chart=scatter>\n<series=A>1:2, 3:4\n5:6</series>\n</chart>") as BlockNode;
 
-		expect(chart.chart?.series[0].points).toEqual([
+		expect(scatter.chart?.series[0].points).toEqual([
 			[1, 2],
 			[3, 4],
 			[5, 6],
 		]);
-		expect(chart.chart?.labels).toEqual(["x", "y"]);
-		expect(chart.chart?.series[0].marker).toBe("circle");
+		expect(scatter.chart?.series[0].marker).toBe("circle");
+
+		const line = block("<chart=line>\n<series=A>1,2</series>\n<labels>x,y</labels>\n</chart>") as BlockNode;
+
+		expect(line.chart?.labels).toEqual(["x", "y"]);
+	});
+
+	it("refuses labels on a scatter, whose axes carry numbers of their own", () => {
+		const thrown = refusal("<chart=scatter>\n<series=A>1:2</series>\n<labels>x</labels>\n</chart>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(thrown.line).toBe(3);
+		expect(thrown.column).toBe(1);
 	});
 
 	it("refuses a value that is not a number, too many points and too many labels", () => {

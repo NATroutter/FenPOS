@@ -1044,7 +1044,8 @@ class DocumentBuilder {
 	 * @param node the chart, with its series and labels already closed beneath it
 	 * @returns what the layout engine draws from
 	 * @throws MarkupError if a value is not a number, or the chart holds nothing to plot, more series
-	 * than it can draw, a pie slice that is not above zero, or more labels than it has points to name
+	 * than it can draw, a pie slice that is not above zero, labels on a scatter, or more labels than
+	 * it has points to name
 	 */
 	private readChart(node: BlockNode): ChartData {
 		const type = node.argument as ChartType;
@@ -1089,6 +1090,19 @@ class DocumentBuilder {
 				seriesBlocks[0].column,
 				String(unshareable),
 				`a pie divides a whole into shares, so <series> holds values above zero, and ${unshareable} is not one`,
+			);
+		}
+
+		// A scatter's points carry an x of their own and its horizontal axis is marked with numbers, so
+		// there is no category for a label to name and no room under the axis to print one in. Refused
+		// rather than ignored: a label an author wrote and the chart never draws is a silent loss.
+		if (type === "scatter" && labelBlocks.length > 0) {
+			throw new MarkupError(
+				MARKUP_ERRORS.misplacedBlock,
+				labelBlocks[0].line,
+				labelBlocks[0].column,
+				"labels",
+				"<labels> has no meaning in a scatter chart; its axes carry numbers",
 			);
 		}
 
