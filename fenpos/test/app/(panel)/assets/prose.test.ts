@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { acceptAttributeFor, acceptedFormatsPhrase, assetStoredMessage } from "@/app/(panel)/assets/prose";
+import {
+	acceptAttributeFor,
+	acceptedFormatsPhrase,
+	assetStoredMessage,
+	replaceDescription,
+} from "@/app/(panel)/assets/prose";
 
 /**
  * Both branches of `assets.acceptedFormats`' two values, for both pieces of text the upload dialog
@@ -35,5 +40,31 @@ describe("assetStoredMessage", () => {
 
 	it("names an image", () => {
 		expect(assetStoredMessage("logo", "IMAGE")).toBe("logo stored as an image.");
+	});
+});
+
+/**
+ * Every branch `replaceDescription` can take: both accepted-formats values for an image, and the
+ * font branch, which does not consult `assets.acceptedFormats` at all. Pinned separately from
+ * `acceptedFormatsPhrase` because this function deliberately never mentions the other kind — see its
+ * own doc comment.
+ */
+describe("replaceDescription", () => {
+	it("names both image formats, for an image, when both are accepted", () => {
+		expect(replaceDescription("IMAGE", "png+jpeg", 2 * 1024 * 1024)).toBe(
+			"PNG or JPEG images, up to 2 MiB. The name stays as it is, so every receipt that already prints this image prints the new one without being edited.",
+		);
+	});
+
+	it("names only PNG, for an image, when JPEG is turned off", () => {
+		expect(replaceDescription("IMAGE", "png", 2 * 1024 * 1024)).toBe(
+			"PNG images, up to 2 MiB. The name stays as it is, so every receipt that already prints this image prints the new one without being edited.",
+		);
+	});
+
+	it("names a font without mentioning images, regardless of assets.acceptedFormats", () => {
+		expect(replaceDescription("FONT", "png+jpeg", 5 * 1024 * 1024)).toBe(
+			"A TTF or OTF font, up to 5 MiB. The name stays as it is, so every receipt that already draws this font draws the new one without being edited.",
+		);
 	});
 });

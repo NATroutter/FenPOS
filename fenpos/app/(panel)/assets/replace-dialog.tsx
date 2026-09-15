@@ -4,7 +4,7 @@ import { type ReactElement, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { replaceAsset, replaceAssetFromUrl } from "@/app/(panel)/assets/actions";
 import { ImageSourceTabs, useImageSource } from "@/app/(panel)/assets/image-source";
-import type { AcceptedFormats } from "@/app/(panel)/assets/prose";
+import { type AcceptedFormats, replaceDescription } from "@/app/(panel)/assets/prose";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import type { AssetKind } from "@/lib/domain/enums";
-import { describeBytes } from "@/lib/format/bytes";
 
 /**
  * Swaps an asset's bytes, keeping its name — a redrawn logo's picture, or a font's own file.
@@ -36,15 +35,6 @@ import { describeBytes } from "@/lib/format/bytes";
  * have fewer ways to supply one than an operator adding it, and should not have to learn a second
  * layout to use them.
  */
-
-/**
- * Names the accepted image formats alone, for a replacement that can only ever be an image —
- * `acceptedFormatsPhrase` (`prose.ts`) always mentions fonts too, which is right for the Add dialog's
- * either-kind File tab and wrong here: a font offered where only an image can land would just be
- * refused, and saying "or a font" first would read as an invitation this dialog cannot honour.
- */
-const IMAGE_FORMATS_PHRASE: Record<AcceptedFormats, string> = { "png+jpeg": "PNG or JPEG", png: "PNG" };
-
 export function ReplaceDialog({
 	assetId,
 	assetName,
@@ -108,11 +98,7 @@ export function ReplaceDialog({
 			<DialogContent className="sm:max-w-[560px]">
 				<DialogHeader>
 					<DialogTitle>Replace {assetName}</DialogTitle>
-					<DialogDescription>
-						{kind === "FONT"
-							? `A TTF or OTF font, up to ${describeBytes(maxBytes)}. The name stays as it is, so every receipt that already draws this font draws the new one without being edited.`
-							: `${IMAGE_FORMATS_PHRASE[acceptedFormats]} images, up to ${describeBytes(maxBytes)}. The name stays as it is, so every receipt that already prints this image prints the new one without being edited.`}
-					</DialogDescription>
+					<DialogDescription>{replaceDescription(kind, acceptedFormats, maxBytes)}</DialogDescription>
 				</DialogHeader>
 				<DialogBody>
 					<div className="flex flex-col gap-4">
