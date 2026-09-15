@@ -47,6 +47,9 @@ export function readAttributes(
 	column: number,
 ): Attributes {
 	const read: Record<string, string | number> = {};
+	// What was written, apart from what was kept: an empty text value is kept as nothing, and a second
+	// one of the same name is still a second one.
+	const seen = new Set<string>();
 
 	for (const attribute of raw) {
 		const spec = Object.hasOwn(table, attribute.name) ? table[attribute.name] : undefined;
@@ -59,7 +62,7 @@ export function readAttributes(
 				`<${tag}> has no attribute '${attribute.name}'`,
 			);
 		}
-		if (Object.hasOwn(read, attribute.name)) {
+		if (seen.has(attribute.name)) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidAttribute,
 				line,
@@ -68,7 +71,11 @@ export function readAttributes(
 				`<${tag}> sets '${attribute.name}' twice`,
 			);
 		}
-		read[attribute.name] = coerce(tag, attribute, spec, line);
+		seen.add(attribute.name);
+		const value = coerce(tag, attribute, spec, line);
+		if (value !== undefined) {
+			read[attribute.name] = value;
+		}
 	}
 
 	for (const [name, spec] of Object.entries(table)) {
@@ -80,7 +87,7 @@ export function readAttributes(
 	return read;
 }
 
-function coerce(tag: string, attribute: RawAttribute, spec: AttributeSpec, line: number): string | number {
+function coerce(tag: string, attribute: RawAttribute, spec: AttributeSpec, line: number): string | number | undefined {
 	const refuse = (expected: string): MarkupError =>
 		new MarkupError(
 			MARKUP_ERRORS.invalidAttribute,
@@ -113,6 +120,11 @@ function coerce(tag: string, attribute: RawAttribute, spec: AttributeSpec, line:
 			return match;
 		}
 		case "text": {
+			// Written empty means not given: a blank legend label or caption is never what was meant,
+			// and the tag already has a meaning for the attribute being absent.
+			if (attribute.value.length === 0) {
+				return undefined;
+			}
 			if (attribute.value.length > spec.maxLength) {
 				throw refuse(`at most ${spec.maxLength} characters`);
 			}

@@ -140,4 +140,62 @@ describe("readAttributes", () => {
 		expect(thrown.column).toBe(7);
 		expect(thrown.message).toBe("<fill> char=ab is not accepted; expected a single character");
 	});
+
+	it("treats an empty text value as though the attribute were left off", () => {
+		const read = readAttributes(
+			"box",
+			[
+				{ name: "title", value: "", column: 6 },
+				{ name: "lines", value: "1", column: 15 },
+			],
+			TABLE,
+			1,
+			1,
+		);
+
+		expect(read).toEqual({ lines: 1 });
+	});
+
+	it("refuses a required text attribute written empty as missing", () => {
+		const thrown = refusal(() =>
+			readAttributes(
+				"text",
+				[{ name: "font", value: "", column: 7 }],
+				{ font: { kind: "text", maxLength: 64, required: true } },
+				1,
+				1,
+			),
+		);
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(1);
+		expect(thrown.detail).toBe("font");
+		expect(thrown.message).toBe("<text> requires font");
+	});
+
+	it("refuses an attribute set twice even when the first was empty", () => {
+		const thrown = refusal(() =>
+			readAttributes(
+				"box",
+				[
+					{ name: "title", value: "", column: 6 },
+					{ name: "title", value: "A", column: 15 },
+				],
+				TABLE,
+				1,
+				1,
+			),
+		);
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(15);
+		expect(thrown.message).toBe("<box> sets 'title' twice");
+	});
+
+	it("still refuses an empty value that is not text", () => {
+		const thrown = refusal(() => readAttributes("box", [{ name: "width", value: "", column: 6 }], TABLE, 1, 1));
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.message).toBe("<box> width= is not accepted; expected a whole number from 1 to 100");
+	});
 });

@@ -545,7 +545,7 @@ describe("block tags", () => {
 			tag: "bar",
 			attributes: { value: 38, width: 80 },
 		});
-		expect(refusal("<bar value=101>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<bar value=101>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 6 });
 	});
 
 	it("bounds nesting depth", () => {
