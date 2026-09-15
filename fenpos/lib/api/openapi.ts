@@ -325,7 +325,7 @@ export function openApiDocument(publicUrl: string): object {
 			title: "FenPOS",
 			version: API_VERSION,
 			description:
-				"The FenPOS public API — submitting print jobs, following them, and managing the devices and assets a key is granted. Requests carry a markup language of their own; see the panel's own /docs/markup page for its reference, since that language has no separate machine-readable schema.",
+				"The FenPOS public API — submitting print jobs, following them, and managing the devices and assets a key is granted. Requests carry a markup language of their own, drawn boxes, tables, gauges and charts among its blocks and an uploaded font alongside the printer's own; see the panel's own /docs/markup page for its reference, since that language has no separate machine-readable schema.",
 		},
 		servers: [{ url: publicUrl }],
 		security: BEARER_AUTH,

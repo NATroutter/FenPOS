@@ -256,7 +256,11 @@ The status is `202`: the job is queued, and the paper has not moved yet.
 32-column printer alike, which hand-counted spaces cannot do.
 
 **Markup:** `bold` · `underline` · `invert` · `size` · `font` · `align` · `wrap` · `nowrap` ·
-`fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut`
+`fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut` · `box` ·
+`table` · `row` · `cell` · `chart` · `series` · `labels` · `bar`
+
+Boxes, tables, charts, gauges, inline images and uploaded fonts are drawn by the server into
+rasters, so they look the same on every printer of the same width.
 
 **Permissions:** `print` · `jobs:read` · `jobs:cancel` · `devices:read` · `devices:control` ·
 `status:read` · `assets:read` · `assets:write` · `devices:raw`

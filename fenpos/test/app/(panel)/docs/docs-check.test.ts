@@ -466,7 +466,7 @@ describe("the worked examples", () => {
 		expect(total).toBe(`Total${" ".repeat(42 - "Total".length - "5.50".length)}5.50`);
 	});
 
-	it("compiles the markup page's blocks receipt clean, with the image resolved", async () => {
+	it("compiles the markup page's blocks receipt clean, drawing the box and chart as rasters", async () => {
 		// Cleared first rather than created blind: the fixture database is per process, not per file,
 		// and another suite that stored a `logo` and did not remove it would make this a name clash
 		// rather than a test.
@@ -478,8 +478,11 @@ describe("the worked examples", () => {
 
 		expect(result.errors, `the markup page's example does not compile: ${JSON.stringify(result.errors)}`).toEqual([]);
 
+		// The box and the image-beside-text line it holds are one drawn region, and so is the chart, so
+		// the image never surfaces as a block of its own — it is ink inside a RASTER rather than a
+		// picture the wire places by name. The QR code is the one symbol the printer still draws itself.
 		const blocks = (result.lines ?? []).flatMap((line) => line.blocks);
-		expect(blocks.filter((block) => block.kind === "IMAGE").map((block) => block.ref)).toEqual(["logo"]);
-		expect(blocks.filter((block) => block.kind === "SYMBOL")).toHaveLength(2);
+		expect(blocks.filter((block) => block.kind === "RASTER")).toHaveLength(2);
+		expect(blocks.filter((block) => block.kind === "SYMBOL")).toHaveLength(1);
 	});
 });

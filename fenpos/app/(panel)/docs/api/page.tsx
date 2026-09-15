@@ -20,6 +20,7 @@ import { prisma } from "@/lib/db";
 import { PERMISSIONS, type Permission } from "@/lib/domain/permissions";
 import { API_ERROR_STATUS } from "@/lib/errors";
 import { getPublicAddress } from "@/lib/public-url";
+import { integerSetting } from "@/lib/settings/settings-service";
 
 export const metadata = { title: "API" };
 
@@ -186,6 +187,7 @@ export default async function ApiDocsPage() {
 	const agentName = device?.agent.name ?? "kitchen-pi";
 	const deviceName = device?.name ?? "kitchen";
 	const base = address.url;
+	const maxRasterMb = await integerSetting("limits.maxRasterMb");
 
 	return (
 		// One grid for the whole page, so the opening card is a column-mate of the sections rather
@@ -487,6 +489,17 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
+								<ErrorRef code="nesting_too_deep" />, <ErrorRef code="too_many_cells" />,{" "}
+								<ErrorRef code="too_many_points" /> and <ErrorRef code="raster_budget_exceeded" /> are all{" "}
+								<Status>413</Status>s for the same reason as the rest of that group: a deeper table, a bigger grid or a
+								longer series is refused for its shape rather than repaired, and drawing it is the only alternative.{" "}
+								<Mono>limits.maxRasterMb</Mono>, {maxRasterMb} MiB on this install, is the one of the four that bounds
+								paper rather than shape — every block, image and configured-font line a job draws together, before
+								base64 — and it exists for the link behind the agent as much as for this server: 4 MiB at 9600 baud is
+								over an hour of printing.
+							</P>
+
+							<P>
 								Most failures are settled before the response. A job can still fail after its <Status>202</Status>, the
 								agent re-checks every dispatch against its own device set and renders it itself, and when one does, the
 								reason reaches you the same way as anything else here: a code in <Mono>error</Mono>, with{" "}
@@ -754,6 +767,14 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 								are the same measurements a submit compiles against, so a caller can check a receipt fits before ever
 								sending it.
 							</P>
+
+							<P>
+								<Mono>rasterBytes</Mono> is the dots every line the printer could not draw for itself will send as a
+								picture, before base64 — a block, an image beside text, or a line under a configured font — and{" "}
+								<Mono>rasterLines</Mono> is the printed lines charged to those pictures specifically, a subset of{" "}
+								<Mono>outputLines</Mono>. Both are zero for a receipt that draws nothing this way. See{" "}
+								<DocLink href="/docs/markup#blocks">Blocks</DocLink> for what puts a line on that path.
+							</P>
 						</Col>
 
 						<Col>
@@ -778,7 +799,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
       ]
     }
   ],
-  "errors": []
+  "errors": [],
+  "rasterBytes": 0,
+  "rasterLines": 0
 }`}</CodeBlock>
 
 							<CodeBlock label="200 OK: markup that does not compile">{`{
@@ -791,7 +814,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   "lines": null,
   "errors": [
     { "code": "unclosed_tag", "message": "…", "status": ${API_ERROR_STATUS.unclosed_tag}, "line": 1, "column": null }
-  ]
+  ],
+  "rasterBytes": 0,
+  "rasterLines": 0
 }`}</CodeBlock>
 						</Col>
 					</Split>
@@ -1043,17 +1068,20 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 					<Split>
 						<Col>
 							<P>
-								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image without its bytes, the
-								library an <Mono>&lt;image&gt;</Mono> tag draws from. Install-wide, like the Assets tab: every key sees
-								one namespace, not a slice scoped to its own devices. Ordered by name ascending, unlike the jobs history
-								above, an image library is browsed alphabetically rather than newest first.
+								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image and font, without their
+								bytes, the library an <Mono>&lt;image&gt;</Mono> or a configured <Mono>&lt;font&gt;</Mono> draws from.
+								Install-wide, like the Assets tab: every key sees one namespace, not a slice scoped to its own devices.
+								Ordered by name ascending, unlike the jobs history above, an asset library is browsed alphabetically
+								rather than newest first.
 							</P>
 
 							<P>
 								<Mono>POST</Mono> needs <Mono>assets:write</Mono> and stores one, the same two ways the Assets tab
 								offers: <Mono>data</Mono>, the file as base64, or <Mono>url</Mono>, a location to import it from.
 								Exactly one of the two, a body naming both, or neither, is refused as <ErrorRef code="invalid_type" />{" "}
-								or <ErrorRef code="missing_field" /> respectively.
+								or <ErrorRef code="missing_field" /> respectively. Which kind it is comes from the bytes themselves — a
+								PNG or JPEG image, or a TTF or OTF font — rather than from anything the body declares; a URL import is
+								images only, so a font is always an upload.
 							</P>
 
 							<P>
@@ -1062,9 +1090,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 							</P>
 
 							<P>
-								An upload over the configured size, or bytes that are not an image this pipeline prints, is refused
-								before it is stored, the same gate the panel's own Assets tab goes through. The name the bundled logo
-								uses is reserved and cannot be written here either.
+								An upload over the configured size, or bytes that are not an image or a font this pipeline can use, is
+								refused before it is stored, the same gate the panel's own Assets tab goes through. The name the bundled
+								logo uses is reserved and cannot be written here either.
 							</P>
 						</Col>
 
@@ -1081,6 +1109,15 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
       "mimeType": "image/png",
       "sourceUrl": null,
       "createdAt": "2026-08-22T18:04:09.000Z"
+    },
+    {
+      "name": "receipt-mono",
+      "kind": "FONT",
+      "width": null,
+      "height": null,
+      "mimeType": "font/ttf",
+      "sourceUrl": null,
+      "createdAt": "2026-08-22T18:05:41.000Z"
     }
   ],
   "nextCursor": null
@@ -1122,8 +1159,9 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 
 							<P>
 								Nothing here checks whether markup still names this asset. A receipt that does now fails to compile with{" "}
-								<ErrorRef code="unknown_asset" />, the same consequence deleting it from the panel's Assets tab has, and
-								it belongs to whoever deletes.
+								<ErrorRef code="unknown_asset" /> for a deleted image or <ErrorRef code="unknown_font" /> for a deleted
+								font, the same consequence deleting it from the panel's Assets tab has, and it belongs to whoever
+								deletes.
 							</P>
 						</Col>
 

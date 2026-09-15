@@ -38,7 +38,10 @@ export const metadata = { title: "Markup" };
 const SECTIONS = [
 	{ id: "markup", title: "Markup", note: "What one line of data may contain" },
 	{ id: "variables", title: "Variables", note: "Values substituted into markup when a job compiles" },
-	{ id: "blocks", title: "Blocks", note: "Symbols, images and the drawer, and the paper they cost" },
+	{ id: "blocks", title: "Blocks", note: "Symbols and images the printer draws itself" },
+	{ id: "layout", title: "Layout", note: "Boxes, tables and gauges the server draws" },
+	{ id: "charts", title: "Charts", note: "Bar, line, pie and scatter" },
+	{ id: "fonts", title: "Fonts", note: "The printer's fonts and your own" },
 ] as const;
 
 /**
@@ -112,7 +115,8 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	},
 	{
 		syntax: "<table>…</table>",
-		meaning: "A grid of rows, sized by width and drawn with border. Holds rows and nothing else.",
+		meaning:
+			"A grid of rows, sized by width and drawn with border, its rules thickened every group of them. Holds rows and nothing else.",
 	},
 	{ syntax: "<row>…</row>", meaning: "One row of a table. Holds cells and nothing else." },
 	{
@@ -122,11 +126,12 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{
 		syntax: "<chart=bar>…</chart>",
 		meaning:
-			"A chart of the series it encloses, drawn as bar, line, pie or scatter, sized by width and height and captioned by title.",
+			"A chart of the series it encloses, drawn as bar, line, pie or scatter, sized by width and height, captioned by title and shown with a legend.",
 	},
 	{
 		syntax: "<series>…</series>",
-		meaning: "One series of a chart, its values written as a comma-separated list. <series=Sales> names it.",
+		meaning:
+			"One series of a chart, its values written as a comma-separated list, drawn with pattern and marker. <series=Sales> names it.",
 	},
 	{ syntax: "<labels>…</labels>", meaning: "A chart's category labels, as a comma-separated list." },
 	{ syntax: "<bar=38>", meaning: "A gauge filled to a percentage, 0–100, as wide as width asks for." },
@@ -159,6 +164,25 @@ const SYMBOLOGY_CONTENT: Record<BarcodeSystem, string> = {
 };
 
 /**
+ * `box`, `table` and `cell`'s own attributes, with the value this server draws when one is left off.
+ *
+ * `row` takes none, so it has no row here; `table.group` has no fallback at all, since leaving it
+ * off draws no thickened rule rather than drawing one at some assumed spacing.
+ */
+const LAYOUT_ATTRIBUTES: { tag: string; attribute: string; values: string; fallback: string }[] = [
+	{ tag: "box", attribute: "width", values: "1–100%", fallback: "100" },
+	{ tag: "box", attribute: "border", values: "single, double, thick, none", fallback: "single" },
+	{ tag: "box", attribute: "pad", values: "0–8", fallback: "1" },
+	{ tag: "table", attribute: "width", values: "1–100%", fallback: "100" },
+	{ tag: "table", attribute: "border", values: "single, double, thick, none", fallback: "single" },
+	{ tag: "table", attribute: "group", values: "1–50 rows or columns", fallback: "none" },
+	{ tag: "cell", attribute: "width", values: "1–100%", fallback: "an equal share of what is left" },
+	{ tag: "cell", attribute: "align", values: "left, center, right", fallback: "left" },
+	{ tag: "cell", attribute: "valign", values: "top, middle, bottom", fallback: "middle" },
+	{ tag: "cell", attribute: "shade", values: "none, light, dark, black", fallback: "none" },
+];
+
+/**
  * The markup reference.
  *
  * A language rather than an API: what goes inside one field of one endpoint's body. So there is no
@@ -177,6 +201,15 @@ export default async function MarkupDocsPage() {
 	const acceptedFormats = await enumSetting<"png+jpeg" | "png">("assets.acceptedFormats");
 	const variablesEnabled = await booleanSetting("variables.enabled");
 	const maxVariableRefs = await integerSetting("variables.maxPerElement");
+	const maxLineChars = await integerSetting("limits.maxLineChars");
+	const maxLines = await integerSetting("limits.maxLines");
+	const maxTotalChars = await integerSetting("limits.maxTotalChars");
+	const maxBlockDepth = await integerSetting("limits.maxBlockDepth");
+	const maxTableCells = await integerSetting("limits.maxTableCells");
+	const maxSeriesPoints = await integerSetting("limits.maxSeriesPoints");
+	const maxRasterMb = await integerSetting("limits.maxRasterMb");
+	const maxFontHeight = await integerSetting("limits.maxFontHeight");
+	const maxFontUploadMb = await integerSetting("assets.maxFontUploadMb");
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -216,6 +249,36 @@ export default async function MarkupDocsPage() {
 								<P>
 									Wrapping counts columns, not characters: under <Mono>&lt;size=2&gt;</Mono> each character costs two,
 									so the same text wraps at half the paper width.
+								</P>
+
+								<P>
+									A tag that takes attributes writes them after its argument, as <Mono>key=value</Mono>, separated by
+									spaces: <Mono>{"<box width=50 border=double>"}</Mono>. A value is quoted, <Mono>key="a value"</Mono>,
+									only when it holds a space or a <Mono>&gt;</Mono> of its own, a chart's <Mono>title</Mono> being the
+									usual reason; anything else may be written bare. An attribute a tag does not declare is{" "}
+									<ErrorRef code="unknown_attribute" />; set twice, or given a value outside what it accepts, is{" "}
+									<ErrorRef code="invalid_attribute" />.
+								</P>
+
+								<P>
+									At most {maxLineChars} characters on one line of <Mono>data</Mono>, measured on the line as written
+									rather than on what it prints, past which is <ErrorRef code="line_too_long" />; at most {maxLines}{" "}
+									lines in one receipt, past which is <ErrorRef code="too_many_lines" />; and at most {maxTotalChars}{" "}
+									characters across every counted line together, past which is <ErrorRef code="text_too_large" />. All
+									three are counted before a tag is interpreted, so they bound the request rather than the receipt it
+									compiles to.
+								</P>
+
+								<P>
+									The printer draws its own text, in its own fonts, and the symbols and the whole-line image below in
+									its own firmware. Anything it cannot — a block, an image sharing a line with text, a line under a
+									configured <Mono>font</Mono> — this server draws into a picture instead and sends as dots rather than
+									characters, which is what <DocLink href="/docs/api#preview">Previewing a receipt</DocLink> below
+									reports back as <Mono>rasterBytes</Mono> and <Mono>rasterLines</Mono>. Layout, Charts and Fonts below
+									are exactly the tags that put a line on that path. Every raster a job draws together is bounded by{" "}
+									<Mono>limits.maxRasterMb</Mono>, {maxRasterMb} MiB on this install, past which is{" "}
+									<ErrorRef code="raster_budget_exceeded" />; see <DocLink href="/docs/api#errors">Errors</DocLink> for
+									why that one is worth watching on a slow link.
 								</P>
 							</Col>
 
@@ -532,12 +595,181 @@ export default async function MarkupDocsPage() {
 									</Table>
 								</div>
 
-								<CodeBlock label="data">{`<align=center><image>logo</image></align>
+								<CodeBlock label="data">{`<box>
+<align=center><image>logo</image> <size=2><bold>THE CORNER CAFE</bold></size></align>
+</box>
+<chart=bar height=6 title="Cups by hour">
+<series>3,5,2,6</series>
+<labels>08,09,10,11</labels>
+</chart>
 <align=center><qr>https://natroutter.fi</qr></align>
-<align=center><barcode=EAN13>5901234123457</barcode></align>
-<bold>Total<fill>5.50</bold><drawer>
-<feed=3>
+<bold>Total<fill>5.50</bold>
 <cut>`}</CodeBlock>
+							</Col>
+						</Split>
+					</DocSection>
+
+					<DocSection {...SECTIONS[3]}>
+						<Split>
+							<Col>
+								<P>
+									<Mono>&lt;box&gt;</Mono>, <Mono>&lt;table&gt;</Mono>, <Mono>&lt;row&gt;</Mono> and{" "}
+									<Mono>&lt;cell&gt;</Mono> lay out a region of the paper rather than a run of text on it: each is drawn
+									in dots by this server, so the printer never sees the columns and rows inside one, only the picture
+									they become. <Mono>&lt;box&gt;</Mono> frames the lines it encloses; <Mono>&lt;table&gt;</Mono> is a
+									grid of <Mono>&lt;row&gt;</Mono>s, each holding <Mono>&lt;cell&gt;</Mono>s and nothing else, with one
+									rule between every pair of them and a thicker one every <Mono>group</Mono> rows or columns, which is
+									what draws a sudoku grid's boxes rather than its cells.
+								</P>
+
+								<P>
+									<Mono>&lt;box&gt;</Mono>, <Mono>&lt;table&gt;</Mono> and <Mono>&lt;chart&gt;</Mono>, below, must
+									enclose whole lines, exactly like <Mono>&lt;align&gt;</Mono>: nothing may precede one on the line it
+									opens and nothing may follow it on the line it closes. <Mono>&lt;row&gt;</Mono> and{" "}
+									<Mono>&lt;cell&gt;</Mono> may share a line, which is how a table stays readable in source at all, and
+									blocks nest inside one another, a table in a box in a table's cell, the same way styling tags do.
+								</P>
+
+								<P>
+									A line holding only block tags — the line <Mono>&lt;table&gt;</Mono> opens on, or the one{" "}
+									<Mono>&lt;/box&gt;</Mono> closes — prints nothing of its own: the region is drawn as one picture and
+									the whitespace written around its tags is markup, not paper, the same courtesy indenting the source is
+									always given.
+								</P>
+
+								<P>
+									Blocks nest at most {maxBlockDepth} deep, an install-wide <Mono>limits.maxBlockDepth</Mono>, past
+									which is <ErrorRef code="nesting_too_deep" />; one table's rows times its columns come to at most{" "}
+									{maxTableCells} cells, <Mono>limits.maxTableCells</Mono>, past which is{" "}
+									<ErrorRef code="too_many_cells" />. Both are measured on the document, not on what it draws, so a
+									receipt is refused for its shape before this server spends any paper rendering it.
+								</P>
+							</Col>
+
+							<Col>
+								<div className="min-w-0 overflow-x-auto rounded-lg border border-border">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead className="w-[130px]">Attribute</TableHead>
+												<TableHead className="w-[150px]">Values</TableHead>
+												<TableHead>Default</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{LAYOUT_ATTRIBUTES.map((row) => (
+												<TableRow key={`${row.tag}.${row.attribute}`}>
+													<TableCell className="font-mono text-[11.5px] whitespace-nowrap text-sky-300/90">
+														{row.tag}.{row.attribute}
+													</TableCell>
+													<TableCell className="text-[12px] text-muted-foreground">{row.values}</TableCell>
+													<TableCell className="text-[12px] text-muted-foreground">{row.fallback}</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+								</div>
+
+								<CodeBlock label="sudoku corner">{`<table group=2>
+<row><cell align=center>5</cell><cell align=center>3</cell><cell align=center>4</cell><cell align=center>6</cell></row>
+<row><cell align=center>6</cell><cell align=center>7</cell><cell align=center>2</cell><cell align=center>1</cell></row>
+<row><cell align=center>9</cell><cell align=center>8</cell><cell align=center>1</cell><cell align=center>4</cell></row>
+<row><cell align=center>2</cell><cell align=center>6</cell><cell align=center>3</cell><cell align=center>5</cell></row>
+</table>`}</CodeBlock>
+
+								<CodeBlock label="forecast">{`<table>
+<row><cell align=center><bold>Mon</bold></cell><cell align=center><bold>Tue</bold></cell><cell align=center shade=light><bold>Wed</bold></cell></row>
+<row><cell align=center>72°F</cell><cell align=center>68°F</cell><cell align=center shade=light>75°F</cell></row>
+</table>`}</CodeBlock>
+							</Col>
+						</Split>
+					</DocSection>
+
+					<DocSection {...SECTIONS[4]}>
+						<Split>
+							<Col>
+								<P>
+									<Mono>&lt;chart=bar&gt;</Mono>, <Mono>&lt;chart=line&gt;</Mono>, <Mono>&lt;chart=pie&gt;</Mono> and{" "}
+									<Mono>&lt;chart=scatter&gt;</Mono> draw the <Mono>&lt;series&gt;</Mono> and{" "}
+									<Mono>&lt;labels&gt;</Mono> it encloses as a plotted picture, sized by <Mono>width</Mono> and{" "}
+									<Mono>height</Mono> (printed lines, 3–60, ten by default) and captioned by <Mono>title</Mono>.
+								</P>
+
+								<P>
+									A <Mono>&lt;series&gt;</Mono> writes its values as a comma- or line-separated list,{" "}
+									<Mono>3,5,2,6</Mono>, except on a scatter, whose points carry their own position: <Mono>x:y</Mono>{" "}
+									pairs, <Mono>1:20,2:25,3:19</Mono>. <Mono>&lt;series=Sales&gt;</Mono> names it, for the legend.{" "}
+									<Mono>&lt;labels&gt;</Mono> names the categories the same way, one per plotted point; a scatter's own
+									axis already carries numbers, so it draws no categories and a <Mono>&lt;labels&gt;</Mono> written on
+									one is refused rather than silently dropped.
+								</P>
+
+								<P>
+									A series that asks for none of its own is given a <Mono>pattern</Mono> — solid, hatch, dot or hollow —
+									and, on a line or a scatter only, a <Mono>marker</Mono> — circle, square, triangle or cross — in turn,
+									so that several series on one chart are still told apart without an author naming every fill by hand.
+									Asking a bar or a pie for a marker is refused: neither plots a point a mark could sit on.
+								</P>
+
+								<P>
+									<Mono>legend</Mono> is <Mono>auto</Mono> by default, which shows one exactly when there is more than
+									one series or the chart is a pie, since a pie's slices have no axis to read them off. <Mono>on</Mono>{" "}
+									always draws it and <Mono>off</Mono> never does, even for a pie left to name its own slices some other
+									way.
+								</P>
+
+								<P>
+									A series may hold at most {maxSeriesPoints} values, an install-wide{" "}
+									<Mono>limits.maxSeriesPoints</Mono>, past which is <ErrorRef code="too_many_points" />.
+								</P>
+							</Col>
+
+							<Col>
+								<CodeBlock label="temperature">{`<chart=line height=8 title="Temperature this week" legend=on>
+<series=High marker=circle>72,75,71,68,74,77,73</series>
+<series=Low marker=square>58,60,57,55,59,61,58</series>
+<labels>Mon,Tue,Wed,Thu,Fri,Sat,Sun</labels>
+</chart>`}</CodeBlock>
+							</Col>
+						</Split>
+					</DocSection>
+
+					<DocSection {...SECTIONS[5]}>
+						<Split>
+							<Col>
+								<P>
+									<Mono>&lt;font=a&gt;</Mono> and <Mono>&lt;font=b&gt;</Mono> select the printer's own two built-in
+									faces, drawn in its own firmware at no paper cost beyond their glyphs.{" "}
+									<Mono>&lt;font=name size=N&gt;</Mono> instead names a font stored on the <Mono>Assets</Mono> tab, a
+									TTF or OTF file whose kind is read from its own bytes rather than declared, and draws it{" "}
+									<Mono>size</Mono> dots tall, 24 by default, capped at {maxFontHeight}, this install's{" "}
+									<Mono>limits.maxFontHeight</Mono>. A name storing no such font is <ErrorRef code="unknown_font" />,
+									and an upload this server cannot parse as a font is <ErrorRef code="invalid_font" />.
+								</P>
+
+								<P>
+									The printer has no command to select a face you uploaded, so a line that asks for one is drawn here
+									and sent as a picture, exactly as <Mono>&lt;box&gt;</Mono> or <Mono>&lt;chart&gt;</Mono> are: naming a{" "}
+									<Mono>font</Mono> is enough on its own to put an otherwise ordinary line of text on that path, whether
+									or not anything beside it needs drawing.
+								</P>
+
+								<P>
+									A character the chosen face has no glyph for is still governed by the device's{" "}
+									<Mono>onUnsupported</Mono> policy, the drawn line does not exempt it: <Mono>REJECT</Mono> fails the
+									print, <Mono>STRIP</Mono> drops the character, and <Mono>REPLACE</Mono> substitutes a glyph from the
+									same face. Only how the character reaches the paper changes; what decides its fate does not.
+								</P>
+
+								<P>
+									An upload is bounded by <Mono>assets.maxFontUploadMb</Mono>, {maxFontUploadMb} MiB on this install,
+									kept apart from the image upload limit because a font file is a different kind of asset stored the
+									same way.
+								</P>
+							</Col>
+
+							<Col>
+								<CodeBlock label="custom font">{`<font=receipt-mono size=32><bold>Thank you!</bold></font>`}</CodeBlock>
 							</Col>
 						</Split>
 					</DocSection>
