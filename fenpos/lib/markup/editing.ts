@@ -27,28 +27,32 @@ const DEFAULT_FONT_SIZE = 24;
 const BUILTIN_FONTS = new Set(["a", "b"]);
 
 /**
- * Opening delimiter for a tag, with its argument if it takes one.
+ * Opening delimiter for a tag, with its attributes.
  *
- * `font` is the one tag whose opening carries a second thing besides its argument: a stored font is
+ * `text` is the one tag whose opening carries something the caller did not say: a stored font is
  * meaningless at the printer's native size, so naming one here also writes a `size`. A built-in font
  * has no such attribute — `A` and `B` already are a size, chosen by the hardware — so it is excluded
- * by name rather than by the tag carrying no attributes, which `font` does have, for the stored case.
+ * by name.
  */
-function openingTag(tag: Tag, argument?: string): string {
-	if (argument === undefined || argument === "") {
-		return `<${tag.name}>`;
+function openingTag(tag: Tag, attributes: Readonly<Record<string, string>> = {}): string {
+	const written: Record<string, string> = { ...attributes };
+	if (tag.name === "text" && written.font && !BUILTIN_FONTS.has(written.font.toLowerCase()) && !written.size) {
+		written.size = String(DEFAULT_FONT_SIZE);
 	}
-	if (tag.name === "font" && !BUILTIN_FONTS.has(argument.toLowerCase())) {
-		return `<${tag.name}=${argument} size=${DEFAULT_FONT_SIZE}>`;
-	}
-	return `<${tag.name}=${argument}>`;
+	const pairs = Object.entries(written)
+		.filter(([, value]) => value !== "")
+		.map(([key, value]) => ` ${key}=${value}`)
+		.join("");
+	return `<${tag.name}${pairs}>`;
 }
 
 /**
  * A box wraps whatever is selected rather than replacing it, the same as any other paired tag — but
  * on its own lines, because a box frames whole lines of a receipt and nobody writes one any other
  * way by hand. Selecting the lines to be framed and pressing the button is exactly what "wrap a
- * selection" already means elsewhere on the toolbar; only the line breaks are new.
+ * selection" already means elsewhere on the toolbar; only the line breaks are new. The selection is
+ * written exactly as it was, with none of its lines indented: a line that starts with text prints
+ * its indentation, so adding any here would print inside the box.
  */
 function boxEdit(selected: string): MarkupEdit {
 	const before = "<box>\n";
@@ -60,10 +64,10 @@ function boxEdit(selected: string): MarkupEdit {
  * A table is a grid, not prose, so there is nothing in a selection worth carrying into it. This
  * always writes the same minimal skeleton instead — one row of two empty cells, ready to be filled
  * in and copied by hand for more — with the caret left inside the first cell, which is where typing
- * starts.
+ * starts. Indented the way the docs' examples are, since the row is nested inside the table.
  */
 function tableSkeleton(): MarkupEdit {
-	const before = "<table>\n<row><cell>";
+	const before = "<table>\n  <row><cell>";
 	const insert = `${before}</cell><cell></cell></row>\n</table>`;
 	return { insert, selectionFrom: before.length, selectionTo: before.length };
 }
@@ -79,13 +83,15 @@ function tableSkeleton(): MarkupEdit {
  * nothing, so it takes `x:y` samples and no `<labels>` at all. A skeleton that a press of the button
  * turns straight into a refusal is worse than no button.
  *
+ * Indented the way the docs' examples are, since the series and labels are nested inside the chart.
+ *
  * @param type "bar", "line", "pie" or "scatter"
  */
 function chartSkeleton(type: string): MarkupEdit {
-	const before = `<chart=${type} height=8>\n<series=A>`;
+	const before = `<chart type=${type} height=8>\n  <series name=A>`;
 	const scatter = type.toLowerCase() === "scatter";
 	const values = scatter ? "1:2,2:3,3:5" : "1,2,3";
-	const labels = scatter ? "" : "\n<labels>a,b,c</labels>";
+	const labels = scatter ? "" : "\n  <labels>a,b,c</labels>";
 	const insert = `${before}${values}</series>${labels}\n</chart>`;
 	return { insert, selectionFrom: before.length, selectionTo: before.length + values.length };
 }
@@ -105,10 +111,14 @@ function chartSkeleton(type: string): MarkupEdit {
  *
  * @param name a tag name as written in markup
  * @param selected the text currently selected, empty for a bare caret
- * @param argument the tag's argument, for tags that take one
+ * @param attributes the attributes to write into the opening tag, for tags that take them
  * @returns the edit to apply, or undefined if no such tag exists
  */
-export function markupEdit(name: string, selected: string, argument?: string): MarkupEdit | undefined {
+export function markupEdit(
+	name: string,
+	selected: string,
+	attributes?: Readonly<Record<string, string>>,
+): MarkupEdit | undefined {
 	const tag = tagByName(name);
 	if (!tag) {
 		return undefined;
@@ -124,10 +134,10 @@ export function markupEdit(name: string, selected: string, argument?: string): M
 		return tableSkeleton();
 	}
 	if (tag.name === "chart") {
-		return argument ? chartSkeleton(argument) : undefined;
+		return attributes?.type ? chartSkeleton(attributes.type) : undefined;
 	}
 
-	const open = openingTag(tag, argument);
+	const open = openingTag(tag, attributes);
 
 	if (tag.kind === "VOID") {
 		// After the selection, not over it. The caret sits past the tag so typing continues on the
