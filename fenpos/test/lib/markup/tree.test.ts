@@ -68,6 +68,14 @@ describe("buildDocument", () => {
 		expect(refusal("<size width=9 height=9>a</size>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
+	it("bounds underline's weight to the printer's two heavier styles", () => {
+		expect(build("<underline weight=2>a</underline>").nodes[0]).toMatchObject({ patch: { underline: 2 } });
+		expect(refusal("<underline weight=3>a</underline>")).toMatchObject({
+			code: MARKUP_ERRORS.invalidAttribute,
+			column: 12,
+		});
+	});
+
 	it("lets align span several lines when it owns each of them", () => {
 		const document = build("<align to=center>a\nb</align>");
 
@@ -334,6 +342,18 @@ describe("buildDocument", () => {
 		expect(build("<image>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: null });
 	});
 
+	it("bounds each content tag's size attribute to what the printer accepts", () => {
+		expect(build("<qr size=16>x</qr>").nodes[0]).toMatchObject({ spec: { kind: "QR", size: 16 } });
+		expect(refusal("<qr size=17>x</qr>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 5 });
+		expect(build("<pdf417 level=0>x</pdf417>").nodes[0]).toMatchObject({ spec: { kind: "PDF417", errorLevel: 0 } });
+		expect(build("<pdf417 level=8>x</pdf417>").nodes[0]).toMatchObject({ spec: { kind: "PDF417", errorLevel: 8 } });
+		expect(refusal("<pdf417 level=9>x</pdf417>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 9 });
+		expect(build("<image width=1>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: 1 });
+		expect(build("<image width=100>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: 100 });
+		expect(refusal("<image width=0>logo</image>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 8 });
+		expect(refusal("<image width=101>logo</image>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 8 });
+	});
+
 	it("reads a chart's type, a series' name and a gauge's value from their attributes", () => {
 		const chart = build('<chart type=BAR><series name="Q1 sales">1</series></chart>').nodes[0] as BlockNode;
 
@@ -346,6 +366,11 @@ describe("buildDocument", () => {
 		});
 		expect((build("<bar value=38>").nodes[0] as BlockNode).attributes.value).toBe(38);
 		expect(refusal("<bar>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "value" });
+	});
+
+	it("bounds the gauge's value to a whole percentage", () => {
+		expect((build("<bar value=0>").nodes[0] as BlockNode).attributes.value).toBe(0);
+		expect((build("<bar value=100>").nodes[0] as BlockNode).attributes.value).toBe(100);
 	});
 
 	it("refuses a value written against a tag that takes none as a malformed attribute", () => {
