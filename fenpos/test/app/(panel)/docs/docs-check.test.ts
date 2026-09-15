@@ -229,9 +229,10 @@ describe("the markup page's tag table", () => {
 		for (const name of names) {
 			// Anchored on `syntax:` so this can only be satisfied by a row of the table. Unanchored,
 			// `<fill>` would be found in the worked example further down the page and the row could be
-			// deleted without this noticing.
+			// deleted without this noticing. The syntax column writes a tag as `<name>` or
+			// `<name attr=…`, never `<name=…`, so the character after the name is a space or the close.
 			expect(MARKUP_PAGE, `<${name}> is a real tag and the table does not list it`).toMatch(
-				new RegExp(`syntax: "<${name}[=>]`),
+				new RegExp(`syntax: "<${name}[ >]`),
 			);
 		}
 	});

@@ -209,7 +209,8 @@ function emptyDescription(kind: AssetKind | undefined, canAdd: boolean): ReactNo
 		return (
 			<>
 				A font stored here is drawn by name, so a receipt says{" "}
-				<span className="font-mono">&lt;font=roboto&gt;text&lt;/font&gt;</span> rather than carrying the face with it.
+				<span className="font-mono">&lt;text font=roboto&gt;text&lt;/text&gt;</span> rather than carrying the face with
+				it.
 				{invite}
 			</>
 		);
@@ -227,7 +228,8 @@ function emptyDescription(kind: AssetKind | undefined, canAdd: boolean): ReactNo
 		<>
 			An asset — an image or a font — is referenced by name, so a receipt says{" "}
 			<span className="font-mono">&lt;image&gt;logo&lt;/image&gt;</span> or{" "}
-			<span className="font-mono">&lt;font=roboto&gt;text&lt;/font&gt;</span> rather than carrying the file with it.
+			<span className="font-mono">&lt;text font=roboto&gt;text&lt;/text&gt;</span> rather than carrying the file with
+			it.
 			{invite}
 		</>
 	);

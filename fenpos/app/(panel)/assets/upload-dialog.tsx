@@ -148,8 +148,8 @@ export function UploadDialog({
 							/>
 							<FieldDescription>
 								What markup refers to it by: <span className="font-mono">&lt;image&gt;logo&lt;/image&gt;</span> or{" "}
-								<span className="font-mono">&lt;font=name&gt;text&lt;/font&gt;</span>, depending on what you upload. A
-								slug, for the same reason printer names are.
+								<span className="font-mono">&lt;text font=name&gt;text&lt;/text&gt;</span>, depending on what you
+								upload. A slug, for the same reason printer names are.
 							</FieldDescription>
 						</Field>
 

@@ -204,6 +204,7 @@ export const API_ERROR_STATUS = {
 	unknown_tag: 422,
 	unclosed_tag: 422,
 	unexpected_close_tag: 422,
+	/** What a tag encloses is missing or malformed: a symbol's payload, an image reference, a series' values. */
 	invalid_tag_argument: 422,
 	invalid_align_scope: 422,
 	invalid_wrap_scope: 422,
@@ -314,7 +315,7 @@ export const API_ERROR_STATUS = {
 	unbundled_logo_width: 422,
 	/** An attribute the tag does not declare. See `MARKUP_ERRORS.unknownAttribute`. */
 	unknown_attribute: 422,
-	/** An attribute value outside what the tag accepts. See `MARKUP_ERRORS.invalidAttribute`. */
+	/** An attribute that is required and missing, set twice, or given a value outside what the tag accepts; or a table whose sized columns exceed the width. */
 	invalid_attribute: 422,
 	/** A block where it cannot go. See `MARKUP_ERRORS.misplacedBlock`. */
 	misplaced_block: 422,

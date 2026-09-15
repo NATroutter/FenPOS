@@ -63,11 +63,17 @@ const DATE_PATTERNS: { pattern: string; example: string }[] = [
 /** Markup tags, in the order they are worth learning. */
 const TAGS: { syntax: string; meaning: string }[] = [
 	{ syntax: "<bold>…</bold>", meaning: "Emphasis." },
-	{ syntax: "<underline>…</underline>", meaning: "Underline. <underline=2> selects the heavier weight." },
+	{ syntax: "<underline>…</underline>", meaning: "Underline. weight=2 selects the heavier weight." },
 	{ syntax: "<invert>…</invert>", meaning: "White on black." },
-	{ syntax: "<size=2>…</size>", meaning: "Character multiplier, 1–8. <size=2,3> sets width and height apart." },
-	{ syntax: "<font=b>…</font>", meaning: "The printer's second built-in font, usually narrower." },
-	{ syntax: "<align=center>…</align>", meaning: "left, center or right. Must enclose the whole line." },
+	{
+		syntax: "<size width=2>…</size>",
+		meaning: "Character multipliers, 1–8. width and height each; one alone leaves the other at 1.",
+	},
+	{
+		syntax: "<text font=b>…</text>",
+		meaning: "A face: a or b for the printer's own, or a stored font's name, drawn size dots tall. See Fonts below.",
+	},
+	{ syntax: "<align to=center>…</align>", meaning: "left, center or right. Must enclose the whole line." },
 	{
 		syntax: "<wrap>…</wrap>",
 		meaning:
@@ -80,34 +86,34 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{
 		syntax: "<fill>",
 		meaning:
-			"Pad to the paper's width, so what follows sits at the right margin. <fill=.> repeats a dot instead of a space. Several on one line split the space evenly.",
+			"Pad to the paper's width, so what follows sits at the right margin. char=. repeats a dot instead of a space. Several on one line split the space evenly.",
 	},
 	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its line." },
 	{
 		syntax: "<qr>…</qr>",
-		meaning: "A QR code. <qr=8> sets the module size, 1–16, default 6. ASCII only. Must be alone in its line.",
+		meaning: "A QR code. size=8 sets the module size, 1–16, default 6. ASCII only. Must be alone in its line.",
 	},
 	{
-		syntax: "<barcode=EAN13>…</barcode>",
+		syntax: "<barcode type=EAN13>…</barcode>",
 		meaning:
 			"A linear barcode. UPCA, UPCE, EAN13, EAN8, CODE39, ITF, CODABAR, CODE93 or CODE128, each with its own content rule. Must be alone in its line.",
 	},
 	{
 		syntax: "<pdf417>…</pdf417>",
 		meaning:
-			"A PDF417 symbol. <pdf417=4> sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its line.",
+			"A PDF417 symbol. level=4 sets the error-correction level, 0–8, default 1. ASCII only. Must be alone in its line.",
 	},
 	{
 		syntax: "<image>name</image>",
 		meaning:
-			"A stored image, by name, or an http(s) URL. <image=50> sets the printed width as a percentage of the paper, 1–100, default 100. May share a line with text.",
+			"A stored image, by name, or an http(s) URL. width=50 sets the printed width as a percentage of the paper, 1–100, default 100. May share a line with text.",
 	},
 	{
 		syntax: "<drawer>",
-		meaning: "Pulse the cash drawer on pin 2. <drawer=5> uses the other pin. Prints nothing, so it may share a line.",
+		meaning: "Pulse the cash drawer on pin 2. pin=5 uses the other pin. Prints nothing, so it may share a line.",
 	},
-	{ syntax: "<feed=3>", meaning: "Advance the paper, 1–255 lines." },
-	{ syntax: "<cut>", meaning: "Cut the paper. <cut=partial> leaves a tab." },
+	{ syntax: "<feed lines=3>", meaning: "Advance the paper, 1–255 lines." },
+	{ syntax: "<cut>", meaning: "Cut the paper. mode=partial leaves a tab." },
 	{
 		syntax: "<box>…</box>",
 		meaning:
@@ -124,17 +130,17 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		meaning: "One cell of a row, sized by width and its content placed by align, valign and shade.",
 	},
 	{
-		syntax: "<chart=bar>…</chart>",
+		syntax: "<chart type=bar>…</chart>",
 		meaning:
 			"A chart of the series it encloses, drawn as bar, line, pie or scatter, sized by width and height, captioned by title and shown with a legend.",
 	},
 	{
 		syntax: "<series>…</series>",
 		meaning:
-			"One series of a chart, its values written as a comma-separated list, drawn with pattern and marker. <series=Sales> names it.",
+			"One series of a chart, its values written as a comma-separated list, drawn with pattern and marker. name=Sales names it for the legend; quote a name with a space.",
 	},
 	{ syntax: "<labels>…</labels>", meaning: "A chart's category labels, as a comma-separated list." },
-	{ syntax: "<bar=38>", meaning: "A gauge filled to a percentage, 0–100, as wide as width asks for." },
+	{ syntax: "<bar value=38>", meaning: "A gauge filled to a percentage, 0–100, as wide as width asks for." },
 	{
 		syntax: "&lt;, &amp; and &lbrace;",
 		meaning:
@@ -247,17 +253,25 @@ export default async function MarkupDocsPage() {
 								</P>
 
 								<P>
-									Wrapping counts columns, not characters: under <Mono>&lt;size=2&gt;</Mono> each character costs two,
-									so the same text wraps at half the paper width.
+									Wrapping counts columns, not characters: under <Mono>&lt;size width=2&gt;</Mono> each character costs
+									two, so the same text wraps at half the paper width.
 								</P>
 
 								<P>
-									A tag that takes attributes writes them after its argument, as <Mono>key=value</Mono>, separated by
-									spaces: <Mono>{"<box width=50 border=double>"}</Mono>. A value is quoted, <Mono>key="a value"</Mono>,
-									only when it holds a space or a <Mono>&gt;</Mono> of its own, a chart's <Mono>title</Mono> being the
-									usual reason; anything else may be written bare. An attribute a tag does not declare is{" "}
-									<ErrorRef code="unknown_attribute" />; set twice, or given a value outside what it accepts, is{" "}
-									<ErrorRef code="invalid_attribute" />.
+									Every value a tag takes is an attribute, written after its name as <Mono>key=value</Mono> and
+									separated by spaces: <Mono>{"<box width=50 border=double>"}</Mono>, <Mono>{"<align to=center>"}</Mono>
+									. A value is quoted, <Mono>key="a value"</Mono>, only when it holds a space or a <Mono>&gt;</Mono> of
+									its own, a chart's <Mono>title</Mono> being the usual reason; anything else may be written bare, and a
+									value from a fixed set, <Mono>to=Center</Mono>, matches whatever its case. An attribute a tag does not
+									declare is <ErrorRef code="unknown_attribute" />; one the tag cannot do without and was not given, set
+									twice, or given a value outside what it accepts, is <ErrorRef code="invalid_attribute" />.
+								</P>
+
+								<P>
+									Whitespace from the start of a line up to a tag is indentation and prints nothing, tabs included, so
+									nested tags can be written the way the examples below are. A line that starts with text keeps every
+									space it was given; to print an indented line that starts with a tag, put the spaces inside it:{" "}
+									<Mono>{"<bold>  Total</bold>"}</Mono>.
 								</P>
 
 								<P>
@@ -478,7 +492,7 @@ export default async function MarkupDocsPage() {
 									between the tags goes either the name of an image stored on the Assets tab or an <Mono>http(s)</Mono>{" "}
 									URL. No tag may appear inside it either, but unlike a symbol it may share its line: text beside a
 									picture is a line this server draws and sends as dots rather than one the printer sets in columns.{" "}
-									<Mono>&lt;image=50&gt;</Mono> prints at half the paper's printable width. The argument is a
+									<Mono>&lt;image width=50&gt;</Mono> prints at half the paper's printable width. The width is a
 									percentage, 1–100, defaulting to 100, rather than a number of dots, because one install can have both
 									80mm and 58mm printers behind a single agent and a dot count that fits one overruns the other.
 								</P>
@@ -596,13 +610,13 @@ export default async function MarkupDocsPage() {
 								</div>
 
 								<CodeBlock label="data">{`<box>
-<align=center><image>logo</image> <size=2><bold>THE CORNER CAFE</bold></size></align>
+  <align to=center><image>logo</image> <size width=2 height=2><bold>THE CORNER CAFE</bold></size></align>
 </box>
-<chart=bar height=6 title="Cups by hour">
-<series>3,5,2,6</series>
-<labels>08,09,10,11</labels>
+<chart type=bar height=6 title="Cups by hour">
+  <series>3,5,2,6</series>
+  <labels>08,09,10,11</labels>
 </chart>
-<align=center><qr>https://natroutter.fi</qr></align>
+<align to=center><qr>https://natroutter.fi</qr></align>
 <bold>Total<fill>5.50</bold>
 <cut>`}</CodeBlock>
 							</Col>
@@ -671,15 +685,15 @@ export default async function MarkupDocsPage() {
 								</div>
 
 								<CodeBlock label="sudoku corner">{`<table group=2>
-<row><cell align=center>5</cell><cell align=center>3</cell><cell align=center>4</cell><cell align=center>6</cell></row>
-<row><cell align=center>6</cell><cell align=center>7</cell><cell align=center>2</cell><cell align=center>1</cell></row>
-<row><cell align=center>9</cell><cell align=center>8</cell><cell align=center>1</cell><cell align=center>4</cell></row>
-<row><cell align=center>2</cell><cell align=center>6</cell><cell align=center>3</cell><cell align=center>5</cell></row>
+  <row><cell align=center>5</cell><cell align=center>3</cell><cell align=center>4</cell><cell align=center>6</cell></row>
+  <row><cell align=center>6</cell><cell align=center>7</cell><cell align=center>2</cell><cell align=center>1</cell></row>
+  <row><cell align=center>9</cell><cell align=center>8</cell><cell align=center>1</cell><cell align=center>4</cell></row>
+  <row><cell align=center>2</cell><cell align=center>6</cell><cell align=center>3</cell><cell align=center>5</cell></row>
 </table>`}</CodeBlock>
 
 								<CodeBlock label="forecast">{`<table>
-<row><cell align=center><bold>Mon</bold></cell><cell align=center><bold>Tue</bold></cell><cell align=center shade=light><bold>Wed</bold></cell></row>
-<row><cell align=center>72°F</cell><cell align=center>68°F</cell><cell align=center shade=light>75°F</cell></row>
+  <row><cell align=center><bold>Mon</bold></cell><cell align=center><bold>Tue</bold></cell><cell align=center shade=light><bold>Wed</bold></cell></row>
+  <row><cell align=center>72°F</cell><cell align=center>68°F</cell><cell align=center shade=light>75°F</cell></row>
 </table>`}</CodeBlock>
 							</Col>
 						</Split>
@@ -689,16 +703,17 @@ export default async function MarkupDocsPage() {
 						<Split>
 							<Col>
 								<P>
-									<Mono>&lt;chart=bar&gt;</Mono>, <Mono>&lt;chart=line&gt;</Mono>, <Mono>&lt;chart=pie&gt;</Mono> and{" "}
-									<Mono>&lt;chart=scatter&gt;</Mono> draw the <Mono>&lt;series&gt;</Mono> and{" "}
-									<Mono>&lt;labels&gt;</Mono> it encloses as a plotted picture, sized by <Mono>width</Mono> and{" "}
-									<Mono>height</Mono> (printed lines, 3–60, eight by default) and captioned by <Mono>title</Mono>.
+									<Mono>&lt;chart type=bar&gt;</Mono>, <Mono>&lt;chart type=line&gt;</Mono>,{" "}
+									<Mono>&lt;chart type=pie&gt;</Mono> and <Mono>&lt;chart type=scatter&gt;</Mono> draw the{" "}
+									<Mono>&lt;series&gt;</Mono> and <Mono>&lt;labels&gt;</Mono> it encloses as a plotted picture, sized by{" "}
+									<Mono>width</Mono> and <Mono>height</Mono> (printed lines, 3–60, eight by default) and captioned by{" "}
+									<Mono>title</Mono>.
 								</P>
 
 								<P>
 									A <Mono>&lt;series&gt;</Mono> writes its values as a comma- or line-separated list,{" "}
 									<Mono>3,5,2,6</Mono>, except on a scatter, whose points carry their own position: <Mono>x:y</Mono>{" "}
-									pairs, <Mono>1:20,2:25,3:19</Mono>. <Mono>&lt;series=Sales&gt;</Mono> names it, for the legend.{" "}
+									pairs, <Mono>1:20,2:25,3:19</Mono>. <Mono>&lt;series name=Sales&gt;</Mono> names it, for the legend.{" "}
 									<Mono>&lt;labels&gt;</Mono> names the categories the same way, one per plotted point; a scatter's own
 									axis already carries numbers, so it draws no categories and a <Mono>&lt;labels&gt;</Mono> written on
 									one is refused rather than silently dropped.
@@ -726,10 +741,10 @@ export default async function MarkupDocsPage() {
 							</Col>
 
 							<Col>
-								<CodeBlock label="temperature">{`<chart=line height=8 title="Temperature this week" legend=on>
-<series=High marker=circle>72,75,71,68,74,77,73</series>
-<series=Low marker=square>58,60,57,55,59,61,58</series>
-<labels>Mon,Tue,Wed,Thu,Fri,Sat,Sun</labels>
+								<CodeBlock label="temperature">{`<chart type=line height=8 title="Temperature this week" legend=on>
+  <series name=High marker=circle>72,75,71,68,74,77,73</series>
+  <series name=Low marker=square>58,60,57,55,59,61,58</series>
+  <labels>Mon,Tue,Wed,Thu,Fri,Sat,Sun</labels>
 </chart>`}</CodeBlock>
 							</Col>
 						</Split>
@@ -739,11 +754,11 @@ export default async function MarkupDocsPage() {
 						<Split>
 							<Col>
 								<P>
-									<Mono>&lt;font=a&gt;</Mono> and <Mono>&lt;font=b&gt;</Mono> select the printer's own two built-in
-									faces, drawn in its own firmware at no paper cost beyond their glyphs; <Mono>size</Mono> means nothing
-									on either and is refused as <ErrorRef code="invalid_attribute" />.{" "}
-									<Mono>&lt;font=name size=N&gt;</Mono> instead names a font stored on the <Mono>Assets</Mono> tab, a
-									TTF or OTF file whose kind is read from its own bytes rather than declared, and draws it{" "}
+									<Mono>&lt;text font=a&gt;</Mono> and <Mono>&lt;text font=b&gt;</Mono> select the printer's own two
+									built-in faces, drawn in its own firmware at no paper cost beyond their glyphs; <Mono>size</Mono>{" "}
+									means nothing on either and is refused as <ErrorRef code="invalid_attribute" />.{" "}
+									<Mono>&lt;text font=name size=N&gt;</Mono> instead names a font stored on the <Mono>Assets</Mono> tab,
+									a TTF or OTF file whose kind is read from its own bytes rather than declared, and draws it{" "}
 									<Mono>size</Mono> dots tall, from 8 to {maxFontHeight}, this install's{" "}
 									<Mono>limits.maxFontHeight</Mono>, 24 by default. A name storing no such font is{" "}
 									<ErrorRef code="unknown_font" />, and an upload this server cannot parse as a font is{" "}
@@ -772,7 +787,7 @@ export default async function MarkupDocsPage() {
 							</Col>
 
 							<Col>
-								<CodeBlock label="custom font">{`<font=receipt-mono size=32><bold>Thank you!</bold></font>`}</CodeBlock>
+								<CodeBlock label="custom font">{`<text font=receipt-mono size=32><bold>Thank you!</bold></text>`}</CodeBlock>
 							</Col>
 						</Split>
 					</DocSection>

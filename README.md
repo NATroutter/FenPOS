@@ -241,7 +241,7 @@ curl -X POST https://fenpos.example.com/api/v1/print/kitchen/receipt-printer \
   -H "Authorization: Bearer fpk_QYm3xR7tK2vN8pLd..." \
   -H "Content-Type: application/json" \
   -d '{
-        "data": "<align=center><size=2>KAHVILA</size></align>\n<hr>\nEspresso<fill>2.50\nCroissant<fill>3.20\n<hr>\n<bold>Total<fill>5.70</bold>\n<feed=3><cut>",
+        "data": "<align to=center><size width=2 height=2>KAHVILA</size></align>\n<hr>\nEspresso<fill>2.50\nCroissant<fill>3.20\n<hr>\n<bold>Total<fill>5.70</bold>\n<feed lines=3><cut>",
         "linefeed": "LF"
       }'
 ```
@@ -255,7 +255,7 @@ The status is `202`: the job is queued, and the paper has not moved yet.
 `<fill>` pads to the paper's width, so the amounts sit at the right margin on a 42-column and a
 32-column printer alike, which hand-counted spaces cannot do.
 
-**Markup:** `bold` · `underline` · `invert` · `size` · `font` · `align` · `wrap` · `nowrap` ·
+**Markup:** `bold` · `underline` · `invert` · `size` · `text` · `align` · `wrap` · `nowrap` ·
 `fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut` · `box` ·
 `table` · `row` · `cell` · `chart` · `series` · `labels` · `bar`
 

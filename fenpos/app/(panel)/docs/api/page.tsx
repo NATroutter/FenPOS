@@ -688,7 +688,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
   -H "Authorization: Bearer fpk_…" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "data": "<align=center><bold>THE CORNER CAFE</bold></align>\\n<hr>\\nCoffee<fill>2.50\\nPastry<fill>3.00\\n<hr>\\n<bold>Total<fill>5.50</bold>\\n<feed=3>\\n<cut>"
+    "data": "<align to=center><bold>THE CORNER CAFE</bold></align>\\n<hr>\\nCoffee<fill>2.50\\nPastry<fill>3.00\\n<hr>\\n<bold>Total<fill>5.50</bold>\\n<feed lines=3>\\n<cut>"
   }'`}</CodeBlock>
 
 							<CodeBlock label="202 Accepted">{`{ "jobId": "clx…", "status": "QUEUED", "device": "${deviceName}", "lines": 8 }`}</CodeBlock>
@@ -1069,7 +1069,7 @@ function verifyFenposSignature(secret, body, header, toleranceSeconds = 300) {
 						<Col>
 							<P>
 								<Mono>GET</Mono> needs <Mono>assets:read</Mono> and lists every stored image and font, without their
-								bytes, the library an <Mono>&lt;image&gt;</Mono> or a configured <Mono>&lt;font&gt;</Mono> draws from.
+								bytes, the library an <Mono>&lt;image&gt;</Mono> or a configured <Mono>&lt;text&gt;</Mono> draws from.
 								Install-wide, like the Assets tab: every key sees one namespace, not a slice scoped to its own devices.
 								Ordered by name ascending, unlike the jobs history above, an asset library is browsed alphabetically
 								rather than newest first.

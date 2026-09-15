@@ -14,7 +14,7 @@ export const MARKUP_ERRORS = {
 	unclosedTag: "unclosed_tag",
 	/** A closing tag with no matching open tag, or one closing the wrong tag. */
 	unexpectedCloseTag: "unexpected_close_tag",
-	/** A tag argument that is missing, malformed, or out of range. */
+	/** What a tag encloses is missing or malformed: a symbol's payload, an image reference, a series' values. */
 	invalidTagArgument: "invalid_tag_argument",
 	/** An alignment tag that does not own its whole line, or a second one. */
 	invalidAlignScope: "invalid_align_scope",
@@ -62,7 +62,7 @@ export const MARKUP_ERRORS = {
 	nestingTooDeep: "nesting_too_deep",
 	/** An attribute the tag does not declare. */
 	unknownAttribute: "unknown_attribute",
-	/** An attribute value outside what the tag accepts, or a table whose sized columns exceed the width. */
+	/** An attribute that is required and missing, set twice, or given a value outside what the tag accepts; or a table whose sized columns exceed the width. */
 	invalidAttribute: "invalid_attribute",
 	/** A block where it cannot go: a row outside a table, a cell outside a row, a symbol inside a box. */
 	misplacedBlock: "misplaced_block",
