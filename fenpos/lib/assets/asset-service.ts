@@ -9,6 +9,7 @@ import {
 	projectedHeightDots,
 } from "@/lib/assets/dither";
 import { fetchRemoteImage, type RemoteFetchSettings, safeUrl } from "@/lib/assets/fetch-remote";
+import { type DetectedKind, detectAssetKind } from "@/lib/assets/kind";
 import { prisma } from "@/lib/db";
 import { AssetKind } from "@/lib/domain/enums";
 import { nameSchema } from "@/lib/domain/naming";
@@ -17,10 +18,17 @@ import { measureImage, requireDecodableSize, requireWithinBytes } from "@/lib/im
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { logger } from "@/lib/logger";
 import type { ImageSource } from "@/lib/markup/images";
+import { type FontFace, InvalidFontError, parseFace } from "@/lib/raster/glyphs";
 import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
 
 /**
- * The image library a receipt's `<image>` tag draws from.
+ * The library a receipt draws its images and its fonts from.
+ *
+ * **One table and one namespace.** Markup names an asset by name alone, so an image and a font
+ * cannot share one — which is what the unique constraint on `name` says, and why the kind is read
+ * from the bytes rather than taken from the caller. What the two kinds do not share is anything
+ * else: an image is decoded, measured and dithered, a font is parsed and rasterised a glyph at a
+ * time, and each is refused by the rules of its own kind.
  *
  * **The source image is stored; the raster is derived.** A raster dithered for 80mm paper is 504
  * dots wide, and putting it on a 58mm printer means downscaling dots that have already been
@@ -32,10 +40,11 @@ import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
  * while the person who chose it is still looking at the file picker, rather than at print time
  * behind a printer where nobody can act on it.
  *
- * Two entry points put bytes into this table — an upload and a URL import — and both go through
- * {@link store}. A third reads bytes without storing them at all: {@link remoteImage} measures
- * the live URL an `<image>` tag can name. All three go through {@link measured}, so a bound added
- * here cannot be walked around by choosing another door.
+ * Two entry points put image bytes into this table — an upload and a URL import — and both go
+ * through {@link store}. A third reads bytes without storing them at all: {@link remoteImage}
+ * measures the live URL an `<image>` tag can name. All three go through {@link measured}, so a
+ * bound added here cannot be walked around by choosing another door. A font has one door,
+ * {@link storeFont}, and one gate, {@link requireUsableFont}.
  */
 
 /**
@@ -57,6 +66,25 @@ import { enumSetting, integerSetting } from "@/lib/settings/settings-service";
  */
 export async function maxAssetBytes(): Promise<number> {
 	return (await integerSetting("assets.maxUploadMb")) * 1024 * 1024;
+}
+
+/**
+ * The largest font this system will store, in bytes.
+ *
+ * A separate setting from {@link maxAssetBytes} because the two are different files with different
+ * honest sizes: a receipt logo is kilobytes, while a face covering CJK is tens of megabytes and
+ * still perfectly reasonable to upload. One cap covering both would have to be the larger of the
+ * two, which would quietly widen what an image upload may be.
+ *
+ * The bound is on the bytes alone. Unlike an image, nothing about a font decompresses on the way in
+ * — {@link fontFace} parses the tables it is asked for and rasterises glyphs one at a time — so
+ * there is no decode budget behind this the way {@link MAX_IMAGE_DIMENSION} stands behind the image
+ * cap.
+ *
+ * @returns the configured cap, in bytes
+ */
+export async function maxFontBytes(): Promise<number> {
+	return (await integerSetting("assets.maxFontUploadMb")) * 1024 * 1024;
 }
 
 /**
@@ -143,8 +171,9 @@ export interface AssetSummary {
 	id: string;
 	kind: AssetKind;
 	name: string;
-	width: number;
-	height: number;
+	/** Pixels across and down for an image, and null for a font, which has no pixels to report. */
+	width: number | null;
+	height: number | null;
 	mimeType: string;
 	/** Where it was imported from, for provenance only. Never re-fetched. Null when uploaded. */
 	sourceUrl: string | null;
@@ -181,25 +210,42 @@ const SUMMARY_COLUMNS = {
 } as const;
 
 /**
- * Lists every stored asset.
+ * Lists stored assets.
  *
+ * @param kind narrows to one kind; omit for every kind, which is what the Assets tab shows
  * @returns assets ordered by name, without their bytes
  */
-export async function listAssets(): Promise<AssetSummary[]> {
-	const rows = await prisma.asset.findMany({ orderBy: { name: "asc" }, select: SUMMARY_COLUMNS });
+export async function listAssets(kind?: AssetKind): Promise<AssetSummary[]> {
+	const rows = await prisma.asset.findMany({
+		...(kind ? { where: { kind } } : {}),
+		orderBy: { name: "asc" },
+		select: SUMMARY_COLUMNS,
+	});
 	return rows.map(summarise);
 }
 
 /**
- * Stores an uploaded image.
+ * Stores an uploaded image or font.
+ *
+ * **Which of the two it is comes from the bytes**, through {@link detectAssetKind}, rather than from
+ * a filename or a content type the uploader chose. The two are then held to different rules — an
+ * image is decoded and measured, a font is parsed — and neither set would say anything useful about
+ * the other.
  *
  * @param name what markup will refer to it by; slug-shaped
  * @param bytes the file exactly as uploaded
  * @returns the stored asset
  * @throws ApiError if the name is unusable or taken, the file is too large, too big in pixels, or
- *         not an image this pipeline prints
+ *         is neither an image this pipeline prints nor a font it can read
  */
 export async function createAsset(name: string, bytes: Buffer): Promise<AssetSummary> {
+	const detected = detectAssetKind(bytes);
+	if (detected === null) {
+		throw new ApiError("invalid_image", "Files must be a PNG or JPEG image, or a TTF or OTF font.");
+	}
+	if (detected.kind === "FONT") {
+		return storeFont(name, bytes, detected.mimeType);
+	}
 	return store(name, bytes, null);
 }
 
@@ -249,20 +295,20 @@ export async function importAssetFromUrl(name: string, url: string): Promise<Ass
  * this image is still the same picture, so the memoised dots are still the right dots for it.
  *
  * Renaming to the name it already has is accepted rather than refused as a clash. That is what a
- * dialog opened and submitted without an edit sends, and "there is already an image called logo" is
+ * dialog opened and submitted without an edit sends, and "there is already an asset called logo" is
  * a true and useless thing to say about the row being renamed.
  *
  * @param id the asset to rename
  * @param rawName the new name as supplied
  * @returns the renamed asset
- * @throws ApiError if there is no such asset, or the name is unusable or taken by another image
+ * @throws ApiError if there is no such asset, or the name is unusable or taken by another asset
  */
 export async function renameAsset(id: string, rawName: string): Promise<AssetSummary> {
 	const name = parseName(rawName);
 
 	const existing = await prisma.asset.findUnique({ where: { id }, select: { id: true, name: true } });
 	if (!existing) {
-		throw new ApiError("unknown_asset", "That image no longer exists.");
+		throw new ApiError("unknown_asset", "That asset no longer exists.");
 	}
 
 	if (existing.name === name) {
@@ -282,7 +328,7 @@ export async function renameAsset(id: string, rawName: string): Promise<AssetSum
 			throw nameTaken(name, thrown);
 		}
 		if (isPrismaCode(thrown, "P2025")) {
-			throw new ApiError("unknown_asset", "That image no longer exists.", {}, { cause: thrown });
+			throw new ApiError("unknown_asset", "That asset no longer exists.", {}, { cause: thrown });
 		}
 		throw thrown;
 	}
@@ -308,10 +354,16 @@ export async function renameAsset(id: string, rawName: string): Promise<AssetSum
  * `sourceUrl` is cleared, because it is a record of where these bytes came from and these are not
  * those bytes. Leaving it would attribute an uploaded image to a URL it was never fetched from.
  *
+ * **The kind cannot change here.** Everything referring to this row refers to it as what it was —
+ * an `<image>` tag or a font attribute — so turning a logo into a font under the same name would
+ * break every receipt naming it while looking like a successful replace. Delete and upload is how
+ * that is said, and it is a deliberate step rather than a slip of the file picker.
+ *
  * @param id the asset to replace
- * @param bytes the new image
+ * @param bytes the new image or font
  * @returns the replaced asset
- * @throws ApiError if there is no such asset, or the bytes are not an image this pipeline prints
+ * @throws ApiError if there is no such asset, the bytes are of the other kind, or they are not an
+ *         image this pipeline prints or a font it can read
  */
 export async function replaceAsset(id: string, bytes: Buffer): Promise<AssetSummary> {
 	return await put(id, bytes, null);
@@ -349,15 +401,25 @@ export async function replaceAssetFromUrl(id: string, url: string): Promise<Asse
  * holding, and nothing downstream could tell.
  *
  * @param id the asset to replace
- * @param bytes the new image
+ * @param bytes the new image or font
  * @param sourceUrl where it was fetched from, or null when uploaded
  * @returns the replaced asset
- * @throws ApiError if there is no such asset, or on any refusal of the bytes
+ * @throws ApiError if there is no such asset, the bytes are of the other kind, or on any refusal of
+ *         the bytes
  */
 async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise<AssetSummary> {
 	const existing = await requireAsset(id);
 
-	const decoded = await measured(bytes);
+	const detected = requireSameKind(existing.kind, existing.name, bytes);
+
+	if (detected.kind === "FONT") {
+		await requireUsableFont(existing.name, bytes);
+	}
+
+	// A font carries no dimensions and an image always does, so both columns are written from
+	// whichever branch ran rather than left at whatever the row held.
+	const written =
+		detected.kind === "FONT" ? { mimeType: detected.mimeType, width: null, height: null } : await measured(bytes);
 
 	let row: AssetRow;
 	try {
@@ -367,9 +429,9 @@ async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise
 				// Copied into a plain `Uint8Array` for the reason `store` gives: Prisma's `Bytes` will
 				// not take a `Buffer`, whose backing store is typed as possibly shared.
 				data: new Uint8Array(bytes),
-				mimeType: decoded.mimeType,
-				width: decoded.width,
-				height: decoded.height,
+				mimeType: written.mimeType,
+				width: written.width,
+				height: written.height,
 				sourceUrl,
 			},
 			select: SUMMARY_COLUMNS,
@@ -377,7 +439,7 @@ async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise
 	} catch (thrown) {
 		// Deleted between the check and the write, by a second operator on the same tab.
 		if (isPrismaCode(thrown, "P2025")) {
-			throw new ApiError("unknown_asset", "That image no longer exists.", {}, { cause: thrown });
+			throw new ApiError("unknown_asset", "That asset no longer exists.", {}, { cause: thrown });
 		}
 		throw thrown;
 	}
@@ -385,9 +447,10 @@ async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise
 	logger.info("Asset replaced", {
 		assetId: id,
 		name: existing.name,
-		mimeType: decoded.mimeType,
-		width: decoded.width,
-		height: decoded.height,
+		kind: detected.kind,
+		mimeType: written.mimeType,
+		width: written.width,
+		height: written.height,
 		bytes: bytes.length,
 		sourceUrl,
 	});
@@ -399,15 +462,40 @@ async function put(id: string, bytes: Buffer, sourceUrl: string | null): Promise
  * Resolves an asset id to the row behind it.
  *
  * @param id the asset
- * @returns its id and name
+ * @returns its id, name and kind
  * @throws ApiError if there is no such asset
  */
-async function requireAsset(id: string): Promise<{ id: string; name: string }> {
-	const existing = await prisma.asset.findUnique({ where: { id }, select: { id: true, name: true } });
+async function requireAsset(id: string): Promise<{ id: string; name: string; kind: string }> {
+	const existing = await prisma.asset.findUnique({
+		where: { id },
+		select: { id: true, name: true, kind: true },
+	});
 	if (!existing) {
-		throw new ApiError("unknown_asset", "That image no longer exists.");
+		throw new ApiError("unknown_asset", "That asset no longer exists.");
 	}
 	return existing;
+}
+
+/**
+ * Refuses a replacement that would change what an asset is.
+ *
+ * @param stored the kind the row holds
+ * @param name the asset's name, for the refusal
+ * @param bytes the replacement, as uploaded or as fetched
+ * @returns what the replacement turned out to be
+ * @throws ApiError if the bytes are neither an image nor a font, or are the other kind
+ */
+function requireSameKind(stored: string, name: string, bytes: Buffer): NonNullable<DetectedKind> {
+	const detected = detectAssetKind(bytes);
+	if (detected === null) {
+		throw new ApiError("invalid_image", "Files must be a PNG or JPEG image, or a TTF or OTF font.");
+	}
+	if (detected.kind !== stored) {
+		const was = stored === "FONT" ? "a font" : "an image";
+		const now = detected.kind === "FONT" ? "a font" : "an image";
+		throw new ApiError("invalid_type", `'${name}' is ${was} and cannot be replaced by ${now}.`);
+	}
+	return detected;
 }
 
 /**
@@ -420,7 +508,7 @@ async function requireAsset(id: string): Promise<{ id: string; name: string }> {
 async function readRow(id: string): Promise<AssetRow> {
 	const row = await prisma.asset.findUnique({ where: { id }, select: SUMMARY_COLUMNS });
 	if (!row) {
-		throw new ApiError("unknown_asset", "That image no longer exists.");
+		throw new ApiError("unknown_asset", "That asset no longer exists.");
 	}
 	return row;
 }
@@ -438,7 +526,7 @@ async function readRow(id: string): Promise<AssetRow> {
 export async function deleteAsset(id: string): Promise<void> {
 	const existing = await prisma.asset.findUnique({ where: { id }, select: { id: true, name: true } });
 	if (!existing) {
-		throw new ApiError("unknown_asset", "That image no longer exists.");
+		throw new ApiError("unknown_asset", "That asset no longer exists.");
 	}
 
 	try {
@@ -451,7 +539,7 @@ export async function deleteAsset(id: string): Promise<void> {
 		if (!isPrismaCode(thrown, "P2025")) {
 			throw thrown;
 		}
-		throw new ApiError("unknown_asset", "That image no longer exists.", {}, { cause: thrown });
+		throw new ApiError("unknown_asset", "That asset no longer exists.", {}, { cause: thrown });
 	}
 
 	logger.info("Asset deleted", { assetId: id, name: existing.name });
@@ -537,7 +625,7 @@ const rasterCache = globalForRasters.fenposRasterCache;
  * @param name the asset's name
  * @param targetDots the paper width in printer dots, from `dotWidth(columns)`
  * @returns the raster's size in dots and its packed bits, MSB first
- * @throws ApiError if no image of that name is stored
+ * @throws ApiError if no image of that name is stored, or the asset of that name is a font
  * @throws RangeError if `targetDots` is not a positive whole number of dots
  */
 export async function rasterFor(name: string, targetDots: number): Promise<ImageRaster> {
@@ -545,12 +633,13 @@ export async function rasterFor(name: string, targetDots: number): Promise<Image
 	// bytes are the expensive part. Two megabytes fetched only to be thrown away would undo most of
 	// what the cache is for.
 	const revision = await prisma.asset.findUnique({
-		where: { kind_name: { kind: "IMAGE", name } },
-		select: { id: true, updatedAt: true },
+		where: { name },
+		select: { id: true, kind: true, updatedAt: true },
 	});
 	if (!revision) {
 		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
 	}
+	requireImage(revision.kind, name);
 
 	const key = `${revision.id}:${revision.updatedAt.getTime()}:${targetDots}`;
 	const remembered = rasterCache.entries.get(key);
@@ -694,22 +783,134 @@ export function rasterCacheStats(): { entries: number; bytes: number } {
  *
  * @param name the asset's name, as written between the tags
  * @returns the image's size in pixels, as it was stored
- * @throws ApiError if no image of that name is stored
+ * @throws ApiError if no image of that name is stored, or the asset of that name is a font
  */
 export async function storedImageSize(name: string): Promise<ImageSource> {
 	const row = await prisma.asset.findUnique({
-		where: { kind_name: { kind: "IMAGE", name } },
-		select: { width: true, height: true },
+		where: { name },
+		select: { kind: true, width: true, height: true },
 	});
 	if (!row) {
 		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
 	}
+	requireImage(row.kind, name);
 	if (row.width === null || row.height === null) {
-		// Nullable for a future asset kind that is not a raster. Every IMAGE this module writes has
-		// both, so a null here is a row it did not write — a fault to surface, not a size to guess.
+		// Nullable because a font has no pixels, and that case is already refused above. Every IMAGE
+		// this module writes has both, so a null here is a row it did not write — a fault to surface,
+		// not a size to guess.
 		throw new Error(`The stored image '${name}' has no dimensions`);
 	}
 	return { width: row.width, height: row.height };
+}
+
+/**
+ * Refuses an asset that is not an image, to a caller that can only use one.
+ *
+ * `unknown_asset` rather than a code of its own: to an `<image>` tag, a name holding a font is a
+ * name holding no image, which is the same situation as a name holding nothing. The sentence is what
+ * differs, because "there is no image called 'x'" would send an operator looking for a missing
+ * upload when the upload is sitting right there under that name.
+ *
+ * @param kind the kind the row holds
+ * @param name the asset's name, for the refusal
+ * @throws ApiError if it is not an image
+ */
+function requireImage(kind: string, name: string): void {
+	if (kind !== "IMAGE") {
+		throw new ApiError("unknown_asset", `'${name}' is a font, not an image.`);
+	}
+}
+
+/**
+ * How many parsed faces this process keeps.
+ *
+ * Small and fixed, unlike the raster cache's configurable byte budget, because the two are bounded
+ * by different things. A face is held open for as long as glyphs are being rasterised from it, and
+ * an install has a handful of fonts rather than a library of them — sixteen is more than any receipt
+ * design would name and is bounded above by {@link maxFontBytes} times this, which an operator can
+ * reason about without a setting for it.
+ */
+const MAX_CACHED_FACES = 16;
+
+/**
+ * Parsed faces, keyed by the asset revision they came from.
+ *
+ * Memoisation, not storage, exactly as the raster cache is: the bytes are what is stored, and an
+ * entry here can always be rebuilt from them. The key carries the row's id *and* its `updatedAt`, so
+ * a replaced font becomes unreachable rather than stale — the same invalidation story, and the same
+ * reason there is no eviction on write to forget.
+ *
+ * Held on `globalThis` so a development hot reload does not strand the previous module's entries.
+ */
+const globalForFaces = globalThis as unknown as { fenposFaceCache: Map<string, FontFace> | undefined };
+
+if (!globalForFaces.fenposFaceCache) {
+	globalForFaces.fenposFaceCache = new Map();
+}
+
+const faceCache = globalForFaces.fenposFaceCache;
+
+/**
+ * Loads a stored font as a parsed face.
+ *
+ * **Memoised by asset revision.** Parsing walks the font's tables, and a face is asked for once per
+ * run of text on every receipt naming it, so a compile of one document would otherwise re-parse the
+ * same megabytes a dozen times. A cheap read of the row's id and timestamp happens on every call, so
+ * a hit cannot serve glyphs from bytes that have been replaced.
+ *
+ * **The returned face is shared**, and `glyphs.ts` keys its own glyph cache on `id`, which is why
+ * the id is the revision rather than the name: two revisions of one name must not be able to hand
+ * each other's dots back.
+ *
+ * @param name the font's name, as markup refers to it
+ * @returns the parsed face
+ * @throws ApiError if no font of that name is stored, or the asset of that name is an image
+ */
+export async function fontFace(name: string): Promise<FontFace> {
+	const row = await prisma.asset.findUnique({
+		where: { name },
+		select: { id: true, kind: true, data: true, updatedAt: true },
+	});
+	if (!row || row.kind !== "FONT") {
+		// One sentence for both, because they are one situation to whoever wrote the markup: the name
+		// they used does not name a font. Which of the two it is is visible on the Assets tab.
+		throw new ApiError("unknown_font", `There is no font called '${name}'. Upload one on the Assets tab.`);
+	}
+
+	const key = `${row.id}:${row.updatedAt.getTime()}`;
+	const remembered = faceCache.get(key);
+	if (remembered) {
+		// Re-inserted so the map's iteration order is least-recently-used first, which is the order
+		// eviction walks.
+		faceCache.delete(key);
+		faceCache.set(key, remembered);
+		return remembered;
+	}
+
+	// Not wrapped: these bytes parsed once already, on the way in. A failure now is this server
+	// disagreeing with itself, which is a 500 and a log line, not something the caller did wrong.
+	const face = parseFace(key, Buffer.from(row.data));
+
+	faceCache.set(key, face);
+	for (const oldest of faceCache.keys()) {
+		if (faceCache.size <= MAX_CACHED_FACES) {
+			break;
+		}
+		faceCache.delete(oldest);
+	}
+
+	return face;
+}
+
+/**
+ * Empties the parsed-face cache.
+ *
+ * For tests, which need to tell a hit from a miss and share one process across cases. Nothing in the
+ * product calls it: an entry is keyed by the revision it came from, so there is never anything stale
+ * to clear.
+ */
+export function forgetFaces(): void {
+	faceCache.clear();
 }
 
 /** A URL image as it was fetched: what it turned out to be, and the bytes it was measured from. */
@@ -779,9 +980,9 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
 		});
 	} catch (thrown) {
 		// `requireNameFree` and this insert are two statements, so two simultaneous creates of the
-		// same name can both pass the check. The `@@unique([kind, name])` constraint is what keeps
-		// that *correct*; this is only about how it reads. Without it the loser is told to check
-		// the server log instead of being told the name is taken, which is the one thing they could
+		// same name can both pass the check. The unique constraint on `name` is what keeps that
+		// *correct*; this is only about how it reads. Without it the loser is told to check the
+		// server log instead of being told the name is taken, which is the one thing they could
 		// actually have done something about.
 		if (!isPrismaCode(thrown, "P2002")) {
 			throw thrown;
@@ -792,6 +993,7 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
 	logger.info("Asset stored", {
 		assetId: row.id,
 		name,
+		kind: "IMAGE",
 		mimeType: decoded.mimeType,
 		width: decoded.width,
 		height: decoded.height,
@@ -800,6 +1002,85 @@ async function store(rawName: string, bytes: Buffer, sourceUrl: string | null): 
 	});
 
 	return summarise(row);
+}
+
+/**
+ * The one way font bytes become a stored asset.
+ *
+ * The parse is the validation, exactly as the decode is for an image: a file that opens with the
+ * TrueType magic and holds nothing usable behind it is refused here, while whoever chose it is
+ * still at the file picker, rather than at compile time on a receipt naming it.
+ *
+ * The parsed face is thrown away rather than seeded into the LRU. Its key carries the row's id and
+ * `updatedAt`, neither of which exists yet at this point, and an upload is not evidence that
+ * anything is about to print with it.
+ *
+ * @param rawName the name as supplied
+ * @param bytes the font exactly as uploaded
+ * @param mimeType what {@link detectAssetKind} read the flavour as
+ * @returns the stored asset
+ * @throws ApiError if the name is unusable or taken, the file is too large, or it will not parse
+ */
+async function storeFont(rawName: string, bytes: Buffer, mimeType: string): Promise<AssetSummary> {
+	const name = parseName(rawName);
+	await requireNameFree(name);
+
+	await requireUsableFont(name, bytes);
+
+	let row: AssetRow;
+	try {
+		row = await prisma.asset.create({
+			data: {
+				kind: "FONT",
+				name,
+				// Copied into a plain `Uint8Array` for the reason `store` gives.
+				data: new Uint8Array(bytes),
+				mimeType,
+				// A font has no pixels. Left null rather than zeroed, so nothing downstream can read a
+				// size out of a row that never had one.
+				width: null,
+				height: null,
+				sourceUrl: null,
+			},
+			select: SUMMARY_COLUMNS,
+		});
+	} catch (thrown) {
+		if (!isPrismaCode(thrown, "P2002")) {
+			throw thrown;
+		}
+		throw nameTaken(name, thrown);
+	}
+
+	logger.info("Asset stored", { assetId: row.id, name, kind: "FONT", mimeType, bytes: bytes.length });
+
+	return summarise(row);
+}
+
+/**
+ * The one gate font bytes pass before anything here believes them.
+ *
+ * The byte cap runs first, so a file too large to store is refused before it is handed to a parser
+ * that would walk its tables.
+ *
+ * The face this produces is dropped. It is parsed to find out whether it can be, and nothing
+ * rasterises from it, so the id it is given here never reaches the glyph cache in `glyphs.ts` —
+ * {@link fontFace} is what parses the face that does, under the revision's own key.
+ *
+ * @param name the asset's name, which the throwaway face is identified by
+ * @param bytes the font, as uploaded
+ * @throws ApiError if it is over {@link maxFontBytes}, or opentype cannot read it
+ */
+async function requireUsableFont(name: string, bytes: Buffer): Promise<void> {
+	requireWithinBytes(bytes.length, await maxFontBytes());
+
+	try {
+		parseFace(name, bytes);
+	} catch (thrown) {
+		if (!(thrown instanceof InvalidFontError)) {
+			throw thrown;
+		}
+		throw new ApiError("invalid_font", "This file could not be read as a TTF or OTF font.", {}, { cause: thrown });
+	}
 }
 
 /**
@@ -930,17 +1211,15 @@ function parseName(rawName: string): string {
 /**
  * Refuses a name already in use.
  *
- * Uniqueness is per kind rather than global, so a later asset kind may reuse a name that reads
- * naturally for it without colliding with an image.
+ * Uniqueness is global rather than per kind, because markup names an asset by name alone: a font
+ * and an image sharing `logo` would be two rows one reference could mean, and nothing written down
+ * would say which.
  *
  * @param name the candidate name
- * @throws ApiError if an image of that name is already stored
+ * @throws ApiError if an asset of that name is already stored, whatever kind it is
  */
 async function requireNameFree(name: string): Promise<void> {
-	const clash = await prisma.asset.findUnique({
-		where: { kind_name: { kind: "IMAGE", name } },
-		select: { id: true },
-	});
+	const clash = await prisma.asset.findUnique({ where: { name }, select: { id: true } });
 	if (clash) {
 		throw nameTaken(name, undefined);
 	}
@@ -958,7 +1237,7 @@ async function requireNameFree(name: string): Promise<void> {
  * @returns the error to throw
  */
 function nameTaken(name: string, cause: unknown): ApiError {
-	return new ApiError("name_taken", `There is already an image called '${name}'.`, { field: "name" }, { cause });
+	return new ApiError("name_taken", `There is already an asset called '${name}'.`, { field: "name" }, { cause });
 }
 
 /**
@@ -981,13 +1260,13 @@ function isPrismaCode(error: unknown, code: string): boolean {
 /**
  * Converts a row into what the panel renders.
  *
- * `width` and `height` are nullable in the schema, for a future kind that is not a raster. Every
- * IMAGE has both, so a null here would mean a row this module did not write.
+ * `width` and `height` are carried through as they are, null included: a font has no pixels, and a
+ * zero would be read as a real size by anything that did arithmetic with it. Every IMAGE this
+ * module writes has both, so a null on one of those is a row it did not write.
  *
- * Exported so `GET /api/v1/assets` can build its listing from it instead of re-implementing these
- * coercions: without them a listing built straight from the columns would emit a nullable
- * `width`/`height` the OpenAPI schema declares as required integers, and an un-narrowed `kind`
- * against a schema that declares it a closed enum.
+ * Exported so `GET /api/v1/assets` can build its listing from it instead of re-implementing the
+ * `kind` narrowing: without it a listing built straight from the columns would emit an un-narrowed
+ * `kind` against a schema that declares it a closed enum.
  *
  * @param row the selected columns
  * @returns the summary
@@ -997,8 +1276,8 @@ export function summarise(row: AssetRow): AssetSummary {
 		id: row.id,
 		kind: AssetKind.is(row.kind) ? row.kind : "IMAGE",
 		name: row.name,
-		width: row.width ?? 0,
-		height: row.height ?? 0,
+		width: row.width,
+		height: row.height,
 		mimeType: row.mimeType,
 		sourceUrl: row.sourceUrl,
 		createdAt: row.createdAt.toISOString(),

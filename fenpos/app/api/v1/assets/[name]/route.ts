@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 
 /**
- * `DELETE /api/v1/assets/{name}` — removing a stored image.
+ * `DELETE /api/v1/assets/{name}` — removing a stored image or font.
  *
  * Addressed by name, which is what markup references and what the caller chose. The id is a cuid
  * they never saw, and publishing one would become a second way to name the same thing that
@@ -14,8 +14,8 @@ import { logger } from "@/lib/logger";
  * Answers 204 rather than a body. There is nothing left to describe: the asset is gone, and a body
  * restating the name the caller just sent is ceremony.
  *
- * A receipt already referring to this image will now fail to print with `unknown_asset` — that is
- * the same consequence deleting from the Assets tab has, and it belongs to whoever deletes.
+ * A receipt already referring to this asset will now fail to print — that is the same consequence
+ * deleting from the Assets tab has, and it belongs to whoever deletes.
  */
 
 export const DELETE = apiRoute<{ name: string }>("api:DELETE /v1/assets/{name}", async ({ key, params }) => {
@@ -32,13 +32,12 @@ export const DELETE = apiRoute<{ name: string }>("api:DELETE /v1/assets/{name}",
 		);
 	}
 
-	const asset = await prisma.asset.findUnique({
-		where: { kind_name: { kind: "IMAGE", name } },
-		select: { id: true },
-	});
+	// By name alone, whatever kind it is: one namespace means one name identifies one row, and a
+	// caller deleting `roboto` has said everything there is to say about which asset they meant.
+	const asset = await prisma.asset.findUnique({ where: { name }, select: { id: true } });
 
 	if (!asset) {
-		throw new ApiError("unknown_asset", `There is no image called '${name}'.`);
+		throw new ApiError("unknown_asset", `There is no asset called '${name}'.`);
 	}
 
 	await deleteAsset(asset.id);
@@ -50,6 +49,6 @@ export const DELETE = apiRoute<{ name: string }>("api:DELETE /v1/assets/{name}",
 		// Safe to name here even though it is the caller's own path segment: the lookup above matched
 		// it against a stored row by exact equality, so it is a real asset's name and bounded by the
 		// rule that name was created under, rather than an unbounded invention.
-		message: `Deleted image '${name}'`,
+		message: `Deleted asset '${name}'`,
 	};
 });

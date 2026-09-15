@@ -49,7 +49,9 @@ export default async function AssetsPage() {
 	// Outside any try: both an absent session and a refusal signal by throwing.
 	const user = await requirePagePermission("assets:read", "/assets");
 
-	const assets = await listAssets();
+	// Images only. Every card here is a dithered preview and a pixel size, neither of which a font
+	// has; the tab that lists fonts is their own.
+	const assets = await listAssets("IMAGE");
 	const uploadCap = await maxAssetBytes();
 	const acceptedFormats = await enumSetting<AcceptedFormats>("assets.acceptedFormats");
 	// Resolved here because a client component cannot read the database. Convenience only — every
@@ -69,8 +71,10 @@ export default async function AssetsPage() {
 		cards.push({
 			id: asset.id,
 			name: asset.name,
-			width: asset.width,
-			height: asset.height,
+			// Nullable in the row for a font's sake, and a listing narrowed to images has both — a
+			// zero here would mean a row the asset service did not write.
+			width: asset.width ?? 0,
+			height: asset.height ?? 0,
 			mimeType: asset.mimeType,
 			sourceUrl: asset.sourceUrl,
 			createdAt: asset.createdAt,

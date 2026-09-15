@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { Jimp, JimpMime } from "jimp";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAsset } from "@/lib/assets/asset-service";
 import { prisma } from "@/lib/db";
 import { rastersFor } from "@/lib/link/asset-sync";
 import { type DeviceConfig, IMAGE_LIMITS, MAX_FRAME_BYTES, serialiseServerFrame } from "@/lib/link/protocol";
+import { logger } from "@/lib/logger";
 
 /**
  * Tests for which rasters an agent is sent with its configuration.
@@ -21,6 +22,9 @@ import { type DeviceConfig, IMAGE_LIMITS, MAX_FRAME_BYTES, serialiseServerFrame 
 
 /** A real 128x40 PNG, the same fixture the dither and asset tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
+
+/** The bundled monospace face, the same fixture the asset service's font tests use. */
+const FONT = readFileSync("public/fonts/DejaVuSansMono.ttf");
 
 /**
  * A device of a given width in columns.
@@ -64,6 +68,7 @@ async function solidPng(width: number, height: number): Promise<Buffer> {
 
 beforeEach(async () => {
 	await prisma.asset.deleteMany();
+	vi.restoreAllMocks();
 });
 
 describe("rastersFor", () => {
@@ -84,6 +89,22 @@ describe("rastersFor", () => {
 		const rasters = await rastersFor([device("kitchen", 32)], "agent-1");
 
 		expect(rasters.map((raster) => raster.name)).toEqual(["logo", "stamp"]);
+	});
+
+	// A font is bytes the dither would read as a picture, which is not a thing to send to a printer
+	// and would be re-derived on every connect. Skipping it quietly is the point: a font that reached
+	// the loop and failed there would log on every connect for the lifetime of the install.
+	it("sends nothing for a stored font, and says nothing about it", async () => {
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const error = vi.spyOn(logger, "error").mockImplementation(() => {});
+		await createAsset("logo", PNG);
+		await createAsset("roboto", FONT);
+
+		const rasters = await rastersFor([device("kitchen", 32)], "agent-1");
+
+		expect(rasters.map((raster) => raster.name)).toEqual(["logo"]);
+		expect(warn).not.toHaveBeenCalled();
+		expect(error).not.toHaveBeenCalled();
 	});
 
 	it("sends nothing for an agent with no devices, since no width would be right", async () => {

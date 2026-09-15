@@ -70,7 +70,9 @@ export async function rastersFor(devices: readonly DeviceConfig[], agentId: stri
 		return [];
 	}
 
-	const assets = await listAssets();
+	// Images only. A font is bytes the dither would happily read as a picture, and the result would
+	// be sent to a printer on every connect for the lifetime of the install.
+	const assets = await listAssets("IMAGE");
 	if (assets.length === 0) {
 		return [];
 	}

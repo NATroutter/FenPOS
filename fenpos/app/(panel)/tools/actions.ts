@@ -544,13 +544,15 @@ export async function listMarkupImages(): Promise<MarkupImage[]> {
 	return panelQuery<MarkupImage[]>(
 		"tools:list-images",
 		async () => {
-			const assets = await listAssets();
+			// Images only: this picker writes an `<image>` tag, which a font would not resolve for.
+			const assets = await listAssets("IMAGE");
 			const images: MarkupImage[] = [];
 			for (const asset of assets) {
 				images.push({
 					name: asset.name,
-					width: asset.width,
-					height: asset.height,
+					// Nullable in the row for a font's sake, and every image has both.
+					width: asset.width ?? 0,
+					height: asset.height ?? 0,
 					preview: await pickerPreview(asset.name),
 				});
 			}

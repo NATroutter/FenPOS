@@ -150,11 +150,12 @@ export const BarcodeSystem = closedSet([
 export type BarcodeSystem = (typeof BarcodeSystem.values)[number];
 
 /**
- * What an asset is. One value today; a second is a new value and a new branch, not a new
- * table.
+ * What an asset is. A picture to dither, or a font to render glyphs from — one table and one
+ * namespace, because markup names an asset by name alone. A third kind is a new value and a new
+ * branch, not a new table.
  *
  * Deliberately has no Java mirror, unlike every other set in this file: asset kinds never
  * cross the link to the agent, only the asset's bytes do. Do not add one.
  */
-export const AssetKind = closedSet(["IMAGE"] as const);
+export const AssetKind = closedSet(["IMAGE", "FONT"] as const);
 export type AssetKind = (typeof AssetKind.values)[number];

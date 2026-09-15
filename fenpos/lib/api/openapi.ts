@@ -133,14 +133,14 @@ const JOB_SCHEMA = {
 	],
 };
 
-/** One stored image, without its bytes — what `GET /assets` lists. */
+/** One stored asset, without its bytes — what `GET /assets` lists. */
 const ASSET_SUMMARY_SCHEMA = {
 	type: "object",
 	properties: {
 		name: { type: "string" },
 		kind: { type: "string", enum: AssetKind.values },
-		width: { type: "integer" },
-		height: { type: "integer" },
+		width: { type: ["integer", "null"], description: "Pixels across for an image, and null for a font." },
+		height: { type: ["integer", "null"], description: "Pixels down for an image, and null for a font." },
 		mimeType: { type: "string" },
 		sourceUrl: { type: ["string", "null"], description: "The URL it was imported from, or null for an upload." },
 		createdAt: { type: "string", format: "date-time" },
@@ -605,10 +605,10 @@ export function openApiDocument(publicUrl: string): object {
 
 			[`${API_BASE}/assets`]: {
 				get: {
-					summary: "List the stored images markup can reference.",
+					summary: "List the stored images and fonts markup can reference.",
 					operationId: "listAssets",
 					description:
-						"Requires the `assets:read` permission. Install-wide, not scoped to a key's devices — the panel, the markup resolver and every key see one namespace. Ordered by name ascending, unlike the jobs listing's newest-first — an image library is browsed alphabetically. Cursor-paginated, without the image bytes.",
+						"Requires the `assets:read` permission. Install-wide, not scoped to a key's devices — the panel, the markup resolver and every key see one namespace. Ordered by name ascending, unlike the jobs listing's newest-first — an asset library is browsed alphabetically. Cursor-paginated, without the stored bytes.",
 					security: BEARER_AUTH,
 					parameters: PAGE_PARAMS,
 					responses: {
@@ -621,10 +621,10 @@ export function openApiDocument(publicUrl: string): object {
 					},
 				},
 				post: {
-					summary: "Store an image.",
+					summary: "Store an image or a font.",
 					operationId: "createAsset",
 					description:
-						"Requires the `assets:write` permission — a broader grant than any device permission, since assets are install-wide. The body names exactly one source for the bytes: `data`, a base64-encoded upload, or `url`, a location to import from.",
+						"Requires the `assets:write` permission — a broader grant than any device permission, since assets are install-wide. The body names exactly one source for the bytes: `data`, a base64-encoded upload, or `url`, a location to import from. Which kind it is comes from the bytes themselves — a PNG or JPEG image, or a TTF or OTF font — rather than from anything the body declares; a URL import is images only.",
 					security: BEARER_AUTH,
 					requestBody: {
 						required: true,
@@ -634,7 +634,7 @@ export function openApiDocument(publicUrl: string): object {
 									type: "object",
 									properties: {
 										name: { type: "string" },
-										data: { type: "string", description: "The image, base64 encoded. Exclusive with `url`." },
+										data: { type: "string", description: "The image or font, base64 encoded. Exclusive with `url`." },
 										url: { type: "string", description: "A location to import the image from. Exclusive with `data`." },
 									},
 									required: ["name"],
@@ -654,10 +654,10 @@ export function openApiDocument(publicUrl: string): object {
 
 			[`${API_BASE}/assets/{name}`]: {
 				delete: {
-					summary: "Remove a stored image.",
+					summary: "Remove a stored image or font.",
 					operationId: "deleteAsset",
 					description:
-						"Requires the `assets:write` permission — a delete is a write. A receipt still naming this image will fail to compile with `unknown_asset` afterwards.",
+						"Requires the `assets:write` permission — a delete is a write. A receipt still naming this asset will fail to compile afterwards.",
 					security: BEARER_AUTH,
 					parameters: [{ name: "name", in: "path", required: true, schema: { type: "string" } }],
 					responses: {

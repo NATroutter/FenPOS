@@ -601,10 +601,13 @@ model Setting {
 
 model Asset {
   id        String   @id @default(cuid())
-  /// IMAGE. See AssetKind in lib/domain/enums.ts for the closed set.
+  /// IMAGE or FONT. See AssetKind in lib/domain/enums.ts for the closed set.
   kind      String   @default("IMAGE")
   /// Referenced from markup. Slug-shaped.
-  name      String
+  ///
+  /// One namespace across kinds: markup names an asset by name alone, so an image and a font cannot
+  /// share one.
+  name      String   @unique
   /// The uploaded file, untouched. Dithered output is derived from this, never stored as the
   /// source of truth, because the right dither depends on the paper it is going to.
   data      Bytes
@@ -617,9 +620,6 @@ model Asset {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  /// Unique per kind rather than globally, so a later kind may reuse a name that reads naturally
-  /// for it without colliding with an image.
-  @@unique([kind, name])
   @@map("assets")
 }
 

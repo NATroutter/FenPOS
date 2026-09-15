@@ -187,7 +187,7 @@ export const CATEGORIES: readonly {
 		groups: [
 			{
 				label: "Stored images",
-				keys: ["assets.maxUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"],
+				keys: ["assets.maxUploadMb", "assets.maxFontUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"],
 			},
 			{
 				// Split from the stored library because the two are different risks, not two halves of
@@ -535,6 +535,7 @@ export const SETTING_KEYS = [
 	"jobs.shutdownGraceSeconds",
 	"jobs.maxErrorMessageChars",
 	"assets.maxUploadMb",
+	"assets.maxFontUploadMb",
 	"assets.acceptedFormats",
 	"assets.rasterCacheMb",
 	"images.maxRemoteReferences",
@@ -794,6 +795,17 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		min: 1,
 		max: 512,
 		fallback: 2,
+		unit: "MiB",
+	},
+	{
+		key: "assets.maxFontUploadMb",
+		label: "Font upload size",
+		description: "A TTF or OTF font file. Stored as uploaded; glyphs are rendered on demand.",
+		category: "media",
+		type: "integer",
+		min: 1,
+		max: 64,
+		fallback: 8,
 		unit: "MiB",
 	},
 	{

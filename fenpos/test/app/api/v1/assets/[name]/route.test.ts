@@ -13,6 +13,8 @@ import { prisma } from "@/lib/db";
  */
 
 const PNG = readFileSync("test/fixtures/logo.png");
+/** The bundled monospace face, the same fixture the asset service's font tests use. */
+const FONT = readFileSync("public/fonts/DejaVuSansMono.ttf");
 let token: string;
 let keyId: string;
 
@@ -55,6 +57,15 @@ describe("DELETE /api/v1/assets/{name}", () => {
 
 		expect(response.status).toBe(204);
 		expect(await prisma.asset.count()).toBe(0);
+	});
+
+	it("removes a font, which shares this namespace with images", async () => {
+		await createAsset("roboto", FONT);
+
+		const response = await DELETE(...call("roboto"));
+
+		expect(response.status).toBe(204);
+		expect(await prisma.asset.findMany({ where: { name: "roboto" } })).toHaveLength(0);
 	});
 
 	it("reports an asset that is not there as unknown", async () => {

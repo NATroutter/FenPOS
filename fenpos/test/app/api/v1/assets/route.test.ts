@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiReadLimiter } from "@/lib/auth/rate-limit";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * `GET` and `POST /api/v1/assets` — stored images, without a browser.
@@ -21,6 +22,8 @@ const { GET, POST } = await import("@/app/api/v1/assets/route");
 const { importAssetFromUrl } = await import("@/lib/assets/asset-service");
 
 const PNG = readFileSync("test/fixtures/logo.png");
+/** The bundled monospace face, the same fixture the asset service's font tests use. */
+const FONT = readFileSync("public/fonts/DejaVuSansMono.ttf");
 
 let token: string;
 let keyId: string;
@@ -79,11 +82,27 @@ describe("POST /api/v1/assets", () => {
 		expect(await prisma.asset.count()).toBe(1);
 	});
 
+	it("stores an uploaded font", async () => {
+		const response = await POST(post({ name: "roboto", data: FONT.toString("base64") }));
+		const body = await response.json();
+
+		expect(response.status).toBe(201);
+		expect(body.kind).toBe("FONT");
+		expect(body.name).toBe("roboto");
+		// A font has no pixels, and the listing says so rather than claiming a size it does not have.
+		expect(body.width).toBeNull();
+		expect(body.height).toBeNull();
+	});
+
 	it("refuses an oversized body before it is parsed", async () => {
-		// Comfortably over the envelope this route derives from the default 2 MiB `assets.maxUploadMb`
-		// (base64's 4/3 expansion plus headroom is about 2.8 MB) while still being valid JSON, so a
-		// failure here can only be the size check that runs before `JSON.parse` and the base64 decode
-		// it guards — not a parse failure, which would prove nothing about the ordering.
+		// Both caps lowered so the envelope this route reads up to — the larger of them, since the
+		// body has not been parsed yet and neither branch can be told apart — is about 1.4 MB. The
+		// body below is comfortably past that while still being valid JSON, so a failure here can
+		// only be the size check that runs before `JSON.parse` and the base64 decode it guards, not a
+		// parse failure, which would prove nothing about the ordering.
+		await setSetting("assets.maxUploadMb", 1);
+		await setSetting("assets.maxFontUploadMb", 1);
+
 		const response = await POST(post({ name: "huge", data: "x".repeat(3_000_000) }));
 
 		expect(response.status).toBe(413);
@@ -198,30 +217,27 @@ describe("GET /api/v1/assets", () => {
 		]);
 	});
 
-	// Not reachable through the public API — `createAsset` always writes `width`/`height` from the
-	// decoded image — so the row is inserted directly, standing in for what a future non-raster
-	// `AssetKind` might leave null. This is what proves the listing goes through the same
-	// `summarise` every other asset shape does, rather than a second, hand-rolled mapping that
-	// forgot the coercion the OpenAPI schema's required integers depend on.
-	it("coerces a null width/height to the integers the schema declares", async () => {
-		await prisma.asset.create({
-			data: { kind: "IMAGE", name: "raw-row", data: Buffer.alloc(1), mimeType: "image/png", width: null, height: null },
-		});
+	it("lists images and fonts together, each saying which it is", async () => {
+		await POST(post({ name: "shop-logo", data: PNG.toString("base64") }));
+		await POST(post({ name: "roboto", data: FONT.toString("base64") }));
 
 		const body = await (await GET(get())).json();
-		const raw = body.assets.find((asset: { name: string }) => asset.name === "raw-row");
+		const byName = Object.fromEntries(body.assets.map((asset: { name: string }) => [asset.name, asset]));
 
-		expect(raw).toBeDefined();
-		expect(raw.width).toBe(0);
-		expect(raw.height).toBe(0);
+		expect(byName["shop-logo"].kind).toBe("IMAGE");
+		expect(byName.roboto.kind).toBe("FONT");
+		// Published as null rather than as a zero it would be read as a real size: a font has no
+		// pixels, and every caller reading this has to be able to tell that apart from a 0x0 image.
+		expect(byName.roboto.width).toBeNull();
+		expect(byName.roboto.height).toBeNull();
 	});
 
 	// `kind` on the Prisma model is a plain `String`, not a database enum — the schema comment on
-	// `Asset.kind` says the closed set is application-level only, guarding against a future kind
-	// reusing a name the way `DELETE /assets/{name}` already addresses rows by `kind_name`. Nothing in
-	// today's API can create a row of any kind but "IMAGE", so — like the null width/height row above
-	// — this one is inserted directly to stand in for that future row.
-	it("does not list an asset of a kind other than IMAGE", async () => {
+	// `Asset.kind` says the closed set is application-level only. A row of some kind this build has
+	// never heard of would be described by `summarise`'s fallback as an image, which is a lie about a
+	// row nothing here wrote, so the listing is filtered to the kinds `AssetKind` names. Nothing in
+	// today's API can create such a row, so this one is inserted directly.
+	it("does not list an asset of a kind it does not know", async () => {
 		await prisma.asset.create({
 			data: {
 				kind: "STICKER",
@@ -266,9 +282,9 @@ describe("GET /api/v1/assets", () => {
 	});
 
 	// Distinct from the case above: this cursor names a row that exists, so it only exercises the
-	// `kind: "IMAGE"` half of `assertCursorInFilter`'s `where` — a plain non-existent id can't tell
-	// that filter apart from the "no such row" case, since both end up refused the same way.
-	it("refuses a cursor naming a row that exists but is not IMAGE", async () => {
+	// kind half of `assertCursorInFilter`'s `where` — a plain non-existent id can't tell that filter
+	// apart from the "no such row" case, since both end up refused the same way.
+	it("refuses a cursor naming a row of a kind it does not know", async () => {
 		const other = await prisma.asset.create({
 			data: {
 				kind: "STICKER",

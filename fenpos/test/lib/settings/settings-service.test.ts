@@ -421,6 +421,7 @@ describe("setting definitions", () => {
 			"jobs.shutdownGraceSeconds": "integer",
 			"jobs.maxErrorMessageChars": "integer",
 			"assets.maxUploadMb": "integer",
+			"assets.maxFontUploadMb": "integer",
 			"assets.acceptedFormats": "enum",
 			"assets.rasterCacheMb": "integer",
 			"images.maxRemoteReferences": "integer",

@@ -332,10 +332,7 @@ describe("listMarkupImages", () => {
 		// take away the operator's only route to an image that prints perfectly well.
 		const broken = `broken-preview-${process.pid}`;
 		await createAsset(broken, LOGO);
-		await prisma.asset.update({
-			where: { kind_name: { kind: "IMAGE", name: broken } },
-			data: { data: Buffer.from("not an image") },
-		});
+		await prisma.asset.update({ where: { name: broken }, data: { data: Buffer.from("not an image") } });
 
 		const listed = (await listMarkupImages()).find((image) => image.name === broken);
 

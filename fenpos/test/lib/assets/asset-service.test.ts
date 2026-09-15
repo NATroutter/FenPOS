@@ -60,6 +60,8 @@ const {
 	RESERVED_ASSET_NAME,
 	createAsset,
 	deleteAsset,
+	fontFace,
+	forgetFaces,
 	forgetRasters,
 	importAssetFromUrl,
 	listAssets,
@@ -69,6 +71,7 @@ const {
 	renameAsset,
 	replaceAsset,
 	replaceAssetFromUrl,
+	storedImageSize,
 } = await import("@/lib/assets/asset-service");
 
 /**
@@ -96,6 +99,9 @@ function tick(): Promise<void> {
 
 /** A real 128x40 PNG, the same fixture the dither tests use. */
 const PNG = readFileSync("test/fixtures/logo.png");
+
+/** The bundled monospace face, which is a real TTF with a full glyph set. */
+const FONT = readFileSync("public/fonts/DejaVuSansMono.ttf");
 
 /**
  * Builds a PNG that claims a size in its header and has no image behind it.
@@ -166,6 +172,21 @@ function jpegHeaderClaiming(width: number, height: number): Buffer {
 }
 
 /**
+ * Pads a file out to a given length, keeping the bytes that say what it is.
+ *
+ * The size cap is only reached by a file whose kind was recognised — a buffer of zeros is refused as
+ * neither an image nor a font long before anything weighs it — so a test about the cap has to hand
+ * over something that really opens with a format's magic.
+ *
+ * @param prefix the real file whose leading bytes are kept
+ * @param length how many bytes the result should be
+ * @returns the prefix followed by zeros
+ */
+function paddedTo(prefix: Buffer, length: number): Buffer {
+	return Buffer.concat([prefix, Buffer.alloc(Math.max(0, length - prefix.length))]);
+}
+
+/**
  * Runs something expected to fail and returns the `ApiError` it raised.
  *
  * @param work the call under test
@@ -188,8 +209,13 @@ beforeEach(async () => {
 	// than whatever the previous test — or another suite sharing this worker's database — left
 	// behind.
 	await prisma.setting.deleteMany({
-		where: { key: { in: ["assets.maxUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"] } },
+		where: {
+			key: {
+				in: ["assets.maxUploadMb", "assets.maxFontUploadMb", "assets.acceptedFormats", "assets.rasterCacheMb"],
+			},
+		},
 	});
+	forgetFaces();
 	fetchRemoteImage.mockReset();
 });
 
@@ -316,7 +342,7 @@ describe("createAsset", () => {
 	});
 
 	it("refuses more bytes than the upload cap", async () => {
-		const tooBig = Buffer.alloc((await maxAssetBytes()) + 1);
+		const tooBig = paddedTo(PNG, (await maxAssetBytes()) + 1);
 
 		expect((await refusal(() => createAsset("huge", tooBig))).code).toBe("body_too_large");
 	});
@@ -329,7 +355,7 @@ describe("createAsset", () => {
 	it("refuses an upload above the configured size", async () => {
 		await setSetting("assets.maxUploadMb", 1);
 
-		expect((await refusal(() => createAsset("big", Buffer.alloc(1_200 * 1024)))).code).toBe("body_too_large");
+		expect((await refusal(() => createAsset("big", paddedTo(PNG, 1_200 * 1024)))).code).toBe("body_too_large");
 	});
 
 	/**
@@ -636,7 +662,7 @@ describe("losing a concurrent write", () => {
 			const refused = await refusal(() => createAsset("logo", PNG));
 
 			expect(refused.code).toBe("name_taken");
-			expect(refused.message).toMatch(/already an image/);
+			expect(refused.message).toMatch(/already an asset/);
 		} finally {
 			missed.mockRestore();
 		}
@@ -1097,5 +1123,90 @@ describe("replaceAssetFromUrl", () => {
 			"unknown_asset",
 		);
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Fonts stored beside images.
+ *
+ * One namespace and one table, because markup names an asset by name alone: an `<image>` and a font
+ * attribute both say `logo`, so the two must not be able to mean different rows. The kind comes from
+ * the bytes rather than from anything the caller wrote, which is what keeps a font out of the dither
+ * path — a raster derived from a TTF is not a picture, and it would be re-derived on every agent
+ * connect.
+ */
+describe("font assets", () => {
+	it("stores a TTF as a FONT with no dimensions", async () => {
+		const asset = await createAsset("roboto", FONT);
+
+		expect(asset).toMatchObject({ kind: "FONT", name: "roboto", width: null, height: null, mimeType: "font/ttf" });
+		const row = await prisma.asset.findUniqueOrThrow({ where: { id: asset.id } });
+		expect(Buffer.from(row.data)).toEqual(FONT);
+	});
+
+	it("refuses a font it cannot parse as invalid_font", async () => {
+		// The TrueType magic with nothing behind it: detected as a font, then refused by the parser,
+		// which is the ordering that makes the message name a font rather than an image.
+		const bytes = Buffer.concat([Buffer.from([0, 1, 0, 0]), Buffer.alloc(64)]);
+		const refused = await refusal(() => createAsset("broken", bytes));
+
+		expect(refused.code).toBe("invalid_font");
+	});
+
+	it("refuses bytes that are neither an image nor a font", async () => {
+		expect((await refusal(() => createAsset("text", Buffer.from("hello")))).code).toBe("invalid_image");
+	});
+
+	it("bounds a font upload by assets.maxFontUploadMb", async () => {
+		await setSetting("assets.maxFontUploadMb", 1);
+		const big = Buffer.concat([FONT, Buffer.alloc(1024 * 1024)]);
+
+		expect((await refusal(() => createAsset("big", big))).code).toBe("body_too_large");
+	});
+
+	it("shares one namespace with images", async () => {
+		await createAsset("logo", PNG);
+
+		expect((await refusal(() => createAsset("logo", FONT))).code).toBe("name_taken");
+	});
+
+	it("lists by kind", async () => {
+		await createAsset("logo", PNG);
+		await createAsset("roboto", FONT);
+
+		expect((await listAssets()).map((asset) => asset.name)).toEqual(["logo", "roboto"]);
+		expect((await listAssets("FONT")).map((asset) => asset.name)).toEqual(["roboto"]);
+		expect((await listAssets("IMAGE")).map((asset) => asset.name)).toEqual(["logo"]);
+	});
+
+	it("loads a stored font as a face, once", async () => {
+		await createAsset("roboto", FONT);
+		const first = await fontFace("roboto");
+
+		expect(first.font.numGlyphs).toBeGreaterThan(100);
+		expect(await fontFace("roboto")).toBe(first);
+	});
+
+	it("reports an unknown font", async () => {
+		expect((await refusal(() => fontFace("nobody"))).code).toBe("unknown_font");
+	});
+
+	it("does not serve an image as a font", async () => {
+		await createAsset("logo", PNG);
+
+		expect((await refusal(() => fontFace("logo"))).code).toBe("unknown_font");
+	});
+
+	it("refuses to dither a font as an image", async () => {
+		await createAsset("roboto", FONT);
+
+		expect((await refusal(() => rasterFor("roboto", 384))).code).toBe("unknown_asset");
+		expect((await refusal(() => storedImageSize("roboto"))).code).toBe("unknown_asset");
+	});
+
+	it("keeps an asset's kind on replace", async () => {
+		const asset = await createAsset("logo", PNG);
+
+		expect((await refusal(() => replaceAsset(asset.id, FONT))).code).toBe("invalid_type");
 	});
 });

@@ -87,11 +87,12 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
 	},
 	{
 		id: "assets:read",
-		description: "List the stored images that markup can reference.",
+		description: "List the stored images and fonts that markup can reference.",
 	},
 	{
 		id: "assets:write",
-		description: "Upload, import and delete stored images. Install-wide: assets are not scoped to a key's devices.",
+		description:
+			"Upload, import and delete stored images and fonts. Install-wide: assets are not scoped to a key's devices.",
 	},
 	{
 		id: "devices:raw",
