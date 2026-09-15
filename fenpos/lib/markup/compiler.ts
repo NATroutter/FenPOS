@@ -341,11 +341,15 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
  * Raised here rather than over the finished wire because this is where the line number still exists,
  * and a caller told which line to shorten can act on the answer.
  *
+ * Exported so a check of this refusal can size its fixture from `IMAGE_LIMITS.maxRasterChars`
+ * itself, by building the oversized raster directly, rather than from a font size and a string of
+ * text chosen to overshoot whatever the cap currently is.
+ *
  * @param raster the dots just drawn
  * @param lineNumber the line of the document they were drawn from
  * @throws ApiError when the raster is larger than one raster may be on this wire
  */
-function requireRasterFitsTheWire(raster: ImageRaster, lineNumber: number): void {
+export function requireRasterFitsTheWire(raster: ImageRaster, lineNumber: number): void {
 	const chars = Math.ceil(raster.packed.length / 3) * 4;
 	if (chars > IMAGE_LIMITS.maxRasterChars) {
 		throw new ApiError(

@@ -1,14 +1,28 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsset, fontFace } from "@/lib/assets/asset-service";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import type { CompiledJob } from "@/lib/link/protocol";
-import { FrameTooLargeError, JOB_LIMITS, serialiseServerFrame } from "@/lib/link/protocol";
+import {
+	FrameTooLargeError,
+	IMAGE_LIMITS,
+	JOB_LIMITS,
+	MAX_FRAME_BYTES,
+	serialiseServerFrame,
+} from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
 import { resolveImages } from "@/lib/markup/resolve-images";
+import { advanceOf, typefaceFor } from "@/lib/raster/fonts";
 import { setSetting } from "@/lib/settings/settings-service";
 import { createVariable } from "@/lib/variables/variable-service";
+
+/** A real face, so a drawn line's rows can be sized from its own metrics rather than guessed. */
+const FONT = readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf"));
 
 /**
  * A spy rather than a stub: what these tests need to observe is whether the network stage was
@@ -57,6 +71,7 @@ describe("submitJob", () => {
 		await prisma.job.deleteMany();
 		await prisma.device.deleteMany();
 		await prisma.agent.deleteMany();
+		await prisma.asset.deleteMany();
 		await prisma.setting.deleteMany({ where: { key: "jobs.maxErrorMessageChars" } });
 		vi.mocked(resolveImages).mockClear();
 		fetchRemoteImage.mockClear();
@@ -119,6 +134,64 @@ describe("submitJob", () => {
 		maxTotalChars: 1_000_000,
 		maxOutputLines: 10_000,
 	};
+
+	/**
+	 * A receipt that compiles past `MAX_FRAME_BYTES` without any one line tripping
+	 * `IMAGE_LIMITS.maxRasterChars` or `IMAGE_LIMITS.maxHeightDots` on its own, and the device
+	 * overrides it needs to reach `link.send` at all.
+	 *
+	 * **Several drawn lines rather than one long line of text.** Both of those per-raster caps sit
+	 * comfortably under what a whole job's frame allows — that is what lets an operator's
+	 * `limits.maxRasterMb` sit under `MAX_FRAME_BYTES` and still leave room for the job's own JSON —
+	 * so no one drawn line can carry this on its own; the frame guard is only reachable by a job
+	 * whose several rasters add up past it together. Sized off the face's own metrics —
+	 * `typeface.cellHeight`, and the advance of the character actually drawn — rather than a row
+	 * count guessed to overshoot whatever the caps happen to be today.
+	 *
+	 * @param assetName the stored font this receipt names
+	 * @param columns the device's width, which fixes the paper a drawn line is canvassed onto
+	 * @returns the receipt, and the `maxOutputLines`/`maxRasterMb` overrides it needs
+	 */
+	async function oversizedFontReceipt(
+		assetName: string,
+		columns: number,
+	): Promise<{ data: string; maxOutputLines: number; maxRasterMb: number }> {
+		const face = await fontFace(assetName);
+		const size = 500;
+		const typeface = typefaceFor(face, size);
+		const widthDots = dotWidth(columns);
+		const rowBytes = Math.ceil(widthDots / 8);
+		const advance = advanceOf(typeface, "A".codePointAt(0) ?? 65) || 1;
+		const charsPerRow = Math.max(1, Math.floor(widthDots / advance));
+
+		// Whichever of the wire's two per-raster caps binds first on this device's paper: half of
+		// what `maxRasterChars` allows as bytes, or nine tenths of what `maxHeightDots` allows as
+		// rows, so no single line trips either on its own.
+		const rowsByBytes = Math.ceil(
+			Math.floor((IMAGE_LIMITS.maxRasterChars * 3) / 4 / 2) / rowBytes / typeface.cellHeight,
+		);
+		const rowsByHeight = Math.floor((IMAGE_LIMITS.maxHeightDots * 0.9) / typeface.cellHeight);
+		const rowsPerLine = Math.max(1, Math.min(rowsByBytes, rowsByHeight));
+
+		const charsPerLine = rowsPerLine * charsPerRow;
+		const heightDotsPerLine = rowsPerLine * typeface.cellHeight;
+		const heightLinesPerLine = Math.ceil(heightDotsPerLine / LINE_HEIGHT_DOTS);
+		const rawBytesPerLine = rowBytes * heightDotsPerLine;
+
+		// Enough lines that the base64 they carry clears MAX_FRAME_BYTES, with one whole line of
+		// margin folded in.
+		const lineCount = Math.max(2, Math.ceil((MAX_FRAME_BYTES * 3) / 4 / rawBytesPerLine) + 1);
+
+		// Wrapped explicitly: `connectedDevice` turns the device's own `defaultWrap` off, and an
+		// unwrapped drawn line stays one row however long its text is.
+		const line = `<wrap><font=${assetName} size=${size}>${"A".repeat(charsPerLine)}</font></wrap>`;
+
+		return {
+			data: Array.from({ length: lineCount }, () => line).join("\n"),
+			maxOutputLines: heightLinesPerLine * lineCount + 10,
+			maxRasterMb: Math.ceil((rawBytesPerLine * lineCount) / (1024 * 1024)) + 5,
+		};
+	}
 
 	it("dispatches a receipt that fits", async () => {
 		const { deviceId, sent } = await connectedDevice();
@@ -194,10 +267,12 @@ describe("submitJob", () => {
 	});
 
 	it("refuses a receipt too large to send, and settles the job rather than leaving it queued", async () => {
-		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
+		const FONT_ASSET = "dispatch-mono";
+		await createAsset(FONT_ASSET, FONT);
+		const { data, maxOutputLines, maxRasterMb } = await oversizedFontReceipt(FONT_ASSET, 42);
 
 		// Lawful under every limit above, and past what one frame carries once compiled.
-		const data = Array.from({ length: 700 }, () => "x".repeat(500)).join("\n");
+		const { deviceId, sent } = await connectedDevice({ ...LONG_RECEIPTS_ALLOWED, maxOutputLines, maxRasterMb });
 
 		const thrown = await submitJob(deviceId, { data }).then(
 			() => null,
@@ -221,8 +296,10 @@ describe("submitJob", () => {
 	 * with a submission that never happened.
 	 */
 	it("frees the idempotency key when a job fails before reaching the agent", async () => {
-		const { deviceId, sent } = await connectedDevice(LONG_RECEIPTS_ALLOWED);
-		const data = Array.from({ length: 700 }, () => "x".repeat(500)).join("\n");
+		const FONT_ASSET = "dispatch-mono";
+		await createAsset(FONT_ASSET, FONT);
+		const { data, maxOutputLines, maxRasterMb } = await oversizedFontReceipt(FONT_ASSET, 42);
+		const { deviceId, sent } = await connectedDevice({ ...LONG_RECEIPTS_ALLOWED, maxOutputLines, maxRasterMb });
 
 		await submitJob(deviceId, { data }, null, { key: "order-1", hash: "hash-a" }).then(
 			() => null,

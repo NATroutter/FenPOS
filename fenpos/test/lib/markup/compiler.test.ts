@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema, IMAGE_LIMITS, rasterBytes } from "@/lib/link/protocol";
-import { pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
+import { dotWidth, pdf417Columns, symbolGeometry } from "@/lib/markup/blocks";
 import {
 	type CompileLimits,
 	type CompileSettings,
@@ -12,6 +12,7 @@ import {
 	layOut,
 	type PrintRequest,
 	readRequest,
+	requireRasterFitsTheWire,
 } from "@/lib/markup/compiler";
 import type { ResolvedImages } from "@/lib/markup/images";
 import { bundledFace } from "@/lib/raster/fonts";
@@ -921,10 +922,24 @@ describe("a document in one string", () => {
 	 * The per-raster cap, which the job-wide budget does not imply. A line of text at a large enough
 	 * font size is a picture the wire will not carry on its own, and one that compiled cleanly here
 	 * would fail serialisation at send time — a 500 for the caller and a job stuck at `QUEUED`.
+	 *
+	 * Sized from `IMAGE_LIMITS.maxRasterChars` itself rather than from a font size and a string
+	 * chosen to overshoot whatever the cap happens to be today — the property under test is the
+	 * refusal, not any one number that used to exceed it. Reaching that many dots through a real
+	 * drawn line would mean rendering tens of millions of glyph pixels, so the oversized raster is
+	 * built directly and fed to the same check `compile` runs, exactly as its own doc comment
+	 * invites.
 	 */
 	it("refuses a drawn line larger than one raster may be on the wire", () => {
-		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
-		const thrown = refusal(() => compile("j", "d", request("<font=mono size=512>abcdefghij</font>"), LIMITS, settings));
+		const widthDots = dotWidth(SETTINGS.columns);
+		const rowBytes = Math.ceil(widthDots / 8);
+		// However the cap is packed into characters, this many raw bytes is always over it: at four
+		// base64 characters per three bytes, `cap` bytes already encode to `cap * 4/3` characters.
+		const heightDots = Math.ceil(IMAGE_LIMITS.maxRasterChars / rowBytes) + 1;
+
+		const thrown = refusal(() =>
+			requireRasterFitsTheWire({ widthDots, heightDots, packed: Buffer.alloc(rowBytes * heightDots) }, 1),
+		);
 
 		expect(thrown.code).toBe("image_too_large");
 		expect(thrown.details).toMatchObject({ line: 1, limit: IMAGE_LIMITS.maxRasterChars });
