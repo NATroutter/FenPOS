@@ -398,6 +398,32 @@ describe("resolveImages", () => {
 	});
 
 	/**
+	 * The pre-pass has to parse under the same bounds the compile itself will, or the two disagree
+	 * about which documents parse at all. `compile` parses with the install's own `CompileLimits`;
+	 * this used to always parse with `DEFAULT_PARSE_OPTIONS`, so a `maxFontHeight` configured above
+	 * the built-in 512 made this pre-pass refuse to parse a document the compile went on to accept —
+	 * resolving nothing, and failing later with "resolveImages must run first" instead of naming the
+	 * image that was never fetched.
+	 */
+	it("resolves an image behind a font size over the default parse limit, once the install's own limit is passed through", async () => {
+		await createAsset("logo", PNG);
+
+		const withoutTheLimit = await resolveImages(
+			"<font=mono size=600><image>logo</image></font>",
+			COLUMNS,
+			null,
+			RASTER_BUDGET,
+		);
+		expect(withoutTheLimit.size).toBe(0);
+
+		const images = await resolveImages("<font=mono size=600><image>logo</image></font>", COLUMNS, null, RASTER_BUDGET, {
+			maxFontHeight: 1024,
+		});
+
+		expect(images.get("logo")?.natural?.widthDots).toBe(128);
+	});
+
+	/**
 	 * Tag names are matched case-insensitively, and the cheap scan that decides which elements are
 	 * worth parsing has to agree with the parser about that. An element skipped by mistake would
 	 * reach the compiler unresolved, which is a fault rather than a receipt.

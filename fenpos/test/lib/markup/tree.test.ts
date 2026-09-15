@@ -277,6 +277,10 @@ describe("block tags", () => {
 		expect(refusal("<box>\na\n</box> b").code).toBe(MARKUP_ERRORS.invalidBlockScope);
 	});
 
+	it("drops trailing whitespace after a box closes on its line", () => {
+		expect(() => build("<box>\nA\n</box>  ")).not.toThrow();
+	});
+
 	it("refuses a row outside a table and a cell outside a row", () => {
 		expect(refusal("<row></row>").code).toBe(MARKUP_ERRORS.misplacedBlock);
 		expect(refusal("<table>\n<cell>a</cell>\n</table>").code).toBe(MARKUP_ERRORS.misplacedBlock);

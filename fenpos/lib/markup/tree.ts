@@ -280,15 +280,21 @@ class DocumentBuilder {
 	// -----------------------------------------------------------------------
 
 	private readText(token: Extract<Token, { kind: "text" }>): void {
-		this.requireInsideLineScope(token.line, token.column);
-
 		const frame = this.frame();
+		const blank = token.text.trim().length === 0;
+		// A block draws its whole line as a picture, so whitespace around its tags is markup rather
+		// than content on that line — the same reasoning that already drops it before the opener.
+		// Blank text after the closer gets the same pass here, rather than being caught by the
+		// closed-owner check meant for real content written beside a block.
+		if (!(blank && frame.owner.blockSeen)) {
+			this.requireInsideLineScope(token.line, token.column);
+		}
+
 		if (frame.content) {
 			frame.content.parts.push(token.text);
 			return;
 		}
 
-		const blank = token.text.trim().length === 0;
 		if (!blank) {
 			this.requireTextIsWelcome(token.line, token.column);
 		}

@@ -44,14 +44,17 @@ function refusal(run: () => unknown): ApiError {
  *
  * No entry in `inline`, which is what a stored asset printed at the paper's own width looks like:
  * its dots reached the agent with the device's configuration, so the job names them rather than
- * carrying them. `natural` is the 40x20 the source itself is, for a line that draws it beside text.
+ * carrying them. `natural`, the 40x20 the source itself is, is only present when asked for: it is
+ * what a drawn line needs to place the image beside text, and a fixture for a native `<image>` tag
+ * has no business claiming a resolve it never ran.
  *
  * @param name the reference the receipt writes
+ * @param options.natural whether to also resolve the image at its own size, as a drawn line needs
  * @returns the resolved images a compile can be handed
  */
-function imagesFor(name: string): ResolvedImages {
+function imagesFor(name: string, options?: { natural?: boolean }): ResolvedImages {
 	const natural = { widthDots: 40, heightDots: 20, packed: Buffer.alloc(rasterBytes(40, 20), 0xff) };
-	return new Map([[name, { width: 40, height: 20, natural, inline: new Map() }]]);
+	return new Map([[name, { width: 40, height: 20, inline: new Map(), ...(options?.natural ? { natural } : {}) }]]);
 }
 
 /**
@@ -969,6 +972,47 @@ describe("a document in one string", () => {
 		const job = compile("j", "d", request("<image>logo</image>"), LIMITS, settingsWith({ images: imagesFor("logo") }));
 
 		expect(job.lines[0].directives[0]).toMatchObject({ type: "IMAGE", source: { kind: "REF" } });
+	});
+
+	/**
+	 * A box, drawn as one raster line: an inline image beside styled text, closed by a rule and a
+	 * cut. The receipt this spec's own header uses, compiled end to end rather than laid out node by
+	 * node as `layout.test.ts` checks it.
+	 */
+	it("compiles the spec's header box to one raster line", () => {
+		const source =
+			"<box>\n<align=center><image>moon</image> <size=2><bold>ASTRONOMY</bold></size></align>\n</box>\n<hr>\n<cut>";
+		const job = compile(
+			"j",
+			"d",
+			request(source),
+			LIMITS,
+			settingsWith({ images: imagesFor("moon", { natural: true }) }),
+		);
+
+		expect(job.lines).toHaveLength(3);
+		expect(job.lines[0].directives[0]).toMatchObject({ type: "IMAGE", source: { kind: "INLINE" } });
+		expect(job.lines[1].spans[0].text).toHaveLength(42);
+		expect(job.lines[2].directives[0]).toEqual({ type: "CUT", mode: "FULL" });
+	});
+
+	it("charges a table by its height in lines", () => {
+		const source = "<table>\n<row><cell>a</cell></row>\n<row><cell>b</cell></row>\n</table>";
+		expect(countOutputLines(request(source), settingsWith({}), LIMITS)).toBe(Math.ceil((2 * 36 + 3) / 24));
+	});
+
+	it("reports a table width error with the cell's line and column", () => {
+		const thrown = refusal(() =>
+			layOut(
+				request("<table>\n<row><cell width=70>a</cell><cell width=40>b</cell></row>\n</table>"),
+				settingsWith({}),
+				LIMITS,
+			),
+		);
+
+		expect(thrown.code).toBe("invalid_attribute");
+		// The second cell, whose width is the one that took the row's claims past 100%.
+		expect(thrown.details).toMatchObject({ line: 2, column: 29 });
 	});
 
 	/**

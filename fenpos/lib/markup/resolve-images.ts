@@ -6,7 +6,7 @@ import { type RemoteFetchSettings, readRemoteFetchSettings } from "@/lib/assets/
 import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
-import type { Document, ImageSourceRef, Node } from "@/lib/markup/document";
+import type { Document, ImageSourceRef, Node, ParseOptions } from "@/lib/markup/document";
 import { needsRaster, splitLines } from "@/lib/markup/flatten";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { parseDocument, type VariableContext } from "@/lib/markup/parser";
@@ -124,6 +124,9 @@ export async function maxRemoteReferences(): Promise<number> {
  *        stop: the compiler charges the finished job's rasters against the same budget, and this
  *        exists so a receipt asking for far more than it may have stops at the picture that crosses
  *        the line rather than decoding the rest of them first.
+ * @param options the bounds to parse under, or the defaults. Must be the same install's limits the
+ *        compile itself will parse with — see {@link collect} for why a narrower default here would
+ *        leave this pre-pass silently resolving nothing.
  * @returns each reference in them, mapped to the image's own pixel dimensions and to any dots that
  *          must travel inside the job
  * @throws ApiError if the request names more remote URLs than {@link maxRemoteReferences} allows —
@@ -137,8 +140,9 @@ export async function resolveImages(
 	columns: number,
 	variables: VariableContext | null,
 	rasterBudgetBytes: number,
+	options?: Partial<ParseOptions>,
 ): Promise<ResolvedImages> {
-	const queue = [...collect(data, columns, variables)];
+	const queue = [...collect(data, columns, variables, options)];
 	await requireWithinRemoteLimit(queue);
 
 	// Read once per request rather than once per remote reference: `fetchRemoteImage` needs three
@@ -249,12 +253,25 @@ interface ImageUse {
  * needs — and the request would fail as an unknown image called `{logo}` instead of whatever `logo`
  * itself turns out to be.
  *
+ * Parses with `options` too, and it has to be the install's own limits rather than this module's
+ * defaults: `compile` parses with the install's `CompileLimits`, and a setting wider than the
+ * default — `maxFontHeight` past 512, say — makes a document this pre-pass would otherwise refuse
+ * to parse one the compile accepts. A silent, empty result from that mismatch is a receipt whose
+ * images were never resolved, which fails later with "resolveImages must run first" instead of
+ * naming the image that was never fetched.
+ *
  * @param data the receipt
  * @param columns the target device's width in printer columns
  * @param variables the values `{name}` may resolve to, or null when variables are switched off
+ * @param options the bounds to parse under, or the defaults
  * @returns each reference, mapped to how the request uses it
  */
-function collect(data: string, columns: number, variables: VariableContext | null): Map<string, ImageUse> {
+function collect(
+	data: string,
+	columns: number,
+	variables: VariableContext | null,
+	options?: Partial<ParseOptions>,
+): Map<string, ImageUse> {
 	const references = new Map<string, ImageUse>();
 	if (!IMAGE_OPENING.test(data)) {
 		return references;
@@ -262,7 +279,7 @@ function collect(data: string, columns: number, variables: VariableContext | nul
 
 	let document: Document;
 	try {
-		document = parseDocument(data, variables);
+		document = parseDocument(data, variables, options);
 	} catch {
 		// The compile reports it, with a line and a column this pre-pass has no better answer for.
 		return references;

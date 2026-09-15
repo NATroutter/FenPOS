@@ -155,7 +155,7 @@ export async function submitJob(
 		// be a URL on the other side of the world. A receipt naming a font nobody uploaded should be
 		// told so without this server fetching anything on its behalf.
 		fonts: await resolveFonts(request.data, variables, limits),
-		images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes),
+		images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes, limits),
 	};
 
 	const job = await prisma.job.create({

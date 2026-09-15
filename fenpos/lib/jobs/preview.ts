@@ -252,7 +252,7 @@ export async function compilePreviewWithContext(
 				...deviceSettings,
 				variables,
 				fonts: await resolveFonts(request.data, variables, limits),
-				images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes),
+				images: await resolveImages(request.data, deviceSettings.columns, variables, limits.maxRasterBytes, limits),
 			};
 		} catch (error) {
 			return {
