@@ -334,9 +334,9 @@ export function InsertDialog({
 
 						{tag === "text" ? (
 							<Field>
-								<FieldLabel htmlFor="insert-font-name">Font</FieldLabel>
+								<FieldLabel htmlFor="insert-text-name">Font</FieldLabel>
 								<Input
-									id="insert-font-name"
+									id="insert-text-name"
 									value={argument}
 									placeholder="a"
 									onChange={(event) => setArgument(event.target.value)}
@@ -349,9 +349,9 @@ export function InsertDialog({
 
 						{tag === "text" ? (
 							<Field>
-								<FieldLabel htmlFor="insert-font-text">Text</FieldLabel>
+								<FieldLabel htmlFor="insert-text-text">Text</FieldLabel>
 								<Textarea
-									id="insert-font-text"
+									id="insert-text-text"
 									value={content}
 									rows={3}
 									placeholder="TOTAL"

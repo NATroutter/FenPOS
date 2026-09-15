@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BlockNode } from "@/lib/markup/document";
 import { markupEdit } from "@/lib/markup/editing";
 import { parseDocument } from "@/lib/markup/parser";
 
@@ -116,5 +117,29 @@ describe("markupEdit", () => {
 	it("writes a built-in font without a size, regardless of case", () => {
 		expect(markupEdit("text", "Hi", { font: "a" })?.insert).toBe("<text font=a>Hi</text>");
 		expect(markupEdit("text", "Hi", { font: "B" })?.insert).toBe("<text font=B>Hi</text>");
+	});
+
+	it("writes a fill character the tokenizer reads back unchanged", () => {
+		const written: Record<string, string> = {
+			">": '<fill char=">">',
+			" ": '<fill char=" ">',
+			'"': "<fill char=&quot;>",
+			"&": "<fill char=&>",
+			"<": "<fill char=<>",
+		};
+
+		for (const [character, insert] of Object.entries(written)) {
+			expect(markupEdit("fill", "", { char: character })?.insert).toBe(insert);
+			expect(parseDocument(insert).nodes[0]).toMatchObject({ kind: "fill", character });
+		}
+	});
+
+	it("quotes and escapes a text value so it reads back unchanged", () => {
+		const name = 'Q1 "best" & <more> &lt;';
+		const insert = markupEdit("series", "1,2", { name })?.insert ?? "";
+
+		expect(insert).toBe('<series name="Q1 &quot;best&quot; & <more> &amp;lt;">1,2</series>');
+		const chart = parseDocument(`<chart type=bar>\n${insert}\n</chart>`).nodes[0] as BlockNode;
+		expect(chart.chart?.series[0].label).toBe(name);
 	});
 });

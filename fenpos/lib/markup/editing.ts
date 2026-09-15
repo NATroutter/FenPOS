@@ -26,6 +26,20 @@ const DEFAULT_FONT_SIZE = 24;
 /** Font names that pick one of the printer's two built-in fonts rather than a stored one. */
 const BUILTIN_FONTS = new Set(["a", "b"]);
 
+/** An `&` that the tokenizer would read as the start of an entity. */
+const ENTITY_START = /&(?=lt;|amp;|lbrace;|quot;)/g;
+
+/**
+ * Writes a value so the tokenizer reads back exactly this string.
+ *
+ * Only what would change the reading is escaped: an `&` that begins an entity, and every `"`. A value
+ * holding a space or a `>` is quoted, because written bare it would end at that character.
+ */
+function attributeValue(value: string): string {
+	const escaped = value.replace(ENTITY_START, "&amp;").replace(/"/g, "&quot;");
+	return /[ >]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
 /**
  * Opening delimiter for a tag, with its attributes.
  *
@@ -41,7 +55,7 @@ function openingTag(tag: Tag, attributes: Readonly<Record<string, string>> = {})
 	}
 	const pairs = Object.entries(written)
 		.filter(([, value]) => value !== "")
-		.map(([key, value]) => ` ${key}=${value}`)
+		.map(([key, value]) => ` ${key}=${attributeValue(value)}`)
 		.join("");
 	return `<${tag.name}${pairs}>`;
 }

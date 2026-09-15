@@ -142,9 +142,9 @@ const TAGS: { syntax: string; meaning: string }[] = [
 	{ syntax: "<labels>…</labels>", meaning: "A chart's category labels, as a comma-separated list." },
 	{ syntax: "<bar value=38>", meaning: "A gauge filled to a percentage, 0–100, as wide as width asks for." },
 	{
-		syntax: "&lt;, &amp; and &lbrace;",
+		syntax: "&lt;, &amp;, &lbrace; and &quot;",
 		meaning:
-			"A literal <, & or {. Any other ampersand is literal text. &lbrace; only matters once a variable's braces are in play, see Variables below.",
+			"A literal <, &, { or \". They work in text, in what a block encloses and inside attribute values, so <fill char=&quot;> fills with quotes. Any other ampersand is literal text. &lbrace; only matters once a variable's braces are in play, see Variables below.",
 	},
 ];
 
@@ -262,9 +262,10 @@ export default async function MarkupDocsPage() {
 									separated by spaces: <Mono>{"<box width=50 border=double>"}</Mono>, <Mono>{"<align to=center>"}</Mono>
 									. A value is quoted, <Mono>key="a value"</Mono>, only when it holds a space or a <Mono>&gt;</Mono> of
 									its own, a chart's <Mono>title</Mono> being the usual reason; anything else may be written bare, and a
-									value from a fixed set, <Mono>to=Center</Mono>, matches whatever its case. An attribute a tag does not
-									declare is <ErrorRef code="unknown_attribute" />; one the tag cannot do without and was not given, set
-									twice, or given a value outside what it accepts, is <ErrorRef code="invalid_attribute" />.
+									value from a fixed set, <Mono>to=Center</Mono>, matches whatever its case. A text value written empty,{" "}
+									<Mono>title=""</Mono>, is the same as leaving the attribute off. An attribute a tag does not declare
+									is <ErrorRef code="unknown_attribute" />; one the tag cannot do without and was not given, set twice,
+									or given a value outside what it accepts, is <ErrorRef code="invalid_attribute" />.
 								</P>
 
 								<P>
