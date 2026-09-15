@@ -75,12 +75,18 @@ function tableSkeleton(): MarkupEdit {
  * one thing no selection could ever supply, so it stays a parameter rather than part of the
  * skeleton's fixed text.
  *
+ * A scatter is the exception twice over: it plots pairs rather than a run of values, and it names
+ * nothing, so it takes `x:y` samples and no `<labels>` at all. A skeleton that a press of the button
+ * turns straight into a refusal is worse than no button.
+ *
  * @param type "bar", "line", "pie" or "scatter"
  */
 function chartSkeleton(type: string): MarkupEdit {
 	const before = `<chart=${type} height=8>\n<series=A>`;
-	const values = "1,2,3";
-	const insert = `${before}${values}</series>\n<labels>a,b,c</labels>\n</chart>`;
+	const scatter = type.toLowerCase() === "scatter";
+	const values = scatter ? "1:2,2:3,3:5" : "1,2,3";
+	const labels = scatter ? "" : "\n<labels>a,b,c</labels>";
+	const insert = `${before}${values}</series>${labels}\n</chart>`;
 	return { insert, selectionFrom: before.length, selectionTo: before.length + values.length };
 }
 

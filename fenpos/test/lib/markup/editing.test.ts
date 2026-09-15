@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { markupEdit } from "@/lib/markup/editing";
+import { parseDocument } from "@/lib/markup/parser";
 
 /**
  * The toolbar's edit rules.
@@ -69,6 +70,25 @@ describe("markupEdit", () => {
 		expect(markupEdit("chart", "", "bar")?.insert).toBe(
 			"<chart=bar height=8>\n<series=A>1,2,3</series>\n<labels>a,b,c</labels>\n</chart>",
 		);
+	});
+
+	it("gives a scatter paired samples and no labels, which it would refuse", () => {
+		expect(markupEdit("chart", "", "scatter")?.insert).toBe(
+			"<chart=scatter height=8>\n<series=A>1:2,2:3,3:5</series>\n</chart>",
+		);
+	});
+
+	/**
+	 * Every type the insert dialog offers, parsed. A skeleton is a promise that what the button wrote
+	 * is valid markup, and the four types do not all take the same data.
+	 */
+	it("leaves every chart skeleton the dialog offers ready to compile", () => {
+		for (const type of ["bar", "line", "pie", "scatter"]) {
+			const insert = markupEdit("chart", "", type)?.insert ?? "";
+
+			expect(() => parseDocument(insert), `<chart=${type}> skeleton`).not.toThrow();
+			expect(parseDocument(insert).nodes).toHaveLength(1);
+		}
 	});
 
 	it("reports no edit for a chart with no type", () => {
