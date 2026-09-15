@@ -281,6 +281,19 @@ describe("block tags", () => {
 		expect(() => build("<box>\nA\n</box>  ")).not.toThrow();
 	});
 
+	/**
+	 * The trailing-whitespace pass belongs to a whole-line block closing, not to a line-sharing one
+	 * like `<bar>` merely having appeared on the line. An align or a wrap still owns the line's
+	 * justification whatever shares it, so nothing may follow their closer either — blank or not.
+	 */
+	it("still refuses trailing whitespace after an align closes, even when a gauge shared its line", () => {
+		expect(refusal("<align=center><bar=50></align>  ").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+	});
+
+	it("still refuses trailing whitespace after a wrap closes, even when a gauge shared its line", () => {
+		expect(refusal("<nowrap><bar=50></nowrap>  ").code).toBe(MARKUP_ERRORS.invalidWrapScope);
+	});
+
 	it("refuses a row outside a table and a cell outside a row", () => {
 		expect(refusal("<row></row>").code).toBe(MARKUP_ERRORS.misplacedBlock);
 		expect(refusal("<table>\n<cell>a</cell>\n</table>").code).toBe(MARKUP_ERRORS.misplacedBlock);

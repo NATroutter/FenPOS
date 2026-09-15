@@ -282,11 +282,14 @@ class DocumentBuilder {
 	private readText(token: Extract<Token, { kind: "text" }>): void {
 		const frame = this.frame();
 		const blank = token.text.trim().length === 0;
-		// A block draws its whole line as a picture, so whitespace around its tags is markup rather
-		// than content on that line — the same reasoning that already drops it before the opener.
-		// Blank text after the closer gets the same pass here, rather than being caught by the
-		// closed-owner check meant for real content written beside a block.
-		if (!(blank && frame.owner.blockSeen)) {
+		const closed = frame.owner.closedOwner;
+		// A whole-line block draws its whole line as a picture, so whitespace after it closes is
+		// markup rather than content — the same reasoning that already drops it before the opener.
+		// Keyed off the closed owner's own code rather than `blockSeen`, which a line-sharing block
+		// like `<bar>` sets too: `<align=center><bar=50></align>` must still refuse trailing text,
+		// because it was the align that closed the line, and nothing may follow `</align>` whatever
+		// shares its line.
+		if (!(blank && closed?.code === MARKUP_ERRORS.invalidBlockScope)) {
 			this.requireInsideLineScope(token.line, token.column);
 		}
 
