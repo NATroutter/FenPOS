@@ -62,7 +62,7 @@ public final class SyncedImages {
      * Mirrors {@code printedWidthDots} in {@code fenpos/lib/markup/images.ts}, rounding included:
      * this is a lookup key, and the two sides must produce the same integer.
      *
-     * @param widthPercent the tag's argument: the share of the paper's width to print at, 1-100
+     * @param widthPercent the tag's {@code width} attribute: the share of the paper's width to print at, 1-100
      * @param columns      the device's width in printer columns
      * @return the printed width in dots, at least one
      */

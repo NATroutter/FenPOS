@@ -245,8 +245,8 @@ describe("compile pipeline", () => {
 
 	it("resolves styles onto each span rather than leaving a tag stack", () => {
 		// Two short lines rather than one nested string, and a roomier line limit than the shared
-		// fixture's twenty characters: named attributes take more source than a bare argument did,
-		// and the point being made is about the output, not the input.
+		// fixture's twenty characters: a tag written with named attributes takes more source than the
+		// shared fixture budgets for, and the point being made is about the output, not the input.
 		const roomy: CompileLimits = { ...limits, maxLineChars: 60 };
 		const request = readRequest(
 			{ data: "<size width=2 height=2>x</size>\n<bold>y</bold>" },

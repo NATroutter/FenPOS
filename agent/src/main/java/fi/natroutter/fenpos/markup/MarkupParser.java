@@ -468,9 +468,9 @@ public final class MarkupParser {
      * Ported from the panel's tokenizer: the guard below is a cheap, quote-blind check that some
      * {@code >} exists on the line at all, not a decision about where this tag actually ends — that
      * decision belongs to {@link #readAttributes}, which is the only part of the scan that knows
-     * where a quoted value is open. Deciding it here from a plain {@code indexOf} was the bug this
-     * replaced: a stray {@code "} inside a bare value could pair with a later one and make the scan
-     * treat everything between them, {@code >} included, as still inside the tag.
+     * where a quoted value is open. Deciding it here from a plain {@code indexOf} would let a stray
+     * {@code "} inside a bare value pair with a later one and make the scan treat everything between
+     * them, {@code >} included, as still inside the tag.
      */
     private void readTag() throws MarkupException {
         int start = index;
