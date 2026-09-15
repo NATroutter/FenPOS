@@ -6,7 +6,7 @@ import { type RemoteFetchSettings, readRemoteFetchSettings } from "@/lib/assets/
 import { ApiError } from "@/lib/errors";
 import { IMAGE_LIMITS, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { dotWidth } from "@/lib/markup/blocks";
-import type { Document, Node } from "@/lib/markup/document";
+import type { Document, ImageSourceRef, Node } from "@/lib/markup/document";
 import { type ImageSource, printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
 import { parseDocument, type VariableContext } from "@/lib/markup/parser";
 import { integerSetting } from "@/lib/settings/settings-service";
@@ -219,6 +219,13 @@ interface ImageUse {
 	column: number;
 	/** Every distinct printed width, in dots, this request asks for. */
 	widths: Set<number>;
+	/**
+	 * Where the node's dots come from, as the tree already decided.
+	 *
+	 * Carried through so a later stage can decode an inline data URI's bytes from here rather than
+	 * re-parsing `ref`, which for a data URI is the whole string this already holds decoded.
+	 */
+	source: ImageSourceRef;
 }
 
 /**
@@ -268,7 +275,7 @@ function collect(data: string, columns: number, variables: VariableContext | nul
 			if (node.kind === "image") {
 				let use = references.get(node.ref);
 				if (!use) {
-					use = { line: node.line, column: node.column, widths: new Set() };
+					use = { line: node.line, column: node.column, widths: new Set(), source: node.source };
 					references.set(node.ref, use);
 				}
 				// Null means the tag carried no width, which is the whole printable width.

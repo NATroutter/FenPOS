@@ -1,11 +1,13 @@
 import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
-import { readAttributes } from "@/lib/markup/attributes";
+import { NAME_PATTERN } from "@/lib/domain/naming";
+import { type Attributes, type RawAttribute, readAttributes } from "@/lib/markup/attributes";
 import { type SymbolSpec, validateSymbolContent } from "@/lib/markup/blocks";
 import type {
 	AlignNode,
 	BlockNode,
 	Document,
 	ImageNode,
+	ImageSourceRef,
 	LineInfo,
 	Node,
 	ParseOptions,
@@ -61,6 +63,9 @@ const MIN_IMAGE_WIDTH_PERCENT = 1;
 
 /** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
 const MAX_IMAGE_WIDTH_PERCENT = 100;
+
+/** A data URI `<image>` accepts: base64 PNG or JPEG. Line breaks are trimmed out before this runs. */
+const IMAGE_DATA_URI = /^data:(image\/png|image\/jpeg);base64,([A-Za-z0-9+/=]+)$/;
 
 type OpenToken = Extract<Token, { kind: "open" }>;
 
@@ -300,7 +305,7 @@ class DocumentBuilder {
 		}
 
 		this.requireArgumentPolicy(tag, token.argument, token.line, token.column);
-		readAttributes(tag.name, token.attributes, tag.attributes, token.line);
+		const attributes = readAttributes(tag.name, token.attributes, tag.attributes, token.line);
 
 		if (isBlockTag(tag.name)) {
 			this.openContent(tag, token);
@@ -313,7 +318,7 @@ class DocumentBuilder {
 			case "invert":
 			case "size":
 			case "font":
-				this.openScope(tag, tag.name, token);
+				this.openScope(tag, tag.name, token, attributes);
 				return;
 			case "align":
 				this.openAlign(token);
@@ -338,12 +343,12 @@ class DocumentBuilder {
 		}
 	}
 
-	private openScope(tag: Tag, scope: ScopeTag, token: OpenToken): void {
+	private openScope(tag: Tag, scope: ScopeTag, token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 		this.enter(tag, token, {
 			kind: "scope",
 			tag: scope,
-			patch: this.stylePatch(tag, scope, token.argument, token.line, token.column),
+			patch: this.stylePatch(tag, scope, token.argument, token.line, token.column, attributes, token.attributes),
 			line: token.line,
 			column: token.column,
 			children: [],
@@ -361,6 +366,8 @@ class DocumentBuilder {
 		argument: string | null,
 		line: number,
 		column: number,
+		attributes: Attributes,
+		rawAttributes: readonly RawAttribute[],
 	): Partial<SpanStyle> {
 		switch (scope) {
 			case "bold":
@@ -382,11 +389,38 @@ class DocumentBuilder {
 				return { widthMult: width, heightMult: height };
 			}
 			case "font": {
-				const font = (argument ?? "").toUpperCase();
-				if (!Font.is(font)) {
-					throw this.argumentError(tag, line, column, "must be 'a' or 'b'");
+				const raw = argument ?? "";
+				const builtIn = raw.toUpperCase();
+				const sizeAttribute = rawAttributes.find((attribute) => attribute.name === "size");
+
+				if (Font.is(builtIn)) {
+					if (sizeAttribute) {
+						throw new MarkupError(
+							MARKUP_ERRORS.invalidAttribute,
+							line,
+							sizeAttribute.column,
+							"size",
+							"<font> size applies to a configured font, not to the printer's own",
+						);
+					}
+					return { font: builtIn, face: null, faceDots: 24 };
 				}
-				return { font };
+
+				if (!NAME_PATTERN.test(raw)) {
+					throw this.argumentError(tag, line, column, `'${raw}' is not a built-in font or a font name`);
+				}
+
+				const size = attributes.size as number | undefined;
+				if (size !== undefined && size > this.options.maxFontHeight) {
+					throw new MarkupError(
+						MARKUP_ERRORS.invalidAttribute,
+						line,
+						sizeAttribute?.column ?? column,
+						"size",
+						`<font> size must be at most ${this.options.maxFontHeight}`,
+					);
+				}
+				return { face: raw, faceDots: size ?? 24 };
 			}
 		}
 	}
@@ -698,6 +732,7 @@ class DocumentBuilder {
 			return {
 				kind: "image",
 				ref: data,
+				source: this.imageSource(data, frame),
 				widthPercent: content.shape.widthPercent,
 				line: frame.line,
 				column: frame.column,
@@ -716,6 +751,38 @@ class DocumentBuilder {
 			throw new MarkupError(MARKUP_ERRORS.invalidTagArgument, frame.line, frame.column, content.tag.name, refusal);
 		}
 		return { kind: "symbol", spec, line: frame.line, column: frame.column };
+	}
+
+	/**
+	 * Reads an `<image>`'s content into where its dots come from.
+	 *
+	 * A `data:` prefix is the only thing that distinguishes an inline data URI from a stored name or
+	 * an `http(s)` URL: both of those are opaque strings to the tree either way, resolved by a later
+	 * stage that has a database and a network to reach with. A data URI is not opaque — its bytes are
+	 * already sitting in the document — so this is the one shape checked now rather than later.
+	 *
+	 * @throws MarkupError if a `data:` prefix is not followed by a base64 PNG or JPEG payload
+	 */
+	private imageSource(data: string, frame: Frame): ImageSourceRef {
+		if (!data.startsWith("data:")) {
+			return { kind: "named", name: data };
+		}
+
+		const match = IMAGE_DATA_URI.exec(data);
+		const bytes = match ? Buffer.from(match[2], "base64") : null;
+		// Re-encoding is what makes the decode trustworthy: `Buffer.from` silently skips characters it
+		// does not recognise, so text that does not come back unchanged was not base64 to begin with.
+		if (!match || !bytes || bytes.toString("base64") !== match[2]) {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidImageData,
+				frame.line,
+				frame.column,
+				"image",
+				"<image> data must be a base64 PNG or JPEG data URI",
+			);
+		}
+
+		return { kind: "data", mimeType: match[1] as "image/png" | "image/jpeg", bytes };
 	}
 
 	// -----------------------------------------------------------------------

@@ -93,4 +93,9 @@ describe("needsRaster", () => {
 		expect(needsRaster(parseDocument("<align=center><image>logo</image></align>").nodes)).toBe(false);
 		expect(needsRaster(parseDocument("<qr>x</qr>").nodes)).toBe(false);
 	});
+
+	it("is true for a configured font and false for a built-in one", () => {
+		expect(needsRaster(parseDocument("<font=roboto>a</font>").nodes)).toBe(true);
+		expect(needsRaster(parseDocument("<font=b>a</font>").nodes)).toBe(false);
+	});
 });

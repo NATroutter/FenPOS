@@ -33,8 +33,13 @@ export const TAGS: Record<string, Tag> = {
 	invert: { name: "invert", kind: "PAIRED", argument: "NONE", attributes: {} },
 	/** Character multipliers, as `W,H` or a single value used for both. */
 	size: { name: "size", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
-	/** Built-in font selection. */
-	font: { name: "font", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
+	/** A built-in font, or a configured font at a given size. */
+	font: {
+		name: "font",
+		kind: "PAIRED",
+		argument: "REQUIRED",
+		attributes: { size: { kind: "integer", min: 8, max: 4096 } },
+	},
 	/** Line justification. Paired, and required to own its whole line. */
 	align: { name: "align", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
 	/** Break this line at the paper width. Paired, and required to own its whole line. */

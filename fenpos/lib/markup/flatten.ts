@@ -91,7 +91,7 @@ export function needsRaster(nodes: Node[]): boolean {
 					images += 1;
 					break;
 				case "scope":
-					if (node.patch.face !== undefined) {
+					if (node.patch.face) {
 						raster = true;
 					}
 					walkNodes(node.children);

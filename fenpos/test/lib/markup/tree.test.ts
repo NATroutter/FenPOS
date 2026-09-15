@@ -200,4 +200,43 @@ describe("buildDocument", () => {
 		expect(thrown.code).toBe(MARKUP_ERRORS.unknownAttribute);
 		expect(thrown.column).toBe(7);
 	});
+
+	it("resolves a built-in font and refuses size on it", () => {
+		expect(build("<font=b>x</font>").nodes[0]).toMatchObject({ patch: { font: "B", face: null } });
+		const thrown = refusal("<font=a size=30>x</font>");
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(9);
+	});
+
+	it("resolves a configured font with a size", () => {
+		expect(build("<font=roboto size=36>x</font>").nodes[0]).toMatchObject({ patch: { face: "roboto", faceDots: 36 } });
+		expect(build("<font=roboto>x</font>").nodes[0]).toMatchObject({ patch: { face: "roboto", faceDots: 24 } });
+	});
+
+	it("bounds the font size by the parse options", () => {
+		const generous = buildDocument(tokenize("<font=roboto size=600>x</font>", null), {
+			...DEFAULT_PARSE_OPTIONS,
+			maxFontHeight: 1024,
+		});
+		expect(generous.nodes[0]).toMatchObject({ patch: { faceDots: 600 } });
+		expect(refusal("<font=roboto size=600>x</font>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<font=roboto size=7>x</font>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+	});
+
+	it("refuses a font name that is not a name", () => {
+		expect(refusal("<font=Roboto>x</font>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	});
+
+	it("decodes a data URI image, wrapped over lines", () => {
+		const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
+		const node = build(`<image>data:image/png;base64,${png.slice(0, 3)}\n${png.slice(3)}</image>`).nodes[0];
+
+		expect(node).toMatchObject({ kind: "image", source: { kind: "data", mimeType: "image/png" } });
+		expect((node as { source: { bytes: Buffer } }).source.bytes).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+	});
+
+	it("refuses a data URI that is not a PNG or JPEG, or not base64", () => {
+		expect(refusal("<image>data:image/gif;base64,R0lG</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
+		expect(refusal("<image>data:image/png;base64,***</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
+	});
 });

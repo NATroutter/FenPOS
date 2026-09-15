@@ -154,7 +154,18 @@ export interface SymbolNode extends Located {
 }
 
 /**
- * A stored image's name or an `http(s)` URL.
+ * Where an image's dots come from: a stored asset or URL by name, or bytes decoded from a data URI
+ * already written into the document.
+ *
+ * Kept apart from {@link ImageNode.ref}, which stays the raw content a pre-pass keys its map by, so
+ * a later stage can read `source` for the bytes without re-parsing the URI `ref` still carries.
+ */
+export type ImageSourceRef =
+	| { kind: "named"; name: string }
+	| { kind: "data"; mimeType: "image/png" | "image/jpeg"; bytes: Buffer };
+
+/**
+ * A stored image's name, an `http(s)` URL, or an inline data URI.
  *
  * `widthPercent` is null when the tag carried no argument, which means the whole printable width.
  * Null rather than the default filled in, so a later stage can tell a caller who asked for 100
@@ -163,6 +174,7 @@ export interface SymbolNode extends Located {
 export interface ImageNode extends Located {
 	kind: "image";
 	ref: string;
+	source: ImageSourceRef;
 	widthPercent: number | null;
 }
 
