@@ -94,7 +94,7 @@ class CharsetValidatorTest {
 
     @Test
     void preservesStylingAndDirectives() throws Exception {
-        Line line = validate("<bold>ok</bold><feed=2>", Codepage.CP858, UnsupportedPolicy.REJECT);
+        Line line = validate("<bold>ok</bold><feed lines=2>", Codepage.CP858, UnsupportedPolicy.REJECT);
 
         assertTrue(line.spans().getFirst().style().bold());
         assertEquals(1, line.directives().size());
@@ -113,14 +113,14 @@ class CharsetValidatorTest {
     void rejectsAFillCharacterTheCodepageCannotRepresent() {
         assertThrows(UnsupportedCharacterException.class,
                 () -> CharsetValidator.validate(
-                        MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
+                        MarkupParser.parse("a<fill char=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
     }
 
     @Test
     void reportsTheFillsOwnColumnWhenItRejectsOne() {
         UnsupportedCharacterException thrown = assertThrows(UnsupportedCharacterException.class,
                 () -> CharsetValidator.validate(
-                        MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
+                        MarkupParser.parse("a<fill char=€>b"), Codepage.CP437, UnsupportedPolicy.REJECT));
 
         assertEquals(2, thrown.column());
     }
@@ -128,7 +128,7 @@ class CharsetValidatorTest {
     @Test
     void leavesAPrintableFillCharacterAlone() throws Exception {
         Line line = CharsetValidator.validate(
-                MarkupParser.parse("a<fill=.>b"), Codepage.CP437, UnsupportedPolicy.REJECT);
+                MarkupParser.parse("a<fill char=.>b"), Codepage.CP437, UnsupportedPolicy.REJECT);
 
         assertEquals(".", line.fills().getFirst().character());
     }
@@ -144,7 +144,7 @@ class CharsetValidatorTest {
     @Test
     void substitutesAFillCharacterUnderTheReplacePolicy() throws Exception {
         Line line = CharsetValidator.validate(
-                MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.REPLACE);
+                MarkupParser.parse("a<fill char=€>b"), Codepage.CP437, UnsupportedPolicy.REPLACE);
 
         assertEquals("?", line.fills().getFirst().character());
     }
@@ -152,7 +152,7 @@ class CharsetValidatorTest {
     @Test
     void dropsAFillWhoseCharacterTheStripPolicyRemoves() throws Exception {
         Line line = CharsetValidator.validate(
-                MarkupParser.parse("a<fill=€>b"), Codepage.CP437, UnsupportedPolicy.STRIP);
+                MarkupParser.parse("a<fill char=€>b"), Codepage.CP437, UnsupportedPolicy.STRIP);
 
         assertTrue(line.fills().isEmpty());
     }
@@ -211,7 +211,7 @@ class CharsetValidatorTest {
     @Test
     void keepsTheSurvivingFillWhenTheStripPolicyDropsItsNeighbour() throws Exception {
         Line line = CharsetValidator.validate(
-                MarkupParser.parse("a<fill=€>b<fill=.>c"), Codepage.CP437, UnsupportedPolicy.STRIP);
+                MarkupParser.parse("a<fill char=€>b<fill char=.>c"), Codepage.CP437, UnsupportedPolicy.STRIP);
 
         assertEquals(List.of("a", "b", "c"), line.spans().stream().map(Span::text).toList());
         assertEquals(1, line.fills().size());

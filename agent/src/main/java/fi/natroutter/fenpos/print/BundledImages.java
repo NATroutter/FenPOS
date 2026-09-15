@@ -31,9 +31,9 @@ import java.util.Optional;
  * the logo on a test page and a logo an operator uploads come off one algorithm.
  *
  * <p><b>No exact width, no image.</b> A device on paper nobody bundled for gets {@link
- * Optional#empty()}, and so does {@code <image=50>}: half a paper width is not a width the logo was
- * dithered at. Never the nearest width, never a scaled one. {@code TestPage} asks before it writes
- * the tag and simply prints one block fewer.
+ * Optional#empty()}, and so does {@code <image width=50>}: half a paper width is not a width the
+ * logo was dithered at. Never the nearest width, never a scaled one. {@code TestPage} asks before
+ * it writes the tag and simply prints one block fewer.
  *
  * @see PrintImages for how this sits alongside the images the server synced
  * @see SyncedImages

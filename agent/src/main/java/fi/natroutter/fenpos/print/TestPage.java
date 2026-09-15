@@ -85,7 +85,7 @@ public final class TestPage {
         int columns = device.print().columns();
         List<String> lines = new ArrayList<>();
 
-        lines.add("<align=center><bold>FenPOS test page</bold></align>");
+        lines.add("<align to=center><bold>FenPOS test page</bold></align>");
         lines.add("<hr>");
         lines.add("Device:   " + device.name());
         lines.add("Columns:  " + columns);
@@ -97,10 +97,10 @@ public final class TestPage {
 
         lines.add("<hr>");
         lines.add("<bold>bold</bold> <underline>underline</underline> <invert>invert</invert>");
-        lines.add("<size=2,2>Double</size>");
-        lines.add("<align=left>left</align>");
-        lines.add("<align=center>center</align>");
-        lines.add("<align=right>right</align>");
+        lines.add("<size width=2 height=2>Double</size>");
+        lines.add("<align to=left>left</align>");
+        lines.add("<align to=center>center</align>");
+        lines.add("<align to=right>right</align>");
 
         lines.add("<hr>");
         lines.add("Codepage sample:");
@@ -108,14 +108,14 @@ public final class TestPage {
 
         lines.add("<hr>");
         lines.add("Blocks:");
-        lines.add("<align=center><qr>" + QR_CONTENT + "</qr></align>");
-        lines.add("<align=center><barcode=CODE39>" + BARCODE_CONTENT + "</barcode></align>");
-        lines.add("<align=center><pdf417>" + PDF417_CONTENT + "</pdf417></align>");
+        lines.add("<align to=center><qr>" + QR_CONTENT + "</qr></align>");
+        lines.add("<align to=center><barcode type=CODE39>" + BARCODE_CONTENT + "</barcode></align>");
+        lines.add("<align to=center><pdf417>" + PDF417_CONTENT + "</pdf417></align>");
         if (images.resolve(BundledImages.NAME, LOGO_WIDTH_PERCENT).isPresent()) {
-            lines.add("<align=center><image>" + BundledImages.NAME + "</image></align>");
+            lines.add("<align to=center><image>" + BundledImages.NAME + "</image></align>");
         }
 
-        lines.add("<feed=3>");
+        lines.add("<feed lines=3>");
         lines.add("<cut>");
 
         return "{\"data\":" + GSON.toJson(String.join("\n", lines)) + "}";

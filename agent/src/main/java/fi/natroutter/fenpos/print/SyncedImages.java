@@ -18,11 +18,11 @@ import java.util.Optional;
  * console, or the reverse.
  *
  * <p><b>Only the width the raster was dithered at will resolve.</b> The server dithers a stored
- * asset once per paper width, at the full printable width, so an {@code <image=50>} finds nothing
- * even when {@code <image>} finds the logo. Shrinking the raster here is the alternative and is
- * worse: its dots have already been reduced to black and white, and resampling them resamples the
- * dither's own noise. A job that needs some other width is compiled on the server, which carries
- * the dots with it.
+ * asset once per paper width, at the full printable width, so an {@code <image width=50>} finds
+ * nothing even when {@code <image>} finds the logo. Shrinking the raster here is the alternative
+ * and is worse: its dots have already been reduced to black and white, and resampling them
+ * resamples the dither's own noise. A job that needs some other width is compiled on the server,
+ * which carries the dots with it.
  */
 public final class SyncedImages {
 

@@ -110,7 +110,7 @@ class EscPosRendererTest {
 
     @Test
     void partialCutEmitsThePartialCutCommand() throws Exception {
-        assertTrue(contains(render("<cut=partial>", Codepage.CP858, Linefeed.LF), CUT_PARTIAL));
+        assertTrue(contains(render("<cut mode=partial>", Codepage.CP858, Linefeed.LF), CUT_PARTIAL));
     }
 
     /**
@@ -137,7 +137,7 @@ class EscPosRendererTest {
     void restatesStyleAfterAFeedBecauseFeedResetsThePrinter() throws Exception {
         List<Line> lines = List.of(
                 MarkupParser.parse("<bold>a</bold>"),
-                MarkupParser.parse("<feed=2>"),
+                MarkupParser.parse("<feed lines=2>"),
                 MarkupParser.parse("<bold>b</bold>"));
 
         byte[] output = EscPosRenderer.render(lines, Codepage.CP858, Linefeed.LF, 42);

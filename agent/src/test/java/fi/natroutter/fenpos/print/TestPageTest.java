@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TestPageTest {
 
     /** The logo line, exactly as the page writes it. */
-    private static final String LOGO_LINE = "<align=center><image>fenpos</image></align>";
+    private static final String LOGO_LINE = "<align to=center><image>fenpos</image></align>";
 
     @Test
     void compilesOnADevice() throws Exception {
@@ -72,11 +72,11 @@ class TestPageTest {
     void printsEachOfTheSymbolBlocks() {
         List<String> lines = elements();
 
-        assertTrue(lines.contains("<align=center><qr>https://natroutter.fi</qr></align>"),
+        assertTrue(lines.contains("<align to=center><qr>https://natroutter.fi</qr></align>"),
                 "no QR code");
-        assertTrue(lines.contains("<align=center><barcode=CODE39>FENPOS</barcode></align>"),
+        assertTrue(lines.contains("<align to=center><barcode type=CODE39>FENPOS</barcode></align>"),
                 "no barcode");
-        assertTrue(lines.contains("<align=center><pdf417>FENPOS TEST</pdf417></align>"),
+        assertTrue(lines.contains("<align to=center><pdf417>FENPOS TEST</pdf417></align>"),
                 "no PDF417 symbol");
     }
 

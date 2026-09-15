@@ -76,7 +76,7 @@ class BundledImagesTest {
     }
 
     /**
-     * {@code <image=50>} finds nothing, for the same reason and on the other axis.
+     * {@code <image width=50>} finds nothing, for the same reason and on the other axis.
      * <p>
      * Half of a 32-column paper is 192 dots, which is not a width the logo was dithered at. The
      * honest answer is that this agent does not hold that picture; shrinking the 384-dot one would
