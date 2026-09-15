@@ -56,35 +56,46 @@ export interface LayoutNode {
 /** How tall a `<hr>` stands in a drawn line: one printed line, with the rule through its middle. */
 const RULE_HEIGHT_DOTS = LINE_HEIGHT_DOTS;
 
+/** A child of a flow, and the align in force when it was placed. */
+interface FlowChild {
+	node: LayoutNode;
+	/** Only meaningful for a block: an inline sequence already bakes its own align into its rows. */
+	align: Align;
+}
+
 /**
  * Stacks a line's nodes top to bottom.
  *
  * **The grouping is what makes a drawn line look like a printed one.** Consecutive inline nodes —
  * text, fills, scopes, images, and the align and wrap wrappers around them — are one sequence, laid
- * out by `layoutText` exactly as the same characters would have been laid out in columns. A rule or a
- * block breaks the sequence, because neither is something that can sit in a row of glyphs, and each
- * becomes a child of its own. So `a<hr>b` is three children and `<bold>a</bold> b` is one.
+ * out by `layoutText` exactly as the same characters would have been laid out in columns. A rule, a
+ * block or a line break ends the sequence, because none of the three is something that can sit in a
+ * row of glyphs, and each becomes a child of its own (a break simply ends one row without adding a
+ * child, which is how a block's children — several source lines run together with none of the
+ * top-level splitting `renderRasterLine`'s own caller already did — become the several rows of its
+ * flow). So `a<hr>b` is three children and `<bold>a</bold> b` is one.
  *
- * @param nodes one line's nodes, as `splitLines` produced them
+ * The align and wrap in force are threaded down through the walk rather than kept as a variable this
+ * closes over, because a wrapper's reach is everything inside it — including a rule or a block that
+ * interrupts the sequence — and a variable reset at every such interruption would forget the wrapper
+ * the moment anything broke the row it opened on.
+ *
+ * @param nodes one line's nodes, or — inside a block — every line of its content run together
  * @param context the fonts, the paper and what the pre-pass resolved
  * @returns the node that draws them
  */
 export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
-	const children: LayoutNode[] = [];
+	const children: FlowChild[] = [];
 	let items: InlineItem[] = [];
-	let align: Align = "LEFT";
-	let wrap = context.defaultWrap;
 
-	const closeSequence = (): void => {
+	const closeSequence = (align: Align, wrap: boolean): void => {
 		if (items.length > 0) {
-			children.push(inlineSequence(items, align, wrap, context));
+			children.push({ node: inlineSequence(items, align, wrap, context), align: "LEFT" });
+			items = [];
 		}
-		items = [];
-		align = "LEFT";
-		wrap = context.defaultWrap;
 	};
 
-	const visit = (list: Node[], style: SpanStyle): void => {
+	const visit = (list: Node[], style: SpanStyle, align: Align, wrap: boolean): void => {
 		for (const node of list) {
 			switch (node.kind) {
 				case "text":
@@ -103,25 +114,27 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					items.push({ kind: "image", raster: rasterFor(node, context) });
 					break;
 				case "scope":
-					visit(node.children, { ...style, ...node.patch });
+					visit(node.children, { ...style, ...node.patch }, align, wrap);
 					break;
 				case "align":
 					// The innermost wrapper wins, which is the same rule a native line follows: the tree
 					// allows only one of each per line, so the last one assigned is the only one written.
-					align = node.align;
-					visit(node.children, style);
+					// Flushed on the way back out, so trailing text collected under this align is charged
+					// to it rather than to whatever align encloses the wrapper itself.
+					visit(node.children, style, node.align, wrap);
+					closeSequence(node.align, wrap);
 					break;
 				case "wrap":
-					wrap = node.wrap;
-					visit(node.children, style);
+					visit(node.children, style, align, node.wrap);
+					closeSequence(align, node.wrap);
 					break;
 				case "rule":
-					closeSequence();
-					children.push(ruleNode());
+					closeSequence(align, wrap);
+					children.push({ node: ruleNode(), align: "LEFT" });
 					break;
 				case "block":
-					closeSequence();
-					children.push(blockNode(node, context));
+					closeSequence(align, wrap);
+					children.push({ node: blockNode(node, context), align });
 					break;
 				case "symbol":
 				case "void": {
@@ -139,13 +152,17 @@ export function buildFlow(nodes: Node[], context: LayoutContext): LayoutNode {
 					);
 				}
 				case "break":
-					throw new Error("splitLines removes every break");
+					// Only a block's children ever carry one this far: every other caller already split at
+					// breaks before handing nodes here. Ending the sequence here is what turns each of a
+					// block's source lines into its own row.
+					closeSequence(align, wrap);
+					break;
 			}
 		}
 	};
 
-	visit(nodes, PLAIN);
-	closeSequence();
+	visit(nodes, PLAIN, "LEFT", context.defaultWrap);
+	closeSequence("LEFT", context.defaultWrap);
 
 	return stack(children);
 }
@@ -251,21 +268,99 @@ function ruleNode(): LayoutNode {
  * @returns the node that draws it
  * @throws Error if nothing here draws that tag
  */
-function blockNode(node: BlockNode, _context: LayoutContext): LayoutNode {
+function blockNode(node: BlockNode, context: LayoutContext): LayoutNode {
 	switch (node.tag) {
+		case "box":
+			return new BoxNode(node, buildFlow(node.children, context));
 		default:
 			throw new Error(`no layout node draws <${node.tag}>`);
 	}
 }
 
-/** Puts children one under another, each offered the whole width. */
-function stack(children: LayoutNode[]): LayoutNode {
+/** A border's dots, from the box's own outer edge to where its padding begins. */
+type BorderKind = "single" | "double" | "thick" | "none";
+const BORDER_INSET: Record<BorderKind, number> = { single: 1, double: 4, thick: 3, none: 0 };
+
+/** Dots one pad unit spans: half a character cell, which is as fine as `<box pad>` resolves. */
+const PAD_UNIT_DOTS = 6;
+
+/**
+ * A framed region: a border drawn around the flow it encloses, with padding between the two.
+ *
+ * The border and the padding are both charged against the box's own width before the flow inside
+ * ever sees it, which is what makes a nested box narrower than its parent by exactly what the
+ * parent drew around it rather than by some share the child has to know to leave.
+ */
+class BoxNode implements LayoutNode {
+	private readonly widthPercent: number;
+	private readonly border: BorderKind;
+	private readonly padDots: number;
+
+	constructor(
+		node: BlockNode,
+		private readonly flow: LayoutNode,
+	) {
+		this.widthPercent = (node.attributes.width as number | undefined) ?? 100;
+		this.border = (node.attributes.border as BorderKind | undefined) ?? "single";
+		this.padDots = ((node.attributes.pad as number | undefined) ?? 1) * PAD_UNIT_DOTS;
+	}
+
+	/** The border and padding together, charged on every side. */
+	private get inset(): number {
+		return BORDER_INSET[this.border] + this.padDots;
+	}
+
+	measure(availableWidth: number): Size {
+		const width = Math.floor((availableWidth * this.widthPercent) / 100);
+		const inner = this.flow.measure(Math.max(0, width - 2 * this.inset));
+		return { width, height: inner.height + 2 * this.inset };
+	}
+
+	paint(canvas: Canvas, x: number, y: number, availableWidth: number): void {
+		const width = Math.floor((availableWidth * this.widthPercent) / 100);
+		const inset = this.inset;
+		const innerWidth = Math.max(0, width - 2 * inset);
+		const height = this.flow.measure(innerWidth).height + 2 * inset;
+
+		this.paintBorder(canvas, x, y, width, height);
+		this.flow.paint(canvas, x + inset, y + inset, innerWidth);
+	}
+
+	/** Draws the outline itself: `double` is two lines with the 2-dot gap between them left blank. */
+	private paintBorder(canvas: Canvas, x: number, y: number, width: number, height: number): void {
+		switch (this.border) {
+			case "none":
+				return;
+			case "single":
+				canvas.rect(x, y, width, height, 1);
+				return;
+			case "thick":
+				canvas.rect(x, y, width, height, 3);
+				return;
+			case "double":
+				canvas.rect(x, y, width, height, 1);
+				canvas.rect(x + 3, y + 3, width - 6, height - 6, 1);
+				return;
+		}
+	}
+}
+
+/**
+ * Puts children one under another, each offered the whole width.
+ *
+ * A block child is narrower than what it is offered whenever its own width attribute says so, and
+ * placed within that width by the align in force where it sat — `0`, half the leftover dots, or all
+ * of them — the same three positions a native line's own justification chooses between. An inline
+ * sequence already chose its own placement while it laid out its rows, so it is always painted flush
+ * with the flow's own left edge.
+ */
+function stack(children: FlowChild[]): LayoutNode {
 	return {
 		measure(availableWidth) {
 			let width = 0;
 			let height = 0;
-			for (const child of children) {
-				const size = child.measure(availableWidth);
+			for (const { node } of children) {
+				const size = node.measure(availableWidth);
 				width = Math.max(width, size.width);
 				height += size.height;
 			}
@@ -273,9 +368,16 @@ function stack(children: LayoutNode[]): LayoutNode {
 		},
 		paint(canvas, x, y, availableWidth) {
 			let top = y;
-			for (const child of children) {
-				child.paint(canvas, x, top, availableWidth);
-				top += child.measure(availableWidth).height;
+			for (const { node, align } of children) {
+				const size = node.measure(availableWidth);
+				const offset =
+					align === "CENTER"
+						? Math.floor((availableWidth - size.width) / 2)
+						: align === "RIGHT"
+							? availableWidth - size.width
+							: 0;
+				node.paint(canvas, x + offset, top, availableWidth);
+				top += size.height;
 			}
 		},
 	};
