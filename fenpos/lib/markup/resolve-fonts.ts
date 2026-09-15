@@ -7,7 +7,7 @@ import { parseDocument, type VariableContext } from "@/lib/markup/parser";
 import type { FontFace } from "@/lib/raster/glyphs";
 
 /**
- * The pre-pass that turns every configured `<font>` a request names into a face the compiler can
+ * The pre-pass that turns every configured `<text>` a request names into a face the compiler can
  * draw with.
  *
  * **The image pre-pass's twin, and it exists for the same reason.** A stored font is a database row
@@ -16,23 +16,22 @@ import type { FontFace } from "@/lib/raster/glyphs";
  * through `CompileSettings.fonts`.
  *
  * It also settles the one thing a caller must be told before a job exists: whether the names they
- * wrote are fonts this install has. `<font=B>` is a printer font and needs nothing; `<font=roboto>`
- * either names something stored or is a refusal, and a refusal that names the line and column is
- * worth far more than one that says a receipt failed to print.
+ * wrote are fonts this install has. `<text font=B>` is a printer font and needs nothing;
+ * `<text font=roboto>` either names something stored or is a refusal, and a refusal that names the
+ * line and column is worth far more than one that says a receipt failed to print.
  */
 
 /** The faces one request may draw with, keyed by the name its markup writes. */
 export type ResolvedFonts = ReadonlyMap<string, FontFace>;
 
 /**
- * How a configured `<font>` opens, matched case-insensitively as the tag registry resolves it.
+ * How a `<text>` opens, matched case-insensitively as the tag registry resolves it.
  *
- * A tag's body runs to the next `>` and its name to the first `=`, so a font that names anything at
- * all opens as exactly `<font=…>`. A receipt with no such text names no configured face, and is not
- * parsed: parsing is not free — a `<qr>` is encoded while it is measured — and most receipts use the
- * printer's own fonts and nothing else.
+ * A receipt with no such tag names no configured face, and is not parsed: parsing is not free — a
+ * `<qr>` is encoded while it is measured — and most receipts use the printer's own fonts and
+ * nothing else.
  */
-const FONT_OPENING = /<font=/i;
+const FONT_OPENING = /<text[\s>]/i;
 
 /**
  * Loads every configured face a request refers to.
@@ -42,7 +41,7 @@ const FONT_OPENING = /<font=/i;
  * answer than anything this pre-pass could give — and until then a receipt with a broken tag has
  * cost no database read.
  *
- * Parsed with `variables`, the same context the compile will use, because a `<font>` may sit inside
+ * Parsed with `variables`, the same context the compile will use, because a `<text>` may sit inside
  * a scope that spans a substituted line and the tree this walks has to be the tree the compile
  * meets.
  *
@@ -96,7 +95,7 @@ interface FontUse {
 /**
  * Finds every configured face the tree names, and where each was first written.
  *
- * A built-in font leaves no mark to find: `<font=A>` patches `face` to null, so only a name this
+ * A built-in font leaves no mark to find: `<text font=A>` patches `face` to null, so only a name this
  * install has to go and load shows up here at all.
  *
  * @param nodes the document's nodes

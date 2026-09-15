@@ -63,51 +63,51 @@ describe("buildDocument", () => {
 	});
 
 	it("resolves size into width and height multipliers", () => {
-		expect(build("<size=2,3>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 3 } });
-		expect(build("<size=2>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 2 } });
-		expect(refusal("<size=9>a</size>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(build("<size width=2 height=3>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 3 } });
+		expect(build("<size width=2 height=2>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 2 } });
+		expect(refusal("<size width=9 height=9>a</size>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("lets align span several lines when it owns each of them", () => {
-		const document = build("<align=center>a\nb</align>");
+		const document = build("<align to=center>a\nb</align>");
 
 		expect(document.nodes[0]).toMatchObject({ kind: "align", align: "CENTER" });
 		expect(kinds((document.nodes[0] as { children: Node[] }).children)).toEqual(["text", "break", "text"]);
 	});
 
 	it("refuses align opened after text on the same line", () => {
-		const thrown = refusal("x <align=center>a</align>");
+		const thrown = refusal("x <align to=center>a</align>");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAlignScope);
 		expect(thrown.column).toBe(3);
 	});
 
 	it("refuses align opened after text on an earlier line inside a scope", () => {
-		expect(refusal("<bold>x\n<align=center>a</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(refusal("<bold>x\n<align to=center>a</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("refuses text after align closes on the same line", () => {
 		// The space is the first thing that follows the close, so it is what is pointed at.
-		const thrown = refusal("<align=center>a</align> b");
+		const thrown = refusal("<align to=center>a</align> b");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAlignScope);
-		expect(thrown.column).toBe(24);
+		expect(thrown.column).toBe(27);
 	});
 
 	it("allows the next line to start fresh after align closes", () => {
-		expect(kinds(build("<align=center>a</align>\nb").nodes)).toEqual(["align", "break", "text"]);
+		expect(kinds(build("<align to=center>a</align>\nb").nodes)).toEqual(["align", "break", "text"]);
 	});
 
 	it("refuses a second align while one is open", () => {
-		expect(refusal("<align=center>a\n<align=left>b</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(refusal("<align to=center>a\n<align to=left>b</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("names the tag being opened when a second align follows the first on one line", () => {
-		const thrown = refusal("<align=center>a</align><align=left>b</align>");
+		const thrown = refusal("<align to=center>a</align><align to=left>b</align>");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAlignScope);
 		expect(thrown.detail).toBe("align");
-		expect(thrown.column).toBe(24);
+		expect(thrown.column).toBe(27);
 	});
 
 	it("names the tag being opened when nowrap follows a closed wrap on one line", () => {
@@ -129,7 +129,7 @@ describe("buildDocument", () => {
 	});
 
 	it("lets a symbol sit inside align and nothing else", () => {
-		const document = build("<align=center><qr>https://x</qr></align>");
+		const document = build("<align to=center><qr>https://x</qr></align>");
 
 		expect(document.nodes[0]).toMatchObject({ kind: "align" });
 		expect((document.nodes[0] as { children: Node[] }).children[0]).toMatchObject({
@@ -154,7 +154,7 @@ describe("buildDocument", () => {
 	});
 
 	it("keeps the image width when given", () => {
-		expect(build("<image=50>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: 50 });
+		expect(build("<image width=50>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: 50 });
 	});
 
 	it("refuses a control character in a symbol's content through the tokenizer", () => {
@@ -162,22 +162,22 @@ describe("buildDocument", () => {
 	});
 
 	it("resolves void tags into directives", () => {
-		const document = build("<cut=partial><feed=3><drawer=5>");
+		const document = build("<cut mode=partial><feed lines=3><drawer pin=5>");
 
 		expect(document.nodes).toEqual([
 			{ kind: "void", directive: { kind: "CUT", mode: "PARTIAL" }, line: 1, column: 1 },
-			{ kind: "void", directive: { kind: "FEED", lines: 3 }, line: 1, column: 14 },
-			{ kind: "void", directive: { kind: "DRAWER", pin: 5 }, line: 1, column: 22 },
+			{ kind: "void", directive: { kind: "FEED", lines: 3 }, line: 1, column: 19 },
+			{ kind: "void", directive: { kind: "DRAWER", pin: 5 }, line: 1, column: 33 },
 		]);
 	});
 
 	it("keeps a fill with its character", () => {
-		expect(build("a<fill=.>b").nodes[1]).toEqual({ kind: "fill", character: ".", line: 1, column: 2 });
+		expect(build("a<fill char=.>b").nodes[1]).toEqual({ kind: "fill", character: ".", line: 1, column: 2 });
 	});
 
 	/** A fill places something on the line, so the line is no longer a fresh one an align could own. */
 	it("refuses align opened after a fill on the same line", () => {
-		expect(refusal("<fill><align=center>x</align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(refusal("<fill><align to=center>x</align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("refuses a close tag for a tag that stands alone", () => {
@@ -203,29 +203,31 @@ describe("buildDocument", () => {
 	});
 
 	it("resolves a built-in font and refuses size on it", () => {
-		expect(build("<font=b>x</font>").nodes[0]).toMatchObject({ patch: { font: "B", face: null } });
-		const thrown = refusal("<font=a size=30>x</font>");
+		expect(build("<text font=b>x</text>").nodes[0]).toMatchObject({ patch: { font: "B", face: null } });
+		const thrown = refusal("<text font=a size=30>x</text>");
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
-		expect(thrown.column).toBe(9);
+		expect(thrown.column).toBe(14);
 	});
 
 	it("resolves a configured font with a size", () => {
-		expect(build("<font=roboto size=36>x</font>").nodes[0]).toMatchObject({ patch: { face: "roboto", faceDots: 36 } });
-		expect(build("<font=roboto>x</font>").nodes[0]).toMatchObject({ patch: { face: "roboto", faceDots: 24 } });
+		expect(build("<text font=roboto size=36>x</text>").nodes[0]).toMatchObject({
+			patch: { face: "roboto", faceDots: 36 },
+		});
+		expect(build("<text font=roboto>x</text>").nodes[0]).toMatchObject({ patch: { face: "roboto", faceDots: 24 } });
 	});
 
 	it("bounds the font size by the parse options", () => {
-		const generous = buildDocument(tokenize("<font=roboto size=600>x</font>", null), {
+		const generous = buildDocument(tokenize("<text font=roboto size=600>x</text>", null), {
 			...DEFAULT_PARSE_OPTIONS,
 			maxFontHeight: 1024,
 		});
 		expect(generous.nodes[0]).toMatchObject({ patch: { faceDots: 600 } });
-		expect(refusal("<font=roboto size=600>x</font>").code).toBe(MARKUP_ERRORS.invalidAttribute);
-		expect(refusal("<font=roboto size=7>x</font>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<text font=roboto size=600>x</text>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<text font=roboto size=7>x</text>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("refuses a font name that is not a name", () => {
-		expect(refusal("<font=Roboto>x</font>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<text font=Roboto>x</text>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("decodes a data URI image, wrapped over lines", () => {
@@ -239,6 +241,128 @@ describe("buildDocument", () => {
 	it("refuses a data URI that is not a PNG or JPEG, or not base64", () => {
 		expect(refusal("<image>data:image/gif;base64,R0lG</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
 		expect(refusal("<image>data:image/png;base64,***</image>").code).toBe(MARKUP_ERRORS.invalidImageData);
+	});
+
+	it("reads size from width and height, either alone leaving the other at 1", () => {
+		expect(build("<size width=2 height=3>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 3 } });
+		expect(build("<size width=2>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 2, heightMult: 1 } });
+		expect(build("<size height=3>a</size>").nodes[0]).toMatchObject({ patch: { widthMult: 1, heightMult: 3 } });
+	});
+
+	it("refuses a size with neither width nor height, at the tag", () => {
+		const thrown = refusal("<size>a</size>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(1);
+		expect(thrown.detail).toBe("width");
+		expect(thrown.message).toBe("<size> needs width or height, or both");
+	});
+
+	it("refuses a multiplier out of range at the attribute's column", () => {
+		const thrown = refusal("<size width=9>a</size>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(7);
+	});
+
+	it("selects a built-in font by letter, ignoring case", () => {
+		expect(build("<text font=B>a</text>").nodes[0]).toMatchObject({
+			kind: "scope",
+			tag: "text",
+			patch: { font: "B", face: null, faceDots: 24 },
+		});
+	});
+
+	it("selects a stored font by name at a size", () => {
+		expect(build("<text font=mono size=32>a</text>").nodes[0]).toMatchObject({ patch: { face: "mono", faceDots: 32 } });
+		expect(build("<text font=mono>a</text>").nodes[0]).toMatchObject({ patch: { face: "mono", faceDots: 24 } });
+	});
+
+	it("refuses a size on a built-in font, at the size", () => {
+		const thrown = refusal("<text font=a size=32>a</text>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(14);
+		expect(thrown.detail).toBe("size");
+	});
+
+	it("refuses a font that is neither a letter nor a name, at the font", () => {
+		const thrown = refusal("<text font=no/pe>a</text>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(7);
+		expect(thrown.detail).toBe("font");
+	});
+
+	it("requires a font on text", () => {
+		expect(refusal("<text>a</text>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "font" });
+	});
+
+	it("reads align from to, ignoring case", () => {
+		expect(build("<align to=Center>a</align>").nodes[0]).toMatchObject({ kind: "align", align: "CENTER" });
+		expect(refusal("<align to=middle>a</align>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 8 });
+		expect(refusal("<align>a</align>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "to" });
+	});
+
+	it("reads a fill's character from char, a space when it is left off", () => {
+		expect(build("<fill char=.>").nodes[0]).toMatchObject({ kind: "fill", character: "." });
+		expect(build("<fill>").nodes[0]).toMatchObject({ kind: "fill", character: " " });
+		expect(refusal("<fill char=ab>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 7 });
+	});
+
+	it("reads the void directives from their attributes", () => {
+		expect(build("<cut mode=partial>").nodes[0]).toMatchObject({ directive: { kind: "CUT", mode: "PARTIAL" } });
+		expect(build("<cut>").nodes[0]).toMatchObject({ directive: { kind: "CUT", mode: "FULL" } });
+		expect(build("<feed lines=3>").nodes[0]).toMatchObject({ directive: { kind: "FEED", lines: 3 } });
+		expect(refusal("<feed>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "lines" });
+		expect(refusal("<feed lines=0>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 7 });
+		expect(build("<drawer pin=5>").nodes[0]).toMatchObject({ directive: { kind: "DRAWER", pin: 5 } });
+		expect(build("<drawer>").nodes[0]).toMatchObject({ directive: { kind: "DRAWER", pin: 2 } });
+		expect(refusal("<drawer pin=3>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, column: 9 });
+	});
+
+	it("reads the content tags' shapes from their attributes", () => {
+		expect(build("<qr size=8>x</qr>").nodes[0]).toMatchObject({ spec: { kind: "QR", size: 8 } });
+		expect(build("<qr>x</qr>").nodes[0]).toMatchObject({ spec: { kind: "QR", size: 6 } });
+		expect(build("<pdf417 level=4>x</pdf417>").nodes[0]).toMatchObject({ spec: { kind: "PDF417", errorLevel: 4 } });
+		expect(build("<pdf417>x</pdf417>").nodes[0]).toMatchObject({ spec: { kind: "PDF417", errorLevel: 1 } });
+		expect(build("<barcode type=ean13>5901234123457</barcode>").nodes[0]).toMatchObject({
+			spec: { kind: "BARCODE", system: "EAN13" },
+		});
+		expect(refusal("<barcode>1</barcode>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "type" });
+		expect(build("<image width=50>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: 50 });
+		expect(build("<image>logo</image>").nodes[0]).toMatchObject({ kind: "image", widthPercent: null });
+	});
+
+	it("reads a chart's type, a series' name and a gauge's value from their attributes", () => {
+		const chart = build('<chart type=BAR><series name="Q1 sales">1</series></chart>').nodes[0] as BlockNode;
+
+		expect(chart.attributes.type).toBe("bar");
+		expect(chart.chart?.type).toBe("bar");
+		expect(chart.chart?.series[0].label).toBe("Q1 sales");
+		expect(refusal("<chart><series>1</series></chart>")).toMatchObject({
+			code: MARKUP_ERRORS.invalidAttribute,
+			detail: "type",
+		});
+		expect((build("<bar value=38>").nodes[0] as BlockNode).attributes.value).toBe(38);
+		expect(refusal("<bar>")).toMatchObject({ code: MARKUP_ERRORS.invalidAttribute, detail: "value" });
+	});
+
+	it("refuses a value written against a tag that takes none as a malformed attribute", () => {
+		expect(refusal("<bold=1>x</bold>")).toMatchObject({ code: MARKUP_ERRORS.unknownAttribute, column: 6, detail: "=" });
+	});
+
+	it("lets an indented tag own its line", () => {
+		expect(build("  <align to=center>a</align>").nodes[0]).toMatchObject({ kind: "align", column: 3 });
+		expect(build("  - no onion").nodes[0]).toMatchObject({ kind: "text", text: "  - no onion" });
+	});
+
+	it("builds an indented block the same as a flat one", () => {
+		const indented = build("<box>\n  <align to=center>a</align>\n</box>").nodes[0] as BlockNode;
+		const flat = build("<box>\n<align to=center>a</align>\n</box>").nodes[0] as BlockNode;
+
+		expect(kinds(indented.children)).toEqual(["break", "align", "break"]);
+		expect(kinds(indented.children)).toEqual(kinds(flat.children));
 	});
 });
 
@@ -287,11 +411,11 @@ describe("block tags", () => {
 	 * justification whatever shares it, so nothing may follow their closer either — blank or not.
 	 */
 	it("still refuses trailing whitespace after an align closes, even when a gauge shared its line", () => {
-		expect(refusal("<align=center><bar=50></align>  ").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(refusal("<align to=center><bar value=50></align>  ").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("still refuses trailing whitespace after a wrap closes, even when a gauge shared its line", () => {
-		expect(refusal("<nowrap><bar=50></nowrap>  ").code).toBe(MARKUP_ERRORS.invalidWrapScope);
+		expect(refusal("<nowrap><bar value=50></nowrap>  ").code).toBe(MARKUP_ERRORS.invalidWrapScope);
 	});
 
 	it("refuses a row outside a table and a cell outside a row", () => {
@@ -312,22 +436,22 @@ describe("block tags", () => {
 
 	it("lets a chart hold series and labels only", () => {
 		const chart = block(
-			"<chart=bar height=8>\n<series=Sales pattern=hatch>1,2,3</series>\n<labels>a,b,c</labels>\n</chart>",
+			"<chart type=bar height=8>\n<series name=Sales pattern=hatch>1,2,3</series>\n<labels>a,b,c</labels>\n</chart>",
 		) as BlockNode;
 
-		expect(chart.argument).toBe("bar");
+		expect(chart.attributes.type).toBe("bar");
 		expect(chart.children.filter((node) => node.kind === "block").map((node) => (node as BlockNode).content)).toEqual([
 			"1,2,3",
 			"a,b,c",
 		]);
-		expect(refusal("<chart=bar>\ntext\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
-		expect(refusal("<chart=bar>\n<bar=10>\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
-		expect(refusal("<chart=donut>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
-		expect(refusal("<chart=bar area=on>\n</chart>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<chart type=bar>\ntext\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<chart type=bar>\n<bar value=10>\n</chart>").code).toBe(MARKUP_ERRORS.misplacedBlock);
+		expect(refusal("<chart type=donut>\n</chart>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(refusal("<chart type=bar area=on>\n</chart>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("parses series values, scatter pairs and labels", () => {
-		const scatter = block("<chart=scatter>\n<series=A>1:2, 3:4\n5:6</series>\n</chart>") as BlockNode;
+		const scatter = block("<chart type=scatter>\n<series name=A>1:2, 3:4\n5:6</series>\n</chart>") as BlockNode;
 
 		expect(scatter.chart?.series[0].points).toEqual([
 			[1, 2],
@@ -336,13 +460,13 @@ describe("block tags", () => {
 		]);
 		expect(scatter.chart?.series[0].marker).toBe("circle");
 
-		const line = block("<chart=line>\n<series=A>1,2</series>\n<labels>x,y</labels>\n</chart>") as BlockNode;
+		const line = block("<chart type=line>\n<series name=A>1,2</series>\n<labels>x,y</labels>\n</chart>") as BlockNode;
 
 		expect(line.chart?.labels).toEqual(["x", "y"]);
 	});
 
 	it("refuses labels on a scatter, whose axes carry numbers of their own", () => {
-		const thrown = refusal("<chart=scatter>\n<series=A>1:2</series>\n<labels>x</labels>\n</chart>");
+		const thrown = refusal("<chart type=scatter>\n<series name=A>1:2</series>\n<labels>x</labels>\n</chart>");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.misplacedBlock);
 		expect(thrown.line).toBe(3);
@@ -350,54 +474,53 @@ describe("block tags", () => {
 	});
 
 	it("refuses a value that is not a number, too many points and too many labels", () => {
-		expect(refusal("<chart=bar>\n<series>1,two</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
-		expect(refusal("<chart=bar>\n<series>1,2</series>\n<labels>a,b,c</labels>\n</chart>").code).toBe(
+		expect(refusal("<chart type=bar>\n<series>1,two</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<chart type=bar>\n<series>1,2</series>\n<labels>a,b,c</labels>\n</chart>").code).toBe(
 			MARKUP_ERRORS.tooManyLabels,
 		);
 		const many = Array.from({ length: 2001 }, (_, index) => index).join(",");
-		expect(refusal(`<chart=line>\n<series>${many}</series>\n</chart>`).code).toBe(MARKUP_ERRORS.tooManyPoints);
+		expect(refusal(`<chart type=line>\n<series>${many}</series>\n</chart>`).code).toBe(MARKUP_ERRORS.tooManyPoints);
 	});
 
 	it("requires one series for a pie and at least one series for any chart", () => {
-		expect(refusal("<chart=pie>\n<series>1</series>\n<series>2</series>\n</chart>").code).toBe(
+		expect(refusal("<chart type=pie>\n<series>1</series>\n<series>2</series>\n</chart>").code).toBe(
 			MARKUP_ERRORS.invalidTagArgument,
 		);
-		expect(refusal("<chart=bar>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<chart type=bar>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
 	});
 
 	it("refuses a pie slice that is not worth a share", () => {
-		const thrown = refusal("<chart=pie>\n<series>3,0,1</series>\n</chart>");
+		const thrown = refusal("<chart type=pie>\n<series>3,0,1</series>\n</chart>");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
 		expect(thrown.line).toBe(2);
-		expect(refusal("<chart=pie>\n<series>3,-1</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
-		expect(() => build("<chart=bar>\n<series>3,0,-1</series>\n</chart>")).not.toThrow();
+		expect(refusal("<chart type=pie>\n<series>3,-1</series>\n</chart>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(() => build("<chart type=bar>\n<series>3,0,-1</series>\n</chart>")).not.toThrow();
 	});
 
 	it("assigns patterns and markers by order", () => {
 		const chart = block(
-			"<chart=bar>\n<series>1</series>\n<series>2</series>\n<series>3</series>\n<series>4</series>\n<series>5</series>\n</chart>",
+			"<chart type=bar>\n<series>1</series>\n<series>2</series>\n<series>3</series>\n<series>4</series>\n<series>5</series>\n</chart>",
 		) as BlockNode;
 
 		expect(chart.chart?.series.map((series) => series.pattern)).toEqual(["solid", "hatch", "dot", "hollow", "solid"]);
 	});
 
 	it("allows a marker only on a chart that plots points", () => {
-		expect(() => build("<chart=scatter>\n<series marker=cross>1:2,3:4</series>\n</chart>")).not.toThrow();
+		expect(() => build("<chart type=scatter>\n<series marker=cross>1:2,3:4</series>\n</chart>")).not.toThrow();
 
-		const thrown = refusal("<chart=pie>\n<series marker=cross>1,2</series>\n</chart>");
+		const thrown = refusal("<chart type=pie>\n<series marker=cross>1,2</series>\n</chart>");
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
 		expect(thrown.line).toBe(2);
 	});
 
 	it("reads the gauge", () => {
-		expect(block("<bar=38 width=80>")).toMatchObject({
+		expect(block("<bar value=38 width=80>")).toMatchObject({
 			kind: "block",
 			tag: "bar",
-			argument: "38",
-			attributes: { width: 80 },
+			attributes: { value: 38, width: 80 },
 		});
-		expect(refusal("<bar=101>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(refusal("<bar value=101>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("bounds nesting depth", () => {
@@ -441,8 +564,8 @@ describe("block tags", () => {
 	});
 
 	it("lets align own a line inside a box", () => {
-		expect(() => build("<box>\n<align=center>hi</align>\n</box>")).not.toThrow();
-		expect(refusal("<box>\nx <align=center>hi</align>\n</box>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(() => build("<box>\n<align to=center>hi</align>\n</box>")).not.toThrow();
+		expect(refusal("<box>\nx <align to=center>hi</align>\n</box>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("marks a raster line", () => {

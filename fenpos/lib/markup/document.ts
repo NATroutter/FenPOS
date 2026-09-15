@@ -83,7 +83,7 @@ export interface BreakNode extends Located {
 }
 
 /** The tags that style the text they enclose without owning the line. */
-export type ScopeTag = "bold" | "underline" | "invert" | "size" | "font";
+export type ScopeTag = "bold" | "underline" | "invert" | "size" | "text";
 
 /**
  * A styling tag and everything it encloses.
@@ -167,7 +167,7 @@ export type ImageSourceRef =
 /**
  * A stored image's name, an `http(s)` URL, or an inline data URI.
  *
- * `widthPercent` is null when the tag carried no argument, which means the whole printable width.
+ * `widthPercent` is null when the tag carried no `width`, which means the whole printable width.
  * Null rather than the default filled in, so a later stage can tell a caller who asked for 100
  * from one who asked for nothing.
  */
@@ -192,7 +192,7 @@ export type ChartType = "bar" | "line" | "pie" | "scatter";
  * the magnitudes — the y axis, the legend — reads them the same way whatever the chart is.
  */
 export interface Series {
-	/** What the legend prints for this series, or null when the tag carried no argument. */
+	/** What the legend prints for this series, or null when the tag carried no name. */
 	label: string | null;
 	pattern: "solid" | "hatch" | "dot" | "hollow";
 	marker: "circle" | "square" | "triangle" | "cross" | "none";
@@ -227,7 +227,6 @@ export interface ChartData {
 export interface BlockNode extends Located {
 	kind: "block";
 	tag: BlockTag;
-	argument: string | null;
 	attributes: Attributes;
 	content: string | null;
 	children: Node[];

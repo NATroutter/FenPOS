@@ -1,3 +1,4 @@
+import { Align, BarcodeSystem } from "@/lib/domain/enums";
 import type { AttributeTable } from "@/lib/markup/attributes";
 
 /**
@@ -12,14 +13,10 @@ import type { AttributeTable } from "@/lib/markup/attributes";
 /** Whether a tag wraps content or stands alone. */
 export type TagKind = "PAIRED" | "VOID";
 
-/** Whether a tag accepts a `=value` argument. */
-export type TagArgument = "NONE" | "OPTIONAL" | "REQUIRED";
-
 /** One tag's rules. */
 export interface Tag {
 	name: string;
 	kind: TagKind;
-	argument: TagArgument;
 	attributes: AttributeTable;
 }
 
@@ -35,81 +32,85 @@ const PERCENT = { kind: "integer", min: 1, max: 100 } as const;
 /** The strokes a drawn edge can have. */
 const BORDER = { kind: "enum", values: ["single", "double", "thick", "none"] } as const;
 
+/** Highest permitted character multiplier, imposed by ESC/POS `GS !`. */
+const MULTIPLIER = { kind: "integer", min: 1, max: 8 } as const;
+
+/** What `<chart>` can be drawn as. */
+export const CHART_TYPES = ["bar", "line", "pie", "scatter"] as const;
+
 /** Every tag, keyed by the lowercase name written in markup. */
 export const TAGS: Record<string, Tag> = {
 	/** Emphasis. */
-	bold: { name: "bold", kind: "PAIRED", argument: "NONE", attributes: {} },
-	/** Underline, optionally selecting the printer's second weight. */
-	underline: { name: "underline", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
+	bold: { name: "bold", kind: "PAIRED", attributes: {} },
+	/** Underline; `weight` selects the printer's second, heavier one. */
+	underline: { name: "underline", kind: "PAIRED", attributes: { weight: { kind: "integer", min: 1, max: 2 } } },
 	/** White on black. */
-	invert: { name: "invert", kind: "PAIRED", argument: "NONE", attributes: {} },
-	/** Character multipliers, as `W,H` or a single value used for both. */
-	size: { name: "size", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
-	/** A built-in font, or a configured font at a given size. */
-	font: {
-		name: "font",
+	invert: { name: "invert", kind: "PAIRED", attributes: {} },
+	/** Character multipliers. Either alone leaves the other at 1; neither is refused by the tree. */
+	size: { name: "size", kind: "PAIRED", attributes: { width: MULTIPLIER, height: MULTIPLIER } },
+	/** A face: one of the printer's own by letter, or a stored font by name, at `size` dots. */
+	text: {
+		name: "text",
 		kind: "PAIRED",
-		argument: "REQUIRED",
-		attributes: { size: { kind: "integer", min: 8, max: 4096 } },
+		attributes: { font: { kind: "text", maxLength: 64, required: true }, size: { kind: "integer", min: 8, max: 4096 } },
 	},
 	/** Line justification. Paired, and required to own its whole line. */
-	align: { name: "align", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
+	align: { name: "align", kind: "PAIRED", attributes: { to: { kind: "enum", values: Align.values, required: true } } },
 	/** Break this line at the paper width. Paired, and required to own its whole line. */
-	wrap: { name: "wrap", kind: "PAIRED", argument: "NONE", attributes: {} },
+	wrap: { name: "wrap", kind: "PAIRED", attributes: {} },
 	/** Print this line as written. Paired, and required to own its whole line. */
-	nowrap: { name: "nowrap", kind: "PAIRED", argument: "NONE", attributes: {} },
+	nowrap: { name: "nowrap", kind: "PAIRED", attributes: {} },
 	/**
-	 * Pad to the paper's width. Argument is the character to repeat, default a space.
+	 * Pad to the paper's width with `char`, a space when it is left off.
 	 *
 	 * The one tag whose printed width is not knowable from the line: it stands for however many
 	 * columns are left over, which is a property of the device. See `lib/markup/fill.ts`.
 	 */
-	fill: { name: "fill", kind: "VOID", argument: "OPTIONAL", attributes: {} },
-	/** Cut the paper, fully by default. */
-	cut: { name: "cut", kind: "VOID", argument: "OPTIONAL", attributes: {} },
-	/** Advance the paper by a number of lines. */
-	feed: { name: "feed", kind: "VOID", argument: "REQUIRED", attributes: {} },
+	fill: { name: "fill", kind: "VOID", attributes: { char: { kind: "char" } } },
+	/** Cut the paper, fully unless `mode` says partial. */
+	cut: { name: "cut", kind: "VOID", attributes: { mode: { kind: "enum", values: ["full", "partial"] } } },
+	/** Advance the paper by `lines`, bounded by ESC/POS `ESC d`. */
+	feed: { name: "feed", kind: "VOID", attributes: { lines: { kind: "integer", min: 1, max: 255, required: true } } },
 	/** A full-width horizontal rule. Required to be alone on its line. */
-	hr: { name: "hr", kind: "VOID", argument: "NONE", attributes: {} },
-	/** A QR code. Argument is the module size, 1-16. */
-	qr: { name: "qr", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
-	/** A linear barcode. Argument is the symbology. */
-	barcode: { name: "barcode", kind: "PAIRED", argument: "REQUIRED", attributes: {} },
-	/** A PDF417 symbol. Argument is the error-correction level, 0-8. */
-	pdf417: { name: "pdf417", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
-	/** A cash drawer pulse. Argument is the pin, 2 or 5. */
-	drawer: { name: "drawer", kind: "VOID", argument: "OPTIONAL", attributes: {} },
+	hr: { name: "hr", kind: "VOID", attributes: {} },
+	/** A QR code; `size` is dots per module, bounded by ESC/POS `GS ( k` function 167. */
+	qr: { name: "qr", kind: "PAIRED", attributes: { size: { kind: "integer", min: 1, max: 16 } } },
+	/** A linear barcode of the symbology `type` names. */
+	barcode: {
+		name: "barcode",
+		kind: "PAIRED",
+		attributes: { type: { kind: "enum", values: BarcodeSystem.values, required: true } },
+	},
+	/** A PDF417 symbol; `level` is the error-correction level, bounded by ESC/POS `GS ( k` function 069. */
+	pdf417: { name: "pdf417", kind: "PAIRED", attributes: { level: { kind: "integer", min: 0, max: 8 } } },
+	/** A cash drawer pulse on `pin`, 2 unless said otherwise. */
+	drawer: { name: "drawer", kind: "VOID", attributes: { pin: { kind: "enum", values: ["2", "5"] } } },
 	/**
-	 * A stored image or an `http(s)` URL. Argument is the printed width as a percentage of the
-	 * paper, 1-100.
+	 * A stored image or an `http(s)` URL, printed `width` percent of the paper wide.
 	 *
-	 * Paired rather than `<image=logo>`, which is the shape the reference first had. A URL routinely
-	 * contains `=` — `?v=2` — and may contain `>`, so an argument-shaped reference would be split at
-	 * the first one. Putting it in the content reuses the `&lt;` and `&amp;` escaping every other
-	 * block already has, and adds no parsing rule of its own.
+	 * The reference is the content rather than an attribute. A URL routinely contains `=` — `?v=2` —
+	 * and may contain `>`, and putting it in the content reuses the `&lt;` and `&amp;` escaping every
+	 * other block already has, and adds no parsing rule of its own.
 	 */
-	image: { name: "image", kind: "PAIRED", argument: "OPTIONAL", attributes: {} },
+	image: { name: "image", kind: "PAIRED", attributes: { width: PERCENT } },
 	/** A framed region around the lines it encloses. */
 	box: {
 		name: "box",
 		kind: "PAIRED",
-		argument: "NONE",
 		attributes: { width: PERCENT, border: BORDER, pad: { kind: "integer", min: 0, max: 8 } },
 	},
 	/** A grid of rows and cells. */
 	table: {
 		name: "table",
 		kind: "PAIRED",
-		argument: "NONE",
 		attributes: { width: PERCENT, border: BORDER, group: { kind: "integer", min: 1, max: 50 } },
 	},
 	/** One row of a table. Holds cells and nothing else. */
-	row: { name: "row", kind: "PAIRED", argument: "NONE", attributes: {} },
+	row: { name: "row", kind: "PAIRED", attributes: {} },
 	/** One cell of a row. */
 	cell: {
 		name: "cell",
 		kind: "PAIRED",
-		argument: "NONE",
 		attributes: {
 			width: PERCENT,
 			align: { kind: "enum", values: ["left", "center", "right"] },
@@ -117,12 +118,12 @@ export const TAGS: Record<string, Tag> = {
 			shade: { kind: "enum", values: ["none", "light", "dark", "black"] },
 		},
 	},
-	/** A chart of the series it encloses. Argument is what it is drawn as. */
+	/** A chart of the series it encloses, drawn as `type`. */
 	chart: {
 		name: "chart",
 		kind: "PAIRED",
-		argument: "REQUIRED",
 		attributes: {
+			type: { kind: "enum", values: CHART_TYPES, required: true },
 			width: PERCENT,
 			height: { kind: "integer", min: 3, max: 60 },
 			title: { kind: "text", maxLength: 64 },
@@ -130,20 +131,24 @@ export const TAGS: Record<string, Tag> = {
 			area: { kind: "enum", values: ["on", "off"] },
 		},
 	},
-	/** One series of a chart, its values enclosed as data. Argument is the name the legend prints. */
+	/** One series of a chart, its values enclosed as data; `name` is what the legend prints. */
 	series: {
 		name: "series",
 		kind: "PAIRED",
-		argument: "OPTIONAL",
 		attributes: {
+			name: { kind: "text", maxLength: 64 },
 			pattern: { kind: "enum", values: ["solid", "hatch", "dot", "hollow"] },
 			marker: { kind: "enum", values: ["circle", "square", "triangle", "cross", "none"] },
 		},
 	},
 	/** A chart's category labels, enclosed as data. */
-	labels: { name: "labels", kind: "PAIRED", argument: "NONE", attributes: {} },
-	/** A gauge. Argument is how full it is drawn, 0-100. */
-	bar: { name: "bar", kind: "VOID", argument: "REQUIRED", attributes: { width: PERCENT } },
+	labels: { name: "labels", kind: "PAIRED", attributes: {} },
+	/** A gauge drawn `value` percent full. */
+	bar: {
+		name: "bar",
+		kind: "VOID",
+		attributes: { value: { kind: "integer", min: 0, max: 100, required: true }, width: PERCENT },
+	},
 };
 
 /**

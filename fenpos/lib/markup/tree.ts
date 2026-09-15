@@ -1,6 +1,6 @@
-import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
+import { type Align, type BarcodeSystem, Font } from "@/lib/domain/enums";
 import { NAME_PATTERN } from "@/lib/domain/naming";
-import { type Attributes, type RawAttribute, readAttributes } from "@/lib/markup/attributes";
+import { type Attributes, readAttributes } from "@/lib/markup/attributes";
 import { type SymbolSpec, validateSymbolContent } from "@/lib/markup/blocks";
 import type {
 	AlignNode,
@@ -34,45 +34,24 @@ import type { Token, Tokenized } from "@/lib/markup/tokenizer";
  * tag was allowed to be there. Both halves are needed, and keeping them apart is what lets each be
  * read on its own: one is about characters, this is about structure.
  *
- * Every rule is checked exactly once, here. A tag's argument, its attributes, whether it may open
- * where it opened, whether it closes what is open, whether a rule shares its line — all of it is
- * settled before a node exists, so nothing downstream has to ask again and nothing downstream can
- * answer differently.
+ * Every rule is checked exactly once, here. A tag's attributes, whether it may open where it
+ * opened, whether it closes what is open, whether a rule shares its line — all of it is settled
+ * before a node exists, so nothing downstream has to ask again and nothing downstream can answer
+ * differently.
  *
  * What is deliberately *not* checked here is anything that needs a device. How wide the paper is,
  * how many dots a symbol takes, whether an image can be fetched: those are properties of the
  * printer rather than of the markup, and a tree is built the same way wherever markup is parsed.
  */
 
-/** Highest permitted character multiplier, imposed by ESC/POS `GS !`. */
-const MAX_SIZE_MULTIPLIER = 8;
-
-/** Highest permitted feed distance, imposed by ESC/POS `ESC d`. */
-const MAX_FEED_LINES = 255;
-
-/** Dots per QR module when `<qr>` carries no argument. Legible on 58mm paper without dominating it. */
+/** Dots per QR module when `<qr>` carries no `size`. Legible on 58mm paper without dominating it. */
 const DEFAULT_QR_MODULE_SIZE = 6;
 
-/** Largest QR module size, imposed by ESC/POS `GS ( k` function 167. */
-const MAX_QR_MODULE_SIZE = 16;
-
-/** PDF417 error-correction level when `<pdf417>` carries no argument. */
+/** PDF417 error-correction level when `<pdf417>` carries no `level`. */
 const DEFAULT_PDF417_ERROR_LEVEL = 1;
-
-/** Highest PDF417 error-correction level, imposed by ESC/POS `GS ( k` function 069. */
-const MAX_PDF417_ERROR_LEVEL = 8;
-
-/** Narrowest image this system will print, as a percentage of the paper. */
-const MIN_IMAGE_WIDTH_PERCENT = 1;
-
-/** Widest an image may be printed: the whole printable width, which the paper cannot exceed. */
-const MAX_IMAGE_WIDTH_PERCENT = 100;
 
 /** A data URI `<image>` accepts: base64 PNG or JPEG. Line breaks are trimmed out before this runs. */
 const IMAGE_DATA_URI = /^data:(image\/png|image\/jpeg);base64,([A-Za-z0-9+/=]+)$/;
-
-/** What `<chart>` can be drawn as. */
-const CHART_KINDS: readonly string[] = ["bar", "line", "pie", "scatter"];
 
 /** The charts that plot points a marker can be drawn on. */
 const MARKER_KINDS: readonly string[] = ["line", "scatter"];
@@ -91,9 +70,6 @@ const VALUE_SEPARATOR = /[\s,]+/;
 
 /** Splits a list of labels, which may hold spaces of their own and so are cut on commas alone. */
 const LABEL_SEPARATOR = /[,\n]/;
-
-/** Fullest a `<bar>` gauge can be asked for, as a percentage. */
-const MAX_GAUGE_PERCENT = 100;
 
 /**
  * The tags the printer prints for itself, which is why no block may hold one.
@@ -136,7 +112,7 @@ interface LineState {
 	 * Anything at all has been placed on this line.
 	 *
 	 * What decides whether a line-owning tag may still open. A cash drawer pulse counts, although
-	 * it prints nothing: `<drawer><align=center>x</align>` is an author asking for alignment around
+	 * it prints nothing: `<drawer><align to=center>x</align>` is an author asking for alignment around
 	 * something that is not the start of the line.
 	 */
 	content: boolean;
@@ -186,7 +162,7 @@ interface ContentState {
 	/** One entry per text token. Line breaks contribute nothing, so they add no entry. */
 	parts: string[];
 	/**
-	 * What the tag's argument said the content will become, resolved when the tag opened.
+	 * What the tag's attributes said the content will become, resolved when the tag opened.
 	 *
 	 * Null for a block that encloses data: its numbers are read against the chart that holds them,
 	 * which is a measurement rather than a shape, so nothing about them is settled here.
@@ -194,7 +170,7 @@ interface ContentState {
 	shape: ContentShape | null;
 }
 
-/** A content tag's argument, resolved before its content is known. */
+/** A content tag's shape, resolved from its attributes before its content is known. */
 type ContentShape =
 	| { kind: "QR"; size: number }
 	| { kind: "BARCODE"; system: BarcodeSystem }
@@ -304,7 +280,7 @@ class DocumentBuilder {
 		// A whole-line block draws its whole line as a picture, so whitespace after it closes is
 		// markup rather than content — the same reasoning that already drops it before the opener.
 		// Keyed off the closed owner's own code rather than `blockSeen`, which a line-sharing block
-		// like `<bar>` sets too: `<align=center><bar=50></align>` must still refuse trailing text,
+		// like `<bar>` sets too: `<align to=center><bar value=50></align>` must still refuse trailing text,
 		// because it was the align that closed the line, and nothing may follow `</align>` whatever
 		// shares its line.
 		if (!(blank && closed?.code === MARKUP_ERRORS.invalidBlockScope)) {
@@ -457,12 +433,11 @@ class DocumentBuilder {
 			this.refuseInsideContent(frame.content.tag, tag, token.line, token.column);
 		}
 
-		this.requireArgumentPolicy(tag, token.argument, token.line, token.column);
-		const attributes = readAttributes(tag.name, token.attributes, tag.attributes, token.line);
+		const attributes = readAttributes(tag.name, token.attributes, tag.attributes, token.line, token.column);
 		this.requirePlacement(tag, token.line, token.column);
 
 		if (isContentTag(tag.name)) {
-			this.openContent(tag, token);
+			this.openContent(tag, token, attributes);
 			return;
 		}
 
@@ -479,24 +454,24 @@ class DocumentBuilder {
 				this.openDataBlock(tag, token, attributes);
 				return;
 			case "bar":
-				this.appendGauge(tag, token, attributes);
+				this.appendGauge(token, attributes);
 				return;
 			case "bold":
 			case "underline":
 			case "invert":
 			case "size":
-			case "font":
+			case "text":
 				this.openScope(tag, tag.name, token, attributes);
 				return;
 			case "align":
-				this.openAlign(token);
+				this.openAlign(token, attributes);
 				return;
 			case "wrap":
 			case "nowrap":
 				this.openWrap(tag, token);
 				return;
 			case "fill":
-				this.appendFill(token);
+				this.appendFill(token, attributes);
 				return;
 			case "hr":
 				this.appendRule(token);
@@ -504,7 +479,7 @@ class DocumentBuilder {
 			case "cut":
 			case "feed":
 			case "drawer":
-				this.appendVoid(tag, token);
+				this.appendVoid(tag, token, attributes);
 				return;
 			default:
 				throw new Error(`Tag ${tag.name} has no place in a document`);
@@ -516,7 +491,7 @@ class DocumentBuilder {
 		this.enter(tag, token, {
 			kind: "scope",
 			tag: scope,
-			patch: this.stylePatch(tag, scope, token.argument, token.line, token.column, attributes, token.attributes),
+			patch: this.stylePatch(scope, token, attributes),
 			line: token.line,
 			column: token.column,
 			children: [],
@@ -526,66 +501,66 @@ class DocumentBuilder {
 	/**
 	 * The change one styling tag makes, rather than the style that results.
 	 *
-	 * @throws MarkupError if the argument is malformed or out of range
+	 * @throws MarkupError if `size` names neither dimension, or `text` names a face that is neither a
+	 * built-in letter nor a stored font's name, or sizes a built-in one
 	 */
-	private stylePatch(
-		tag: Tag,
-		scope: ScopeTag,
-		argument: string | null,
-		line: number,
-		column: number,
-		attributes: Attributes,
-		rawAttributes: readonly RawAttribute[],
-	): Partial<SpanStyle> {
+	private stylePatch(scope: ScopeTag, token: OpenToken, attributes: Attributes): Partial<SpanStyle> {
 		switch (scope) {
 			case "bold":
 				return { bold: true };
 			case "invert":
 				return { invert: true };
-			case "underline": {
-				const thickness = argument === null ? 1 : this.requireInt(argument, 1, 2, tag, line, column);
-				return { underline: thickness as 0 | 1 | 2 };
-			}
+			case "underline":
+				return { underline: ((attributes.weight as number | undefined) ?? 1) as 0 | 1 | 2 };
 			case "size": {
-				const parts = (argument as string).split(",");
-				if (parts.length > 2) {
-					throw this.argumentError(TAGS.size, line, column, "expected W or W,H");
+				const width = attributes.width as number | undefined;
+				const height = attributes.height as number | undefined;
+				if (width === undefined && height === undefined) {
+					throw new MarkupError(
+						MARKUP_ERRORS.invalidAttribute,
+						token.line,
+						token.column,
+						"width",
+						"<size> needs width or height, or both",
+					);
 				}
-				const width = this.requireInt(parts[0], 1, MAX_SIZE_MULTIPLIER, TAGS.size, line, column);
-				const height =
-					parts.length === 1 ? width : this.requireInt(parts[1], 1, MAX_SIZE_MULTIPLIER, TAGS.size, line, column);
-				return { widthMult: width, heightMult: height };
+				return { widthMult: width ?? 1, heightMult: height ?? 1 };
 			}
-			case "font": {
-				const raw = argument ?? "";
+			case "text": {
+				const raw = attributes.font as string;
 				const builtIn = raw.toUpperCase();
-				const sizeAttribute = rawAttributes.find((attribute) => attribute.name === "size");
+				const size = attributes.size as number | undefined;
 
 				if (Font.is(builtIn)) {
-					if (sizeAttribute) {
+					if (size !== undefined) {
 						throw new MarkupError(
 							MARKUP_ERRORS.invalidAttribute,
-							line,
-							sizeAttribute.column,
+							token.line,
+							attributeColumn(token, "size"),
 							"size",
-							"<font> size applies to a configured font, not to the printer's own",
+							"<text> size applies to a stored font, not to the printer's own",
 						);
 					}
 					return { font: builtIn, face: null, faceDots: 24 };
 				}
 
 				if (!NAME_PATTERN.test(raw)) {
-					throw this.argumentError(tag, line, column, `'${raw}' is not a built-in font or a font name`);
+					throw new MarkupError(
+						MARKUP_ERRORS.invalidAttribute,
+						token.line,
+						attributeColumn(token, "font"),
+						"font",
+						`<text> font '${raw}' is not a built-in font or a font name`,
+					);
 				}
 
-				const size = attributes.size as number | undefined;
 				if (size !== undefined && size > this.options.maxFontHeight) {
 					throw new MarkupError(
 						MARKUP_ERRORS.invalidAttribute,
-						line,
-						sizeAttribute?.column ?? column,
+						token.line,
+						attributeColumn(token, "size"),
 						"size",
-						`<font> size must be at most ${this.options.maxFontHeight}`,
+						`<text> size must be at most ${this.options.maxFontHeight}`,
 					);
 				}
 				return { face: raw, faceDots: size ?? 24 };
@@ -593,7 +568,7 @@ class DocumentBuilder {
 		}
 	}
 
-	private openAlign(token: OpenToken): void {
+	private openAlign(token: OpenToken, attributes: Attributes): void {
 		const state = this.frame().owner;
 		if (state.alignSeen || this.lineOwnerOpen("align")) {
 			throw new MarkupError(
@@ -606,15 +581,10 @@ class DocumentBuilder {
 		}
 		this.requireLineOwnerCanOpen("align", MARKUP_ERRORS.invalidAlignScope, token.line, token.column);
 
-		const value = (token.argument ?? "").toUpperCase();
-		if (!Align.is(value)) {
-			throw this.argumentError(TAGS.align, token.line, token.column, "must be 'left', 'center' or 'right'");
-		}
-
 		state.alignSeen = true;
 		this.enter(TAGS.align, token, {
 			kind: "align",
-			align: value,
+			align: attributes.to as Align,
 			line: token.line,
 			column: token.column,
 			children: [],
@@ -654,14 +624,14 @@ class DocumentBuilder {
 	/**
 	 * Opens a tag that encloses data rather than markup.
 	 *
-	 * The argument is resolved here rather than when the tag closes, so a bad one is refused at the
-	 * position it was written and before the rest of the document has been read. The content cannot
-	 * be judged until it is complete, so it waits; the argument has no reason to.
+	 * The attributes are resolved here rather than when the tag closes, so a bad one is refused at
+	 * the position it was written and before the rest of the document has been read. The content
+	 * cannot be judged until it is complete, so it waits; the attributes have no reason to.
 	 */
-	private openContent(tag: Tag, token: OpenToken): void {
+	private openContent(tag: Tag, token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 
-		const shape = this.contentShape(tag, token.argument, token.line, token.column);
+		const shape = this.contentShape(tag, attributes);
 		this.enter(tag, token, null).content = { tag, parts: [], shape };
 
 		// A symbol is a block of dots the printer places by itself, so it claims the printed line it
@@ -673,58 +643,27 @@ class DocumentBuilder {
 		}
 	}
 
-	/**
-	 * Reads a content tag's argument.
-	 *
-	 * @throws MarkupError if it is not a module size, error level, symbology or width this tag takes
-	 */
-	private contentShape(tag: Tag, argument: string | null, line: number, column: number): ContentShape {
+	/** Reads a content tag's attributes into what its content will become. */
+	private contentShape(tag: Tag, attributes: Attributes): ContentShape {
 		switch (tag.name) {
 			case "qr":
-				return {
-					kind: "QR",
-					size:
-						argument === null
-							? DEFAULT_QR_MODULE_SIZE
-							: this.requireInt(argument, 1, MAX_QR_MODULE_SIZE, tag, line, column),
-				};
+				return { kind: "QR", size: (attributes.size as number | undefined) ?? DEFAULT_QR_MODULE_SIZE };
 			case "pdf417":
-				return {
-					kind: "PDF417",
-					errorLevel:
-						argument === null
-							? DEFAULT_PDF417_ERROR_LEVEL
-							: this.requireInt(argument, 0, MAX_PDF417_ERROR_LEVEL, tag, line, column),
-				};
-			case "barcode": {
-				const system = (argument ?? "").toUpperCase();
-				if (!BarcodeSystem.is(system)) {
-					throw this.argumentError(tag, line, column, `must name a symbology: ${BarcodeSystem.values.join(", ")}`);
-				}
-				return { kind: "BARCODE", system };
-			}
+				return { kind: "PDF417", errorLevel: (attributes.level as number | undefined) ?? DEFAULT_PDF417_ERROR_LEVEL };
+			case "barcode":
+				return { kind: "BARCODE", system: attributes.type as BarcodeSystem };
 			case "image":
-				return {
-					kind: "IMAGE",
-					widthPercent:
-						argument === null
-							? null
-							: this.requireInt(argument, MIN_IMAGE_WIDTH_PERCENT, MAX_IMAGE_WIDTH_PERCENT, tag, line, column),
-				};
+				return { kind: "IMAGE", widthPercent: (attributes.width as number | undefined) ?? null };
 			default:
 				throw new Error(`Tag ${tag.name} encloses markup rather than data`);
 		}
 	}
 
-	private appendFill(token: OpenToken): void {
+	private appendFill(token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 
-		const character = token.argument ?? " ";
-		// Code points, not UTF-16 units: an astral character is one character and two units, and
-		// measuring units would refuse a legitimate single character as though it were two.
-		if ([...character].length !== 1) {
-			throw this.argumentError(TAGS.fill, token.line, token.column, "takes a single character, written <fill=x>");
-		}
+		// The reader has already refused anything but one character.
+		const character = (attributes.char as string | undefined) ?? " ";
 
 		const frame = this.frame();
 		frame.children.push({ kind: "fill", character, line: token.line, column: token.column });
@@ -742,10 +681,10 @@ class DocumentBuilder {
 		this.placed(frame.owner);
 	}
 
-	private appendVoid(tag: Tag, token: OpenToken): void {
+	private appendVoid(tag: Tag, token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 
-		const directive = this.voidDirective(tag, token.argument, token.line, token.column);
+		const directive = this.voidDirective(tag, attributes);
 		const frame = this.frame();
 		frame.children.push({ kind: "void", directive, line: token.line, column: token.column });
 		this.placed(frame.owner);
@@ -754,37 +693,17 @@ class DocumentBuilder {
 		}
 	}
 
-	private voidDirective(tag: Tag, argument: string | null, line: number, column: number): VoidDirective {
+	private voidDirective(tag: Tag, attributes: Attributes): VoidDirective {
 		switch (tag.name) {
 			case "cut":
-				return { kind: "CUT", mode: this.cutMode(argument, line, column) };
+				return { kind: "CUT", mode: attributes.mode === "partial" ? "PARTIAL" : "FULL" };
 			case "feed":
-				return { kind: "FEED", lines: this.requireInt(argument as string, 1, MAX_FEED_LINES, tag, line, column) };
+				return { kind: "FEED", lines: attributes.lines as number };
 			case "drawer":
-				return { kind: "DRAWER", pin: this.drawerPin(argument, line, column) };
+				return { kind: "DRAWER", pin: attributes.pin === "5" ? 5 : 2 };
 			default:
 				throw new Error(`Tag ${tag.name} is not a directive`);
 		}
-	}
-
-	private cutMode(argument: string | null, line: number, column: number): "FULL" | "PARTIAL" {
-		if (argument === null || argument.toLowerCase() === "full") {
-			return "FULL";
-		}
-		if (argument.toLowerCase() === "partial") {
-			return "PARTIAL";
-		}
-		throw this.argumentError(TAGS.cut, line, column, "must be 'full' or 'partial'");
-	}
-
-	private drawerPin(argument: string | null, line: number, column: number): 2 | 5 {
-		if (argument === null || argument === "2") {
-			return 2;
-		}
-		if (argument === "5") {
-			return 5;
-		}
-		throw this.argumentError(TAGS.drawer, line, column, "must be pin 2 or 5");
 	}
 
 	// -----------------------------------------------------------------------
@@ -832,7 +751,9 @@ class DocumentBuilder {
 	 */
 	private openRegion(tag: Tag, token: OpenToken, attributes: Attributes): void {
 		const block = tag.name as BlockTag;
-		const argument = this.blockArgument(tag, token, attributes);
+		if (block === "chart") {
+			this.requireChartShape(token, attributes);
+		}
 
 		if (SHARES_A_LINE.has(block)) {
 			this.requireInsideLineScope(token.line, token.column);
@@ -847,7 +768,6 @@ class DocumentBuilder {
 		this.enter(tag, token, {
 			kind: "block",
 			tag: block,
-			argument,
 			attributes,
 			content: null,
 			children: [],
@@ -871,7 +791,6 @@ class DocumentBuilder {
 		this.enter(tag, token, {
 			kind: "block",
 			tag: tag.name as BlockTag,
-			argument: token.argument,
 			attributes,
 			content: null,
 			children: [],
@@ -880,8 +799,8 @@ class DocumentBuilder {
 		}).content = { tag, parts: [], shape: null };
 	}
 
-	/** Appends a gauge, which encloses nothing: how full it is drawn is its argument. */
-	private appendGauge(tag: Tag, token: OpenToken, attributes: Attributes): void {
+	/** Appends a gauge, which encloses nothing: how full it is drawn is its `value`. */
+	private appendGauge(token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 		this.enterBlock(token.line, token.column);
 
@@ -889,7 +808,6 @@ class DocumentBuilder {
 		frame.children.push({
 			kind: "block",
 			tag: "bar",
-			argument: this.blockArgument(tag, token, attributes),
 			attributes,
 			content: null,
 			children: [],
@@ -900,35 +818,19 @@ class DocumentBuilder {
 	}
 
 	/**
-	 * Reads a block's argument into the form the layout engine will draw it from.
+	 * Rejects a chart attribute that only some chart types can honour.
 	 *
-	 * @throws MarkupError if the argument names no chart this draws, or is not a percentage
+	 * @throws MarkupError if `area` is asked of anything but a line chart
 	 */
-	private blockArgument(tag: Tag, token: OpenToken, attributes: Attributes): string | null {
-		switch (tag.name) {
-			case "chart": {
-				// Lowercased, so the layout engine matches against one spelling however the tag was
-				// written, which is the same courtesy `<align>` and `<barcode>` extend by upper-casing.
-				const kind = (token.argument ?? "").toLowerCase();
-				if (!CHART_KINDS.includes(kind)) {
-					throw this.argumentError(tag, token.line, token.column, `must name a chart: ${CHART_KINDS.join(", ")}`);
-				}
-				if (attributes.area !== undefined && kind !== "line") {
-					throw new MarkupError(
-						MARKUP_ERRORS.invalidAttribute,
-						token.line,
-						attributeColumn(token, "area"),
-						"area",
-						"<chart> area fills under a line, so it applies to a line chart only",
-					);
-				}
-				return kind;
-			}
-			case "bar":
-				this.requireInt(token.argument as string, 0, MAX_GAUGE_PERCENT, tag, token.line, token.column);
-				return token.argument;
-			default:
-				return token.argument;
+	private requireChartShape(token: OpenToken, attributes: Attributes): void {
+		if (attributes.area !== undefined && attributes.type !== "line") {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidAttribute,
+				token.line,
+				attributeColumn(token, "area"),
+				"area",
+				"<chart> area fills under a line, so it applies to a line chart only",
+			);
 		}
 	}
 
@@ -1016,7 +918,7 @@ class DocumentBuilder {
 		this.endLineOf(frame.owner);
 
 		const marker = node.tag === "chart" ? frame.block?.marker : null;
-		if (marker && !MARKER_KINDS.includes(node.argument ?? "")) {
+		if (marker && !MARKER_KINDS.includes(node.attributes.type as string)) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidAttribute,
 				marker.line,
@@ -1048,7 +950,7 @@ class DocumentBuilder {
 	 * it has points to name
 	 */
 	private readChart(node: BlockNode): ChartData {
-		const type = node.argument as ChartType;
+		const type = node.attributes.type as ChartType;
 		const blocks = node.children.filter((child): child is BlockNode => child.kind === "block");
 		const seriesBlocks = blocks.filter((child) => child.tag === "series");
 		const series = seriesBlocks.map((child, index) => this.readSeries(child, type, index));
@@ -1066,7 +968,7 @@ class DocumentBuilder {
 				node.line,
 				node.column,
 				"chart",
-				`a pie divides one whole up, so <chart=pie> draws exactly one <series>, not ${series.length}`,
+				`a pie divides one whole up, so <chart type=pie> draws exactly one <series>, not ${series.length}`,
 			);
 		}
 		if (!series.some((one) => one.values.length > 0)) {
@@ -1162,7 +1064,7 @@ class DocumentBuilder {
 		const values = points ? points.map(([, y]) => y) : tokens.map((token) => this.readValue(node, token, token));
 
 		return {
-			label: node.argument,
+			label: (node.attributes.name as string | undefined) ?? null,
 			pattern:
 				(node.attributes.pattern as Series["pattern"] | undefined) ?? SERIES_PATTERNS[index % SERIES_PATTERNS.length],
 			marker:
@@ -1459,37 +1361,6 @@ class DocumentBuilder {
 			tag.name,
 			`<${outer.name}> encloses data rather than markup, so <${tag.name}> cannot appear inside it`,
 		);
-	}
-
-	private requireArgumentPolicy(tag: Tag, argument: string | null, line: number, column: number): void {
-		const supplied = argument !== null;
-		if (supplied && tag.argument === "NONE") {
-			throw this.argumentError(tag, line, column, "takes no argument");
-		}
-		if (!supplied && tag.argument === "REQUIRED") {
-			throw this.argumentError(tag, line, column, `requires an argument, written <${tag.name}=value>`);
-		}
-		if (supplied && argument.length === 0) {
-			throw this.argumentError(tag, line, column, "has an empty argument");
-		}
-	}
-
-	private requireInt(value: string, min: number, max: number, tag: Tag, line: number, column: number): number {
-		const trimmed = value.trim();
-		// Checked with a pattern rather than by parsing, because parseInt("3px") is 3 and Number(" ")
-		// is 0 — both would accept an argument the reference parser refuses.
-		if (!/^[+-]?\d+$/.test(trimmed)) {
-			throw this.argumentError(tag, line, column, `'${value}' is not a number`);
-		}
-		const parsed = Number.parseInt(trimmed, 10);
-		if (parsed < min || parsed > max) {
-			throw this.argumentError(tag, line, column, `must be between ${min} and ${max}, got ${parsed}`);
-		}
-		return parsed;
-	}
-
-	private argumentError(tag: Tag, line: number, column: number, detail: string): MarkupError {
-		return new MarkupError(MARKUP_ERRORS.invalidTagArgument, line, column, tag.name, `<${tag.name}> ${detail}`);
 	}
 
 	// -----------------------------------------------------------------------

@@ -602,9 +602,9 @@ class GaugeNode implements LayoutNode {
 
 	constructor(node: BlockNode, context: LayoutContext) {
 		this.widthPercent = (node.attributes.width as number | undefined) ?? 100;
-		this.percent = Number.parseInt(node.argument ?? "0", 10);
-		// The parsed number rather than the text it was written as: `<bar=038>` is thirty-eight full,
-		// and a gauge that printed "038%" beside a bar drawn to 38 would be reporting two things.
+		this.percent = node.attributes.value as number;
+		// The parsed number rather than the text it was written as: `<bar value=038>` is thirty-eight
+		// full, and a gauge that printed "038%" beside a bar drawn to 38 would be reporting two things.
 		const items: InlineItem[] = [{ kind: "run", text: `${this.percent}%`, style: PLAIN, column: node.column }];
 		this.numberRows = layoutText(items, Number.MAX_SAFE_INTEGER, false, "LEFT", context);
 		this.numberWidth = this.numberRows.reduce((widest, row) => Math.max(widest, row.width), 0);
