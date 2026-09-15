@@ -12,7 +12,7 @@ import { hasControlCharacter, isControlCharacter, variableReferenceAt } from "@/
  */
 export type Token =
 	| { kind: "text"; text: string; line: number; column: number; expandedFrom?: string }
-	| { kind: "open"; name: string; argument: string | null; attributes: RawAttribute[]; line: number; column: number }
+	| { kind: "open"; name: string; attributes: RawAttribute[]; line: number; column: number }
 	| { kind: "close"; name: string; line: number; column: number }
 	| { kind: "break"; line: number; column: number };
 
@@ -60,6 +60,7 @@ class Tokenizer {
 	) {}
 
 	run(): Tokenized {
+		this.skipIndentation();
 		while (this.index < this.source.length) {
 			const current = this.source[this.index];
 			if (current === "\n") {
@@ -91,6 +92,27 @@ class Tokenizer {
 		this.line += 1;
 		this.lineStart = this.index;
 		this.substitutions = 0;
+		this.skipIndentation();
+	}
+
+	/**
+	 * Skips whitespace between the start of a line and a tag.
+	 *
+	 * Indentation is for whoever reads the markup, not for the paper: a nested block is unreadable
+	 * written flat, and the spaces that make it readable would otherwise print, or place content on a
+	 * line an alignment then cannot own. Only a run that ends at a `<` is skipped, so a line that
+	 * starts with text keeps every space it was given, and a tab before text is still the control
+	 * character it always was. The raw line length still counts the run, because the limit it feeds
+	 * bounds the request rather than what prints.
+	 */
+	private skipIndentation(): void {
+		let at = this.index;
+		while (at < this.source.length && isSpace(this.source[at])) {
+			at += 1;
+		}
+		if (at > this.index && this.source[at] === "<") {
+			this.index = at;
+		}
 	}
 
 	private readText(current: string): void {
@@ -229,21 +251,6 @@ class Tokenizer {
 			return;
 		}
 
-		let argument: string | null = null;
-		if (this.source[at] === "=") {
-			at += 1;
-			const argumentStart = at;
-			while (
-				at < this.source.length &&
-				!isSpace(this.source[at]) &&
-				this.source[at] !== ">" &&
-				this.source[at] !== "\n"
-			) {
-				at += 1;
-			}
-			argument = this.source.slice(argumentStart, at);
-		}
-
 		const attributes: RawAttribute[] = [];
 		while (at < this.source.length && this.source[at] !== ">") {
 			if (this.source[at] === "\n") {
@@ -266,7 +273,7 @@ class Tokenizer {
 					this.line,
 					keyColumn,
 					shown,
-					`<${name}> attribute '${shown}' must be written as ${shown}=value`,
+					`<${name}> attributes are written key=value`,
 				);
 			}
 			at += 1;
@@ -308,7 +315,7 @@ class Tokenizer {
 			throw unterminated();
 		}
 
-		this.tokens.push({ kind: "open", name, argument, attributes, line: this.line, column });
+		this.tokens.push({ kind: "open", name, attributes, line: this.line, column });
 		this.index = at + 1;
 	}
 

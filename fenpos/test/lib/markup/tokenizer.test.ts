@@ -43,13 +43,6 @@ describe("tokenize", () => {
 		expect(tokenize("a\n\nb", null).lineChars).toEqual([1, 0, 1]);
 	});
 
-	it("reads an open tag with a primary argument", () => {
-		const { tokens } = tokenize("<size=2,3>x</size>", null);
-
-		expect(tokens[0]).toEqual({ kind: "open", name: "size", argument: "2,3", attributes: [], line: 1, column: 1 });
-		expect(tokens[2]).toEqual({ kind: "close", name: "size", line: 1, column: 12 });
-	});
-
 	/**
 	 * Resolving a tag is case-insensitive and `tagByName` lowercases for that itself, so lowercasing
 	 * here would only throw away the spelling a refusal wants to echo back at its author.
@@ -60,23 +53,74 @@ describe("tokenize", () => {
 	});
 
 	it("reads bare and quoted attributes with their columns", () => {
-		const { tokens } = tokenize('<chart=bar height=8 title="Sales > 10">', null);
+		const { tokens } = tokenize('<chart type=bar height=8 title="Sales > 10">', null);
 
 		expect(tokens[0]).toEqual({
 			kind: "open",
 			name: "chart",
-			argument: "bar",
 			attributes: [
-				{ name: "height", value: "8", column: 12 },
-				{ name: "title", value: "Sales > 10", column: 21 },
+				{ name: "type", value: "bar", column: 8 },
+				{ name: "height", value: "8", column: 17 },
+				{ name: "title", value: "Sales > 10", column: 26 },
 			],
 			line: 1,
 			column: 1,
 		});
 	});
 
-	it("treats a fill argument that is a single quote as the argument, not a quoted value", () => {
-		expect(tokenize('<fill=">', null).tokens[0]).toMatchObject({ name: "fill", argument: '"', attributes: [] });
+	it("reads an open tag whose values are all attributes", () => {
+		const { tokens } = tokenize("<size width=2 height=3>x</size>", null);
+
+		expect(tokens[0]).toEqual({
+			kind: "open",
+			name: "size",
+			attributes: [
+				{ name: "width", value: "2", column: 7 },
+				{ name: "height", value: "3", column: 15 },
+			],
+			line: 1,
+			column: 1,
+		});
+		expect(tokens[2]).toEqual({ kind: "close", name: "size", line: 1, column: 25 });
+	});
+
+	it("refuses a value written against the tag name as a malformed attribute", () => {
+		const thrown = refusal("<align=center>");
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.unknownAttribute);
+		expect(thrown.column).toBe(7);
+		expect(thrown.detail).toBe("=");
+		expect(thrown.message).toBe("<align> attributes are written key=value");
+	});
+
+	it("drops indentation before a tag and keeps the tag's column exact", () => {
+		expect(tokenize("  <bold>x</bold>", null).tokens[0]).toEqual({
+			kind: "open",
+			name: "bold",
+			attributes: [],
+			line: 1,
+			column: 3,
+		});
+		expect(tokenize("\t<bold>x</bold>", null).tokens[0]).toMatchObject({ kind: "open", column: 2 });
+	});
+
+	it("keeps indentation before text", () => {
+		expect(tokenize("  - no onion", null).tokens).toEqual([{ kind: "text", text: "  - no onion", line: 1, column: 1 }]);
+	});
+
+	it("still refuses a tab before text", () => {
+		expect(refusal("\tx").code).toBe(MARKUP_ERRORS.controlCharacter);
+	});
+
+	it("drops indentation before a closing tag on a later line", () => {
+		const { tokens } = tokenize("<bold>a\n  </bold>", null);
+
+		expect(kinds(tokens)).toEqual(["open", "text", "break", "close"]);
+		expect(tokens[3]).toEqual({ kind: "close", name: "bold", line: 2, column: 3 });
+	});
+
+	it("counts indentation in the line's raw length", () => {
+		expect(tokenize("  <hr>", null).lineChars).toEqual([6]);
 	});
 
 	it("refuses an unterminated tag as unknown_tag at its column", () => {
