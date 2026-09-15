@@ -110,10 +110,11 @@ export const GET = apiRoute("api:GET /v1/assets", async ({ key, request }) => {
 
 	return {
 		response: Response.json({
-			// `summarise` rather than a second, hand-rolled mapping: it is the one place that coerces a
-			// nullable `width`/`height` to the integers the OpenAPI schema declares required and narrows
-			// `kind` to the closed enum, so this listing cannot describe a row differently than the rest
-			// of this module does.
+			// `summarise` rather than a second, hand-rolled mapping: it is the one place that narrows a
+			// row's `kind` to the closed enum the OpenAPI schema declares, and it reads the same columns
+			// this handler selects. Both halves have to stay in one place — a second mapping would be a
+			// second answer for what a row looks like, free to disagree with the one the panel and
+			// `POST` are built from.
 			assets: page.map((row) => toPublicAsset(summarise(row))),
 			nextCursor,
 		}),

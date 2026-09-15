@@ -1187,6 +1187,29 @@ describe("font assets", () => {
 		expect(await fontFace("roboto")).toBe(first);
 	});
 
+	/**
+	 * The memoisation is only worth having if the hit is cheap, and a hit that still fetched the blob
+	 * would not be: a face covering CJK is tens of megabytes, asked for once per run of text. Counted
+	 * by which selects ran, because a caller cannot tell the two apart from the face it gets back —
+	 * the revision read happens on both, and only the second read carries `data`.
+	 */
+	it("does not read a memoised font's bytes again", async () => {
+		await createAsset("roboto", FONT);
+		const findUnique = vi.spyOn(prisma.asset, "findUnique");
+
+		try {
+			await fontFace("roboto");
+			await fontFace("roboto");
+
+			const reads = findUnique.mock.calls.filter(
+				([args]) => (args as { select?: { data?: boolean } }).select?.data === true,
+			);
+			expect(reads).toHaveLength(1);
+		} finally {
+			findUnique.mockRestore();
+		}
+	});
+
 	it("reports an unknown font", async () => {
 		expect((await refusal(() => fontFace("nobody"))).code).toBe("unknown_font");
 	});

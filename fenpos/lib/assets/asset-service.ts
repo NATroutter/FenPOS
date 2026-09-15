@@ -856,7 +856,8 @@ const faceCache = globalForFaces.fenposFaceCache;
  * **Memoised by asset revision.** Parsing walks the font's tables, and a face is asked for once per
  * run of text on every receipt naming it, so a compile of one document would otherwise re-parse the
  * same megabytes a dozen times. A cheap read of the row's id and timestamp happens on every call, so
- * a hit cannot serve glyphs from bytes that have been replaced.
+ * a hit cannot serve glyphs from bytes that have been replaced; the bytes themselves are read only
+ * when there is nothing to serve.
  *
  * **The returned face is shared**, and `glyphs.ts` keys its own glyph cache on `id`, which is why
  * the id is the revision rather than the name: two revisions of one name must not be able to hand
@@ -867,17 +868,20 @@ const faceCache = globalForFaces.fenposFaceCache;
  * @throws ApiError if no font of that name is stored, or the asset of that name is an image
  */
 export async function fontFace(name: string): Promise<FontFace> {
-	const row = await prisma.asset.findUnique({
+	// Deliberately not selecting `data`: this read runs on every call, including the hits, and a face
+	// covering CJK is tens of megabytes. Fetching those only to find the parsed face already in hand
+	// would undo most of what the cache is for — the same split `rasterFor` makes for the same reason.
+	const revision = await prisma.asset.findUnique({
 		where: { name },
-		select: { id: true, kind: true, data: true, updatedAt: true },
+		select: { id: true, kind: true, updatedAt: true },
 	});
-	if (!row || row.kind !== "FONT") {
+	if (!revision || revision.kind !== "FONT") {
 		// One sentence for both, because they are one situation to whoever wrote the markup: the name
 		// they used does not name a font. Which of the two it is is visible on the Assets tab.
 		throw new ApiError("unknown_font", `There is no font called '${name}'. Upload one on the Assets tab.`);
 	}
 
-	const key = `${row.id}:${row.updatedAt.getTime()}`;
+	const key = `${revision.id}:${revision.updatedAt.getTime()}`;
 	const remembered = faceCache.get(key);
 	if (remembered) {
 		// Re-inserted so the map's iteration order is least-recently-used first, which is the order
@@ -887,9 +891,16 @@ export async function fontFace(name: string): Promise<FontFace> {
 		return remembered;
 	}
 
+	const stored = await prisma.asset.findUnique({ where: { id: revision.id }, select: { data: true } });
+	if (!stored) {
+		// Deleted between the two reads, which is ordinary with two operators on the Assets tab. The
+		// caller gets the same answer as if it had been gone all along.
+		throw new ApiError("unknown_font", `There is no font called '${name}'. Upload one on the Assets tab.`);
+	}
+
 	// Not wrapped: these bytes parsed once already, on the way in. A failure now is this server
 	// disagreeing with itself, which is a 500 and a log line, not something the caller did wrong.
-	const face = parseFace(key, Buffer.from(row.data));
+	const face = parseFace(key, Buffer.from(stored.data));
 
 	faceCache.set(key, face);
 	for (const oldest of faceCache.keys()) {
