@@ -1,9 +1,9 @@
-import opentype from "opentype.js";
+import { type Font, type PathCommand, parse as parseFont } from "opentype.js";
 
 /** A parsed font. `id` keys the glyph cache; for a stored font it is the asset id and update time. */
 export interface FontFace {
 	id: string;
-	font: opentype.Font;
+	font: Font;
 }
 
 export interface GlyphBitmap {
@@ -47,9 +47,9 @@ const GLYPH_MARGIN_DOTS = 8;
  * and they are read from the file rather than from anything this process decided.
  */
 export function parseFace(id: string, bytes: Buffer): FontFace {
-	let font: opentype.Font;
+	let font: Font;
 	try {
-		font = opentype.parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+		font = parseFont(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 	} catch (error) {
 		throw new InvalidFontError(error instanceof Error ? error.message : "unreadable font");
 	}
@@ -61,7 +61,7 @@ export function parseFace(id: string, bytes: Buffer): FontFace {
 }
 
 /** Refuses a face whose line height or outline box runs past {@link MAX_EM_SPAN} of its own em. */
-function requireSaneOutlines(font: opentype.Font): void {
+function requireSaneOutlines(font: Font): void {
 	const em = font.unitsPerEm;
 	const bound = MAX_EM_SPAN * em;
 	const head = font.tables.head as { xMin?: number; xMax?: number; yMin?: number; yMax?: number } | undefined;
@@ -155,7 +155,7 @@ export function rasterizeGlyph(face: FontFace, codepoint: number, emDots: number
 	return { width, height, left, top, advance, bits };
 }
 
-function flatten(commands: opentype.PathCommand[]): Edge[] {
+function flatten(commands: PathCommand[]): Edge[] {
 	const edges: Edge[] = [];
 	let x = 0;
 	let y = 0;

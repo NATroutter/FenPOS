@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import opentype from "opentype.js";
+import { pathToFileURL } from "node:url";
+import type { Font } from "opentype.js";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type FontFace,
@@ -10,6 +11,25 @@ import {
 	parseFace,
 	rasterizeGlyph,
 } from "@/lib/raster/glyphs";
+
+/**
+ * Stands in for the parser, so a face with impossible metrics can reach `parseFace` without a file
+ * that carries them.
+ *
+ * Replaces the named export rather than a property of an imported object, because the module has no
+ * object to reach into: see "the opentype import" below for what the package actually exports.
+ * Falls through to the real parser unless a test says otherwise, so the face read from disk here is
+ * still a real one.
+ */
+const parseFont = vi.hoisted(() => vi.fn());
+
+vi.mock("opentype.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("opentype.js")>();
+	parseFont.mockImplementation(actual.parse);
+	return { ...actual, parse: parseFont };
+});
+
+const OPENTYPE_DIRECTORY = path.join(process.cwd(), "node_modules/opentype.js");
 
 const FACE = parseFace("dejavu", readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf")));
 
@@ -43,14 +63,10 @@ describe("parseFace", () => {
 			ascender: 32767,
 			descender: -32768,
 			tables: { head: { xMin: -32768, xMax: 32767, yMin: -32768, yMax: 32767 } },
-		} as unknown as opentype.Font;
-		const parse = vi.spyOn(opentype, "parse").mockReturnValue(absurd);
+		} as unknown as Font;
+		parseFont.mockReturnValueOnce(absurd);
 
-		try {
-			expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
-		} finally {
-			parse.mockRestore();
-		}
+		expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
 	});
 
 	it("refuses a face whose head box alone is outsized, with a plausible line height", () => {
@@ -60,18 +76,42 @@ describe("parseFace", () => {
 			ascender: 800,
 			descender: -200,
 			tables: { head: { xMin: -20000, xMax: 20000, yMin: -200, yMax: 800 } },
-		} as unknown as opentype.Font;
-		const parse = vi.spyOn(opentype, "parse").mockReturnValue(absurd);
+		} as unknown as Font;
+		parseFont.mockReturnValueOnce(absurd);
 
-		try {
-			expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
-		} finally {
-			parse.mockRestore();
-		}
+		expect(() => parseFace("x", Buffer.from("anything"))).toThrow(InvalidFontError);
 	});
 
 	it("keeps accepting a real face", () => {
 		expect(FACE.font.numGlyphs).toBeGreaterThan(2);
+	});
+});
+
+/**
+ * How this module takes its parser.
+ *
+ * `opentype.js` ships two builds and points `module` at the ECMAScript one, which exports its
+ * functions by name and nothing by default. Node resolves `main` instead — CommonJS, whose exports
+ * object arrives as a synthesised default — so a default import runs perfectly under vitest and
+ * under `tsx` and fails only once the panel is bundled. It fails there at the whole module graph:
+ * the parser is reached from the agent link, which is reached from startup, so every route in the
+ * panel answers 500 rather than only the ones that draw glyphs.
+ */
+describe("the opentype import", () => {
+	it("names what it takes, because the build a bundler resolves exports no default", async () => {
+		const manifest = JSON.parse(readFileSync(path.join(OPENTYPE_DIRECTORY, "package.json"), "utf8")) as {
+			module: string;
+		};
+		const bundled = (await import(pathToFileURL(path.join(OPENTYPE_DIRECTORY, manifest.module)).href)) as Record<
+			string,
+			unknown
+		>;
+
+		expect(bundled.default).toBeUndefined();
+		expect(typeof bundled.parse).toBe("function");
+
+		const source = readFileSync(path.join(process.cwd(), "lib/raster/glyphs.ts"), "utf8");
+		expect(source).not.toMatch(/import\s+[A-Za-z_$][\w$]*\s+from\s+"opentype\.js"/);
 	});
 });
 
