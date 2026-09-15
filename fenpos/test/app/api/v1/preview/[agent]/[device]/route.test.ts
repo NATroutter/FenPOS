@@ -73,6 +73,9 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 		expect(body.errors).toEqual([]);
 		expect(body.lines[0].spans.map((span: { text: string }) => span.text).join("")).toBe("Total 5.50");
 		expect(body.columns).toBe(20);
+		// Present and zero for a receipt that draws nothing the printer could not draw itself.
+		expect(body.rasterBytes).toBe(0);
+		expect(body.rasterLines).toBe(0);
 	});
 
 	it("answers 200 with the fault when the markup does not compile", async () => {

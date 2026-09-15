@@ -101,6 +101,21 @@ describe("openApiDocument", () => {
 	});
 
 	/**
+	 * A drawn line's dots are counted the same way `requireRasterBudget` counts them, and a reader
+	 * relying on this document to build a client should not be able to treat either field as
+	 * optional and silently drop a receipt's own raster cost.
+	 */
+	it("requires the raster figures a preview reports", () => {
+		const previewSchema = (
+			DOCUMENT.paths[`${API_BASE}/preview/{agent}/{device}`].post as {
+				responses: { 200: { content: { "application/json": { schema: { required: string[] } } } } };
+			}
+		).responses[200].content["application/json"].schema;
+
+		expect(previewSchema.required).toEqual(expect.arrayContaining(["rasterBytes", "rasterLines"]));
+	});
+
+	/**
 	 * The header promises every enumerated value and every numeric bound in this document is read
 	 * from the constant that defines it rather than typed out a second time. Nothing at the type
 	 * level checks that promise — the properties below are hand-built object literals — so this is

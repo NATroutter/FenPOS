@@ -203,8 +203,28 @@ const PREVIEW_SCHEMA = {
 			items: COMPILED_LINE_SCHEMA,
 		},
 		errors: { type: "array", description: "Empty when the receipt compiled.", items: PREVIEW_FAULT_SCHEMA },
+		rasterBytes: {
+			type: "integer",
+			description:
+				"Bytes of dots a line the printer could not draw for itself sends as a picture — a configured face, or an image beside text — before base64. Zero for a receipt that draws nothing this way.",
+		},
+		rasterLines: {
+			type: "integer",
+			description: "Printed lines charged to a line drawn this way, rather than printed by the device itself.",
+		},
 	},
-	required: ["agent", "device", "columns", "outputLines", "maxOutputLines", "linefeed", "lines", "errors"],
+	required: [
+		"agent",
+		"device",
+		"columns",
+		"outputLines",
+		"maxOutputLines",
+		"linefeed",
+		"lines",
+		"errors",
+		"rasterBytes",
+		"rasterLines",
+	],
 };
 
 /** The body `POST /print/{agent}/{device}` and `POST /preview/{agent}/{device}` both accept. */

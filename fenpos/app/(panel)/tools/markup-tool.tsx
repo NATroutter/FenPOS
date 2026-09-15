@@ -922,8 +922,10 @@ function Paper({ result }: { result: PreviewResult | null }) {
 							for (const [blockIndex, block] of line.blocks.entries()) {
 								rows.push(
 									<div key={`${lineKey(index, line)}:block:${blockIndex}`} style={{ textAlign: align(line.align) }}>
-										{/* Both arrive finished — an SVG for a symbol, the printer's own dots as a
-										    PNG for an image — and differ only in how they are placed on the paper. */}
+										{/* All three arrive finished — an SVG for a symbol, the printer's own dots
+										    as a PNG for an image or a drawn line — and differ only in how they are
+										    placed on the paper. A drawn line has no reference of its own to show, so
+										    it is labelled by what it is instead of by what it was written as. */}
 										{block.kind === "SYMBOL" ? (
 											<SymbolPreview
 												spec={block.spec}
@@ -934,7 +936,7 @@ function Paper({ result }: { result: PreviewResult | null }) {
 											/>
 										) : (
 											<ImagePreview
-												reference={block.ref}
+												reference={block.kind === "IMAGE" ? block.ref : "drawn"}
 												png={block.png}
 												heightLines={block.heightLines}
 												inkedLines={block.inkedLines}
@@ -1114,7 +1116,9 @@ function toPaperRows(line: PreviewLine, columns: number): PreviewLine["spans"][]
  */
 function lineKey(index: number, line: PreviewLine): string {
 	const content = [
-		...line.blocks.map((block) => (block.kind === "SYMBOL" ? block.spec.content : block.ref)),
+		...line.blocks.map((block) =>
+			block.kind === "SYMBOL" ? block.spec.content : block.kind === "IMAGE" ? block.ref : block.png,
+		),
 		...line.spans.map((span) => span.text),
 		line.marker ?? "",
 	].join("");

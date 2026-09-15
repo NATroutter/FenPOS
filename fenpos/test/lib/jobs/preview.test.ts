@@ -1,12 +1,21 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createAsset } from "@/lib/assets/asset-service";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { compilePreview, compilePreviewWithContext, faultOf } from "@/lib/jobs/preview";
-import type { CompiledJob } from "@/lib/link/protocol";
+import { type CompiledJob, rasterBytes } from "@/lib/link/protocol";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { dotWidth, LINE_HEIGHT_DOTS } from "@/lib/markup/blocks";
+import { resolveFonts } from "@/lib/markup/resolve-fonts";
+import { typefaceFor } from "@/lib/raster/fonts";
 import { createVariable } from "@/lib/variables/variable-service";
+
+/** The face `resolve-fonts.test.ts` also uploads, real enough to expose a missing glyph. */
+const FONT = readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf"));
 
 /**
  * Compiling markup without printing it.
@@ -27,6 +36,7 @@ beforeEach(async () => {
 	await prisma.device.deleteMany();
 	await prisma.agent.deleteMany();
 	await prisma.setting.deleteMany();
+	await prisma.asset.deleteMany();
 
 	const agent = await prisma.agent.create({ data: { name: `helsinki-${Date.now()}` } });
 	const device = await prisma.device.create({
@@ -114,6 +124,68 @@ describe("compilePreview", () => {
 		const result = await compilePreview("no-such-device", { data: "hi" });
 
 		expect(result.errors[0].code).toBe("unknown_device");
+	});
+});
+
+/**
+ * What a preview reports about a line the server drew because the printer could not — a configured
+ * face, here, though an image beside text costs the same way.
+ */
+describe("compilePreview with a configured font", () => {
+	it("reports the dots a drawn line costs, and zero for a receipt that draws nothing this way", async () => {
+		await createAsset("mono", FONT);
+
+		const data = "<font=mono>Total 5.50</font>";
+		const fonts = await resolveFonts(data, null, {});
+		const face = fonts.get("mono");
+		if (!face) {
+			throw new Error("the font was not resolved, so nothing below is measuring the right thing");
+		}
+		// The default face size, in the absence of a `size` argument on the tag — the same figure
+		// `<font=name>` falls back to inside the compiler.
+		const heightDots = typefaceFor(face, 24).cellHeight;
+
+		const result = await compilePreview(deviceId, { data });
+
+		expect(result.errors).toEqual([]);
+		expect(result.rasterLines).toBe(Math.ceil(heightDots / LINE_HEIGHT_DOTS));
+		expect(result.rasterBytes).toBe(rasterBytes(dotWidth(20), heightDots));
+	});
+
+	it("reports zero raster dots for a receipt with nothing drawn on it", async () => {
+		const result = await compilePreview(deviceId, { data: "Total 5.50" });
+
+		expect(result.rasterLines).toBe(0);
+		expect(result.rasterBytes).toBe(0);
+	});
+
+	/**
+	 * The property the raster check inside `collectDocumentErrors` exists for: a drawn line is laid
+	 * out for real, so a face missing a glyph is caught there rather than only once the receipt is
+	 * actually compiled, and it is collected alongside every other line's faults rather than being
+	 * the one thing reported.
+	 */
+	it("reports an unsupported character on a drawn line, and still reports one on a native line", async () => {
+		await createAsset("mono", FONT);
+		const device = await prisma.device.create({
+			data: {
+				agentId: (await prisma.agent.create({ data: { name: `oslo-${Date.now()}` } })).id,
+				name: "wide",
+				port: "COM4",
+				columns: 32,
+				onUnsupported: "REJECT",
+			},
+		});
+
+		const result = await compilePreview(device.id, {
+			data: "<font=mono>bad\u{1F600}one</font>\nbad\u{1F600}two",
+		});
+
+		expect(result.lines).toBeNull();
+		expect(result.errors).toEqual([
+			expect.objectContaining({ code: "unsupported_character", line: 1 }),
+			expect.objectContaining({ code: "unsupported_character", line: 2 }),
+		]);
 	});
 });
 

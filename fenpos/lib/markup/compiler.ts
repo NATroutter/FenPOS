@@ -21,7 +21,7 @@ import { normaliseSource, parseDocument, type VariableContext } from "@/lib/mark
 import type { ResolvedFonts } from "@/lib/markup/resolve-fonts";
 import { wrapLine } from "@/lib/markup/wrapper";
 import { builtinTypeface, type Typeface, typefaceFor } from "@/lib/raster/fonts";
-import { type LayoutContext, renderRasterLine } from "@/lib/raster/layout";
+import { buildFlow, type LayoutContext, renderRasterLine } from "@/lib/raster/layout";
 import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/supplied";
 
 /**
@@ -541,28 +541,33 @@ export function countOutputLines(request: PrintRequest, settings: CompileSetting
  * someone in the middle of fixing the markup, and handing them one mistake per round trip makes
  * four mistakes take four times as long to find.
  *
- * What can be collected is what belongs to one line — the symbols and the codepage check. A parse
- * failure is not one of those however positioned it is: the tree cannot be built past the point it
- * went wrong, so the document yields exactly one error and there is nothing after it to report.
+ * What can be collected is what belongs to one line — the symbols, the codepage check, and now a
+ * drawn line's own layout. A parse failure is not one of those however positioned it is: the tree
+ * cannot be built past the point it went wrong, so the document yields exactly one error and there
+ * is nothing after it to report.
  *
- * Takes the device's settings rather than the whole {@link CompileSettings} so that it can run
- * *before* the images are resolved, which is what it is worth: markup with an unclosed tag has no
- * business making this server fetch a URL, and the person fixing it should not wait for one either.
+ * Takes the whole {@link CompileSettings} rather than only the device's own settings, because a
+ * drawn line is laid out for real to find its faults — a face missing a glyph, a block sitting
+ * where text was expected — and that needs the same faces and rasters `layOut` itself uses. Fonts
+ * and images are therefore resolved before this runs rather than after, which trades away part of
+ * what used to be true here: a document that turns out to have an error of its own no longer stops
+ * every one of its images from being fetched, only one that fails to parse at all does, since
+ * `resolveFonts` and `resolveImages` both tolerate a parse failure by returning nothing rather than
+ * throwing through it.
  *
- * Takes `variables` as its own parameter rather than through `CompileSettings` for the same reason:
- * `resolveVariables` — a database read — has to finish before this runs, since `unknown_variable` is
- * one of the errors it must be able to report, but resolving images has not happened yet and may
- * never need to.
+ * Takes `variables` as its own parameter rather than through `CompileSettings` for the same reason
+ * it always has: `resolveVariables` — a database read — has to finish before this runs, since
+ * `unknown_variable` is one of the errors it must be able to report.
  *
  * @param request the validated request
- * @param settings the device's print settings
+ * @param settings the device's print settings, with the faces and rasters a drawn line needs
  * @param variables the values `{name}` may resolve to, or null when variables are switched off
  * @param limits the limits the document's characters are charged against
  * @returns every error, in line order; empty when the markup is sound
  */
 export function collectDocumentErrors(
 	request: PrintRequest,
-	settings: DeviceSettings,
+	settings: CompileSettings,
 	variables: VariableContext | null,
 	limits: CompileLimits,
 ): ApiError[] {
@@ -580,6 +585,11 @@ export function collectDocumentErrors(
 	for (const top of splitLines(document.nodes)) {
 		try {
 			if (needsRaster(top.nodes)) {
+				// Laid out exactly as `layOut` will lay it out again once this receipt actually
+				// compiles, stopping short of painting it: measuring alone runs the same `layoutText`
+				// and raises the same `UnsupportedCharacterError` and misplaced-block `MarkupError`,
+				// which is all a preview needs to know a drawn line is wrong.
+				buildFlow(top.nodes, layoutContext(settings, limits)).measure(dotWidth(settings.columns));
 				continue;
 			}
 			const parsed = flattenLine(top.nodes);

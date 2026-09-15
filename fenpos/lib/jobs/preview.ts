@@ -9,9 +9,11 @@ import {
 	type CompileSettings,
 	collectDocumentErrors,
 	compile,
-	countOutputLines,
+	countTextLines,
 	type DeviceSettings,
+	layOut,
 	type PrintRequest,
+	rasterBytesOf,
 	readRequest,
 } from "@/lib/markup/compiler";
 import type { VariableContext } from "@/lib/markup/parser";
@@ -71,6 +73,13 @@ export interface CompiledPreview {
 	lines: CompiledLine[] | null;
 	/** Empty when it did. Every fault is checked, not only the first to fail. */
 	errors: PreviewFault[];
+	/**
+	 * Bytes of dots a line the printer could not draw for itself sends as a picture, summed exactly
+	 * as `requireRasterBudget` sums them. Zero for a receipt that draws nothing this way.
+	 */
+	rasterBytes: number;
+	/** Printed lines charged to a `RASTER` directive — a configured face, or an image beside text. */
+	rasterLines: number;
 }
 
 /**
@@ -78,9 +87,10 @@ export interface CompiledPreview {
  * compiled from.
  *
  * `request` and `settings` are populated the moment each is produced — `request` as soon as
- * `readRequest` succeeds, `settings` as soon as `resolveImages` does — and stay null before that, so
- * a caller can tell how far the compile got even when `preview.errors` is non-empty. Both are always
- * present together with `preview.lines` on a clean compile.
+ * `readRequest` succeeds, `settings` as soon as `resolveFonts` and `resolveImages` both do — and stay
+ * null before that, so a caller can tell how far the compile got even when `preview.errors` is
+ * non-empty. `settings` is discarded again if the document itself turns out to have a fault, so both
+ * are present together with `preview.lines` only on a clean compile.
  */
 export interface PreviewWithContext {
 	/** What an API caller receives: see {@link compilePreview}. */
@@ -157,6 +167,8 @@ export async function compilePreviewWithContext(
 				outputLines: 0,
 				maxOutputLines: limits.maxOutputLines,
 				linefeed,
+				rasterBytes: 0,
+				rasterLines: 0,
 			}) as const;
 
 		const maxVariableValueChars = await integerSetting("variables.maxValueChars");
@@ -179,7 +191,9 @@ export async function compilePreviewWithContext(
 
 		// Resolved before the document errors, even though it is a database read and they are not:
 		// `collectDocumentErrors` parses the document, and `unknown_variable` is one of the errors it
-		// has to be able to report.
+		// has to be able to report. It also has to run before fonts and images are resolved below,
+		// since `<image>{logo}</image>` names nothing at all until a variable inside it has been
+		// substituted.
 		//
 		// `apiKeyName` comes from the caller and is not hardcoded, because it is the one fact in this
 		// context that differs between the two callers and this file's whole claim is that it does
@@ -205,19 +219,14 @@ export async function compilePreviewWithContext(
 			};
 		}
 
-		const documentErrors = collectDocumentErrors(request, deviceSettings, variables, limits);
-		if (documentErrors.length > 0) {
-			return {
-				preview: { ...measured(request.linefeed), errors: documentErrors.map(faultOf) },
-				request,
-				settings: null,
-				limits,
-			};
-		}
-
-		// After the document's own errors, deliberately: markup that does not compile has no business making
-		// this server fetch a URL. A refusal here — a deleted asset, a host that will not answer — is
-		// the caller's to fix like any other, so it is reported beside them and the measurements stay.
+		// Resolved before the document's own errors now, and that trades one property for another. A
+		// drawn line's faults — a face missing a glyph, a block sitting where text was expected — can
+		// only be found by laying it out for real, which needs the same faces and rasters `compile`
+		// itself uses; collecting them alongside every other line's faults is what this buys. What is
+		// given up is narrower than it looks: `resolveFonts` and `resolveImages` both parse the receipt
+		// themselves and return nothing rather than throwing when it fails to parse at all, so a body
+		// that is not markup still costs neither a font load nor a fetch. Only a document that parses
+		// but turns out to have some other fault now pays for images it did not need to.
 		let settings: CompileSettings;
 		try {
 			settings = {
@@ -235,13 +244,27 @@ export async function compilePreviewWithContext(
 			};
 		}
 
+		const documentErrors = collectDocumentErrors(request, settings, variables, limits);
+		if (documentErrors.length > 0) {
+			return {
+				preview: { ...measured(request.linefeed), errors: documentErrors.map(faultOf) },
+				request,
+				// Discarded rather than handed back: a document the receipt itself is wrong about is
+				// one this function has never surfaced settings for, and nothing downstream needs them
+				// once `preview.errors` is non-empty.
+				settings: null,
+				limits,
+			};
+		}
+
+		const laidOut = layOut(request, settings, limits);
 		const job = compile("preview", device.name, request, limits, settings);
 
 		return {
 			preview: {
 				columns: device.columns,
 				errors: [],
-				outputLines: countOutputLines(request, settings, limits),
+				outputLines: countTextLines(laidOut, settings),
 				maxOutputLines: limits.maxOutputLines,
 				linefeed: request.linefeed,
 				lines: job.lines.map((line) => ({
@@ -254,13 +277,34 @@ export async function compilePreviewWithContext(
 						widthMult: span.widthMult,
 					})),
 				})),
+				rasterBytes: rasterBytesOf(job.lines),
+				// The wire cannot say which of its `INLINE` pictures came from a `RASTER` directive and
+				// which from an `<image>` tag — `toWireLine` collapses both to the same shape — so this
+				// is read off the lines `layOut` produced, before that happens.
+				rasterLines: laidOut.reduce(
+					(total, line) =>
+						total +
+						line.directives.reduce(
+							(sum, directive) => sum + (directive.kind === "RASTER" ? directive.heightLines : 0),
+							0,
+						),
+					0,
+				),
 			},
 			request,
 			settings,
 			limits,
 		};
 	} catch (error) {
-		const blank = { lines: null, columns: 0, outputLines: 0, maxOutputLines: 0, linefeed: "LF" as Linefeed };
+		const blank = {
+			lines: null,
+			columns: 0,
+			outputLines: 0,
+			maxOutputLines: 0,
+			linefeed: "LF" as Linefeed,
+			rasterBytes: 0,
+			rasterLines: 0,
+		};
 
 		if (error instanceof ApiError) {
 			return { preview: { ...blank, errors: [faultOf(error)] }, request: null, settings: null, limits: null };

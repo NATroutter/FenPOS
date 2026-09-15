@@ -89,8 +89,27 @@ export interface PreviewImage extends DrawnBlock {
 	inkedLines: number;
 }
 
-/** One block printed on a line: a symbol, or an image. */
-export type PreviewBlock = PreviewSymbol | PreviewImage;
+/**
+ * One line the server drew into a picture because the printer could not draw it itself — a
+ * configured face, or an image placed beside text.
+ *
+ * **The PNG is the exact dots the printer receives.** It comes from `rasterToPngDataUrl` over the
+ * same `ImageRaster` `toWireLine` sends as an `INLINE` image, not a second rendering of the markup
+ * for the screen, so this can never show an operator a line that looks right here and wrong on
+ * paper. `widthFraction` is always 1: a drawn line is canvassed at the paper's own width — see
+ * `renderRasterLine` — never at a share of it the way an `<image>` tag may ask for.
+ */
+export interface PreviewRaster extends DrawnBlock {
+	kind: "RASTER";
+	/** The dots, as a `data:image/png;base64,…` URI. */
+	png: string;
+	/** Lines its dots really cover, before the budget rounded them up to a whole one. */
+	inkedLines: number;
+	widthFraction: 1;
+}
+
+/** One block printed on a line: a symbol, an image, or a line drawn because the printer could not. */
+export type PreviewBlock = PreviewSymbol | PreviewImage | PreviewRaster;
 
 /** One line as the paper preview renders it. */
 export interface PreviewLine {
@@ -307,6 +326,14 @@ async function blocksOf(line: ModelLine, settings: CompileSettings): Promise<Pre
 			});
 		} else if (directive.kind === "IMAGE") {
 			blocks.push(await drawnImage(directive.ref, directive.widthPercent, settings));
+		} else if (directive.kind === "RASTER") {
+			blocks.push({
+				kind: "RASTER",
+				png: await rasterToPngDataUrl(directive.raster),
+				heightLines: directive.heightLines,
+				inkedLines: directive.raster.heightDots / LINE_HEIGHT_DOTS,
+				widthFraction: 1,
+			});
 		}
 	}
 

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { rasterToPngDataUrl } from "@/lib/assets/preview";
 import { prisma } from "@/lib/db";
@@ -64,6 +65,12 @@ const LOGO = readFileSync("test/fixtures/logo.png");
 /** The stored image these previews name. Its own name, so no other test file's clean-up reaches it. */
 const ASSET = "preview-logo";
 
+/** A real face, for the one line below that the printer cannot draw for itself. */
+const FONT = readFileSync(path.join(process.cwd(), "public/fonts/DejaVuSansMono.ttf"));
+
+/** The stored font these previews name. Suffixed for the same reason {@link ASSET} is. */
+const FONT_ASSET = `preview-mono-${process.pid}`;
+
 /**
  * The block a symbol should arrive as, drawn and measured from the shared module.
  *
@@ -121,6 +128,7 @@ describe("preview", () => {
 		deviceId = device.id;
 
 		await createAsset(ASSET, LOGO);
+		await createAsset(FONT_ASSET, FONT);
 	});
 
 	it("draws a symbol at the size the compiler charged it", async () => {
@@ -270,6 +278,27 @@ describe("preview", () => {
 		expect(onWide.lines?.[0].blocks[0].widthFraction).toBe(1);
 		expect(onWide.lines?.[0].blocks).toEqual([await dithered(100, 42)]);
 		expect(onWide.lines?.[0].blocks[0]).not.toEqual(onNarrow.lines?.[0].blocks[0]);
+	});
+
+	/**
+	 * The one property that matters for a line the server drew rather than the printer: the PNG is
+	 * the dots the job actually carries, not a second rendering of the markup for the screen.
+	 */
+	it("draws a configured-font line as the dots the printer receives", async () => {
+		const result = await preview(deviceId, `<font=${FONT_ASSET}>Total 5.50</font>`);
+
+		expect(result.errors).toEqual([]);
+		expect(result.lines?.[0].blocks).toHaveLength(1);
+		const block = result.lines?.[0].blocks[0];
+		if (block?.kind !== "RASTER") {
+			throw new Error(`expected a RASTER block, got ${block?.kind}`);
+		}
+		expect(block.widthFraction).toBe(1);
+		expect(block.png).toMatch(/^data:image\/png;base64,/);
+		// The block occupies whole lines of paper; the picture inside it covers only what it inks,
+		// which is never more than that — the same relationship an image's own block carries.
+		expect(block.inkedLines).toBeGreaterThan(0);
+		expect(block.inkedLines).toBeLessThanOrEqual(block.heightLines);
 	});
 
 	it("fetches a URL image through the guarded fetch, and shows what came back", async () => {
