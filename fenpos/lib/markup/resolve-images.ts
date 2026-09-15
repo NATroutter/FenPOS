@@ -184,19 +184,18 @@ export async function resolveImages(
 }
 
 /**
- * The two ways an `<image>` can open, matched case-insensitively as the tag registry resolves it.
+ * How an `<image>` opens, matched case-insensitively as the tag registry resolves it.
  *
- * A tag's body runs to the next `>` and its name to the first `=`, so an image opens as exactly
- * `<image>` or `<image=…>` and nothing else — `<image ` is a tag called "image " and is refused as
- * unknown. Anything a receipt does not contain, it cannot produce.
+ * A receipt with no such tag names no image reference at all, and is not parsed: parsing is not
+ * free — a `<qr>` is encoded while it is measured — and most receipts name no image at all.
  */
-const IMAGE_OPENING = /<image[=>]/i;
+const IMAGE_OPENING = /<image[\s>]/i;
 
 /**
  * How one request uses one image.
  *
  * The widths are what makes this more than a line number. A raster is dithered for one printed
- * width, so a receipt writing `<image>logo</image>` and `<image=50>logo</image>` needs two — while
+ * width, so a receipt writing `<image>logo</image>` and `<image width=50>logo</image>` needs two — while
  * still needing only one lookup or one fetch, because an image's own dimensions do not depend on how
  * wide it is printed. Held as a set so a logo repeated on every copy of a receipt is dithered once.
  */
@@ -243,7 +242,7 @@ interface ImageUse {
  * A receipt with no image tag in it is not parsed at all. Parsing is not free — a `<qr>` is encoded
  * while it is measured — and without this every job would be parsed twice for the sake of a
  * directive most receipts do not use. The scan is deliberately cruder than the parser and errs
- * towards parsing: it costs a wasted parse when a `<image=` turns out to be inside a QR payload,
+ * towards parsing: it costs a wasted parse when an `<image` turns out to be inside a QR payload,
  * and if it ever missed a real one the compile would fail loudly rather than print an image nothing
  * had charged for.
  *
@@ -636,7 +635,7 @@ async function resolveRemote(
  * width of the paper — needs nothing here beyond two integer columns. A tag asking for some other
  * width has no synced raster to name, and the alternative of shrinking one on the agent would
  * resample dots already reduced to black and white, so those dots are dithered here and ride in the
- * job like a URL's. That is the honest price of `<image=50>`, and it is paid on the print path.
+ * job like a URL's. That is the honest price of `<image width=50>`, and it is paid on the print path.
  *
  * A line the layout engine draws is the exception to that, and has to be: its dots are produced
  * here, so the raster the agent already holds is of no use to it however wide the image prints.

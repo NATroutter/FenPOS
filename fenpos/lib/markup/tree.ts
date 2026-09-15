@@ -368,8 +368,8 @@ class DocumentBuilder {
 	 * either combined with anything else would overflow its line by construction rather than by
 	 * accident. `<drawer>` is exempt because it prints nothing at all: it pulses a
 	 * solenoid, so it costs the line no paper and may legally sit beside anything. Fills count even
-	 * though they produce no text yet — `<hr><fill=.>` would otherwise print a line of dots, feed,
-	 * and then the rule.
+	 * though they produce no text yet — `<hr><fill char=.>` would otherwise print a line of dots,
+	 * feed, and then the rule.
 	 *
 	 * The state is an argument rather than the innermost frame's, because a block's last line ends
 	 * when the block closes: by then the frame that owned that line has been popped, and the line

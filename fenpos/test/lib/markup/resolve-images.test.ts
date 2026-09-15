@@ -185,6 +185,20 @@ describe("resolveImages", () => {
 		expect(fetchRemoteImage).not.toHaveBeenCalled();
 	});
 
+	/**
+	 * A width is a named attribute rather than a bare argument, so the tag opens as `<image ` —
+	 * a space, not `=` or `>` directly. The cheap scan that decides whether a receipt is worth
+	 * parsing at all has to still recognise that as an image, or the reference never reaches the
+	 * compiler and printing fails with a fault instead of naming the tag that needed resolving.
+	 */
+	it("resolves a stored asset named by an image tag that carries a width", async () => {
+		await createAsset("logo", PNG);
+
+		const images = await resolve(["<image width=50>logo</image>"]);
+
+		expect(images.get("logo")).toMatchObject({ width: 128, height: 40 });
+	});
+
 	it("resolves a URL through the guarded fetch, keeping its query string", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
