@@ -37,21 +37,21 @@ import { BarcodeSystem } from "@/lib/domain/enums";
  *
  * The rest of the toolbar writes a tag and gets out of the way, because there is nothing to decide:
  * `<bold>` is `<bold>`. These ten carry a payload or a number that has to come from somewhere, and
- * typing `<barcode=CODE128></barcode>` by hand means knowing the symbology's name and that it belongs
- * in the argument rather than the content. That is what this dialog is for.
+ * typing `<barcode type=CODE128></barcode>` by hand means knowing the symbology's name and that it
+ * belongs in an attribute rather than the content. That is what this dialog is for.
  *
  * `<image>` is the one that could not be done any other way: an image is referenced by a name stored
  * on the server, so the only alternative to a picker is remembering what the Assets tab calls it. A
- * variable is the same argument a second time: it too is a name defined elsewhere — on the Variables
+ * variable is the same attribute a second time: it too is a name defined elsewhere — on the Variables
  * tab rather than Assets — and it is not even a tag, so there is no markup to learn by heart at all.
  *
  * `chart` and `bar` are here for a different reason: nothing to remember, just a choice (which kind
  * of chart) or a number (how full the gauge is) with no sensible default a button could write on its
- * own. `font` is here because a stored font is a name off the Assets tab, exactly like an image, and
+ * own. `text` is here because a stored font is a name off the Assets tab, exactly like an image, and
  * asking for it also means asking what it should say — unlike the two built-in fonts, which used to
  * write themselves straight onto the toolbar because there was nothing left to ask.
  */
-export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill" | "chart" | "bar" | "font";
+export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill" | "chart" | "bar" | "text";
 
 /** The four kinds of chart the toolbar offers. */
 const CHART_TYPES = ["bar", "line", "pie", "scatter"] as const;
@@ -93,11 +93,24 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
 			"Bar, line, pie or scatter. A sample series and labels are inserted with it — replace the values and add more series by copying the tags.",
 	},
 	bar: { title: "Insert a gauge", description: "How full the gauge is drawn, 0 (empty) to 100 (full)." },
-	font: {
+	text: {
 		title: "Insert a font",
 		description:
 			"A or B for one of the printer's built-in fonts, or the name of a font stored on the Assets tab, drawn at the given size.",
 	},
+};
+
+/** The attribute each prompted tag's answer is written as. */
+const ATTRIBUTE: Record<Exclude<InsertTag, "variable">, string> = {
+	image: "width",
+	barcode: "type",
+	qr: "size",
+	pdf417: "level",
+	feed: "lines",
+	fill: "char",
+	chart: "type",
+	bar: "value",
+	text: "font",
 };
 
 /**
@@ -109,7 +122,7 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
  *
  * @param tag which tag is being inserted, or null when the dialog is closed
  * @param onClose asks the toolbar to clear `tag`
- * @param onInsert receives the tag's argument and content, both already trimmed
+ * @param onInsert receives the tag's attributes and content, both already trimmed
  */
 export function InsertDialog({
 	tag,
@@ -118,15 +131,15 @@ export function InsertDialog({
 }: {
 	tag: InsertTag | null;
 	onClose: () => void;
-	onInsert: (tag: InsertTag, argument: string | undefined, content: string) => void;
+	onInsert: (tag: InsertTag, attributes: Record<string, string> | undefined, content: string) => void;
 }) {
 	const [argument, setArgument] = useState("");
 	/**
-	 * The argument of the tags whose argument is a number.
+	 * The attribute value of the tags whose attribute is a number.
 	 *
 	 * Held apart from {@link argument} rather than as text, because these use the same stepper the
 	 * Settings tab does and that speaks in numbers. `null` is a real state and not zero: it is the
-	 * empty box, which is how the markup says "no argument at all" — a different thing from any value
+	 * empty box, which is how the markup says "no attribute at all" — a different thing from any value
 	 * the field could hold.
 	 */
 	const [amount, setAmount] = useState<number | null>(null);
@@ -143,7 +156,7 @@ export function InsertDialog({
 			return;
 		}
 		setArgument(tag === "barcode" ? "CODE128" : tag === "chart" ? "bar" : "");
-		// Only the feed starts with a value: it is the one whose argument is required, and one line
+		// Only the feed starts with a value: it is the one whose attribute is required, and one line
 		// is what someone reaching for it usually wants.
 		setAmount(tag === "feed" ? 1 : null);
 		setContent("");
@@ -179,23 +192,24 @@ export function InsertDialog({
 
 	const trimmedContent = content.trim();
 	const trimmedArgument = argument.trim();
-	/** Whether this tag's argument is the numeric one. */
+	/** Whether this tag's attribute is the numeric one. */
 	const numeric = tag === "image" || tag === "qr" || tag === "pdf417" || tag === "feed" || tag === "bar";
-	// The void tags carry everything in their argument and enclose nothing; a chart's type always has
-	// a value once the dialog is open, since it defaults to "bar"; a font needs a name but its text is
-	// optional, the same as any other paired tag with nothing selected; the rest need content.
+	// The void tags carry everything in their attribute and enclose nothing; a chart's type always has
+	// a value once the dialog is open, since it defaults to "bar"; a text tag needs a font name but its
+	// text is optional, the same as any other paired tag with nothing selected; the rest need content.
 	const ready =
 		tag === "feed" || tag === "bar"
 			? amount !== null
 			: tag === "fill" || tag === "chart"
 				? true
-				: tag === "font"
+				: tag === "text"
 					? trimmedArgument !== ""
 					: trimmedContent !== "";
 
 	const insert = (): void => {
 		const written = numeric ? (amount === null ? "" : String(amount)) : trimmedArgument;
-		onInsert(tag, written === "" ? undefined : written, trimmedContent);
+		const attributes = tag === "variable" || written === "" ? undefined : { [ATTRIBUTE[tag]]: written };
+		onInsert(tag, attributes, trimmedContent);
 		onClose();
 	};
 
@@ -318,7 +332,7 @@ export function InsertDialog({
 							/>
 						) : null}
 
-						{tag === "font" ? (
+						{tag === "text" ? (
 							<Field>
 								<FieldLabel htmlFor="insert-font-name">Font</FieldLabel>
 								<Input
@@ -333,7 +347,7 @@ export function InsertDialog({
 							</Field>
 						) : null}
 
-						{tag === "font" ? (
+						{tag === "text" ? (
 							<Field>
 								<FieldLabel htmlFor="insert-font-text">Text</FieldLabel>
 								<Textarea
@@ -556,7 +570,7 @@ function VariableFields({
  * in prose beside it, and the arrows are there for the values people nudge rather than type.
  *
  * Empty is a value here in a way it is not in Settings: every number this dialog collects is
- * optional except the feed's, and an empty box is how the markup says "no argument at all" — which
+ * optional except the feed's, and an empty box is how the markup says "no attribute at all" — which
  * is why `null` is passed straight through rather than being turned into a zero.
  */
 function NumberRow({

@@ -282,7 +282,7 @@ describe("the Device test page example", () => {
 		});
 		// The element the failure named. Stated rather than searched for, so that the example
 		// growing a line above it is something this notices instead of quietly following.
-		expect(elements[22]).toBe("<align=center><image>fenpos</image></align>");
+		expect(elements[22]).toBe("<align to=center><image>fenpos</image></align>");
 
 		const result = await preview(device.id, elements.join("\n"));
 

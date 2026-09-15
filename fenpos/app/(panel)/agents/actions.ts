@@ -174,12 +174,12 @@ export async function sendTestPrint(agentId: string): Promise<ActionState> {
  */
 function testJob(): string[] {
 	return [
-		"<align=center><bold>FenPOS test job</bold></align>",
+		"<align to=center><bold>FenPOS test job</bold></align>",
 		"<hr>",
 		`Submitted: ${new Date().toISOString()}`,
 		"",
 		"Compiled by the server, wrapped to this printer's width, and sent over the link.",
-		"<feed=3>",
+		"<feed lines=3>",
 		"<cut>",
 	];
 }

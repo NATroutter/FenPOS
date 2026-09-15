@@ -103,13 +103,13 @@ function chosenLinefeed(value: string): Linefeed | null {
 	return Linefeed.is(value) ? value : null;
 }
 
-const SAMPLE = `<align=center><bold>THE CORNER CAFE</bold></align>
+const SAMPLE = `<align to=center><bold>THE CORNER CAFE</bold></align>
 <hr>
 Coffee<fill>2.50
 Pastry<fill>3.00
 <hr>
 <bold>Total<fill>5.50</bold>
-<feed=3>
+<feed lines=3>
 <cut>`;
 
 /** A ready-made piece of markup the editor can be loaded with. */
@@ -208,7 +208,7 @@ const EXAMPLES: Example[] = [
 		note: "Width ruler, styles, codepage and blocks",
 		build: (device) =>
 			[
-				"<align=center><bold>FenPOS test page</bold></align>",
+				"<align to=center><bold>FenPOS test page</bold></align>",
 				"<hr>",
 				`Device:   ${device.deviceName}`,
 				`Columns:  ${device.columns}`,
@@ -218,20 +218,20 @@ const EXAMPLES: Example[] = [
 				ruler(device.columns),
 				"<hr>",
 				"<bold>bold</bold> <underline>underline</underline> <invert>invert</invert>",
-				"<size=2,2>Double</size>",
-				"<align=left>left</align>",
-				"<align=center>center</align>",
-				"<align=right>right</align>",
+				"<size width=2 height=2>Double</size>",
+				"<align to=left>left</align>",
+				"<align to=center>center</align>",
+				"<align to=right>right</align>",
 				"<hr>",
 				"Codepage sample:",
 				CODEPAGE_SAMPLE,
 				"<hr>",
 				"Blocks:",
-				"<align=center><qr>https://natroutter.fi</qr></align>",
-				"<align=center><barcode=CODE39>FENPOS</barcode></align>",
-				"<align=center><pdf417>FENPOS TEST</pdf417></align>",
-				`<align=center><image>${BUNDLED_LOGO}</image></align>`,
-				"<feed=3>",
+				"<align to=center><qr>https://natroutter.fi</qr></align>",
+				"<align to=center><barcode type=CODE39>FENPOS</barcode></align>",
+				"<align to=center><pdf417>FENPOS TEST</pdf417></align>",
+				`<align to=center><image>${BUNDLED_LOGO}</image></align>`,
+				"<feed lines=3>",
 				"<cut>",
 			].join("\n"),
 	},
@@ -240,12 +240,12 @@ const EXAMPLES: Example[] = [
 		note: "The same line with and without <nowrap>",
 		build: () =>
 			[
-				"<align=center><bold>Wrapping</bold></align>",
+				"<align to=center><bold>Wrapping</bold></align>",
 				"<hr>",
 				"<wrap>Wrapped at the last space that fits, which is what an operator asking to wrap wants.</wrap>",
 				"<hr>",
 				"<nowrap>Not wrapped by the server, so the printer runs out of paper and cuts mid-word.</nowrap>",
-				"<feed=3>",
+				"<feed lines=3>",
 				"<cut>",
 			].join("\n"),
 	},
@@ -254,17 +254,17 @@ const EXAMPLES: Example[] = [
 		note: "A symbol drawn at the height it prints",
 		build: (device) =>
 			[
-				"<align=center><bold>THE CORNER CAFE</bold></align>",
+				"<align to=center><bold>THE CORNER CAFE</bold></align>",
 				"<hr>",
 				"Coffee<fill>2.50",
 				"Pastry<fill>3.00",
 				"<hr>",
 				"<bold>Total<fill>5.50</bold>",
-				"<feed=1>",
-				"<align=center>Scan for the full receipt</align>",
-				"<align=center><qr>https://cafe.example/o/1042</qr></align>",
-				`<align=center>Printed on ${device.deviceName}</align>`,
-				"<feed=3>",
+				"<feed lines=1>",
+				"<align to=center>Scan for the full receipt</align>",
+				"<align to=center><qr>https://cafe.example/o/1042</qr></align>",
+				`<align to=center>Printed on ${device.deviceName}</align>`,
+				"<feed lines=3>",
 				"<cut>",
 			].join("\n"),
 	},
@@ -273,15 +273,15 @@ const EXAMPLES: Example[] = [
 		note: "A docket, right-aligned quantities",
 		build: () =>
 			[
-				"<align=center><size=2,2>TABLE 12</size></align>",
+				"<align to=center><size width=2 height=2>TABLE 12</size></align>",
 				"<hr>",
 				"<bold>2x</bold> Salmon soup",
 				"<bold>1x</bold> Veggie burger",
 				"      - no onion",
 				"<bold>3x</bold> Rye bread",
 				"<hr>",
-				"<align=right>19:42</align>",
-				"<feed=4>",
+				"<align to=right>19:42</align>",
+				"<feed lines=4>",
 				"<cut>",
 			].join("\n"),
 	},
@@ -291,7 +291,7 @@ const EXAMPLES: Example[] = [
 interface TagChoice {
 	label: string;
 	tag: string;
-	argument?: string;
+	attributes?: Record<string, string>;
 	note?: string;
 	/**
 	 * Shown before the label, for the one or two entries worth picking out of the list at a glance.
@@ -306,8 +306,8 @@ interface TagChoice {
 	 * Opens {@link InsertDialog} instead of writing the tag straight away.
 	 *
 	 * For the tags that are useless without something only the operator knows — which image, which
-	 * symbology, what the barcode encodes. Writing `<barcode=CODE128></barcode>` and leaving them to
-	 * fill in the middle is worse than asking: it looks finished, and it compiles to a symbol with
+	 * symbology, what the barcode encodes. Writing `<barcode type=CODE128></barcode>` and leaving them
+	 * to fill in the middle is worse than asking: it looks finished, and it compiles to a symbol with
 	 * nothing in it.
 	 */
 	prompt?: InsertTag;
@@ -316,22 +316,22 @@ interface TagChoice {
 /**
  * Character multipliers offered as sizes.
  *
- * `<size>` takes `W,H`, which is two numbers most people do not want to think about. These are the
- * combinations worth a button — wider, taller, both — written the long way so the markup a person
- * ends up reading is the same shape whichever they picked.
+ * `<size>` takes `width` and `height`, which is two numbers most people do not want to think about.
+ * These are the combinations worth a button — wider, taller, both — written the long way so the
+ * markup a person ends up reading is the same shape whichever they picked.
  */
 const SIZE_CHOICES: TagChoice[] = [
-	{ label: "Double width", tag: "size", argument: "2,1", note: "<size=2,1>" },
-	{ label: "Double height", tag: "size", argument: "1,2", note: "<size=1,2>" },
-	{ label: "Double both", tag: "size", argument: "2,2", note: "<size=2,2>" },
-	{ label: "Triple both", tag: "size", argument: "3,3", note: "<size=3,3>" },
+	{ label: "Double width", tag: "size", attributes: { width: "2" }, note: "<size width=2>" },
+	{ label: "Double height", tag: "size", attributes: { height: "2" }, note: "<size height=2>" },
+	{ label: "Double both", tag: "size", attributes: { width: "2", height: "2" }, note: "<size width=2 height=2>" },
+	{ label: "Triple both", tag: "size", attributes: { width: "3", height: "3" }, note: "<size width=3 height=3>" },
 ];
 
 /** Justification. Lowercase, matching how the examples and the docs write it. */
 const ALIGN_CHOICES: TagChoice[] = [
-	{ label: "Left", tag: "align", argument: "left", note: "<align=left>" },
-	{ label: "Centre", tag: "align", argument: "center", note: "<align=center>" },
-	{ label: "Right", tag: "align", argument: "right", note: "<align=right>" },
+	{ label: "Left", tag: "align", attributes: { to: "left" }, note: "<align to=left>" },
+	{ label: "Centre", tag: "align", attributes: { to: "center" }, note: "<align to=center>" },
+	{ label: "Right", tag: "align", attributes: { to: "right" }, note: "<align to=right>" },
 ];
 
 /**
@@ -348,8 +348,8 @@ const ALIGN_CHOICES: TagChoice[] = [
  * Box, Table, Chart and Gauge belong here rather than in a menu of their own for the same reason as
  * the rest: none of them is a style applied to text, so there is nothing for a selection to carry
  * except, for Box alone, the lines it should frame. Font joined them too, once naming a stored font
- * meant asking for a size as well as a name — a single button could write `<font=A>` or `<font=B>`
- * without asking anything, but it cannot guess a name off the Assets tab.
+ * meant asking for a size as well as a name — a single button could write `<text font=a>` or
+ * `<text font=b>` without asking anything, but it cannot guess a name off the Assets tab.
  */
 const INSERT_CHOICES: TagChoice[] = [
 	{ label: "Horizontal rule", tag: "hr", note: "A full-width line" },
@@ -374,7 +374,7 @@ const INSERT_CHOICES: TagChoice[] = [
 	{ label: "Table", tag: "table", note: "A grid of cells" },
 	{ label: "Chart", tag: "chart", prompt: "chart", note: "bar, line, pie or scatter" },
 	{ label: "Gauge", tag: "bar", prompt: "bar", note: "0 to 100" },
-	{ label: "Font", tag: "font", prompt: "font", note: "a, b or a stored font" },
+	{ label: "Font", tag: "text", prompt: "text", note: "a, b or a stored font" },
 ];
 
 /**
@@ -430,12 +430,12 @@ export function MarkupTool({
 	 * {@link variableEdit} instead, which places the caret the same way a void tag's insertion does.
 	 *
 	 * @param name the tag to write, or `"variable"` to insert `{content}` as a variable reference
-	 * @param argument its argument, for tags that take one
+	 * @param attributes its attributes, for tags that take them
 	 * @param content what it should enclose, when that came from a dialog rather than from the
 	 *   selection — the two are alternatives, and a dialog's answer wins because the person just
 	 *   typed it. For `"variable"`, this is the variable's name rather than enclosed text.
 	 */
-	const applyTag = useCallback((name: string, argument?: string, content?: string) => {
+	const applyTag = useCallback((name: string, attributes?: Record<string, string>, content?: string) => {
 		const view = editor.current?.view;
 		if (!view) {
 			return;
@@ -449,7 +449,7 @@ export function MarkupTool({
 					const edit =
 						name === "variable" && content !== undefined
 							? variableEdit(content, selected)
-							: markupEdit(name, content ?? selected, argument);
+							: markupEdit(name, content ?? selected, attributes);
 					if (!edit) {
 						return { range };
 					}
@@ -534,7 +534,7 @@ export function MarkupTool({
 					    not a value the editor holds — a select would go on claiming an example was
 					    "selected" after the first keystroke changed it into something else. */}
 					<div className="flex flex-wrap items-center gap-2">
-						{/* The three that need no argument get a button each; everything else is a menu,
+						{/* The three that need no attributes get a button each; everything else is a menu,
 						    because a tag with a value has no single obvious one to put on a button. */}
 						<div className="flex items-center gap-1">
 							<TagButton label="Bold" icon={<Bold className="size-3.5" />} onClick={() => applyTag("bold")} />
@@ -768,7 +768,7 @@ function TagMenu({
 	icon: ReactNode;
 	choices: TagChoice[];
 	/** Called for a choice that writes its tag straight away. */
-	onPick: (tag: string, argument?: string) => void;
+	onPick: (tag: string, attributes?: Record<string, string>) => void;
 	/** Called instead for a choice that needs the dialog to collect something first. */
 	onPrompt?: (prompt: InsertTag) => void;
 }) {
@@ -788,7 +788,9 @@ function TagMenu({
 					<DropdownMenuItem
 						key={choice.label}
 						className="flex-col items-start gap-0.5 text-[12.5px]"
-						onClick={() => (choice.prompt && onPrompt ? onPrompt(choice.prompt) : onPick(choice.tag, choice.argument))}
+						onClick={() =>
+							choice.prompt && onPrompt ? onPrompt(choice.prompt) : onPick(choice.tag, choice.attributes)
+						}
 					>
 						<span className="flex items-center gap-1.5">
 							{choice.icon}

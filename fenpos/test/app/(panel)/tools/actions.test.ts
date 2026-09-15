@@ -175,7 +175,7 @@ describe("preview", () => {
 	 * reports that refusal like any other markup error, while the markup is still being written.
 	 */
 	it("refuses a symbol too wide for the paper rather than drawing it overhanging", async () => {
-		const result = await preview(deviceId, `<barcode=CODE128>${"ORDER-1234567890".repeat(4)}</barcode>`);
+		const result = await preview(deviceId, `<barcode type=CODE128>${"ORDER-1234567890".repeat(4)}</barcode>`);
 
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0].code).toBe("symbol_too_wide");
@@ -185,14 +185,14 @@ describe("preview", () => {
 
 	it("still previews a symbol that fits the paper", async () => {
 		// The other side of that boundary: the refusal must be about the width, not about the tag.
-		const result = await preview(deviceId, "<barcode=CODE128>ORDER-1234</barcode>");
+		const result = await preview(deviceId, "<barcode type=CODE128>ORDER-1234</barcode>");
 
 		expect(result.errors).toEqual([]);
 		expect(result.lines?.[0].blocks[0].widthFraction).toBeLessThanOrEqual(1);
 	});
 
 	it("carries a symbol's own alignment, and marks it as nothing else", async () => {
-		const result = await preview(deviceId, `<align=center><qr>${QR_CONTENT}</qr></align>`);
+		const result = await preview(deviceId, `<align to=center><qr>${QR_CONTENT}</qr></align>`);
 
 		expect(result.lines?.[0].align).toBe("CENTER");
 		// A symbol is drawn, not annotated: a marker here would be a second description of a line
@@ -206,7 +206,7 @@ describe("preview", () => {
 
 		const result = await preview(
 			deviceId,
-			["<barcode=EAN13>5901234123457</barcode>", "<pdf417>ORDER-123</pdf417>"].join("\n"),
+			["<barcode type=EAN13>5901234123457</barcode>", "<pdf417>ORDER-123</pdf417>"].join("\n"),
 		);
 
 		expect(result.errors).toEqual([]);
@@ -215,7 +215,7 @@ describe("preview", () => {
 	});
 
 	it("marks a drawer pulse without hiding the line it was written on", async () => {
-		const result = await preview(deviceId, "Total 5.50<drawer=5>");
+		const result = await preview(deviceId, "Total 5.50<drawer pin=5>");
 
 		expect(result.lines?.[0].marker).toBe("drawer (pin 5)");
 		expect(result.lines?.[0].spans.map((span) => span.text).join("")).toBe("Total 5.50");
@@ -252,7 +252,7 @@ describe("preview", () => {
 	});
 
 	it("draws an image at its share of the paper's width, not of its height", async () => {
-		const half = await preview(deviceId, `<image=50>${ASSET}</image>`);
+		const half = await preview(deviceId, `<image width=50>${ASSET}</image>`);
 
 		expect(half.errors).toEqual([]);
 		expect(half.lines?.[0].blocks).toEqual([await dithered(50, COLUMNS)]);
@@ -285,7 +285,7 @@ describe("preview", () => {
 	 * the dots the job actually carries, not a second rendering of the markup for the screen.
 	 */
 	it("draws a configured-font line as the dots the printer receives", async () => {
-		const result = await preview(deviceId, `<font=${FONT_ASSET}>Total 5.50</font>`);
+		const result = await preview(deviceId, `<text font=${FONT_ASSET}>Total 5.50</text>`);
 
 		expect(result.errors).toEqual([]);
 		expect(result.lines?.[0].blocks).toHaveLength(1);

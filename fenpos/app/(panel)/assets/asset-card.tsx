@@ -104,7 +104,7 @@ export function AssetCard({
 	const isFont = asset.kind === "FONT";
 
 	/** What a receipt writes to reach this asset. Tags are paired; see the Docs tab. */
-	const reference = isFont ? `<font=${asset.name}>text</font>` : `<image>${asset.name}</image>`;
+	const reference = isFont ? `<text font=${asset.name}>text</text>` : `<image>${asset.name}</image>`;
 
 	return (
 		<Card className="flex flex-col">

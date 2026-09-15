@@ -356,7 +356,7 @@ async function blocksOf(line: ModelLine, settings: CompileSettings): Promise<Pre
  * share of the paper's *width* is the only figure that answers "does this fit across my 32 columns".
  *
  * @param ref the reference as written between the tags
- * @param widthPercent the tag's argument: the share of the paper's width to print at
+ * @param widthPercent the tag's `width` attribute: the share of the paper's width to print at
  * @param settings the compile settings, carrying the paper width and what the pre-pass resolved
  * @returns the image as the preview draws it
  * @throws Error if the reference was never resolved, which the compile above would already have
