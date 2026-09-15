@@ -68,7 +68,7 @@ export const MARKUP_ERRORS = {
 	misplacedBlock: "misplaced_block",
 	/** More labels than a chart has categories. */
 	tooManyLabels: "too_many_labels",
-	/** A `<font>` naming a font that is not stored. */
+	/** A `<text>` naming a font that is not stored. */
 	unknownFont: "unknown_font",
 	/** More cells in one table than `limits.maxTableCells`. */
 	tooManyCells: "too_many_cells",

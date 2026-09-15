@@ -321,7 +321,7 @@ export const API_ERROR_STATUS = {
 	misplaced_block: 422,
 	/** More labels than a chart has categories. See `MARKUP_ERRORS.tooManyLabels`. */
 	too_many_labels: 422,
-	/** A `<font>` naming a font that is not stored. See `MARKUP_ERRORS.unknownFont`. */
+	/** A `<text>` naming a font that is not stored. See `MARKUP_ERRORS.unknownFont`. */
 	unknown_font: 422,
 	/** An `<image>` data URI that is not a PNG or JPEG, or not base64. See `MARKUP_ERRORS.invalidImageData`. */
 	invalid_image_data: 422,
