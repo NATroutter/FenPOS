@@ -4,7 +4,7 @@ import { columnAt, type Line, type Span, type SpanStyle } from "@/lib/markup/mod
  * Splits a line so it fits the paper width.
  *
  * **Wrapping works on individual characters, not on the line's text.** A character's cost in
- * columns depends on the width multiplier of the span it belongs to: under `<size=2>` each
+ * columns depends on the width multiplier of the span it belongs to: under `<size width=2>` each
  * character occupies two columns, so the same text has to wrap at half the paper width.
  * Measuring string length would overflow the paper on every enlarged line.
  *

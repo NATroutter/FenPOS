@@ -68,7 +68,7 @@ export function share(slack: number, count: number): number[] {
 /**
  * Builds one fill's span, or null when its budget buys nothing.
  *
- * The budget is spent in whole characters, so a fill written inside `<size=N>` can leave up to
+ * The budget is spent in whole characters, so a fill written inside `<size width=N>` can leave up to
  * `N - 1` columns unspent and the line lands that much short of the paper's edge. Under the default
  * multiplier of one — every ordinary receipt row — that cannot happen. Chasing the missing column
  * would mean machinery that only ever runs for a pad inside an enlarged span.

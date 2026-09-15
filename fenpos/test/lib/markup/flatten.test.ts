@@ -30,7 +30,7 @@ describe("splitLines", () => {
 	});
 
 	it("carries align across the lines it spans", () => {
-		const lines = splitLines(parseDocument("<align=center>a\nb</align>").nodes);
+		const lines = splitLines(parseDocument("<align to=center>a\nb</align>").nodes);
 
 		expect(lines[0].nodes[0]).toMatchObject({ kind: "align", align: "CENTER" });
 		expect(lines[1].nodes[0]).toMatchObject({ kind: "align", align: "CENTER" });
@@ -53,16 +53,16 @@ describe("splitLines", () => {
 describe("flattenLine", () => {
 	it("produces the same Line the old parser did", () => {
 		const line = flattenLine(
-			splitLines(parseDocument("<align=right><bold>Total</bold><fill>5.50</align>").nodes)[0].nodes,
+			splitLines(parseDocument("<align to=right><bold>Total</bold><fill>5.50</align>").nodes)[0].nodes,
 		);
 
 		expect(line.align).toBe("RIGHT");
 		expect(line.wrap).toBeNull();
 		expect(line.spans.map((span) => [span.text, span.style.bold, span.sourceColumn])).toEqual([
-			["Total", true, 20],
-			["5.50", false, 38],
+			["Total", true, 23],
+			["5.50", false, 41],
 		]);
-		expect(line.fills).toEqual([{ afterSpans: 1, character: " ", style: line.spans[1].style, sourceColumn: 32 }]);
+		expect(line.fills).toEqual([{ afterSpans: 1, character: " ", style: line.spans[1].style, sourceColumn: 35 }]);
 	});
 
 	it("keeps a spanning scope's style on the second line", () => {
@@ -72,7 +72,7 @@ describe("flattenLine", () => {
 	});
 
 	it("measures a symbol into its directive", () => {
-		const line = flattenLine(splitLines(parseDocument("<qr=4>https://x</qr>").nodes)[0].nodes);
+		const line = flattenLine(splitLines(parseDocument("<qr size=4>https://x</qr>").nodes)[0].nodes);
 
 		expect(line.directives[0]).toMatchObject({ kind: "QR", content: "https://x", size: 4, sourceColumn: 1 });
 		expect((line.directives[0] as { heightLines: number }).heightLines).toBeGreaterThan(0);
@@ -90,12 +90,12 @@ describe("flattenLine", () => {
 describe("needsRaster", () => {
 	it("is false for native text, symbols and a lone image", () => {
 		expect(needsRaster(parseDocument("<bold>a</bold>").nodes)).toBe(false);
-		expect(needsRaster(parseDocument("<align=center><image>logo</image></align>").nodes)).toBe(false);
+		expect(needsRaster(parseDocument("<align to=center><image>logo</image></align>").nodes)).toBe(false);
 		expect(needsRaster(parseDocument("<qr>x</qr>").nodes)).toBe(false);
 	});
 
 	it("is true for a configured font and false for a built-in one", () => {
-		expect(needsRaster(parseDocument("<font=roboto>a</font>").nodes)).toBe(true);
-		expect(needsRaster(parseDocument("<font=b>a</font>").nodes)).toBe(false);
+		expect(needsRaster(parseDocument("<text font=roboto>a</text>").nodes)).toBe(true);
+		expect(needsRaster(parseDocument("<text font=b>a</text>").nodes)).toBe(false);
 	});
 });

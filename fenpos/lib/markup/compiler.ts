@@ -102,7 +102,7 @@ export interface DeviceSettings {
 export interface CompileSettings extends DeviceSettings {
 	images: ResolvedImages;
 	/**
-	 * The faces `<font=name>` may select, as `resolveFonts` loaded them.
+	 * The faces `<text font=name>` may select, as `resolveFonts` loaded them.
 	 *
 	 * Here for the same reason `images` is: a stored font is a database row and parsing it walks the
 	 * font's tables, neither of which a synchronous compile can wait for. Required rather than
@@ -923,7 +923,7 @@ function toWireLine(line: Line, settings: CompileSettings): WireLine {
  * prevent, so a pre-pass that produced the wrong set fails here instead.
  *
  * @param ref the reference as written between the tags
- * @param widthPercent the tag's argument: the share of the paper's width to print at
+ * @param widthPercent the tag's `width` attribute: the share of the paper's width to print at
  * @param settings the compile settings, carrying the paper width and what the pre-pass resolved
  * @returns the directive to send
  * @throws Error if the dots for this width were neither synced nor resolved, which is a server bug

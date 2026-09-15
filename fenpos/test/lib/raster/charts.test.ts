@@ -19,7 +19,9 @@ describe("ticks", () => {
 describe("chartFrame", () => {
 	it("reserves the title and axes and puts a legend to the right when the plot stays wide", () => {
 		const frame = chartFrame(
-			chartOf('<chart=bar height=10 title="Sales">\n<series=A>1,2</series>\n<series=B>2,3</series>\n</chart>'),
+			chartOf(
+				'<chart type=bar height=10 title="Sales">\n<series name=A>1,2</series>\n<series name=B>2,3</series>\n</chart>',
+			),
 			576,
 			context,
 		);
@@ -32,7 +34,7 @@ describe("chartFrame", () => {
 
 	it("drops the legend below on narrow paper", () => {
 		const frame = chartFrame(
-			chartOf("<chart=bar height=10>\n<series=A>1</series>\n<series=B>2</series>\n</chart>"),
+			chartOf("<chart type=bar height=10>\n<series name=A>1</series>\n<series name=B>2</series>\n</chart>"),
 			384,
 			context,
 		);
@@ -41,7 +43,7 @@ describe("chartFrame", () => {
 	});
 
 	it("has no legend for one series under auto", () => {
-		expect(chartFrame(chartOf("<chart=bar>\n<series>1</series>\n</chart>"), 384, context).legend).toBeNull();
+		expect(chartFrame(chartOf("<chart type=bar>\n<series>1</series>\n</chart>"), 384, context).legend).toBeNull();
 	});
 });
 
@@ -50,7 +52,7 @@ describe("bar and line charts", () => {
 		expectRasterToMatchGolden(
 			renderRasterLine(
 				parseDocument(
-					'<chart=bar height=8 title="Sales by hour">\n<series=A>3,5,2</series>\n<series=B>4,1,6</series>\n<labels>08,09,10</labels>\n</chart>',
+					'<chart type=bar height=8 title="Sales by hour">\n<series name=A>3,5,2</series>\n<series name=B>4,1,6</series>\n<labels>08,09,10</labels>\n</chart>',
 				).nodes,
 				context,
 			),
@@ -62,7 +64,7 @@ describe("bar and line charts", () => {
 		expectRasterToMatchGolden(
 			renderRasterLine(
 				parseDocument(
-					'<chart=line height=10 title="Temperature" area=on>\n<series=Temp pattern=hatch marker=circle>62,64,68,72,74,75</series>\n<labels>08,09,10,11,12,13</labels>\n</chart>',
+					'<chart type=line height=10 title="Temperature" area=on>\n<series name=Temp pattern=hatch marker=circle>62,64,68,72,74,75</series>\n<labels>08,09,10,11,12,13</labels>\n</chart>',
 				).nodes,
 				context,
 			),
@@ -72,7 +74,7 @@ describe("bar and line charts", () => {
 
 	it("starts the axis below zero when a value is negative", () => {
 		const raster = renderRasterLine(
-			parseDocument("<chart=line height=6>\n<series>-2,1,3</series>\n</chart>").nodes,
+			parseDocument("<chart type=line height=6>\n<series>-2,1,3</series>\n</chart>").nodes,
 			context,
 		);
 
@@ -85,7 +87,7 @@ describe("pie and scatter charts", () => {
 		expectRasterToMatchGolden(
 			renderRasterLine(
 				parseDocument(
-					'<chart=pie height=10 title="Share">\n<series>50,30,20</series>\n<labels>Coffee,Tea,Water</labels>\n</chart>',
+					'<chart type=pie height=10 title="Share">\n<series>50,30,20</series>\n<labels>Coffee,Tea,Water</labels>\n</chart>',
 				).nodes,
 				context,
 			),
@@ -103,7 +105,7 @@ describe("pie and scatter charts", () => {
 	 */
 	it("draws a pie of as many slices as a series may hold without stalling", () => {
 		const values = Array.from({ length: 2000 }, (_, index) => (index % 7) + 1).join(",");
-		const nodes = parseDocument(`<chart=pie height=40 legend=off>\n<series>${values}</series>\n</chart>`).nodes;
+		const nodes = parseDocument(`<chart type=pie height=40 legend=off>\n<series>${values}</series>\n</chart>`).nodes;
 
 		const started = performance.now();
 		const raster = renderRasterLine(nodes, context);
@@ -116,7 +118,7 @@ describe("pie and scatter charts", () => {
 
 	it("stops a pie's legend where the chart ends rather than listing every slice", () => {
 		const values = Array.from({ length: 2000 }, () => 1).join(",");
-		const chart = chartOf(`<chart=pie height=10>\n<series>${values}</series>\n</chart>`);
+		const chart = chartOf(`<chart type=pie height=10>\n<series>${values}</series>\n</chart>`);
 
 		expect(chart.series[0].values).toHaveLength(2000);
 		expect(chartFrame(chart, 384, context).legend?.height).toBeLessThanOrEqual(chartHeight(chart));
@@ -125,8 +127,9 @@ describe("pie and scatter charts", () => {
 	it("draws scatter points with cycling markers", () => {
 		expectRasterToMatchGolden(
 			renderRasterLine(
-				parseDocument("<chart=scatter height=8>\n<series=A>1:2,2:3,3:5</series>\n<series=B>1:4,2:1</series>\n</chart>")
-					.nodes,
+				parseDocument(
+					"<chart type=scatter height=8>\n<series name=A>1:2,2:3,3:5</series>\n<series name=B>1:4,2:1</series>\n</chart>",
+				).nodes,
 				context,
 			),
 			"chart-scatter",

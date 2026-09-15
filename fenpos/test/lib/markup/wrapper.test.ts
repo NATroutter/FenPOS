@@ -40,7 +40,7 @@ describe("wrapLine", () => {
 	it("wraps double-width text at half the columns", () => {
 		// The reason wrapping walks spans rather than a plain string: a double-width character
 		// occupies two columns, so the same text wraps at half the paper width.
-		expect(texts(wrap("<size=2>HELLO WORLD</size>", 20))).toEqual(["HELLO", "WORLD"]);
+		expect(texts(wrap("<size width=2 height=2>HELLO WORLD</size>", 20))).toEqual(["HELLO", "WORLD"]);
 	});
 
 	it("does not wrap single-width text of the same length at that width", () => {
@@ -73,7 +73,7 @@ describe("wrapLine", () => {
 	});
 
 	it("gives every fragment the line alignment", () => {
-		const wrapped = wrap("<align=center>aaaa bbbb</align>", 4);
+		const wrapped = wrap("<align to=center>aaaa bbbb</align>", 4);
 
 		expect(wrapped).toHaveLength(2);
 		for (const line of wrapped) {
@@ -84,7 +84,7 @@ describe("wrapLine", () => {
 	it("attaches directives to the last fragment only", () => {
 		// A cut must happen once, after the last fragment. Repeating it per fragment would cut
 		// the paper in the middle of the receipt.
-		const wrapped = wrap("aaaa bbbb<feed=2>", 4);
+		const wrapped = wrap("aaaa bbbb<feed lines=2>", 4);
 
 		expect(wrapped).toHaveLength(2);
 		expect(wrapped[0].directives).toHaveLength(0);
@@ -110,7 +110,7 @@ describe("wrapLine", () => {
 	it("emits a character that is wider than the whole line", () => {
 		// Guards the wrapping loop: a character wider than the whole paper must still be
 		// emitted, or the wrapper would make no progress and spin forever.
-		expect(texts(wrap("<size=8>ab</size>", 4))).toEqual(["a", "b"]);
+		expect(texts(wrap("<size width=8 height=8>ab</size>", 4))).toEqual(["a", "b"]);
 	});
 
 	it("collapses a line of only spaces to nothing", () => {

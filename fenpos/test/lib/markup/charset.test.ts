@@ -132,7 +132,7 @@ describe("validateCharset", () => {
 	});
 
 	it("preserves styling and directives", () => {
-		const line = validate("<bold>ok</bold><feed=2>", "CP858", "REJECT");
+		const line = validate("<bold>ok</bold><feed lines=2>", "CP858", "REJECT");
 
 		expect(line.spans[0].style.bold).toBe(true);
 		expect(line.directives).toHaveLength(1);
@@ -144,18 +144,18 @@ describe("validateCharset", () => {
 
 	/**
 	 * The euro is the right character to test this with and a middle dot is the wrong one: CP437
-	 * holds U+00B7 at 0xFA, so `<fill=·>` prints there perfectly well.
+	 * holds U+00B7 at 0xFA, so `<fill char=·>` prints there perfectly well.
 	 */
 	it("rejects a fill character the codepage cannot represent", () => {
-		expect(rejection("a<fill=€>b", "CP437").character).toBe("€");
+		expect(rejection("a<fill char=€>b", "CP437").character).toBe("€");
 	});
 
 	it("reports the fill's own column when it rejects one", () => {
-		expect(rejection("a<fill=€>b", "CP437").column).toBe(2);
+		expect(rejection("a<fill char=€>b", "CP437").column).toBe(2);
 	});
 
 	it("substitutes a fill character under the replace policy", () => {
-		expect(validate("a<fill=€>b", "CP437", "REPLACE").fills[0].character).toBe("?");
+		expect(validate("a<fill char=€>b", "CP437", "REPLACE").fills[0].character).toBe("?");
 	});
 
 	/**
@@ -163,11 +163,11 @@ describe("validateCharset", () => {
 	 * nothing. What slack it would have taken goes to whatever fills remain.
 	 */
 	it("drops a fill whose character the strip policy removes", () => {
-		expect(validate("a<fill=€>b", "CP437", "STRIP").fills).toEqual([]);
+		expect(validate("a<fill char=€>b", "CP437", "STRIP").fills).toEqual([]);
 	});
 
 	it("leaves a printable fill character alone", () => {
-		expect(validate("a<fill=.>b", "CP437", "REJECT").fills[0].character).toBe(".");
+		expect(validate("a<fill char=.>b", "CP437", "REJECT").fills[0].character).toBe(".");
 	});
 
 	/**
@@ -206,7 +206,7 @@ describe("validateCharset", () => {
 	 * position is the thing this checks.
 	 */
 	it("keeps the surviving fill when the strip policy drops its neighbour", () => {
-		const line = validate("a<fill=€>b<fill=.>c", "CP437", "STRIP");
+		const line = validate("a<fill char=€>b<fill char=.>c", "CP437", "STRIP");
 
 		expect(line.spans.map((span) => span.text)).toEqual(["a", "b", "c"]);
 		expect(line.fills).toHaveLength(1);

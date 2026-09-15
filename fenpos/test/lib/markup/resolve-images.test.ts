@@ -202,7 +202,7 @@ describe("resolveImages", () => {
 	it("resolves a URL through the guarded fetch, keeping its query string", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolve(["<image=50>https://x.test/l.png?v=2</image>"]);
+		const images = await resolve(["<image width=50>https://x.test/l.png?v=2</image>"]);
 
 		expect(fetchRemoteImage).toHaveBeenCalledWith(
 			"https://x.test/l.png?v=2",
@@ -214,7 +214,10 @@ describe("resolveImages", () => {
 	it("looks a reference up once however many times a receipt writes it", async () => {
 		fetchRemoteImage.mockResolvedValue(PNG);
 
-		const images = await resolve(["<image>https://x.test/l.png</image>", "<image=50>https://x.test/l.png</image>"]);
+		const images = await resolve([
+			"<image>https://x.test/l.png</image>",
+			"<image width=50>https://x.test/l.png</image>",
+		]);
 
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
 		expect(images.size).toBe(1);
@@ -423,16 +426,22 @@ describe("resolveImages", () => {
 		await createAsset("logo", PNG);
 
 		const withoutTheLimit = await resolveImages(
-			"<font=mono size=600><image>logo</image></font>",
+			"<text font=mono size=600><image>logo</image></text>",
 			COLUMNS,
 			null,
 			RASTER_BUDGET,
 		);
 		expect(withoutTheLimit.size).toBe(0);
 
-		const images = await resolveImages("<font=mono size=600><image>logo</image></font>", COLUMNS, null, RASTER_BUDGET, {
-			maxFontHeight: 1024,
-		});
+		const images = await resolveImages(
+			"<text font=mono size=600><image>logo</image></text>",
+			COLUMNS,
+			null,
+			RASTER_BUDGET,
+			{
+				maxFontHeight: 1024,
+			},
+		);
 
 		expect(images.get("logo")?.natural?.widthDots).toBe(128);
 	});
@@ -445,7 +454,7 @@ describe("resolveImages", () => {
 	it("resolves a tag written in capitals, which the parser accepts", async () => {
 		await createAsset("logo", PNG);
 
-		expect((await resolve(["<ALIGN=CENTER><IMAGE=50>logo</IMAGE></ALIGN>"])).get("logo")).toMatchObject({
+		expect((await resolve(["<ALIGN TO=CENTER><IMAGE WIDTH=50>logo</IMAGE></ALIGN>"])).get("logo")).toMatchObject({
 			width: 128,
 			height: 40,
 		});
@@ -496,7 +505,7 @@ describe("dots that have to travel with the job", () => {
 	it("dithers a stored image at a width nobody synced", async () => {
 		await createAsset("logo", PNG);
 
-		const images = await resolve(["<image=50>logo</image>"]);
+		const images = await resolve(["<image width=50>logo</image>"]);
 
 		expect(images.get("logo")?.inline?.get(PAPER_DOTS / 2)?.widthDots).toBe(PAPER_DOTS / 2);
 	});
@@ -520,8 +529,8 @@ describe("dots that have to travel with the job", () => {
 
 		const images = await resolve([
 			"<image>https://x.test/l.png</image>",
-			"<image=50>https://x.test/l.png</image>",
-			"<image=50>https://x.test/l.png</image>",
+			"<image width=50>https://x.test/l.png</image>",
+			"<image width=50>https://x.test/l.png</image>",
 		]);
 
 		expect(fetchRemoteImage).toHaveBeenCalledTimes(1);
@@ -717,7 +726,7 @@ describe("dots that have to travel with the job", () => {
 		 * other width rather than previewing a picture the paper cannot carry.
 		 */
 		it("refuses a width the agent bundles nothing for, naming the line", async () => {
-			const thrown = await refusal(["Coffee 2.50", "<image=50>fenpos</image>"]);
+			const thrown = await refusal(["Coffee 2.50", "<image width=50>fenpos</image>"]);
 
 			expect(thrown.code).toBe("unbundled_logo_width");
 			expect(thrown.details.line).toBe(2);

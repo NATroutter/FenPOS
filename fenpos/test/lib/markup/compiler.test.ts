@@ -237,16 +237,24 @@ describe("compile pipeline", () => {
 	});
 
 	it("carries cut and feed directives through to the wire", () => {
-		const job = run({ data: "done<feed=2>\n<cut=partial>" });
+		const job = run({ data: "done<feed lines=2>\n<cut mode=partial>" });
 
 		expect(job.lines[0].directives).toEqual([{ type: "FEED", lines: 2 }]);
 		expect(job.lines[1].directives).toEqual([{ type: "CUT", mode: "PARTIAL" }]);
 	});
 
 	it("resolves styles onto each span rather than leaving a tag stack", () => {
-		// Two short lines rather than one nested string, because the fixture's line limit is
-		// twenty characters and the point being made is about the output, not the input.
-		const job = run({ data: "<size=2>x</size>\n<bold>y</bold>" });
+		// Two short lines rather than one nested string, and a roomier line limit than the shared
+		// fixture's twenty characters: named attributes take more source than a bare argument did,
+		// and the point being made is about the output, not the input.
+		const roomy: CompileLimits = { ...limits, maxLineChars: 60 };
+		const request = readRequest(
+			{ data: "<size width=2 height=2>x</size>\n<bold>y</bold>" },
+			roomy,
+			settings,
+			MAX_VARIABLE_VALUE_CHARS,
+		);
+		const job = compile("job-1", "kitchen", request, roomy, settings);
 
 		expect(job.lines[0].spans[0].widthMult).toBe(2);
 		expect(job.lines[0].spans[0].heightMult).toBe(2);
@@ -425,7 +433,7 @@ describe("compile pipeline", () => {
 	 */
 	it("reports an unprintable fill character with no column count in hand", () => {
 		const errors = collectDocumentErrors(
-			{ data: "a<fill=€>b", linefeed: "LF", variables: {} },
+			{ data: "a<fill char=€>b", linefeed: "LF", variables: {} },
 			{ ...settings, codepage: "CP437" },
 			null,
 			limits,
@@ -511,7 +519,7 @@ describe("block line budget", () => {
 	it("refuses a symbol wider than the device's paper, naming the tag and its column", () => {
 		// Wrapped in an alignment so the tag is not at column 1, which is what shows the column
 		// really travelled from the parser rather than being a constant the compiler made up.
-		const tagged = "<align=center><qr=8>https://example.com/o/1</qr></align>";
+		const tagged = "<align to=center><qr size=8>https://example.com/o/1</qr></align>";
 		const thrown = (() => {
 			try {
 				countOutputLines({ data: `Hello\n${tagged}`, linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS);
@@ -524,7 +532,7 @@ describe("block line budget", () => {
 		expect(thrown).toBeInstanceOf(ApiError);
 		expect(thrown?.code).toBe("symbol_too_wide");
 		expect(thrown?.status).toBe(422);
-		expect(thrown?.details).toMatchObject({ line: 2, column: tagged.indexOf("<qr=8>") + 1, detail: "qr" });
+		expect(thrown?.details).toMatchObject({ line: 2, column: tagged.indexOf("<qr size=8>") + 1, detail: "qr" });
 		expect(thrown?.message).toMatch(/200 dots wide, more than the 120/);
 
 		// The same symbol on paper wide enough for it compiles, so this is the width and not the tag.
@@ -552,7 +560,7 @@ describe("block line budget", () => {
 			content: "1234567890128",
 		}).heightLines;
 		const withBarcode = countOutputLines(
-			{ data: "Hello\n<barcode=EAN13>1234567890128</barcode>", linefeed: "LF", variables: {} },
+			{ data: "Hello\n<barcode type=EAN13>1234567890128</barcode>", linefeed: "LF", variables: {} },
 			WIDE_SETTINGS,
 			BUDGET_LIMITS,
 		);
@@ -587,7 +595,11 @@ describe("block line budget", () => {
 
 	it("charges a half-width image half the paper", () => {
 		expect(
-			countOutputLines({ data: "<image=50>logo</image>", linefeed: "LF", variables: {} }, SETTINGS, BUDGET_LIMITS),
+			countOutputLines(
+				{ data: "<image width=50>logo</image>", linefeed: "LF", variables: {} },
+				SETTINGS,
+				BUDGET_LIMITS,
+			),
 		).toBe(5);
 	});
 
@@ -652,10 +664,10 @@ describe("block line budget", () => {
 		const request = readRequest(
 			{
 				data: [
-					"<qr=8>https://example.com/o/1</qr>",
-					"<barcode=EAN13>1234567890128</barcode>",
-					"<pdf417=4>ORDER-1</pdf417>",
-					"<drawer=5>",
+					"<qr size=8>https://example.com/o/1</qr>",
+					"<barcode type=EAN13>1234567890128</barcode>",
+					"<pdf417 level=4>ORDER-1</pdf417>",
+					"<drawer pin=5>",
 				].join("\n"),
 				linefeed: "LF",
 			},
@@ -751,7 +763,7 @@ describe("images on the wire", () => {
 	 * resample dots already reduced to black and white. So these dots ride in the job like a URL's.
 	 */
 	it("carries a stored image's dots when its printed width is not the one that was synced", () => {
-		expect(directivesFor("<image=50>logo</image>")).toEqual([
+		expect(directivesFor("<image width=50>logo</image>")).toEqual([
 			{
 				type: "IMAGE",
 				source: { kind: "INLINE", widthDots: 60, heightDots: 120, data: Buffer.alloc(8 * 120).toString("base64") },
@@ -764,7 +776,7 @@ describe("images on the wire", () => {
 	 * behind the printer, which is the failure this whole pipeline exists to avoid.
 	 */
 	it("refuses to name a width nobody synced, rather than sending a reference the agent cannot resolve", () => {
-		expect(() => directivesFor("<image=50>stamp</image>")).toThrow(/stamp/);
+		expect(() => directivesFor("<image width=50>stamp</image>")).toThrow(/stamp/);
 	});
 });
 
@@ -891,7 +903,7 @@ describe("a document in one string", () => {
 		const job = compile(
 			"j",
 			"d",
-			request("<font=mono size=40>Hi</font>"),
+			request("<text font=mono size=40>Hi</text>"),
 			LIMITS,
 			settingsWith({ fonts: new Map([["mono", bundledFace()]]) }),
 		);
@@ -900,7 +912,7 @@ describe("a document in one string", () => {
 		expect(job.lines[0].directives[0]).toMatchObject({ type: "IMAGE", source: { kind: "INLINE", widthDots: 504 } });
 		expect(
 			countOutputLines(
-				request("<font=mono size=40>Hi</font>"),
+				request("<text font=mono size=40>Hi</text>"),
 				settingsWith({ fonts: new Map([["mono", bundledFace()]]) }),
 				LIMITS,
 			),
@@ -914,7 +926,7 @@ describe("a document in one string", () => {
 	it("refuses a job whose rasters exceed the budget", () => {
 		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
 		const thrown = refusal(() =>
-			compile("j", "d", request("<font=mono size=200>A</font>"), { ...LIMITS, maxRasterBytes: 1000 }, settings),
+			compile("j", "d", request("<text font=mono size=200>A</text>"), { ...LIMITS, maxRasterBytes: 1000 }, settings),
 		);
 
 		expect(thrown.code).toBe("raster_budget_exceeded");
@@ -956,11 +968,11 @@ describe("a document in one string", () => {
 	it("refuses a printer command on a drawn line, naming its column", () => {
 		const settings = settingsWith({ fonts: new Map([["mono", bundledFace()]]) });
 		const thrown = refusal(() =>
-			compile("j", "d", request("<font=mono size=40>Total</font><drawer>"), LIMITS, settings),
+			compile("j", "d", request("<text font=mono size=40>Total</text><drawer>"), LIMITS, settings),
 		);
 
 		expect(thrown.code).toBe("misplaced_block");
-		expect(thrown.details).toMatchObject({ line: 1, column: 32, detail: "drawer" });
+		expect(thrown.details).toMatchObject({ line: 1, column: 37, detail: "drawer" });
 	});
 
 	/**
@@ -981,7 +993,7 @@ describe("a document in one string", () => {
 	 */
 	it("compiles a receipt's icon-and-title header box to one raster line", () => {
 		const source =
-			"<box>\n<align=center><image>moon</image> <size=2><bold>ASTRONOMY</bold></size></align>\n</box>\n<hr>\n<cut>";
+			"<box>\n<align to=center><image>moon</image> <size width=2 height=2><bold>ASTRONOMY</bold></size></align>\n</box>\n<hr>\n<cut>";
 		const job = compile(
 			"j",
 			"d",
@@ -1023,11 +1035,11 @@ describe("a document in one string", () => {
 	 */
 	it("produces identical wire bytes for legacy single-line markup joined by newlines", () => {
 		const legacy = [
-			"<align=center><bold>THE CORNER CAFE</bold></align>",
+			"<align to=center><bold>THE CORNER CAFE</bold></align>",
 			"<hr>",
 			"Coffee<fill>2.50",
 			"<bold>Total<fill>5.50</bold>",
-			"<feed=3>",
+			"<feed lines=3>",
 			"<cut>",
 		];
 		const job = compile("j", "d", request(legacy.join("\n")), LIMITS, settingsWith({}));

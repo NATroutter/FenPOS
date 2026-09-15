@@ -91,7 +91,7 @@ const PERCENT = 100;
  * At least one dot: an image scaled below a whole dot still prints, and charging it nothing would
  * let a job past the budget it was measured against.
  *
- * @param widthPercent the tag's argument: the share of the paper's width to print at, 1-100
+ * @param widthPercent the tag's `width` attribute: the share of the paper's width to print at, 1-100
  * @param columns the device's width in printer columns
  * @returns the printed width in dots
  */
@@ -109,7 +109,7 @@ export function printedWidthDots(widthPercent: number, columns: number): number 
  * jimp keeps a whole one.
  *
  * @param source the image's own pixel dimensions
- * @param widthPercent the tag's argument: the share of the paper's width to print at, 1-100
+ * @param widthPercent the tag's `width` attribute: the share of the paper's width to print at, 1-100
  * @param columns the device's width in printer columns
  * @returns the printed size in dots, and what it costs the line budget
  * @throws RangeError if the source has no pixels, which would make the height meaningless

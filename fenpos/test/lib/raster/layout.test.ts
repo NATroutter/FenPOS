@@ -9,7 +9,7 @@ import { ascii, expectRasterToMatchGolden } from "../../helpers/pbm";
 
 describe("renderRasterLine", () => {
 	it("draws a configured-font line the paper's width, one row tall", () => {
-		const raster = renderRasterLine(parseDocument("<font=mono size=40>Good morning</font>").nodes, context);
+		const raster = renderRasterLine(parseDocument("<text font=mono size=40>Good morning</text>").nodes, context);
 
 		expect(raster.widthDots).toBe(384);
 		expect(raster.heightDots).toBe(typefaceFor(bundledFace(), 40).cellHeight);
@@ -18,7 +18,7 @@ describe("renderRasterLine", () => {
 
 	it("puts an inline image beside text, centred", () => {
 		const raster = renderRasterLine(
-			parseDocument("<align=center><image>icon</image> ASTRONOMY</align>").nodes,
+			parseDocument("<align to=center><image>icon</image> ASTRONOMY</align>").nodes,
 			context,
 		);
 
@@ -42,13 +42,15 @@ describe("renderRasterLine", () => {
 			]),
 		};
 
-		expect(() => renderRasterLine(parseDocument("<image=50>icon</image> x").nodes, context)).toThrow(/resolveImages/);
-		expect(renderRasterLine(parseDocument("<image=50>icon</image> x").nodes, withHalf).heightDots).toBe(96);
+		expect(() => renderRasterLine(parseDocument("<image width=50>icon</image> x").nodes, context)).toThrow(
+			/resolveImages/,
+		);
+		expect(renderRasterLine(parseDocument("<image width=50>icon</image> x").nodes, withHalf).heightDots).toBe(96);
 	});
 
 	it("wraps a long configured-font line", () => {
 		const raster = renderRasterLine(
-			parseDocument("<font=mono size=30>one two three four five six seven eight nine ten</font>").nodes,
+			parseDocument("<text font=mono size=30>one two three four five six seven eight nine ten</text>").nodes,
 			context,
 		);
 
@@ -61,8 +63,8 @@ describe("renderRasterLine", () => {
 	 * way a fresh sequence would.
 	 */
 	it("keeps text after a rule centred when an align wraps both", () => {
-		const centred = renderRasterLine(parseDocument("<align=center>a</align>").nodes, context);
-		const wrapped = renderRasterLine(parseDocument("<align=center>a\n<hr>\na</align>").nodes, context);
+		const centred = renderRasterLine(parseDocument("<align to=center>a</align>").nodes, context);
+		const wrapped = renderRasterLine(parseDocument("<align to=center>a\n<hr>\na</align>").nodes, context);
 
 		const leftmostInk = (raster: typeof centred, yStart: number, yEnd: number): number => {
 			const canvas = new Canvas(raster.widthDots, raster.heightDots);
@@ -110,7 +112,7 @@ describe("BoxNode", () => {
 	});
 
 	it("centres a narrow box under align", () => {
-		const raster = renderRasterLine(parseDocument("<align=center><box width=50>\nA\n</box></align>").nodes, context);
+		const raster = renderRasterLine(parseDocument("<align to=center><box width=50>\nA\n</box></align>").nodes, context);
 		expectRasterToMatchGolden(raster, "box-centred");
 	});
 
@@ -205,13 +207,13 @@ describe("TableNode", () => {
 
 describe("GaugeNode", () => {
 	it("draws an outlined bar filled to the percentage with the number after it", () => {
-		expectRasterToMatchGolden(renderRasterLine(parseDocument("<bar=38 width=80>").nodes, context), "gauge-38");
-		expect(renderRasterLine(parseDocument("<bar=0>").nodes, context).heightDots).toBe(24);
+		expectRasterToMatchGolden(renderRasterLine(parseDocument("<bar value=38 width=80>").nodes, context), "gauge-38");
+		expect(renderRasterLine(parseDocument("<bar value=0>").nodes, context).heightDots).toBe(24);
 	});
 
 	it("prints the number a leading zero was written as, not the digits", () => {
-		const padded = renderRasterLine(parseDocument("<bar=038 width=80>").nodes, context);
+		const padded = renderRasterLine(parseDocument("<bar value=038 width=80>").nodes, context);
 
-		expect(ascii(padded)).toBe(ascii(renderRasterLine(parseDocument("<bar=38 width=80>").nodes, context)));
+		expect(ascii(padded)).toBe(ascii(renderRasterLine(parseDocument("<bar value=38 width=80>").nodes, context)));
 	});
 });

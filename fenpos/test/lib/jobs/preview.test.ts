@@ -114,9 +114,9 @@ describe("compilePreview", () => {
 	});
 
 	it("reports a fault on the line of the document that failed", async () => {
-		const preview = await compilePreview(deviceId, { data: "fine\n<size=9>x</size>" });
+		const preview = await compilePreview(deviceId, { data: "fine\n<size width=9 height=9>x</size>" });
 
-		expect(preview.errors).toEqual([expect.objectContaining({ code: "invalid_tag_argument", line: 2, column: 1 })]);
+		expect(preview.errors).toEqual([expect.objectContaining({ code: "invalid_attribute", line: 2, column: 7 })]);
 	});
 
 	it("reports a request-level failure without a line, because it belongs to the whole body", async () => {
@@ -163,14 +163,14 @@ describe("compilePreview with a configured font", () => {
 	it("reports the dots a drawn line costs, and zero for a receipt that draws nothing this way", async () => {
 		await createAsset("mono", FONT);
 
-		const data = "<font=mono>Total 5.50</font>";
+		const data = "<text font=mono>Total 5.50</text>";
 		const fonts = await resolveFonts(data, null, {});
 		const face = fonts.get("mono");
 		if (!face) {
 			throw new Error("the font was not resolved, so nothing below is measuring the right thing");
 		}
-		// The default face size, in the absence of a `size` argument on the tag — the same figure
-		// `<font=name>` falls back to inside the compiler.
+		// The default face size, in the absence of a `size` attribute on the tag — the same figure
+		// `<text font=name>` falls back to inside the compiler.
 		const heightDots = typefaceFor(face, 24).cellHeight;
 
 		const result = await compilePreview(deviceId, { data });
@@ -206,7 +206,7 @@ describe("compilePreview with a configured font", () => {
 		});
 
 		const result = await compilePreview(device.id, {
-			data: "<font=mono>bad\u{1F600}one</font>\nbad\u{1F600}two",
+			data: "<text font=mono>bad\u{1F600}one</text>\nbad\u{1F600}two",
 		});
 
 		expect(result.lines).toBeNull();

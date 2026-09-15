@@ -184,7 +184,7 @@ describe("submitJob", () => {
 
 		// Wrapped explicitly: `connectedDevice` turns the device's own `defaultWrap` off, and an
 		// unwrapped drawn line stays one row however long its text is.
-		const line = `<wrap><font=${assetName} size=${size}>${"A".repeat(charsPerLine)}</font></wrap>`;
+		const line = `<wrap><text font=${assetName} size=${size}>${"A".repeat(charsPerLine)}</text></wrap>`;
 
 		return {
 			data: Array.from({ length: lineCount }, () => line).join("\n"),

@@ -21,17 +21,17 @@ describe("resolveFonts", () => {
 
 	it("loads every configured font the document names, once", async () => {
 		await createAsset("mono", FONT);
-		const fonts = await resolveFonts("<font=mono>a</font>\n<font=mono size=30>b</font>", null, {});
+		const fonts = await resolveFonts("<text font=mono>a</text>\n<text font=mono size=30>b</text>", null, {});
 
 		expect([...fonts.keys()]).toEqual(["mono"]);
 	});
 
 	it("ignores the built-in fonts", async () => {
-		expect((await resolveFonts("<font=a>x</font><font=b>y</font>", null, {})).size).toBe(0);
+		expect((await resolveFonts("<text font=a>x</text><text font=b>y</text>", null, {})).size).toBe(0);
 	});
 
 	it("reports an unknown font with its line and column", async () => {
-		await expect(resolveFonts("ok\n<font=nobody>x</font>", null, {})).rejects.toMatchObject({
+		await expect(resolveFonts("ok\n<text font=nobody>x</text>", null, {})).rejects.toMatchObject({
 			code: "unknown_font",
 			details: { line: 2, column: 1, detail: "nobody" },
 		});

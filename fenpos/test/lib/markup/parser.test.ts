@@ -124,26 +124,26 @@ describe("parseLine", () => {
 		expect(style.underline).toBe(1);
 	});
 
-	it("parses size arguments as separate multipliers", () => {
-		const style = parseLine("<size=2,3>BIG</size>").spans[0].style;
+	it("parses size attributes as separate multipliers", () => {
+		const style = parseLine("<size width=2 height=3>BIG</size>").spans[0].style;
 
 		expect(style.widthMult).toBe(2);
 		expect(style.heightMult).toBe(3);
 	});
 
-	it("parses a single size argument as both multipliers", () => {
-		const style = parseLine("<size=2>BIG</size>").spans[0].style;
+	it("parses a single size attribute as both multipliers", () => {
+		const style = parseLine("<size width=2 height=2>BIG</size>").spans[0].style;
 
 		expect(style.widthMult).toBe(2);
 		expect(style.heightMult).toBe(2);
 	});
 
 	it("parses underline thickness", () => {
-		expect(parseLine("<underline=2>x</underline>").spans[0].style.underline).toBe(2);
+		expect(parseLine("<underline weight=2>x</underline>").spans[0].style.underline).toBe(2);
 	});
 
 	it("parses font selection", () => {
-		expect(parseLine("<font=b>x</font>").spans[0].style.font).toBe("B");
+		expect(parseLine("<text font=b>x</text>").spans[0].style.font).toBe("B");
 	});
 
 	it("treats tag names as case insensitive", () => {
@@ -155,18 +155,18 @@ describe("parseLine", () => {
 	// -----------------------------------------------------------------------
 
 	it("makes alignment a line property rather than a span style", () => {
-		const line = parseLine("<align=center>RECEIPT</align>");
+		const line = parseLine("<align to=center>RECEIPT</align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(plainText(line)).toBe("RECEIPT");
 	});
 
 	it("rejects alignment that does not enclose the whole line", () => {
-		expect(error("<align=center>x</align> trailing").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(error("<align to=center>x</align> trailing").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	it("rejects a second alignment tag", () => {
-		expect(error("<align=left><align=right>x</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(error("<align to=left><align to=right>x</align></align>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	/**
@@ -175,7 +175,7 @@ describe("parseLine", () => {
 	 * one it is. See "Changes by component" in the wrap-tags design spec.
 	 */
 	it("rejects alignment opened inside a styling tag, same as wrap", () => {
-		expect(error("<bold><align=right>x</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(error("<bold><align to=right>x</align></bold>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	// -----------------------------------------------------------------------
@@ -189,9 +189,9 @@ describe("parseLine", () => {
 		expect(line.fills).toEqual([{ afterSpans: 1, character: " ", style: PLAIN, sourceColumn: 7 }]);
 	});
 
-	it("defaults a fill to a space and takes any other character from the argument", () => {
+	it("defaults a fill to a space and takes any other character from the attribute", () => {
 		expect(parseLine("a<fill>b").fills[0].character).toBe(" ");
-		expect(parseLine("a<fill=.>b").fills[0].character).toBe(".");
+		expect(parseLine("a<fill char=.>b").fills[0].character).toBe(".");
 	});
 
 	/**
@@ -199,12 +199,12 @@ describe("parseLine", () => {
 	 * as though the caller had written two, so accepting it is what pins the code-point counting.
 	 */
 	it("accepts a fill character outside the basic plane", () => {
-		expect(parseLine("a<fill=🙂>b").fills[0].character).toBe("🙂");
+		expect(parseLine("a<fill char=🙂>b").fills[0].character).toBe("🙂");
 	});
 
-	it("refuses a fill argument that is not exactly one character", () => {
-		expect(error("a<fill=ab>b").code).toBe(MARKUP_ERRORS.invalidTagArgument);
-		expect(error("a<fill=>b").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	it("refuses a fill attribute that is not exactly one character", () => {
+		expect(error("a<fill char=ab>b").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(error("a<fill char=>b").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("refuses a closing fill tag", () => {
@@ -212,7 +212,7 @@ describe("parseLine", () => {
 	});
 
 	it("captures the style in effect where the fill was written", () => {
-		const line = parseLine("<bold>Total<fill=.>5.00</bold>");
+		const line = parseLine("<bold>Total<fill char=.>5.00</bold>");
 
 		expect(line.fills[0].style.bold).toBe(true);
 	});
@@ -242,7 +242,7 @@ describe("parseLine", () => {
 	});
 
 	it("refuses a fill after a line-owning tag has closed", () => {
-		expect(error("<align=right>x</align><fill>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
+		expect(error("<align to=right>x</align><fill>").code).toBe(MARKUP_ERRORS.invalidAlignScope);
 	});
 
 	/**
@@ -252,7 +252,7 @@ describe("parseLine", () => {
 	 * where alignment is not even a no-op.
 	 */
 	it("permits a fill inside an alignment", () => {
-		const line = parseLine("<align=center>a<fill>b</align>");
+		const line = parseLine("<align to=center>a<fill>b</align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.fills).toHaveLength(1);
@@ -270,11 +270,11 @@ describe("parseLine", () => {
 	});
 
 	it("parses a partial cut", () => {
-		expect(parseLine("<cut=partial>").directives).toEqual([{ kind: "CUT", mode: "PARTIAL" }]);
+		expect(parseLine("<cut mode=partial>").directives).toEqual([{ kind: "CUT", mode: "PARTIAL" }]);
 	});
 
 	it("parses a feed with its line count", () => {
-		expect(parseLine("<feed=3>").directives).toEqual([{ kind: "FEED", lines: 3 }]);
+		expect(parseLine("<feed lines=3>").directives).toEqual([{ kind: "FEED", lines: 3 }]);
 	});
 
 	it("parses a rule alone on its line", () => {
@@ -342,19 +342,19 @@ describe("parseLine", () => {
 	});
 
 	it("rejects a size multiplier above eight", () => {
-		expect(error("<size=9,1>x</size>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(error("<size width=9 height=1>x</size>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
-	it("rejects a non-numeric size argument", () => {
-		expect(error("<size=big>x</size>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	it("rejects a non-numeric size attribute", () => {
+		expect(error("<size width=big>x</size>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
-	it("rejects an argument on a tag that takes none", () => {
-		expect(error("<bold=1>x</bold>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	it("rejects a value on a tag that takes none", () => {
+		expect(error("<bold=1>x</bold>").code).toBe(MARKUP_ERRORS.unknownAttribute);
 	});
 
-	it("rejects a missing argument on a tag that requires one", () => {
-		expect(error("<align>x</align>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+	it("rejects a missing attribute on a tag that requires one", () => {
+		expect(error("<align>x</align>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("rejects an unterminated tag", () => {
@@ -591,14 +591,14 @@ describe("wrap tags", () => {
 	});
 
 	it("nests inside alignment", () => {
-		const line = parseLine("<align=right><nowrap>Yhteensa 14.80</nowrap></align>");
+		const line = parseLine("<align to=right><nowrap>Yhteensa 14.80</nowrap></align>");
 
 		expect(line.align).toBe("RIGHT");
 		expect(line.wrap).toBe(false);
 	});
 
 	it("nests outside alignment, which means the same thing", () => {
-		const line = parseLine("<nowrap><align=right>Yhteensa 14.80</align></nowrap>");
+		const line = parseLine("<nowrap><align to=right>Yhteensa 14.80</align></nowrap>");
 
 		expect(line.align).toBe("RIGHT");
 		expect(line.wrap).toBe(false);
@@ -701,20 +701,20 @@ describe("block tags", () => {
 	});
 
 	it("measures a QR code with the same geometry the preview draws", () => {
-		const line = parseLine("<qr=6>https://example.com/o/1</qr>");
+		const line = parseLine("<qr size=6>https://example.com/o/1</qr>");
 		const expected = symbolGeometry({ kind: "QR", content: "https://example.com/o/1", size: 6 });
 
 		expect(line.directives[0]).toMatchObject({ heightLines: expected.heightLines });
 	});
 
-	it("takes the module size from the argument", () => {
-		const line = parseLine("<qr=8>https://example.com/o/1</qr>");
+	it("takes the module size from the attribute", () => {
+		const line = parseLine("<qr size=8>https://example.com/o/1</qr>");
 
 		expect(line.directives[0]).toMatchObject({ kind: "QR", size: 8 });
 	});
 
 	it("rejects a module size outside 1-16", () => {
-		expect(() => parseLine("<qr=99>x</qr>")).toThrow(/1.*16/);
+		expect(() => parseLine("<qr size=99>x</qr>")).toThrow(/1.*16/);
 	});
 
 	it("keeps characters that would otherwise be markup", () => {
@@ -732,7 +732,7 @@ describe("block tags", () => {
 	});
 
 	it("parses a barcode with its symbology", () => {
-		const line = parseLine("<barcode=EAN13>1234567890128</barcode>");
+		const line = parseLine("<barcode type=EAN13>1234567890128</barcode>");
 
 		expect(line.directives[0]).toMatchObject({
 			kind: "BARCODE",
@@ -742,16 +742,16 @@ describe("block tags", () => {
 	});
 
 	it("requires a symbology on a barcode", () => {
-		expect(blockError("<barcode>123</barcode>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(blockError("<barcode>123</barcode>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("rejects an unknown symbology", () => {
-		expect(blockError("<barcode=NOPE>123</barcode>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(blockError("<barcode type=NOPE>123</barcode>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("rejects content the symbology cannot encode, at the right column", () => {
-		expect(() => parseLine("<barcode=EAN13>123</barcode>")).toThrow(/13/);
-		expect(blockError("<align=center><barcode=EAN13>123</barcode></align>").column).toBe(15);
+		expect(() => parseLine("<barcode type=EAN13>123</barcode>")).toThrow(/13/);
+		expect(blockError("<align to=center><barcode type=EAN13>123</barcode></align>").column).toBe(18);
 	});
 
 	/**
@@ -760,7 +760,7 @@ describe("block tags", () => {
 	 * as a 400 naming the column rather than as an unhandled fault.
 	 */
 	it("rejects content the encoder refuses, as a markup error rather than a crash", () => {
-		const thrown = blockError("<barcode=EAN13>1234567890123</barcode>");
+		const thrown = blockError("<barcode type=EAN13>1234567890123</barcode>");
 
 		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
 		expect(thrown.column).toBe(1);
@@ -773,7 +773,7 @@ describe("block tags", () => {
 	 * in a response they read, so `blocks.ts` strips it before the parser ever sees it.
 	 */
 	it("keeps the encoder's internal identifier out of the message", () => {
-		const thrown = blockError("<barcode=EAN13>1234567890123</barcode>");
+		const thrown = blockError("<barcode type=EAN13>1234567890123</barcode>");
 
 		expect(thrown.message).not.toContain("bwipp.");
 		expect(thrown.message).not.toMatch(/#\d+/);
@@ -806,12 +806,12 @@ describe("block tags", () => {
 		expect(line.directives[0]).toMatchObject({ kind: "PDF417", content: "ORDER-1", errorLevel: 1 });
 	});
 
-	it("takes the PDF417 error level from the argument", () => {
-		expect(parseLine("<pdf417=4>ORDER-1</pdf417>").directives[0]).toMatchObject({ errorLevel: 4 });
+	it("takes the PDF417 error level from the attribute", () => {
+		expect(parseLine("<pdf417 level=4>ORDER-1</pdf417>").directives[0]).toMatchObject({ errorLevel: 4 });
 	});
 
 	it("rejects a PDF417 error level outside 0-8", () => {
-		expect(blockError("<pdf417=9>x</pdf417>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(blockError("<pdf417 level=9>x</pdf417>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("parses a drawer pulse with its default pin", () => {
@@ -821,11 +821,11 @@ describe("block tags", () => {
 	});
 
 	it("parses the second drawer pin", () => {
-		expect(parseLine("<drawer=5>").directives[0]).toEqual({ kind: "DRAWER", pin: 5 });
+		expect(parseLine("<drawer pin=5>").directives[0]).toEqual({ kind: "DRAWER", pin: 5 });
 	});
 
 	it("rejects a drawer pin that is neither 2 nor 5", () => {
-		expect(blockError("<drawer=3>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(blockError("<drawer pin=3>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	it("refuses a block sharing its element with text", () => {
@@ -852,7 +852,7 @@ describe("block tags", () => {
 	});
 
 	it("permits a block inside an alignment, which owns the whole line", () => {
-		const line = parseLine("<align=center><qr>x</qr></align>");
+		const line = parseLine("<align to=center><qr>x</qr></align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.directives[0]).toMatchObject({ kind: "QR" });
@@ -890,17 +890,18 @@ describe("the image tag", () => {
 	});
 
 	it("takes a width percentage", () => {
-		expect(parseLine("<image=50>logo</image>").directives[0]).toMatchObject({ widthPercent: 50 });
+		expect(parseLine("<image width=50>logo</image>").directives[0]).toMatchObject({ widthPercent: 50 });
 	});
 
 	it("refuses a percentage outside 1-100", () => {
-		expect(imageError("<image=0>logo</image>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
-		expect(imageError("<image=101>logo</image>").code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(imageError("<image width=0>logo</image>").code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(imageError("<image width=101>logo</image>").code).toBe(MARKUP_ERRORS.invalidAttribute);
 	});
 
 	/**
-	 * The reason the tag is paired rather than `<image=…>`: a URL routinely carries `=` in a query
-	 * string, so an argument-shaped reference would be split at the first one.
+	 * The reason the reference is the tag's content rather than an attribute's value, unlike
+	 * `width`: a URL routinely carries `=` in a query string, so an attribute value would be split
+	 * at the first one.
 	 */
 	it("keeps a URL with a query string intact", () => {
 		expect(parseLine("<image>https://x.test/l.png?v=2</image>").directives[0]).toMatchObject({
@@ -945,7 +946,7 @@ describe("the image tag", () => {
 	});
 
 	it("obeys an alignment that owns the line", () => {
-		const line = parseLine("<align=center><image=25>logo</image></align>");
+		const line = parseLine("<align to=center><image width=25>logo</image></align>");
 
 		expect(line.align).toBe("CENTER");
 		expect(line.directives[0]).toMatchObject({ kind: "IMAGE", ref: "logo", widthPercent: 25 });
@@ -966,16 +967,16 @@ describe("parseDocument", () => {
 	it("carries the line on an error inside a spanning scope", () => {
 		const thrown = (() => {
 			try {
-				parseDocument("<bold>\n<size=9>x</size>\n</bold>");
+				parseDocument("<bold>\n<size width=9 height=9>x</size>\n</bold>");
 			} catch (error) {
 				return error as MarkupError;
 			}
 			throw new Error("expected a refusal");
 		})();
 
-		expect(thrown.code).toBe(MARKUP_ERRORS.invalidTagArgument);
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
 		expect(thrown.line).toBe(2);
-		expect(thrown.column).toBe(1);
+		expect(thrown.column).toBe(7);
 	});
 
 	it("refuses parseLine on a document", () => {

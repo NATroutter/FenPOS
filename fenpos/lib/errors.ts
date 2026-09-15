@@ -307,7 +307,7 @@ export const API_ERROR_STATUS = {
 	 *
 	 * The logo is not an asset and is not scaled: the agent holds one raster per bundled paper
 	 * width and `BundledImages` matches a width exactly, so a device on some other paper — or a
-	 * `<image=50>` asking for half of one — names dots that do not exist on either side. The panel
+	 * `<image width=50>` asking for half of one — names dots that do not exist on either side. The panel
 	 * could dither any width and deliberately does not, since a preview of something no printer can
 	 * produce is worse than a refusal. See `BUNDLED_LOGO_WIDTHS` in `lib/assets/bundled-logo.ts`.
 	 */

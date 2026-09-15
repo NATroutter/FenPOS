@@ -31,7 +31,7 @@ describe("resolveFills", () => {
 	});
 
 	it("repeats the character the tag named", () => {
-		expect(filled("Coffee<fill=.>2.50")).toBe(`Coffee${".".repeat(32)}2.50`);
+		expect(filled("Coffee<fill char=.>2.50")).toBe(`Coffee${".".repeat(32)}2.50`);
 	});
 
 	it("splits the slack evenly between several fills", () => {
@@ -80,18 +80,18 @@ describe("resolveFills", () => {
 	 * slack: there are columns left over, and they stay unspent because the character will not fit.
 	 */
 	it("emits nothing when the budget is smaller than one fill character", () => {
-		const line = resolveFills(parseLine("X<size=2>A<fill>B</size>"), 6);
+		const line = resolveFills(parseLine("X<size width=2 height=2>A<fill>B</size>"), 6);
 
 		expect(line.spans.map((span) => span.text).join("")).toBe("XAB");
 		expect(lineColumns(line)).toBe(5);
 	});
 
 	/**
-	 * A fill inside `<size=2>` spends two columns per character, so an odd budget cannot be spent
+	 * A fill inside `<size width=2 height=2>` spends two columns per character, so an odd budget cannot be spent
 	 * exactly and the line lands a column short. Under the default multiplier this cannot arise.
 	 */
 	it("spends a budget in whole characters, leaving the line short under a width multiplier", () => {
-		const line = resolveFills(parseLine("X<size=2>A<fill>B</size>"), COLUMNS);
+		const line = resolveFills(parseLine("X<size width=2 height=2>A<fill>B</size>"), COLUMNS);
 
 		expect(line.spans.map((span) => span.text).join("")).toBe(`XA${" ".repeat(18)}B`);
 		expect(lineColumns(line)).toBe(41);
@@ -108,7 +108,7 @@ describe("resolveFills", () => {
 	});
 
 	it("draws a rule from a fill that is alone on its line", () => {
-		expect(filled("<fill=->")).toBe("-".repeat(42));
+		expect(filled("<fill char=->")).toBe("-".repeat(42));
 	});
 
 	it("right-aligns a segment when the fill leads", () => {

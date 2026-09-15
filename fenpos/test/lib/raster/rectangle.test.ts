@@ -15,9 +15,9 @@ const SOURCES = [
 	"<box>\nA\n</box>",
 	"<box border=double>\n<box border=thick>\nA\n</box>\n</box>",
 	"<table>\n<row><cell>a</cell><cell>b</cell></row>\n</table>",
-	"<bar=50>",
-	"<font=mono size=100>Wide text that wraps</font>",
-	"<align=right><box width=30>\nx\n</box></align>",
+	"<bar value=50>",
+	"<text font=mono size=100>Wide text that wraps</text>",
+	"<align to=right><box width=30>\nx\n</box></align>",
 ];
 
 describe("every raster", () => {
