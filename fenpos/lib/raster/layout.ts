@@ -303,6 +303,8 @@ function blockNode(node: BlockNode, context: LayoutContext): LayoutNode {
 			return new BoxNode(node, buildFlow(node.children, context));
 		case "table":
 			return new TableNode(node, context);
+		case "bar":
+			return new GaugeNode(node, context);
 		default:
 			throw new Error(`no layout node draws <${node.tag}>`);
 	}
@@ -575,6 +577,49 @@ class TableNode implements LayoutNode {
 			}
 		}
 		return widths;
+	}
+}
+
+/** Dots between the outlined bar and the number that follows it. */
+const GAUGE_GAP_DOTS = 12;
+
+/**
+ * A one-line gauge: an outlined bar hatched to a percentage, with the percentage itself set after
+ * a gap.
+ *
+ * The number is measured once, at construction, rather than at every `measure`/`paint` call: it is
+ * plain text in a fixed face, so nothing about it can change with the width the gauge is offered,
+ * unlike a box or table whose content reflows.
+ */
+class GaugeNode implements LayoutNode {
+	private readonly widthPercent: number;
+	private readonly percent: number;
+	private readonly numberRows: TextRow[];
+	private readonly numberWidth: number;
+
+	constructor(node: BlockNode, context: LayoutContext) {
+		this.widthPercent = (node.attributes.width as number | undefined) ?? 100;
+		this.percent = Number.parseInt(node.argument ?? "0", 10);
+		const items: InlineItem[] = [{ kind: "run", text: `${node.argument}%`, style: PLAIN, column: node.column }];
+		this.numberRows = layoutText(items, Number.MAX_SAFE_INTEGER, false, "LEFT", context);
+		this.numberWidth = this.numberRows.reduce((widest, row) => Math.max(widest, row.width), 0);
+	}
+
+	measure(availableWidth: number): Size {
+		return { width: Math.floor((availableWidth * this.widthPercent) / 100), height: LINE_HEIGHT_DOTS };
+	}
+
+	paint(canvas: Canvas, x: number, y: number, availableWidth: number): void {
+		const width = Math.floor((availableWidth * this.widthPercent) / 100);
+		const barWidth = Math.max(0, width - this.numberWidth - GAUGE_GAP_DOTS);
+
+		canvas.rect(x, y, barWidth, LINE_HEIGHT_DOTS, 1);
+		const innerWidth = Math.max(0, barWidth - 2);
+		const filled = Math.round((innerWidth * this.percent) / 100);
+		canvas.fill(x + 1, y + 1, filled, LINE_HEIGHT_DOTS - 2, "hatch");
+
+		const textTop = y + Math.floor((LINE_HEIGHT_DOTS - textHeight(this.numberRows)) / 2);
+		paintRows(canvas, this.numberRows, x + barWidth + GAUGE_GAP_DOTS, textTop);
 	}
 }
 

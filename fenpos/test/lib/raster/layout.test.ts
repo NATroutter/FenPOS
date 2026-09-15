@@ -202,3 +202,10 @@ describe("TableNode", () => {
 		);
 	});
 });
+
+describe("GaugeNode", () => {
+	it("draws an outlined bar filled to the percentage with the number after it", () => {
+		expectRasterToMatchGolden(renderRasterLine(parseDocument("<bar=38 width=80>").nodes, context), "gauge-38");
+		expect(renderRasterLine(parseDocument("<bar=0>").nodes, context).heightDots).toBe(24);
+	});
+});
