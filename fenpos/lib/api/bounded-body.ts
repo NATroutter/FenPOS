@@ -99,14 +99,3 @@ export async function readBoundedJson(request: Request, maxBytes: number): Promi
 		throw new ApiError("invalid_json", "Body is not valid JSON");
 	}
 }
-
-/**
- * The body-size ceiling print and preview share.
- *
- * One constant rather than two copies of the literal. It had drifted into exactly that: preview
- * restated `64 * 1024` with a comment asserting it matched the print endpoint, and nothing but
- * that comment enforced the claim. A receipt is `data`, one markup element per line, plus an
- * optional `linefeed` — 64 KiB is far more than any receipt this system prints needs, and a body
- * approaching it is already not a receipt a thermal printer could use.
- */
-export const PRINT_REQUEST_MAX_BODY_BYTES = 64 * 1024;

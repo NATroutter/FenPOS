@@ -434,12 +434,17 @@ model Device {
   defaultLinefeed String  @default("LF") @map("default_linefeed")
 
   // --- Per-device limit overrides. Null means inherit the global setting. ---
-  maxBodyBytes   Int? @map("max_body_bytes")
-  maxLines       Int? @map("max_lines")
-  maxLineChars   Int? @map("max_line_chars")
-  maxTotalChars  Int? @map("max_total_chars")
-  maxOutputLines Int? @map("max_output_lines")
-  maxQueueDepth  Int? @map("max_queue_depth")
+  maxBodyBytes    Int? @map("max_body_bytes")
+  maxLines        Int? @map("max_lines")
+  maxLineChars    Int? @map("max_line_chars")
+  maxTotalChars   Int? @map("max_total_chars")
+  maxOutputLines  Int? @map("max_output_lines")
+  maxQueueDepth   Int? @map("max_queue_depth")
+  maxBlockDepth   Int? @map("max_block_depth")
+  maxTableCells   Int? @map("max_table_cells")
+  maxSeriesPoints Int? @map("max_series_points")
+  maxRasterMb     Int? @map("max_raster_mb")
+  maxFontHeight   Int? @map("max_font_height")
 
   /// Desired state. Observed connection state lives in memory, reported by the agent.
   paused    Boolean  @default(false)

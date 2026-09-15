@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/errors";
 import { compiledJobSchema, IMAGE_LIMITS } from "@/lib/link/protocol";
 import { type CompileSettings, compile, readRequest } from "@/lib/markup/compiler";
-import { setSetting } from "@/lib/settings/settings-service";
+import { DEFAULT_LIMITS, setSetting } from "@/lib/settings/settings-service";
 
 /**
  * Tests for the pre-pass that gives the compiler an image's dimensions.
@@ -604,7 +604,7 @@ describe("dots that have to travel with the job", () => {
 				images,
 				variables: null,
 			};
-			const limits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
+			const limits = { ...DEFAULT_LIMITS, maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
 
 			const request = readRequest({ data: "<image>fenpos</image>", linefeed: "LF" }, limits, settings, 200);
 			const job = compile("job-1", "kitchen", request, limits, settings);

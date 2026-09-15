@@ -27,6 +27,7 @@ import {
 	globalSignInPolicy,
 	integerSetting,
 	listSettings,
+	printBodyLimitBytes,
 	SETTING_KEYS,
 	SETTINGS,
 	secretSetting,
@@ -128,6 +129,18 @@ describe("settings", () => {
 		expect((await globalLimits()).maxOutputLines).toBe(7);
 	});
 
+	it("derives the raster byte budget from the megabyte setting", async () => {
+		await setSetting("limits.maxRasterMb", 2);
+
+		expect((await globalLimits()).maxRasterBytes).toBe(2 * 1024 * 1024);
+	});
+
+	it("reads the request body limit in bytes", async () => {
+		await setSetting("limits.maxBodyKb", 64);
+
+		expect(await printBodyLimitBytes()).toBe(64 * 1024);
+	});
+
 	it("reads job settings as one object, honouring overrides", async () => {
 		await prisma.setting.create({ data: { key: "jobs.maxRecords", value: "500" } });
 
@@ -171,6 +184,16 @@ describe("settings", () => {
 describe("setting definitions", () => {
 	beforeEach(async () => {
 		await prisma.setting.deleteMany();
+	});
+
+	it("bounds the raster megabyte setting at a literal ceiling, not yet derived from the frame cap", () => {
+		// Base64 expands by four thirds and the frame also carries the job's JSON, so an eventual
+		// derivation from the frame cap needs that cap raised first — today's frame is far too small for
+		// the arithmetic to produce a positive number. Until then, 11 is a literal.
+		const definition = SETTINGS.find((setting) => setting.key === "limits.maxRasterMb");
+
+		expect(definition?.type).toBe("integer");
+		expect(definition && definition.type === "integer" ? definition.max : undefined).toBe(11);
 	});
 
 	it("gives every setting a category the category table names", () => {
@@ -416,6 +439,12 @@ describe("setting definitions", () => {
 			"limits.maxLineChars": "integer",
 			"limits.maxTotalChars": "integer",
 			"limits.maxOutputLines": "integer",
+			"limits.maxBodyKb": "integer",
+			"limits.maxBlockDepth": "integer",
+			"limits.maxTableCells": "integer",
+			"limits.maxSeriesPoints": "integer",
+			"limits.maxRasterMb": "integer",
+			"limits.maxFontHeight": "integer",
 			"jobs.retentionMinutes": "integer",
 			"jobs.maxRecords": "integer",
 			"jobs.shutdownGraceSeconds": "integer",

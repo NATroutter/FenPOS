@@ -7,6 +7,7 @@ import { resetFormatting, setFormatting } from "@/lib/format/datetime";
 import { agentSettingsSchema, JOB_LIMITS, jobSettingsSchema, rawWriteSchema } from "@/lib/link/protocol";
 import { logger, resetMinimumLevel, setMinimumLevel } from "@/lib/logger";
 import type { CompileLimits } from "@/lib/markup/compiler";
+import { DEFAULT_PARSE_OPTIONS } from "@/lib/markup/document";
 
 /**
  * Install-wide settings, replacing the globals the YAML file used to carry.
@@ -35,6 +36,11 @@ export const DEFAULT_LIMITS: CompileLimits = {
 	maxLineChars: 256,
 	maxTotalChars: 16_384,
 	maxOutputLines: 300,
+	maxBlockDepth: DEFAULT_PARSE_OPTIONS.maxBlockDepth,
+	maxTableCells: DEFAULT_PARSE_OPTIONS.maxTableCells,
+	maxSeriesPoints: DEFAULT_PARSE_OPTIONS.maxSeriesPoints,
+	maxRasterBytes: 4 * 1024 * 1024,
+	maxFontHeight: DEFAULT_PARSE_OPTIONS.maxFontHeight,
 };
 
 /**
@@ -148,7 +154,23 @@ export const CATEGORIES: readonly {
 		groups: [
 			{
 				label: "Print requests",
-				keys: ["limits.maxLines", "limits.maxLineChars", "limits.maxTotalChars", "limits.maxOutputLines"],
+				keys: [
+					"limits.maxLines",
+					"limits.maxLineChars",
+					"limits.maxTotalChars",
+					"limits.maxOutputLines",
+					"limits.maxBodyKb",
+				],
+			},
+			{
+				label: "Blocks and rasters",
+				keys: [
+					"limits.maxBlockDepth",
+					"limits.maxTableCells",
+					"limits.maxSeriesPoints",
+					"limits.maxRasterMb",
+					"limits.maxFontHeight",
+				],
 			},
 			{ label: "API responses", keys: ["api.defaultPageSize", "api.maxPageSize"] },
 		],
@@ -530,6 +552,12 @@ export const SETTING_KEYS = [
 	"limits.maxLineChars",
 	"limits.maxTotalChars",
 	"limits.maxOutputLines",
+	"limits.maxBodyKb",
+	"limits.maxBlockDepth",
+	"limits.maxTableCells",
+	"limits.maxSeriesPoints",
+	"limits.maxRasterMb",
+	"limits.maxFontHeight",
 	"jobs.retentionMinutes",
 	"jobs.maxRecords",
 	"jobs.shutdownGraceSeconds",
@@ -742,6 +770,77 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		max: JOB_LIMITS.maxLines,
 		fallback: DEFAULT_LIMITS.maxOutputLines,
 		unit: "lines",
+	},
+	{
+		key: "limits.maxBodyKb",
+		label: "Request body",
+		description:
+			"Largest print or preview request body accepted, checked before it is parsed. A receipt is mostly text, but a job can also carry drawn blocks, inline images and configured-font lines, all of which cost bytes long before this bound existed.",
+		category: "limits",
+		type: "integer",
+		min: 64,
+		max: 4_096,
+		fallback: 1_024,
+		unit: "KiB",
+	},
+	{
+		key: "limits.maxBlockDepth",
+		label: "Block nesting depth",
+		description: "How many blocks one inside another a document may nest before it is refused.",
+		category: "limits",
+		type: "integer",
+		min: 1,
+		max: 64,
+		fallback: DEFAULT_LIMITS.maxBlockDepth,
+		unit: "levels",
+	},
+	{
+		key: "limits.maxTableCells",
+		label: "Cells per table",
+		description: "Rows times columns, across one table.",
+		category: "limits",
+		type: "integer",
+		min: 1,
+		max: 100_000,
+		fallback: DEFAULT_LIMITS.maxTableCells,
+		unit: "cells",
+	},
+	{
+		key: "limits.maxSeriesPoints",
+		label: "Points per series",
+		description: "How many data points one chart series may plot.",
+		category: "limits",
+		type: "integer",
+		min: 1,
+		max: 100_000,
+		fallback: DEFAULT_LIMITS.maxSeriesPoints,
+		unit: "points",
+	},
+	{
+		key: "limits.maxRasterMb",
+		label: "Raster bytes per job",
+		description:
+			"Every drawn block, inline image and configured-font line in one job, before base64. The knob for a slow serial link: 4 MiB at 9600 baud is over an hour of printing.",
+		category: "limits",
+		type: "integer",
+		min: 1,
+		// A literal for now, not yet derived from the frame cap: base64 expands by four thirds and
+		// the frame also carries the job's JSON, and today's frame is far too small for that
+		// arithmetic to land on a positive number.
+		max: 11,
+		fallback: 4,
+		unit: "MiB",
+	},
+	{
+		key: "limits.maxFontHeight",
+		label: "Font height",
+		description: "Tallest glyph a configured font may render, in dots.",
+		category: "limits",
+		type: "integer",
+		min: 8,
+		max: 4_096,
+		fallback: DEFAULT_LIMITS.maxFontHeight,
+		unit: "dots",
 	},
 	{
 		key: "jobs.retentionMinutes",
@@ -1882,7 +1981,24 @@ export async function globalLimits(): Promise<CompileLimits> {
 		maxLineChars: value("limits.maxLineChars"),
 		maxTotalChars: value("limits.maxTotalChars"),
 		maxOutputLines: value("limits.maxOutputLines"),
+		maxBlockDepth: value("limits.maxBlockDepth"),
+		maxTableCells: value("limits.maxTableCells"),
+		maxSeriesPoints: value("limits.maxSeriesPoints"),
+		maxRasterBytes: value("limits.maxRasterMb") * 1024 * 1024,
+		maxFontHeight: value("limits.maxFontHeight"),
 	};
+}
+
+/**
+ * Reads the request body size ceiling print and preview share, in bytes.
+ *
+ * Stored as kibibytes so the setting's own bounds read like a size a person would recognise;
+ * converted here because {@link readBoundedJson} counts bytes, not the unit an operator thinks in.
+ *
+ * @returns the largest body a print or preview request may carry, in bytes
+ */
+export async function printBodyLimitBytes(): Promise<number> {
+	return (await integerSetting("limits.maxBodyKb")) * 1024;
 }
 
 /** Job retention and shutdown as configured, in the shape `config.sync` carries. */

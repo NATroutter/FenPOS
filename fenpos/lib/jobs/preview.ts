@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
+import { effectiveLimits } from "@/lib/jobs/limits";
 import { logger } from "@/lib/logger";
 import {
 	type CompileLimits,
@@ -141,12 +142,7 @@ export async function compilePreviewWithContext(
 		};
 
 		const installed = await globalLimits();
-		const limits: CompileLimits = {
-			maxLines: device.maxLines ?? installed.maxLines,
-			maxLineChars: device.maxLineChars ?? installed.maxLineChars,
-			maxTotalChars: device.maxTotalChars ?? installed.maxTotalChars,
-			maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
-		};
+		const limits: CompileLimits = effectiveLimits(device, installed);
 
 		// Everything reported about a failure, minus the failures themselves. Built fresh at each
 		// early return so the measurements are always present and honest, and takes the linefeed

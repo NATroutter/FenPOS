@@ -14,6 +14,7 @@ import {
 	readRequest,
 } from "@/lib/markup/compiler";
 import type { ResolvedImages } from "@/lib/markup/images";
+import { DEFAULT_LIMITS } from "@/lib/settings/settings-service";
 
 /** The value-length cap `readRequest` enforces on a supplied `variables` field. Not itself under test here. */
 const MAX_VARIABLE_VALUE_CHARS = 200;
@@ -67,6 +68,7 @@ describe("compile pipeline", () => {
 	};
 
 	const limits: CompileLimits = {
+		...DEFAULT_LIMITS,
 		maxLines: 5,
 		maxLineChars: 20,
 		maxTotalChars: 50,
@@ -266,7 +268,13 @@ describe("compile pipeline", () => {
 	describe("per-line wrapping", () => {
 		// The shared limits allow twenty characters per line, which a tagged line exceeds
 		// before it ever reaches the wrapper. Roomier here so the tag is what is being tested.
-		const roomy: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 6 };
+		const roomy: CompileLimits = {
+			...DEFAULT_LIMITS,
+			maxLines: 5,
+			maxLineChars: 60,
+			maxTotalChars: 200,
+			maxOutputLines: 6,
+		};
 
 		/** Compiles against the ten-column fixture, with the device default under test. */
 		const wrapping = (body: unknown, defaultWrap = true) => {
@@ -459,7 +467,13 @@ describe("block line budget", () => {
 	const WIDE_SETTINGS: CompileSettings = { ...SETTINGS, columns: 42 };
 
 	/** Roomy enough that no character limit fires: these cases are about the line budget. */
-	const BUDGET_LIMITS: CompileLimits = { maxLines: 20, maxLineChars: 80, maxTotalChars: 400, maxOutputLines: 400 };
+	const BUDGET_LIMITS: CompileLimits = {
+		...DEFAULT_LIMITS,
+		maxLines: 20,
+		maxLineChars: 80,
+		maxTotalChars: 400,
+		maxOutputLines: 400,
+	};
 
 	it("charges a QR code its printed height, not one line", () => {
 		const plain = countOutputLines({ data: "Hello", linefeed: "LF", variables: {} }, WIDE_SETTINGS, BUDGET_LIMITS);
@@ -578,7 +592,13 @@ describe("block line budget", () => {
 	});
 
 	it("refuses a job whose images do not fit, the same as one whose text does not", () => {
-		const limits: CompileLimits = { maxLines: 5, maxLineChars: 40, maxTotalChars: 100, maxOutputLines: 9 };
+		const limits: CompileLimits = {
+			...DEFAULT_LIMITS,
+			maxLines: 5,
+			maxLineChars: 40,
+			maxTotalChars: 100,
+			maxOutputLines: 9,
+		};
 		const request = readRequest(
 			{ data: "<image>logo</image>", linefeed: "LF" },
 			limits,
@@ -611,7 +631,13 @@ describe("block line budget", () => {
 	});
 
 	it("carries block directives to the wire unchanged, unlike a rule", () => {
-		const limits: CompileLimits = { maxLines: 10, maxLineChars: 60, maxTotalChars: 400, maxOutputLines: 30 };
+		const limits: CompileLimits = {
+			...DEFAULT_LIMITS,
+			maxLines: 10,
+			maxLineChars: 60,
+			maxTotalChars: 400,
+			maxOutputLines: 30,
+		};
 		const request = readRequest(
 			{
 				data: [
@@ -678,7 +704,13 @@ describe("images on the wire", () => {
 		variables: null,
 	};
 
-	const limits: CompileLimits = { maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 40 };
+	const limits: CompileLimits = {
+		...DEFAULT_LIMITS,
+		maxLines: 5,
+		maxLineChars: 60,
+		maxTotalChars: 200,
+		maxOutputLines: 40,
+	};
 
 	const directivesFor = (markup: string) => {
 		const request = readRequest({ data: markup, linefeed: "LF" }, limits, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
@@ -732,6 +764,7 @@ describe("images on the wire", () => {
  */
 describe("compiling with variables", () => {
 	const limits = (): CompileLimits => ({
+		...DEFAULT_LIMITS,
 		maxLines: 5,
 		maxLineChars: 200,
 		maxTotalChars: 500,
@@ -794,7 +827,7 @@ describe("compiling with variables", () => {
  * span each other and about a receipt whose exact bytes are pinned below.
  */
 describe("a document in one string", () => {
-	const LIMITS: CompileLimits = { maxLines: 200, maxLineChars: 256, maxTotalChars: 16384, maxOutputLines: 300 };
+	const LIMITS: CompileLimits = DEFAULT_LIMITS;
 
 	const SETTINGS: CompileSettings = {
 		columns: 42,

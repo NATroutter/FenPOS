@@ -3,11 +3,11 @@ import { prisma } from "@/lib/db";
 import type { Codepage, Linefeed, UnsupportedPolicy } from "@/lib/domain/enums";
 import { ApiError } from "@/lib/errors";
 import { publish } from "@/lib/events/bus";
+import { effectiveLimits } from "@/lib/jobs/limits";
 import { FrameTooLargeError, MAX_FRAME_BYTES } from "@/lib/link/protocol";
 import { getLink } from "@/lib/link/registry";
 import { logger } from "@/lib/logger";
 import {
-	type CompileLimits,
 	type CompileSettings,
 	compile,
 	type DeviceSettings,
@@ -96,17 +96,8 @@ export async function submitJob(
 		defaultLinefeed: device.defaultLinefeed as Linefeed,
 	};
 
-	// Three layers, narrowest wins: a device override, then the install-wide setting, then the
-	// built-in default. A device that overrides nothing follows the setting, and an install that
-	// changes nothing follows the code — so improving a default improves it for everyone who never
-	// touched it.
 	const installed = await globalLimits();
-	const limits: CompileLimits = {
-		maxLines: device.maxLines ?? installed.maxLines,
-		maxLineChars: device.maxLineChars ?? installed.maxLineChars,
-		maxTotalChars: device.maxTotalChars ?? installed.maxTotalChars,
-		maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,
-	};
+	const limits = effectiveLimits(device, installed);
 
 	const maxVariableValueChars = await integerSetting("variables.maxValueChars");
 

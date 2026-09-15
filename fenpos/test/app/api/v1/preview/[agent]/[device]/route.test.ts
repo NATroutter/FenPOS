@@ -3,6 +3,7 @@ import { POST } from "@/app/api/v1/preview/[agent]/[device]/route";
 import { apiReadLimiter } from "@/lib/auth/rate-limit";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * `POST /api/v1/preview/{agent}/{device}` — what would this print.
@@ -110,6 +111,7 @@ describe("POST /api/v1/preview/{agent}/{device}", () => {
 	});
 
 	it("refuses an oversized body before it is parsed", async () => {
+		await setSetting("limits.maxBodyKb", 64);
 		// Valid JSON, not malformed — a failure here can only be the size check that runs before
 		// `JSON.parse`, not a parse failure that would prove nothing about the ordering.
 		const oversized = JSON.stringify({ data: "x".repeat(70_000) });

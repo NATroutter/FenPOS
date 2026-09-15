@@ -1,8 +1,9 @@
 import { apiRoute } from "@/lib/api/api-route";
-import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
+import { readBoundedJson } from "@/lib/api/bounded-body";
 import { requireApiRead } from "@/lib/auth/rate-limit";
 import { compilePreview } from "@/lib/jobs/preview";
 import { requireGrantedDevice } from "@/lib/keys/authenticate";
+import { printBodyLimitBytes } from "@/lib/settings/settings-service";
 
 /**
  * `POST /api/v1/preview/{agent}/{device}` — what this body would print, without printing it.
@@ -29,7 +30,7 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 
 		const target = await requireGrantedDevice(key, agent, device);
 
-		const { body } = await readBoundedJson(request, PRINT_REQUEST_MAX_BODY_BYTES);
+		const { body } = await readBoundedJson(request, await printBodyLimitBytes());
 
 		// The key's own name goes with it. A receipt using an `API_KEY_NAME` variable is compiled
 		// against the same name a print by this key would substitute, which is the only way the claim

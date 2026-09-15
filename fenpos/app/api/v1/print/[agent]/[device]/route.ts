@@ -1,11 +1,12 @@
 import { type ApiRouteResult, apiRoute } from "@/lib/api/api-route";
-import { PRINT_REQUEST_MAX_BODY_BYTES, readBoundedJson } from "@/lib/api/bounded-body";
+import { readBoundedJson } from "@/lib/api/bounded-body";
 import { ApiError } from "@/lib/errors";
 import { submitJob } from "@/lib/jobs/dispatch";
 import { bodyHash, findReplay, type IdempotentReplay, isIdempotencyKeyRace } from "@/lib/jobs/idempotency";
 import { requireGrantedDevice } from "@/lib/keys/authenticate";
 import { logger } from "@/lib/logger";
 import { getClientAddress } from "@/lib/request-context";
+import { printBodyLimitBytes } from "@/lib/settings/settings-service";
 
 /**
  * `POST /api/v1/print/{agent}/{device}` — submits a job to one printer.
@@ -67,7 +68,7 @@ export const POST = apiRoute<{ agent: string; device: string }>(
 		const target = await requireGrantedDevice(key, agent, device);
 
 		const idempotencyKey = readIdempotencyKey(request);
-		const { body, raw } = await readBoundedJson(request, PRINT_REQUEST_MAX_BODY_BYTES);
+		const { body, raw } = await readBoundedJson(request, await printBodyLimitBytes());
 
 		// Checked after the body is read, because the answer depends on the body: a repeated key
 		// with different content is a conflict rather than a replay, and that cannot be known until

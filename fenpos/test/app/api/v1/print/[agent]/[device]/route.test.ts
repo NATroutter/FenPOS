@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashSecret } from "@/lib/auth/secrets";
 import { prisma } from "@/lib/db";
 import { type AgentLink, registerLink, unregisterLink } from "@/lib/link/registry";
+import { setSetting } from "@/lib/settings/settings-service";
 
 /**
  * `POST /api/v1/print/{agent}/{device}` — idempotent submits.
@@ -120,7 +121,30 @@ beforeEach(async () => {
 });
 
 describe("POST /api/v1/print — body size", () => {
-	it("refuses an oversized body before it is parsed, and never dispatches", async () => {
+	afterEach(async () => {
+		await prisma.setting.deleteMany({ where: { key: "limits.maxBodyKb" } });
+	});
+
+	it("accepts a body that the old fixed 64 KiB ceiling would have refused", async () => {
+		// The install-wide default is now well over 64 KiB, so a body this size is ordinary rather
+		// than oversized — this is the case the fixed constant used to refuse outright.
+		const body = JSON.stringify({ data: "x".repeat(70_000) });
+
+		const response = await POST(
+			new Request(`https://fenpos.test/api/v1/print/${agentName}/kitchen`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}` },
+				body,
+			}),
+			{ params: Promise.resolve({ agent: agentName, device: "kitchen" }) },
+		);
+
+		expect(response.status).toBe(202);
+		expect(vi.mocked(submitJob)).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses a body over an install-tightened limit, and never dispatches", async () => {
+		await setSetting("limits.maxBodyKb", 64);
 		// Valid JSON, not malformed — a failure here can only be the size check that runs before
 		// `JSON.parse`, not a parse failure that would prove nothing about the ordering.
 		const oversized = JSON.stringify({ data: "x".repeat(70_000) });

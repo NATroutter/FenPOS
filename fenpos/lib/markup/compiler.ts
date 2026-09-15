@@ -58,6 +58,11 @@ export interface CompileLimits {
 	maxLineChars: number;
 	maxTotalChars: number;
 	maxOutputLines: number;
+	maxBlockDepth: number;
+	maxTableCells: number;
+	maxSeriesPoints: number;
+	maxRasterBytes: number;
+	maxFontHeight: number;
 }
 
 /** Print settings the compiler needs, as configured on the device. */
