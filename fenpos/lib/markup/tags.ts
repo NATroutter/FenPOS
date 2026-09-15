@@ -149,8 +149,8 @@ export const TAGS: Record<string, Tag> = {
 /**
  * Whether a tag encloses data rather than text to be printed.
  *
- * The four block tags are paired like a styling tag but behave nothing like one: what they enclose
- * is the payload of a symbology, or the name of an image, so it is captured verbatim into a
+ * The four content tags are paired like a styling tag but behave nothing like one: what they
+ * enclose is the payload of a symbology, or the name of an image, so it is captured verbatim into a
  * directive instead of becoming styled spans. Naming the set here keeps the parser's several checks
  * on it in step.
  *
@@ -159,7 +159,7 @@ export const TAGS: Record<string, Tag> = {
  * @param name a tag name, as written in markup
  * @returns true when the tag's content is data rather than text
  */
-export function isBlockTag(name: string): boolean {
+export function isContentTag(name: string): boolean {
 	return name === "qr" || name === "barcode" || name === "pdf417" || name === "image";
 }
 

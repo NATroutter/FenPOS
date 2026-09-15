@@ -23,7 +23,7 @@ import type {
 } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import type { SpanStyle } from "@/lib/markup/model";
-import { isBlockTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
+import { isContentTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
 import type { Token, Tokenized } from "@/lib/markup/tokenizer";
 
 /**
@@ -78,7 +78,7 @@ const CHART_KINDS: readonly string[] = ["bar", "line", "pie", "scatter"];
 const MARKER_KINDS: readonly string[] = ["line", "scatter"];
 
 /** Printed lines a `<chart>` stands, when the tag does not say. */
-const DEFAULT_CHART_HEIGHT = 10;
+const DEFAULT_CHART_HEIGHT = 8;
 
 /** The fills series are drawn with, in the order series that asked for none are given them. */
 const SERIES_PATTERNS = ["solid", "hatch", "dot", "hollow"] as const;
@@ -461,7 +461,7 @@ class DocumentBuilder {
 		const attributes = readAttributes(tag.name, token.attributes, tag.attributes, token.line);
 		this.requirePlacement(tag, token.line, token.column);
 
-		if (isBlockTag(tag.name)) {
+		if (isContentTag(tag.name)) {
 			this.openContent(tag, token);
 			return;
 		}

@@ -5,7 +5,7 @@ import { Canvas } from "@/lib/raster/canvas";
 import { bundledFace, typefaceFor } from "@/lib/raster/fonts";
 import { type LayoutContext, renderRasterLine } from "@/lib/raster/layout";
 import { context } from "../../helpers/layout-context";
-import { expectRasterToMatchGolden } from "../../helpers/pbm";
+import { ascii, expectRasterToMatchGolden } from "../../helpers/pbm";
 
 describe("renderRasterLine", () => {
 	it("draws a configured-font line the paper's width, one row tall", () => {
@@ -207,5 +207,11 @@ describe("GaugeNode", () => {
 	it("draws an outlined bar filled to the percentage with the number after it", () => {
 		expectRasterToMatchGolden(renderRasterLine(parseDocument("<bar=38 width=80>").nodes, context), "gauge-38");
 		expect(renderRasterLine(parseDocument("<bar=0>").nodes, context).heightDots).toBe(24);
+	});
+
+	it("prints the number a leading zero was written as, not the digits", () => {
+		const padded = renderRasterLine(parseDocument("<bar=038 width=80>").nodes, context);
+
+		expect(ascii(padded)).toBe(ascii(renderRasterLine(parseDocument("<bar=38 width=80>").nodes, context)));
 	});
 });

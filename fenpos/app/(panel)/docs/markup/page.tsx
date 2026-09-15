@@ -692,7 +692,7 @@ export default async function MarkupDocsPage() {
 									<Mono>&lt;chart=bar&gt;</Mono>, <Mono>&lt;chart=line&gt;</Mono>, <Mono>&lt;chart=pie&gt;</Mono> and{" "}
 									<Mono>&lt;chart=scatter&gt;</Mono> draw the <Mono>&lt;series&gt;</Mono> and{" "}
 									<Mono>&lt;labels&gt;</Mono> it encloses as a plotted picture, sized by <Mono>width</Mono> and{" "}
-									<Mono>height</Mono> (printed lines, 3–60, ten by default) and captioned by <Mono>title</Mono>.
+									<Mono>height</Mono> (printed lines, 3–60, eight by default) and captioned by <Mono>title</Mono>.
 								</P>
 
 								<P>

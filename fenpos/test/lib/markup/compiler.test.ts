@@ -976,10 +976,10 @@ describe("a document in one string", () => {
 
 	/**
 	 * A box, drawn as one raster line: an inline image beside styled text, closed by a rule and a
-	 * cut. The receipt this spec's own header uses, compiled end to end rather than laid out node by
-	 * node as `layout.test.ts` checks it.
+	 * cut. A receipt header — an icon and a title, aligned together in a box — compiled end to end
+	 * rather than laid out node by node as `layout.test.ts` checks it.
 	 */
-	it("compiles the spec's header box to one raster line", () => {
+	it("compiles a receipt's icon-and-title header box to one raster line", () => {
 		const source =
 			"<box>\n<align=center><image>moon</image> <size=2><bold>ASTRONOMY</bold></size></align>\n</box>\n<hr>\n<cut>";
 		const job = compile(
