@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { BlockNode, ChartData } from "@/lib/markup/document";
 import { parseDocument } from "@/lib/markup/parser";
 import { chartFrame, ticks } from "@/lib/raster/charts";
+import { renderRasterLine } from "@/lib/raster/layout";
 import { context } from "../../helpers/layout-context";
+import { expectRasterToMatchGolden } from "../../helpers/pbm";
 
 const chartOf = (source: string): ChartData => (parseDocument(source).nodes[0] as BlockNode).chart as ChartData;
 
@@ -40,5 +42,40 @@ describe("chartFrame", () => {
 
 	it("has no legend for one series under auto", () => {
 		expect(chartFrame(chartOf("<chart=bar>\n<series>1</series>\n</chart>"), 384, context).legend).toBeNull();
+	});
+});
+
+describe("bar and line charts", () => {
+	it("draws grouped bars", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument(
+					'<chart=bar height=8 title="Sales by hour">\n<series=A>3,5,2</series>\n<series=B>4,1,6</series>\n<labels>08,09,10</labels>\n</chart>',
+				).nodes,
+				context,
+			),
+			"chart-bar",
+		);
+	});
+
+	it("draws a line with markers and an area", () => {
+		expectRasterToMatchGolden(
+			renderRasterLine(
+				parseDocument(
+					'<chart=line height=10 title="Temperature" area=on>\n<series=Temp pattern=hatch marker=circle>62,64,68,72,74,75</series>\n<labels>08,09,10,11,12,13</labels>\n</chart>',
+				).nodes,
+				context,
+			),
+			"chart-line-area",
+		);
+	});
+
+	it("starts the axis below zero when a value is negative", () => {
+		const raster = renderRasterLine(
+			parseDocument("<chart=line height=6>\n<series>-2,1,3</series>\n</chart>").nodes,
+			context,
+		);
+
+		expect(raster.heightDots).toBe(6 * 24);
 	});
 });

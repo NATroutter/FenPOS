@@ -80,6 +80,37 @@ export class Canvas {
 		}
 	}
 
+	/**
+	 * Draws the thinnest line joining two dots.
+	 *
+	 * Bresenham rather than a walk along the slope: a printer has no grey to spare, so a diagonal is
+	 * one inked dot per step and which dot that is has to be decided in integers, or a line drawn
+	 * twice from opposite ends would not land on the same dots.
+	 */
+	line(x0: number, y0: number, x1: number, y1: number): void {
+		const dx = Math.abs(x1 - x0);
+		const dy = -Math.abs(y1 - y0);
+		const stepX = x0 < x1 ? 1 : -1;
+		const stepY = y0 < y1 ? 1 : -1;
+		let error = dx + dy;
+		let x = x0;
+		let y = y0;
+
+		for (;;) {
+			this.set(x, y);
+			if (x === x1 && y === y1) return;
+			const doubled = 2 * error;
+			if (doubled >= dy) {
+				error += dy;
+				x += stepX;
+			}
+			if (doubled <= dx) {
+				error += dx;
+				y += stepY;
+			}
+		}
+	}
+
 	rect(x: number, y: number, width: number, height: number, thickness = 1): void {
 		this.hLine(x, y, width, thickness);
 		this.hLine(x, y + height - thickness, width, thickness);

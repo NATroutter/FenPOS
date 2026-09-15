@@ -41,6 +41,30 @@ describe("Canvas", () => {
 		expect(ascii(canvas.pack())).toBe(["######", "######", "##..##", "######", "######"].join("\n"));
 	});
 
+	it("draws a sloped line between its two ends", () => {
+		const canvas = new Canvas(6, 3);
+		canvas.line(0, 0, 5, 2);
+
+		expect(ascii(canvas.pack())).toBe(["##....", "..##..", "....##"].join("\n"));
+	});
+
+	it("draws a line whichever way round its ends are given", () => {
+		const forward = new Canvas(5, 5);
+		forward.line(0, 4, 4, 0);
+		const backward = new Canvas(5, 5);
+		backward.line(4, 0, 0, 4);
+
+		expect(ascii(backward.pack())).toBe(ascii(forward.pack()));
+		expect(ascii(forward.pack())).toBe(["....#", "...#.", "..#..", ".#...", "#...."].join("\n"));
+	});
+
+	it("draws a line of one dot when both ends are the same", () => {
+		const canvas = new Canvas(3, 1);
+		canvas.line(1, 0, 1, 0);
+
+		expect(ascii(canvas.pack())).toBe(".#.");
+	});
+
 	it("fills with a pattern anchored to canvas coordinates", () => {
 		const canvas = new Canvas(8, 4);
 		canvas.fill(0, 0, 8, 4, "dot");
