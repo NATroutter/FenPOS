@@ -55,7 +55,7 @@ public final class Frames {
      * cap a third of these, so it would refuse a receipt that only the new cap makes possible,
      * rather than the printer producing blank paper where the raster should have been.
      */
-    public static final int PROTOCOL_VERSION = 3;
+    public static final int PROTOCOL_VERSION = 4;
 
     private Frames() {
     }

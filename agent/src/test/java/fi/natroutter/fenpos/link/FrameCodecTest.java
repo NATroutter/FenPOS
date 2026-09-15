@@ -920,17 +920,17 @@ class FrameCodecTest {
     @Test
     void refusesAWelcomeWhoseIdentifiersAreOutsideTheirBounds() {
         assertThrows(ProtocolException.class, () -> codec.read("""
-                {"type":"welcome","protocolVersion":3,"agentId":"%s","agentName":"n",\
+                {"type":"welcome","protocolVersion":4,"agentId":"%s","agentName":"n",\
                 "serverTime":"2026-09-04T10:00:00Z"}""".formatted("a".repeat(65))));
         assertThrows(ProtocolException.class, () -> codec.read("""
-                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                {"type":"welcome","protocolVersion":4,"agentId":"a","agentName":"%s",\
                 "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(129))));
     }
 
     @Test
     void acceptsAWelcomeAgentNameAtItsMaximumLength() {
         assertDoesNotThrow(() -> codec.read("""
-                {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"%s",\
+                {"type":"welcome","protocolVersion":4,"agentId":"a","agentName":"%s",\
                 "serverTime":"2026-09-04T10:00:00Z"}""".formatted("n".repeat(128))));
     }
 
@@ -938,7 +938,7 @@ class FrameCodecTest {
     void refusesAServerTimeThatIsNotATimestamp() {
         for (String value : new String[] {"\"not-a-timestamp\"", "\"\"", "\"2026-13-45T99:99:99Z\""}) {
             assertThrows(ProtocolException.class, () -> codec.read("""
-                    {"type":"welcome","protocolVersion":3,"agentId":"a","agentName":"n",\
+                    {"type":"welcome","protocolVersion":4,"agentId":"a","agentName":"n",\
                     "serverTime":%s}""".formatted(value)), value);
         }
     }

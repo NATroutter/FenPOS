@@ -53,7 +53,7 @@ import {
  * third of these, so it would refuse a receipt that only the new cap makes possible, rather
  * than the printer producing blank paper where the raster should have been.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * Largest frame accepted, in bytes.
