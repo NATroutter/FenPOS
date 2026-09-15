@@ -34,7 +34,7 @@ vi.mock("@/lib/assets/fetch-remote", async (importOriginal) => ({
 }));
 
 const { createAsset } = await import("@/lib/assets/asset-service");
-const { maxRemoteReferences, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
+const { charge, maxRemoteReferences, RESOLVE_WINDOW, resolveImages } = await import("@/lib/markup/resolve-images");
 
 /**
  * The `images.maxRemoteReferences` fallback (`settings-service.ts`), for tests that leave it unset.
@@ -143,6 +143,22 @@ async function refusal(data: string[]): Promise<ApiError> {
 async function refusalWithin(data: string[], rasterBudgetBytes: number): Promise<ApiError> {
 	try {
 		await resolveImages(data.join("\n"), COLUMNS, null, rasterBudgetBytes);
+	} catch (thrown) {
+		expect(thrown).toBeInstanceOf(ApiError);
+		return thrown as ApiError;
+	}
+	throw new Error("expected a refusal, got a success");
+}
+
+/**
+ * The same for a call that refuses without waiting on anything.
+ *
+ * @param run the call expected to raise
+ * @returns the error, having asserted it is an ApiError
+ */
+function refusalFrom(run: () => void): ApiError {
+	try {
+		run();
 	} catch (thrown) {
 		expect(thrown).toBeInstanceOf(ApiError);
 		return thrown as ApiError;
@@ -545,23 +561,35 @@ describe("dots that have to travel with the job", () => {
 	 *
 	 * There are two, and only one was checked here. `limits.maxRasterMb` bounds what a whole
 	 * request may spend; `IMAGE_LIMITS.maxRasterChars` bounds any single raster, and both
-	 * `imageSourceSchema` and the agent's `FrameCodec.readRaster` enforce it. The image below sits in
-	 * the gap: 504x1600 dots is about 134 KB of base64, past the 128 KB per-raster cap and well inside
-	 * the install's raster budget. It used to compile, be recorded as a job, and then fail
-	 * serialisation with a `ZodError` — a 500 for the caller and a job stuck at `QUEUED`.
+	 * `imageSourceSchema` and the agent's `FrameCodec.readRaster` enforce it. A raster in the gap
+	 * between them used to compile, be recorded as a job, and then fail serialisation with a
+	 * `ZodError` — a 500 for the caller and a job stuck at `QUEUED`.
 	 *
-	 * Both bounds are asserted, because a check that had simply been tightened to the per-raster cap
-	 * would pass the first of these and break the second: two images of 100 KB each are lawful
-	 * individually and unlawful together.
+	 * Sized from the cap itself rather than from an image whose dots happened to exceed whatever the
+	 * cap was: the property is the refusal, not any one number. The raster is built and charged
+	 * directly, because no picture can carry this many dots through the resolver — the size gate above
+	 * refuses a claim that large long before a raster comes of it — and it is charged against a budget
+	 * with room to spare, so that the refusal under test is the one this case is named for.
 	 */
-	it("refuses a single raster larger than the wire will carry, even inside the request budget", async () => {
-		fetchRemoteImage.mockResolvedValue(await solidPng(504, 1600));
+	it("refuses a single raster larger than the wire will carry, even inside the request budget", () => {
+		// The widest a raster may be, so that the height carrying this many bytes is one the wire would
+		// itself accept: what refuses this fixture is its size alone, rather than its shape.
+		const widthDots = IMAGE_LIMITS.maxWidthDots;
+		const rowBytes = Math.ceil(widthDots / 8);
+		// However the cap is packed into characters, this many raw bytes is always over it: at four
+		// base64 characters per three bytes, `cap` bytes already encode to `cap * 4/3` characters.
+		const heightDots = Math.ceil(IMAGE_LIMITS.maxRasterChars / rowBytes) + 1;
+		const packed = Buffer.alloc(rowBytes * heightDots);
+		// Room to spare for these bytes, so what refuses them is the wire's cap on one raster rather
+		// than the request's budget for all of them.
+		const budget = { spent: 0, limit: packed.length * 2 };
 
-		const thrown = await refusal(["<image>https://x.test/tall.png</image>"]);
+		expect(heightDots).toBeLessThanOrEqual(IMAGE_LIMITS.maxHeightDots);
+
+		const thrown = refusalFrom(() => charge("https://x.test/tall.png", { widthDots, heightDots, packed }, budget));
 
 		expect(thrown.code).toBe("image_too_large");
 		expect(thrown.details.limit).toBe(IMAGE_LIMITS.maxRasterChars);
-		expect(thrown.details.line).toBe(1);
 	});
 
 	it("still allows a raster just inside the per-raster cap", async () => {

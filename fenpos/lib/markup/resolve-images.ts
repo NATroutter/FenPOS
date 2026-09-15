@@ -539,13 +539,18 @@ interface InlineBudget {
  * the caller got a 500 and the job sat QUEUED forever. The sync path already checked each raster
  * against `assetRasterSchema` before adding it; the job path did not.
  *
+ * Exported so a check of that first refusal can size its fixture from `IMAGE_LIMITS.maxRasterChars`
+ * itself, by building the oversized raster directly. No image can reach it through this module: the
+ * dots it takes to pass the cap are far more than the size gate lets a decodable picture claim, so a
+ * fixture that went in as pixels would be testing that gate instead.
+ *
  * @param reference the image, for the message
  * @param raster the dots just produced
  * @param budget what the request has spent so far, updated in place
  * @throws ApiError when this raster is larger than the wire will carry, or takes the request past
  *         its budget
  */
-function charge(reference: string, raster: ImageRaster, budget: InlineBudget): void {
+export function charge(reference: string, raster: ImageRaster, budget: InlineBudget): void {
 	const chars = Math.ceil(raster.packed.length / 3) * 4;
 	if (chars > IMAGE_LIMITS.maxRasterChars) {
 		throw new ApiError(
