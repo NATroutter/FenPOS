@@ -162,6 +162,42 @@ describe("tokenize", () => {
 		expect(tokenize("Tom & Jerry", null).tokens).toEqual([{ kind: "text", text: "Tom & Jerry", line: 1, column: 1 }]);
 	});
 
+	it("decodes the quote entity in text as a token of its own", () => {
+		expect(tokenize("a&quot;b", null).tokens).toEqual([
+			{ kind: "text", text: "a", line: 1, column: 1 },
+			{ kind: "text", text: '"', line: 1, column: 2 },
+			{ kind: "text", text: "b", line: 1, column: 8 },
+		]);
+	});
+
+	it("decodes entities inside bare and quoted attribute values", () => {
+		const { tokens } = tokenize('<x title="He said &quot;hi&quot;" char=&amp; other=&lt;>', null);
+
+		expect(tokens[0]).toEqual({
+			kind: "open",
+			name: "x",
+			attributes: [
+				{ name: "title", value: 'He said "hi"', column: 4 },
+				{ name: "char", value: "&", column: 35 },
+				{ name: "other", value: "<", column: 46 },
+			],
+			line: 1,
+			column: 1,
+		});
+	});
+
+	it("keeps an ampersand that starts no entity inside a value", () => {
+		expect(tokenize("<x a=R&D>", null).tokens[0]).toMatchObject({
+			attributes: [{ name: "a", value: "R&D", column: 4 }],
+		});
+	});
+
+	it("reads a raw quote inside a bare value as part of the value", () => {
+		expect(tokenize('<fill char=a">', null).tokens[0]).toMatchObject({
+			attributes: [{ name: "char", value: 'a"', column: 7 }],
+		});
+	});
+
 	it("substitutes a variable into its own token and never re-scans the value", () => {
 		const { tokens } = tokenize("Order {id}", context({ id: "<bold>7</bold>" }));
 

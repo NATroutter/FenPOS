@@ -26,6 +26,7 @@ const ENTITIES: readonly [string, string][] = [
 	["&lt;", "<"],
 	["&amp;", "&"],
 	["&lbrace;", "{"],
+	["&quot;", '"'],
 ];
 
 const NAME_CHAR = /[a-z0-9_-]/i;
@@ -309,7 +310,7 @@ class Tokenizer {
 					);
 				}
 			}
-			attributes.push({ name: key, value, column: keyColumn });
+			attributes.push({ name: key, value: decodeEntities(value), column: keyColumn });
 		}
 		if (this.source[at] !== ">") {
 			throw unterminated();
@@ -327,4 +328,29 @@ class Tokenizer {
 
 function isSpace(character: string): boolean {
 	return character === " " || character === "\t";
+}
+
+/**
+ * Replaces each entity in an attribute value with the character it stands for.
+ *
+ * Runs after the value's extent is known, so an entity never decides where a value ends: none of them
+ * contains a space, a `>` or a `"`. Any `&` that begins no entity is kept as written, as it is in text.
+ */
+function decodeEntities(value: string): string {
+	if (!value.includes("&")) {
+		return value;
+	}
+	let decoded = "";
+	let at = 0;
+	while (at < value.length) {
+		const entity = value[at] === "&" ? ENTITIES.find(([written]) => value.startsWith(written, at)) : undefined;
+		if (entity) {
+			decoded += entity[1];
+			at += entity[0].length;
+		} else {
+			decoded += value[at];
+			at += 1;
+		}
+	}
+	return decoded;
 }
