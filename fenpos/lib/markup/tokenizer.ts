@@ -22,14 +22,14 @@ export interface Tokenized {
 	lineChars: number[];
 }
 
-const ENTITIES: readonly [string, string][] = [
+export const ENTITIES: readonly [string, string][] = [
 	["&lt;", "<"],
 	["&amp;", "&"],
 	["&lbrace;", "{"],
 	["&quot;", '"'],
 ];
 
-const NAME_CHAR = /[a-z0-9_-]/i;
+export const NAME_CHAR = /[a-z0-9_-]/i;
 
 /**
  * Reads a whole document into tokens.
@@ -326,7 +326,7 @@ class Tokenizer {
 	}
 }
 
-function isSpace(character: string): boolean {
+export function isSpace(character: string): boolean {
 	return character === " " || character === "\t";
 }
 
