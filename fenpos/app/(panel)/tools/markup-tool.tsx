@@ -32,6 +32,7 @@ import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
 import { InsertDialog, type InsertTag } from "@/app/(panel)/tools/insert-dialog";
+import { markupLanguage } from "@/app/(panel)/tools/markup-language";
 import { ImagePreview } from "@/components/panel/image-preview";
 import { useSessionState } from "@/components/panel/session-state";
 import { SymbolPreview } from "@/components/panel/symbol-preview";
@@ -50,6 +51,9 @@ import { markupEdit, variableEdit } from "@/lib/markup/editing";
 
 /** How long the editor sits still before a preview is compiled. */
 const DEBOUNCE_MS = 300;
+
+/** Built once: a new extension array on every render would reconfigure the editor each keystroke. */
+const MARKUP_EXTENSIONS = markupLanguage();
 
 /**
  * How long a toolbar action keeps pulling focus back to the editor.
@@ -623,6 +627,7 @@ export function MarkupTool({
 							className="h-full"
 							height="100%"
 							theme={editorTheme}
+							extensions={MARKUP_EXTENSIONS}
 							basicSetup={{
 								lineNumbers: true,
 								foldGutter: false,

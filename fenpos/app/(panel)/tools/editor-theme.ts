@@ -40,6 +40,12 @@ export const editorTheme = EditorView.theme(
 				backgroundColor: "color-mix(in oklab, var(--brand) 35%, transparent)",
 			},
 		".cm-cursor": { borderLeftColor: "#e5e5e5" },
+		".cm-mk-tag": { color: "var(--brand)" },
+		".cm-mk-attr": { color: "#a3a3a3" },
+		".cm-mk-value": { color: "#d4d4d4" },
+		".cm-mk-punct": { color: "#525252" },
+		".cm-mk-entity": { color: "#a3a3a3", fontStyle: "italic" },
+		".cm-mk-variable": { color: "#a3a3a3", fontStyle: "italic" },
 	},
 	{ dark: true },
 );
