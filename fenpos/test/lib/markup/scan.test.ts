@@ -114,4 +114,21 @@ describe("scan", () => {
 
 		expect(value?.complete).toBe(true);
 	});
+
+	it("ends a tag at the bracket outside its quoted value", () => {
+		const source = '<chart title="a > b">';
+		const spans = scan(source);
+		const value = spans.find((span) => span.kind === "attribute-value");
+		const brackets = spans.filter((span) => span.kind === "tag-punctuation" && source[span.from] === ">");
+
+		expect(value && source.slice(value.from, value.to)).toBe("a > b");
+		expect(brackets.map((span) => span.from)).toEqual([source.length - 1]);
+	});
+
+	it("ends a tag at its bracket when a bare value contains a quote", () => {
+		const source = '<a b=x"y>';
+		const brackets = scan(source).filter((span) => span.kind === "tag-punctuation" && source[span.from] === ">");
+
+		expect(brackets.map((span) => span.from)).toEqual([source.length - 1]);
+	});
 });

@@ -94,6 +94,32 @@ function lineEnd(source: string, from: number): number {
 }
 
 /**
+ * Where this tag's own `>` is, or -1 when its line holds none.
+ *
+ * A `>` inside a quoted value belongs to the value: `<chart title="a > b">` ends at the last one,
+ * not the first. A quote opens a value only directly after `=`, which is how the strict tokenizer
+ * reads one, so a quote inside a bare value stays an ordinary character.
+ */
+function tagEnd(source: string, start: number, end: number): number {
+	let at = start + 1;
+	while (at < end) {
+		if (source[at] === ">") {
+			return at;
+		}
+		if (source[at] === "=" && source[at + 1] === '"') {
+			const close = source.indexOf('"', at + 2);
+			if (close < 0 || close >= end) {
+				return -1;
+			}
+			at = close + 1;
+			continue;
+		}
+		at += 1;
+	}
+	return -1;
+}
+
+/**
  * Reads one tag, complete or not, and returns where scanning continues.
  *
  * Mirrors the tokenizer's own tag scan: an optional `/`, a name of name characters, then attributes
@@ -102,8 +128,8 @@ function lineEnd(source: string, from: number): number {
  */
 function readTag(source: string, start: number, spans: Span[]): number {
 	const end = lineEnd(source, start);
-	const terminator = source.indexOf(">", start);
-	const complete = terminator >= 0 && terminator <= end;
+	const terminator = tagEnd(source, start, end);
+	const complete = terminator >= 0;
 	const limit = complete ? terminator : end;
 
 	let at = start + 1;

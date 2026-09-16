@@ -197,7 +197,7 @@ export function closingFor(source: string, offset: number): string | null {
 	const terminator = spans.find(
 		(span) => span.kind === "tag-punctuation" && span.to === offset && source[span.from] === ">",
 	);
-	if (!terminator || insideQuotedValue(source, spans, terminator.from)) {
+	if (!terminator) {
 		return null;
 	}
 	const name = nameOfHeaderEndingAt(source, spans, terminator.from);
@@ -209,27 +209,6 @@ export function closingFor(source: string, offset: number): string | null {
 		return null;
 	}
 	return hasClose(source, spans, name.text, terminator.to) ? null : `</${name.text}>`;
-}
-
-/**
- * Whether a position sits between a pair of quotes, positionally rather than by scan order.
- *
- * A `>` written inside a quoted attribute value makes `scan` misjudge where the header's own
- * terminator is, and the punctuation span it emits for that misjudged terminator can land inside the
- * quoted text. Pairing quote marks by their positions in the source, rather than by where `scan`
- * happened to place their spans in its output, tells the two apart.
- */
-function insideQuotedValue(source: string, spans: Span[], at: number): boolean {
-	const quotes = spans
-		.filter((span) => span.kind === "tag-punctuation" && source[span.from] === '"')
-		.map((span) => span.from)
-		.sort((a, b) => a - b);
-	for (let index = 0; index + 1 < quotes.length; index += 2) {
-		if (at > quotes[index] && at < quotes[index + 1]) {
-			return true;
-		}
-	}
-	return false;
 }
 
 /** The name span belonging to the header whose `>` sits at this offset. */
