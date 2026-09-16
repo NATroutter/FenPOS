@@ -791,6 +791,23 @@ class MarkupParserTest {
         assertEquals(4, thrown.line());
     }
 
+    /**
+     * A refusal about what a block enclosed names the tag that opened it, wherever the content
+     * happens to end: that is where an author reading the error has to look, and it is the position
+     * the panel reports.
+     */
+    @Test
+    void reportsAMultiLineImagesRefusalAtTheTagThatOpenedIt() {
+        ImageResolver images = (name, width) -> Optional.empty();
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parseDocument("<image>\nnosuch\n</image>", images));
+
+        assertEquals(MarkupError.INVALID_TAG_ARGUMENT, thrown.error());
+        assertEquals(1, thrown.line());
+        assertEquals(1, thrown.column());
+        assertEquals("image", thrown.detail());
+    }
+
     @Test
     void singleLineParseRefusesADocument() {
         assertThrows(IllegalArgumentException.class, () -> MarkupParser.parse("a\nb"));

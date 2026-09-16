@@ -680,8 +680,8 @@ public final class MarkupParser {
             throw switch (tag) {
                 case QR -> symbolError(finished, "QR code content must not be empty");
                 case PDF417 -> symbolError(finished, "PDF417 content must not be empty");
-                case IMAGE -> argumentError(tag, column, "must enclose the name of a stored image");
-                default -> argumentError(tag, column, "must enclose the content to encode");
+                case IMAGE -> argumentError(finished, "must enclose the name of a stored image");
+                default -> argumentError(finished, "must enclose the content to encode");
             };
         }
 
@@ -697,10 +697,10 @@ public final class MarkupParser {
             case BARCODE -> new Directive.Barcode(finished.system(), content);
             case IMAGE -> {
                 if (content.startsWith("data:")) {
-                    throw new MarkupException(MarkupError.SERVER_RENDERED, line, column, tag.tagName(),
+                    throw new MarkupException(MarkupError.SERVER_RENDERED, finished.line(), column, tag.tagName(),
                             "<image> data is decoded by the server; the console prints stored images by name");
                 }
-                yield syncedImage(content, finished.value(), column);
+                yield syncedImage(finished, content);
             }
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
@@ -717,11 +717,11 @@ public final class MarkupParser {
      * the name may be wrong, or the image may be one the server has not synced yet. Either way the
      * caller can see which tag, and at which column.
      */
-    private Directive syncedImage(String name, int widthPercent, int column)
-            throws MarkupException {
+    private Directive syncedImage(OpenBlock finished, String name) throws MarkupException {
+        int widthPercent = finished.value();
         Optional<Directive.Image> found = images.resolve(name, widthPercent);
         if (found.isEmpty()) {
-            throw argumentError(Tag.IMAGE, column, "cannot print '" + name + "' at " + widthPercent
+            throw argumentError(finished, "cannot print '" + name + "' at " + widthPercent
                     + "% of the paper: this agent holds no such image at that width. Only images"
                     + " the server has synced can be printed from here, at the width they were"
                     + " synced for.");
@@ -747,6 +747,19 @@ public final class MarkupParser {
     private MarkupException symbolError(OpenBlock finished, String message) {
         return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, finished.line(), finished.column(),
                 finished.tag().tagName(), message);
+    }
+
+    /**
+     * The same refusal, phrased about the tag rather than about what it encodes.
+     * <p>
+     * A block's content runs to its closing tag and may be written across several lines, so the
+     * position reported is the tag that opened it: that is where an author reading the error has to
+     * look, and it is the position the panel reports.
+     */
+    private MarkupException argumentError(OpenBlock finished, String detail) {
+        String name = finished.tag().tagName();
+        return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, finished.line(), finished.column(), name,
+                "<" + name + "> " + detail);
     }
 
     /**
@@ -827,15 +840,6 @@ public final class MarkupParser {
         throw new MarkupException(soleOccupant.error(), soleOccupant.line(), soleOccupant.column(),
                 soleOccupant.name(),
                 "<" + soleOccupant.name() + "> takes a whole line and must be alone on its line");
-    }
-
-    // -------------------------------------------------------------------------
-    // Shared checks
-    // -------------------------------------------------------------------------
-
-    private MarkupException argumentError(Tag tag, int column, String detail) {
-        return new MarkupException(MarkupError.INVALID_TAG_ARGUMENT, line, column, tag.tagName(),
-                "<" + tag.tagName() + "> " + detail);
     }
 
     /**

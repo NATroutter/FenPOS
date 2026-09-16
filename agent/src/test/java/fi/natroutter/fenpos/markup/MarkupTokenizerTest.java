@@ -118,6 +118,26 @@ class MarkupTokenizerTest {
         assertEquals("char", e.detail());
     }
 
+    /**
+     * DEL and the C1 range are commands to a printer as much as the C0 range is, and they sit at the
+     * far end of the predicate. Built from char codes rather than string literals so the bytes stay
+     * visible to anyone reading this file.
+     */
+    @Test
+    void refusesDeleteAndC1ControlsAtTheirColumn() {
+        MarkupException delete = refusal("a" + (char) 0x7F + "b");
+
+        assertEquals(MarkupError.CONTROL_CHARACTER, delete.error());
+        assertEquals(2, delete.column());
+        assertEquals("U+007F", delete.detail());
+
+        MarkupException c1 = refusal("a" + (char) 0x85 + "b");
+
+        assertEquals(MarkupError.CONTROL_CHARACTER, c1.error());
+        assertEquals(2, c1.column());
+        assertEquals("U+0085", c1.detail());
+    }
+
     @Test
     void refusesALaterSyntaxErrorBeforeAnythingIsParsed() {
         assertEquals(2, refusal("<feed lines=0>\n<bold x\">").line());
