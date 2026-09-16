@@ -35,7 +35,8 @@ export interface Span {
  * the character rules they scan with, so they cannot disagree about what a name or an entity is.
  *
  * @param source the document as typed
- * @returns every span in order, covering the whole source
+ * @returns the spans it found, in order and not overlapping; the space between a header's attributes
+ *          and any stray character inside one are consumed without a span of their own
  */
 export function scan(source: string): Span[] {
 	const spans: Span[] = [];
