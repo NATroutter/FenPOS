@@ -16,6 +16,8 @@ export interface CaretContext {
 	/** The tag whose header the caret is in, or null when it is not in one. */
 	tag: string | null;
 	inHeader: boolean;
+	/** Whether nothing but the tag's own name stands between the caret and the header's `<`. */
+	onTagName: boolean;
 	/** The attribute the caret is on or in the value of, when it is in a header. */
 	attribute: string | null;
 	inValue: boolean;
@@ -37,6 +39,7 @@ export function contextAt(source: string, offset: number): CaretContext {
 	const open: string[] = [];
 	let tag: string | null = null;
 	let inHeader = false;
+	let onTagName = false;
 	let attribute: string | null = null;
 	let inValue = false;
 
@@ -54,13 +57,16 @@ export function contextAt(source: string, offset: number): CaretContext {
 			lastAttribute = source.slice(span.from, span.to).toLowerCase();
 		}
 		if (span.kind === "tag-punctuation" && source[span.from] === ">") {
-			if (headerTag) {
+			// A header that ends at or after the caret says nothing about what encloses it. An opening
+			// tag written below has not been reached, and a closing tag written below closes a block the
+			// caret is inside rather than one it is past, so neither may move the stack.
+			if (headerTag && span.to <= offset) {
 				if (headerClosing) {
 					const last = open.lastIndexOf(headerTag);
 					if (last >= 0) {
 						open.splice(last, 1);
 					}
-				} else if (tagByName(headerTag)?.kind === "PAIRED" && span.to <= offset) {
+				} else if (tagByName(headerTag)?.kind === "PAIRED") {
 					open.push(headerTag);
 				}
 			}
@@ -82,13 +88,14 @@ export function contextAt(source: string, offset: number): CaretContext {
 			const header = source.slice(openTagStart, offset);
 			const name = /^<\/?([a-z0-9_-]*)/i.exec(header)?.[1] ?? "";
 			tag = name.toLowerCase() || null;
+			onTagName = /^<\/?[a-z0-9_-]*$/i.test(header);
 			attribute = lastAttribute;
 			inValue = /=[^\s>]*$/.test(header) || /="[^"]*$/.test(header);
 		}
 	}
 
 	const wordStart = wordBoundary(source, offset);
-	return { open, tag, inHeader, attribute, inValue, word: { from: wordStart, to: offset } };
+	return { open, tag, inHeader, onTagName, attribute, inValue, word: { from: wordStart, to: offset } };
 }
 
 /** Where the word under the caret starts, so a completion replaces it rather than doubling it. */
@@ -166,6 +173,27 @@ export function valueSuggestions(context: CaretContext): Suggestion[] {
 	return [];
 }
 
+/**
+ * Everything that may be written at the caret, or nothing when the caret is not in a header.
+ *
+ * A caret still on the name is offered tags, whatever the characters typed so far happen to spell. A
+ * partial name resolving to a tag of its own — `<size` on the way to `<sizes`, were there such a tag —
+ * is the name being typed rather than a header waiting for attributes, and offering an attribute there
+ * would replace the name with it.
+ */
+export function suggestionsFor(context: CaretContext, source: string): Suggestion[] {
+	if (!context.inHeader) {
+		return [];
+	}
+	if (context.inValue) {
+		return valueSuggestions(context);
+	}
+	if (context.onTagName || context.tag === null) {
+		return tagSuggestions(context);
+	}
+	return attributeSuggestions(context, source);
+}
+
 /** What an attribute accepts, in the words a refusal would use. */
 function describe(spec: AttributeSpec): string {
 	switch (spec.kind) {
@@ -211,7 +239,12 @@ export function closingFor(source: string, offset: number): string | null {
 	return hasClose(source, spans, name.text, terminator.to) ? null : `</${name.text}>`;
 }
 
-/** The name span belonging to the header whose `>` sits at this offset. */
+/**
+ * The name span belonging to the header whose `>` sits at this offset.
+ *
+ * A name belongs to this header only if it was written after this header's own `<`, so a header with
+ * no name of its own — `<>` — has none, rather than the name of whatever tag was written before it.
+ */
 function nameOfHeaderEndingAt(
 	source: string,
 	spans: Span[],
@@ -219,7 +252,12 @@ function nameOfHeaderEndingAt(
 ): { text: string; closing: boolean; from: number; to: number } | null {
 	let found: Span | null = null;
 	for (const span of spans) {
-		if (span.kind === "tag-name" && span.from < terminatorStart) {
+		if (span.from >= terminatorStart) {
+			break;
+		}
+		if (span.kind === "tag-punctuation" && source[span.from] === "<") {
+			found = null;
+		} else if (span.kind === "tag-name") {
 			found = span;
 		}
 	}
@@ -307,4 +345,53 @@ export function renamePairFor(source: string, offset: number): { from: number; t
 		}
 	}
 	return null;
+}
+
+/** What a tag name is spelled with, as a whole inserted run. The empty run is one, being a deletion. */
+const NAME_TEXT = /^[a-z0-9_-]*$/i;
+
+/** One change to a document, located in the document as it stood before the change. */
+export interface SourceEdit {
+	from: number;
+	to: number;
+	insert: string;
+}
+
+/**
+ * The partner rewrites a set of changes calls for, read from the document as it stood before them.
+ *
+ * Only name characters are carried across. A caret counts as being on a name at either of its ends, so
+ * that a character appended to a name renames the partner too; the same position is where a name is
+ * ended rather than extended, by the space that begins an attribute, by an `=`, or by the `>` that
+ * terminates the header. Splicing one of those into the partner writes something the tokenizer refuses
+ * — a closing tag takes its `>` directly after its name — so a run that is not a name renames nothing.
+ *
+ * A pair whose own name the changes already reach is left alone. Both halves are then being written by
+ * hand, and a rewrite computed without sight of the other half would write the characters typed there
+ * a second time. For the same reason a pair is rewritten at most once, however many carets are on it.
+ */
+export function renameEditsFor(before: string, changes: readonly SourceEdit[]): SourceEdit[] {
+	const edits: SourceEdit[] = [];
+	for (const change of changes) {
+		if (!NAME_TEXT.test(change.insert)) {
+			continue;
+		}
+		const pair = renamePairFor(before, change.from);
+		if (pair === null) {
+			continue;
+		}
+		if (changes.some((other) => other.from <= pair.to && other.to >= pair.from)) {
+			continue;
+		}
+		if (edits.some((edit) => edit.from === pair.from && edit.to === pair.to)) {
+			continue;
+		}
+		const subject = renamePairFor(before, pair.from);
+		if (subject === null || change.from < subject.from || change.to > subject.to) {
+			continue;
+		}
+		const renamed = `${before.slice(subject.from, change.from)}${change.insert}${before.slice(change.to, subject.to)}`;
+		edits.push({ from: pair.from, to: pair.to, insert: renamed });
+	}
+	return edits;
 }

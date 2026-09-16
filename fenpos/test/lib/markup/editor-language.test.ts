@@ -3,7 +3,9 @@ import {
 	attributeSuggestions,
 	closingFor,
 	contextAt,
+	renameEditsFor,
 	renamePairFor,
+	suggestionsFor,
 	tagSuggestions,
 	valueSuggestions,
 } from "@/lib/markup/editor-language";
@@ -36,11 +38,30 @@ describe("contextAt", () => {
 		expect(context.open).toEqual(["table", "row"]);
 		expect(context.inHeader).toBe(false);
 	});
+
+	it("reports the enclosing open tags inside a block that is already closed", () => {
+		const source = "<table>\n\n</table>";
+		const context = contextAt(source, "<table>\n".length);
+
+		expect(context.open).toEqual(["table"]);
+	});
+
+	it("reports a caret that is still on the tag name", () => {
+		expect(contextAt("<size", 5).onTagName).toBe(true);
+		expect(contextAt("<size ", 6).onTagName).toBe(false);
+		expect(contextAt("<size width=2", 13).onTagName).toBe(false);
+	});
 });
 
 describe("tagSuggestions", () => {
 	it("offers only row inside a table", () => {
 		expect(labels(tagSuggestions(contextAt("<table>\n", 8)))).toEqual(["row"]);
+	});
+
+	it("offers only row inside a table that is already closed", () => {
+		const source = "<table>\n\n</table>";
+
+		expect(labels(tagSuggestions(contextAt(source, "<table>\n".length)))).toEqual(["row"]);
 	});
 
 	it("offers only cell inside a row", () => {
@@ -53,6 +74,14 @@ describe("tagSuggestions", () => {
 
 	it("offers no printer-drawn tag inside a block", () => {
 		const inside = labels(tagSuggestions(contextAt("<box>\n", 6)));
+
+		expect(inside).not.toContain("qr");
+		expect(inside).not.toContain("cut");
+		expect(inside).toContain("bold");
+	});
+
+	it("offers no printer-drawn tag inside a block that is already closed", () => {
+		const inside = labels(tagSuggestions(contextAt("<box>\n\n</box>", "<box>\n".length)));
 
 		expect(inside).not.toContain("qr");
 		expect(inside).not.toContain("cut");
@@ -150,6 +179,12 @@ describe("closingFor", () => {
 
 		expect(closingFor(source, source.indexOf(">") + 1)).toBeNull();
 	});
+
+	it("does not take the name of an earlier tag for a header that has none", () => {
+		const source = "<bold>x\n<>";
+
+		expect(closingFor(source, source.length)).toBeNull();
+	});
 });
 
 describe("renamePairFor", () => {
@@ -169,5 +204,70 @@ describe("renamePairFor", () => {
 
 	it("gives nothing when the document is unbalanced", () => {
 		expect(renamePairFor("<bold>a", 2)).toBeNull();
+	});
+});
+
+describe("suggestionsFor", () => {
+	it("offers tags while the caret is still on the tag name", () => {
+		const source = "<size";
+		const offered = labels(suggestionsFor(contextAt(source, source.length), source));
+
+		expect(offered).toContain("size");
+		expect(offered).not.toContain("width");
+	});
+
+	it("offers attributes once the name is behind the caret", () => {
+		const source = "<size ";
+
+		expect(labels(suggestionsFor(contextAt(source, source.length), source))).toEqual(["height", "width"]);
+	});
+
+	it("offers an enum's values inside a value", () => {
+		const source = "<align to=";
+
+		expect(labels(suggestionsFor(contextAt(source, source.length), source))).toEqual(["center", "left", "right"]);
+	});
+
+	it("offers nothing outside a header", () => {
+		expect(suggestionsFor(contextAt("hello", 5), "hello")).toEqual([]);
+	});
+});
+
+describe("renameEditsFor", () => {
+	const source = "<bold></bold>";
+	const nameEnd = "<bold".length;
+	const partner = { from: "<bold></".length, to: "<bold></bold".length };
+
+	it("rewrites the partner as a name character is typed", () => {
+		const edits = renameEditsFor(source, [{ from: nameEnd, to: nameEnd, insert: "x" }]);
+
+		expect(edits).toEqual([{ from: partner.from, to: partner.to, insert: "boldx" }]);
+	});
+
+	it("rewrites the partner as a name character is deleted", () => {
+		const edits = renameEditsFor(source, [{ from: nameEnd - 1, to: nameEnd, insert: "" }]);
+
+		expect(edits).toEqual([{ from: partner.from, to: partner.to, insert: "bol" }]);
+	});
+
+	it("leaves the partner alone when a space begins an attribute", () => {
+		expect(renameEditsFor(source, [{ from: nameEnd, to: nameEnd, insert: " " }])).toEqual([]);
+	});
+
+	it("leaves the partner alone when a bracket ends the header", () => {
+		expect(renameEditsFor(source, [{ from: nameEnd, to: nameEnd, insert: ">" }])).toEqual([]);
+	});
+
+	it("leaves the partner alone when an attribute is assigned", () => {
+		expect(renameEditsFor(source, [{ from: nameEnd, to: nameEnd, insert: "=" }])).toEqual([]);
+	});
+
+	it("leaves both names alone when one change edits each of them", () => {
+		const both = [
+			{ from: nameEnd, to: nameEnd, insert: "x" },
+			{ from: partner.to, to: partner.to, insert: "x" },
+		];
+
+		expect(renameEditsFor(source, both)).toEqual([]);
 	});
 });
