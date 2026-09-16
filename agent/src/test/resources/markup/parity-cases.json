@@ -92,5 +92,10 @@
   { "name": "text size past its upper bound", "markup": "<text font=a size=4097>a</text>", "refusal": { "code": "invalid_attribute", "line": 1, "column": 14, "detail": "size", "message": "<text> size=4097 is not accepted; expected a whole number from 8 to 4096" } },
   { "name": "a stored font at the smallest size", "markup": "<text font=mono size=8>a</text>", "refusal": null, "agent": { "code": "server_rendered", "line": 1, "column": 7, "detail": "text", "message": "<text font=name> uses a stored font the server renders; the console has a and b" } },
   { "name": "the brace entity in a quoted value", "markup": "a<fill char=\"&lbrace;\">b", "refusal": null },
-  { "name": "the ampersand entity in text", "markup": "a&amp;b", "refusal": null }
+  { "name": "the ampersand entity in text", "markup": "a&amp;b", "refusal": null },
+  { "name": "text in white on black", "markup": "<invert>a</invert>", "refusal": null },
+  { "name": "a line asked to wrap", "markup": "<wrap>a</wrap>", "refusal": null },
+  { "name": "a line asked not to wrap", "markup": "<nowrap>a</nowrap>", "refusal": null },
+  { "name": "a space after a symbol", "markup": "<qr>x</qr> ", "refusal": { "code": "invalid_block_scope", "line": 1, "column": 1, "detail": "qr", "message": "<qr> takes a whole line and must be alone on its line" } },
+  { "name": "a space after a whole-line block", "markup": "<box>\na\n</box> ", "refusal": null, "agent": { "code": "server_rendered", "line": 1, "column": 1, "detail": "box", "message": "<box> is drawn by the server into a raster; the console prints text only" } }
 ]

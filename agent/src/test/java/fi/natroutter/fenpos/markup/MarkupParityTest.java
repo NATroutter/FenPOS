@@ -1,6 +1,7 @@
 package fi.natroutter.fenpos.markup;
 
 import com.google.gson.Gson;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -8,7 +9,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -60,5 +64,34 @@ class MarkupParityTest {
                 () -> MarkupParser.parseDocument(parity.markup()));
         assertEquals(expected, new Refusal(thrown.error().apiCode(), thrown.line(), thrown.column(),
                 thrown.detail(), thrown.getMessage()));
+    }
+
+    /**
+     * Every tag, and every attribute each tag declares, is written in at least one case.
+     * <p>
+     * The panel asserts how many cases there are, which catches one that was deleted. This catches one
+     * that was never written: a tag or an attribute added to the language reaches both parsers with no
+     * shared case exercising it, and the count stays whatever it was.
+     */
+    @Test
+    void everyTagAndAttributeIsWrittenInACase() throws IOException {
+        String written = cases().stream()
+                .map(ParityCase::markup)
+                .collect(Collectors.joining("\n"))
+                .toLowerCase(Locale.ROOT);
+
+        List<String> missing = new ArrayList<>();
+        for (Tag tag : Tag.values()) {
+            if (!written.contains("<" + tag.tagName())) {
+                missing.add("<" + tag.tagName() + ">");
+            }
+            for (String attribute : tag.attributes().keySet()) {
+                if (!written.contains(attribute + "=")) {
+                    missing.add("<" + tag.tagName() + "> " + attribute);
+                }
+            }
+        }
+
+        assertEquals(List.of(), missing, "tags and attributes no parity case writes");
     }
 }
