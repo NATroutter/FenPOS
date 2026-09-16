@@ -647,6 +647,18 @@ class MarkupParserTest {
                 MarkupParser.parse("<image width=40>logo</image>", holding("logo", 40)).directives());
     }
 
+    /**
+     * An image is the one block that may be placed beside text: it is drawn into a row of glyphs
+     * sized to its own dots rather than taking the whole line, so a line may hold both.
+     */
+    @Test
+    void letsAnImageShareItsLineWithText() throws Exception {
+        Line line = MarkupParser.parse("Logo: <image>logo</image>", holding("logo", 100));
+
+        assertEquals("Logo: ", line.plainText());
+        assertEquals(List.of(ONE_DOT), line.directives());
+    }
+
     @Test
     void rejectsAnImageThisAgentDoesNotHold() {
         MarkupException thrown = assertThrows(MarkupException.class,
