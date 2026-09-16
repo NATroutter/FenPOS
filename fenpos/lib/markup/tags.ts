@@ -1,5 +1,6 @@
 import { Align, BarcodeSystem } from "@/lib/domain/enums";
 import type { AttributeTable } from "@/lib/markup/attributes";
+import type { BlockTag } from "@/lib/markup/document";
 
 /**
  * The complete set of markup tags.
@@ -185,3 +186,27 @@ export function tagByName(name: string): Tag | undefined {
 	const lower = name.toLowerCase();
 	return Object.hasOwn(TAGS, lower) ? TAGS[lower] : undefined;
 }
+
+/**
+ * The tags the printer prints for itself, which is why no block may hold one.
+ *
+ * A block is a region of dots the server draws and sends as a picture. A symbol is encoded by the
+ * printer's own firmware and a cut or a feed acts on the paper rather than marking it, so neither
+ * is something that can be drawn into a region: there is nothing to draw.
+ */
+export const PRINTER_DRAWN: ReadonlySet<string> = new Set(["qr", "barcode", "pdf417", "cut", "feed", "drawer"]);
+
+/** The blocks that mean nothing on their own, and the block each belongs directly inside. */
+export const REQUIRED_PARENT: ReadonlyMap<string, BlockTag> = new Map([
+	["row", "table"],
+	["cell", "row"],
+	["series", "chart"],
+	["labels", "chart"],
+] as [string, BlockTag][]);
+
+/** The blocks that hold named tags and nothing else, whitespace and line breaks apart. */
+export const HOLDS_ONLY: ReadonlyMap<BlockTag, readonly string[]> = new Map([
+	["table", ["row"]],
+	["row", ["cell"]],
+	["chart", ["series", "labels"]],
+] as [BlockTag, readonly string[]][]);

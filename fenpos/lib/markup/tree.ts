@@ -23,7 +23,7 @@ import type {
 } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import type { SpanStyle } from "@/lib/markup/model";
-import { isContentTag, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
+import { HOLDS_ONLY, isContentTag, PRINTER_DRAWN, REQUIRED_PARENT, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
 import type { Token, Tokenized } from "@/lib/markup/tokenizer";
 
 /**
@@ -70,30 +70,6 @@ const VALUE_SEPARATOR = /[\s,]+/;
 
 /** Splits a list of labels, which may hold spaces of their own and so are cut on commas alone. */
 const LABEL_SEPARATOR = /[,\n]/;
-
-/**
- * The tags the printer prints for itself, which is why no block may hold one.
- *
- * A block is a region of dots this side draws and sends as a picture. A symbol is encoded by the
- * printer's own firmware and a cut or a feed acts on the paper rather than marking it, so neither
- * is something that can be drawn into a region: there is nothing to draw.
- */
-const PRINTER_DRAWN: ReadonlySet<string> = new Set(["qr", "barcode", "pdf417", "cut", "feed", "drawer"]);
-
-/** The blocks that mean nothing on their own, and the block each belongs directly inside. */
-const REQUIRED_PARENT: ReadonlyMap<string, BlockTag> = new Map([
-	["row", "table"],
-	["cell", "row"],
-	["series", "chart"],
-	["labels", "chart"],
-] as [string, BlockTag][]);
-
-/** The blocks that hold named tags and nothing else, whitespace and line breaks apart. */
-const HOLDS_ONLY: ReadonlyMap<BlockTag, readonly string[]> = new Map([
-	["table", ["row"]],
-	["row", ["cell"]],
-	["chart", ["series", "labels"]],
-] as [BlockTag, readonly string[]][]);
 
 /** The blocks that may sit beside something else on a line, rather than owning whole lines. */
 const SHARES_A_LINE: ReadonlySet<BlockTag> = new Set(["row", "cell", "series", "labels", "bar"]);
