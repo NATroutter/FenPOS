@@ -705,7 +705,7 @@ public final class MarkupParser {
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
 
-        claimLine(tag.tagName(), column, MarkupError.INVALID_BLOCK_SCOPE);
+        claimLine(tag.tagName(), finished.line(), column, MarkupError.INVALID_BLOCK_SCOPE);
         directives.add(directive);
         block = null;
     }
@@ -787,7 +787,7 @@ public final class MarkupParser {
                     "partial".equals(attributes.string("mode")) ? Directive.Cut.Mode.PARTIAL : Directive.Cut.Mode.FULL));
             case FEED -> directives.add(new Directive.Feed(attributes.integer("lines", 1)));
             case HR -> {
-                claimLine("hr", column, MarkupError.INVALID_RULE_SCOPE);
+                claimLine("hr", line, column, MarkupError.INVALID_RULE_SCOPE);
                 directives.add(new Directive.Rule());
             }
             default -> throw new IllegalStateException("Tag " + tag + " is not a directive");
@@ -810,8 +810,13 @@ public final class MarkupParser {
         fills.add(new Fill(spans.size(), character, style, column));
     }
 
-    /** Records a directive that must be the only thing printed on its line. */
-    private void claimLine(String name, int column, MarkupError error) {
+    /**
+     * Records a directive that must be the only thing printed on its line.
+     * <p>
+     * The position is the tag's own, passed in rather than read from the parser: a symbol may be
+     * written across several lines, and the line it claims is the one its opening tag stands on.
+     */
+    private void claimLine(String name, int line, int column, MarkupError error) {
         if (soleOccupant == null) {
             soleOccupant = new SoleOccupant(name, column, error, line);
         }

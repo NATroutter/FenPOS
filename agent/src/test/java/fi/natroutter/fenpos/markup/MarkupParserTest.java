@@ -808,6 +808,21 @@ class MarkupParserTest {
         assertEquals("image", thrown.detail());
     }
 
+    /**
+     * A symbol written across several lines claims the line its opening tag stands on, so text
+     * sharing that line is refused there rather than wherever the symbol's content happened to end.
+     */
+    @Test
+    void claimsAMultiLineSymbolsLineAtTheTagThatOpenedIt() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parseDocument("<qr>\nabc\n</qr> paid"));
+
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+        assertEquals(1, thrown.line());
+        assertEquals(1, thrown.column());
+        assertEquals("qr", thrown.detail());
+    }
+
     @Test
     void singleLineParseRefusesADocument() {
         assertThrows(IllegalArgumentException.class, () -> MarkupParser.parse("a\nb"));
