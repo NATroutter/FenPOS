@@ -138,7 +138,7 @@ function readTag(source: string, start: number, spans: Span[]): number {
 		if (at < limit && source[at] === "=") {
 			spans.push({ from: at, to: at + 1, kind: "tag-punctuation", complete });
 			at += 1;
-			at = readValue(source, at, limit, end, spans);
+			at = readValue(source, at, limit, end, complete, spans);
 			continue;
 		}
 
@@ -155,8 +155,14 @@ function readTag(source: string, start: number, spans: Span[]): number {
 	return end;
 }
 
-/** Reads one attribute value, quoted or bare, and returns where the header scan continues. */
-function readValue(source: string, at: number, limit: number, end: number, spans: Span[]): number {
+/**
+ * Reads one attribute value, quoted or bare, and returns where the header scan continues.
+ *
+ * A quoted value ends at its own closing quote, so it can be complete inside a tag that is not. A
+ * bare value has no terminator of its own and runs until the tag ends, so it is complete exactly
+ * when the tag is.
+ */
+function readValue(source: string, at: number, limit: number, end: number, complete: boolean, spans: Span[]): number {
 	if (source[at] === '"') {
 		const close = source.indexOf('"', at + 1);
 		const closed = close >= 0 && close <= end;
@@ -177,7 +183,7 @@ function readValue(source: string, at: number, limit: number, end: number, spans
 		at += 1;
 	}
 	if (at > valueStart) {
-		spans.push({ from: valueStart, to: at, kind: "attribute-value", complete: true });
+		spans.push({ from: valueStart, to: at, kind: "attribute-value", complete });
 	}
 	return at;
 }

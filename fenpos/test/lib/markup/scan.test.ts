@@ -102,4 +102,16 @@ describe("scan", () => {
 			expect(scannedNames(parity.markup), parity.name).toEqual(strict);
 		}
 	});
+
+	it("marks a bare value incomplete while its tag is unterminated", () => {
+		const spans = scan("<a b=1");
+
+		expect(spans.every((span) => span.complete === false)).toBe(true);
+	});
+
+	it("keeps a closed quoted value complete inside an unterminated tag", () => {
+		const value = scan('<a b="x"').find((span) => span.kind === "attribute-value");
+
+		expect(value?.complete).toBe(true);
+	});
 });
