@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -75,10 +77,8 @@ class MarkupParityTest {
      */
     @Test
     void everyTagAndAttributeIsWrittenInACase() throws IOException {
-        String written = cases().stream()
-                .map(ParityCase::markup)
-                .collect(Collectors.joining("\n"))
-                .toLowerCase(Locale.ROOT);
+        List<String> markups = cases().stream().map(ParityCase::markup).collect(Collectors.toList());
+        String written = String.join("\n", markups).toLowerCase(Locale.ROOT);
 
         List<String> missing = new ArrayList<>();
         for (Tag tag : Tag.values()) {
@@ -86,12 +86,48 @@ class MarkupParityTest {
                 missing.add("<" + tag.tagName() + ">");
             }
             for (String attribute : tag.attributes().keySet()) {
-                if (!written.contains(attribute + "=")) {
+                if (!writesAttributeOnItsOwnTag(markups, tag.tagName(), attribute)) {
                     missing.add("<" + tag.tagName() + "> " + attribute);
                 }
             }
         }
 
         assertEquals(List.of(), missing, "tags and attributes no parity case writes");
+    }
+
+    /**
+     * Whether some case writes {@code attribute=} inside an opening {@code <tagName ...>}, rather
+     * than merely somewhere in the fixture under the same name.
+     * <p>
+     * Unscoped, {@code <barcode>}'s {@code type} would be satisfied by {@code <chart type=bar>}
+     * and {@code <image>}'s {@code width} by {@code <size width=...>}: two different attributes
+     * that happen to share a name. Each tag's own occurrence is searched instead, up to the
+     * {@code >} that closes it, skipping one written inside a quoted value.
+     */
+    private static boolean writesAttributeOnItsOwnTag(List<String> markups, String tagName, String attribute) {
+        Pattern openTag = Pattern.compile("(?i)<" + Pattern.quote(tagName) + "(?=[\\s>])");
+        Pattern attributeWritten = Pattern.compile("(?i)(^|[^a-zA-Z0-9_-])" + Pattern.quote(attribute) + "=");
+
+        for (String markup : markups) {
+            Matcher tagMatch = openTag.matcher(markup);
+            while (tagMatch.find()) {
+                int i = tagMatch.end();
+                boolean inQuotes = false;
+                while (i < markup.length()) {
+                    char c = markup.charAt(i);
+                    if (c == '"') {
+                        inQuotes = !inQuotes;
+                    } else if (c == '>' && !inQuotes) {
+                        break;
+                    }
+                    i++;
+                }
+                String header = markup.substring(tagMatch.end(), i);
+                if (attributeWritten.matcher(header).find()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }
