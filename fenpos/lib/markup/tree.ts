@@ -1166,6 +1166,9 @@ class DocumentBuilder {
 			if (node.kind === "block") {
 				this.closeRegion(frame, node);
 			}
+			if (node.kind === "scope" || node.kind === "align" || node.kind === "wrap") {
+				this.trimLayoutBreaks(node.children);
+			}
 			this.frame().children.push(node);
 			if (node.kind === "align" || node.kind === "wrap") {
 				this.releaseLineOwner(tag, node.kind);
@@ -1189,6 +1192,27 @@ class DocumentBuilder {
 			name: tag.name,
 			code: kind === "align" ? MARKUP_ERRORS.invalidAlignScope : MARKUP_ERRORS.invalidWrapScope,
 		};
+	}
+
+	/**
+	 * Drops the breaks that only lay a tag out over several lines.
+	 *
+	 * A tag written on its own line is followed by the newline ending that line, and a closing tag on
+	 * its own line is preceded by another. Neither is content: the author indented to be read, and
+	 * keeping them prints blank lines nobody wrote, so the same tag laid out over several lines prints
+	 * differently from one written on a single line. Exactly one break goes at each end, which leaves a
+	 * blank line written deliberately still printing.
+	 *
+	 * Blocks are not trimmed: a block's breaks belong to the layout engine, which already takes the
+	 * first as the end of the line the block opened on.
+	 */
+	private trimLayoutBreaks(children: Node[]): void {
+		if (children[0]?.kind === "break") {
+			children.shift();
+		}
+		if (children[children.length - 1]?.kind === "break") {
+			children.pop();
+		}
 	}
 
 	/**

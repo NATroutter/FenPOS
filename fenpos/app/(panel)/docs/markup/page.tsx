@@ -272,7 +272,10 @@ export default async function MarkupDocsPage() {
 									Whitespace from the start of a line up to a tag is indentation and prints nothing, tabs included, so
 									nested tags can be written the way the examples below are. A line that starts with text keeps every
 									space it was given; to print an indented line that starts with a tag, put the spaces inside it:{" "}
-									<Mono>{"<bold>  Total</bold>"}</Mono>.
+									<Mono>{"<bold>  Total</bold>"}</Mono>. The newline beside a tag is laid out the same way: a tag opened
+									at the end of its line, or closed at the start of one, has that newline dropped, so a tag written over
+									several lines prints what the same tag written on one line prints. A blank line written between
+									content still prints.
 								</P>
 
 								<P>

@@ -103,5 +103,7 @@
   { "name": "a cell with width, align, valign and shade", "markup": "<table>\n<row><cell width=50 align=center valign=middle shade=light>a</cell></row>\n</table>", "refusal": null, "agent": { "code": "server_rendered", "line": 1, "column": 1, "detail": "table", "message": "<table> is drawn by the server into a raster; the console prints text only" } },
   { "name": "a line chart with width, height, legend and area, and a series with a pattern and a marker", "markup": "<chart type=line width=50 height=10 legend=on area=on>\n<series pattern=hatch marker=circle>1,2</series>\n</chart>", "refusal": null, "agent": { "code": "server_rendered", "line": 1, "column": 1, "detail": "chart", "message": "<chart> is drawn by the server into a raster; the console prints text only" } },
   { "name": "a gauge with a width", "markup": "<bar value=50 width=60>", "refusal": null, "agent": { "code": "server_rendered", "line": 1, "column": 1, "detail": "bar", "message": "<bar> is drawn by the server into a raster; the console prints text only" } },
-  { "name": "a cash drawer on a named pin", "markup": "<drawer pin=5>", "refusal": null, "agent": { "code": "unknown_tag", "line": 1, "column": 1, "detail": "drawer", "message": "Unknown tag 'drawer'; write &lt; for a literal '<'" } }
+  { "name": "a cash drawer on a named pin", "markup": "<drawer pin=5>", "refusal": null, "agent": { "code": "unknown_tag", "line": 1, "column": 1, "detail": "drawer", "message": "Unknown tag 'drawer'; write &lt; for a literal '<'" } },
+  { "name": "a scope laid out over several lines", "markup": "<align to=center>\n<bold>a</bold>\n</align>", "refusal": null },
+  { "name": "a blank line written inside a scope", "markup": "<align to=center>\na\n\nb\n</align>", "refusal": null }
 ]

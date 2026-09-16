@@ -389,6 +389,28 @@ describe("buildDocument", () => {
 		expect(kinds(indented.children)).toEqual(["break", "align", "break"]);
 		expect(kinds(indented.children)).toEqual(kinds(flat.children));
 	});
+
+	it("builds a scope opened and closed on its own line the same as one written on a line", () => {
+		const split = build("<box>\n  <align to=center>\n    <bold>a</bold>\n  </align>\n</box>").nodes[0] as BlockNode;
+		const flat = build("<box>\n  <align to=center><bold>a</bold></align>\n</box>").nodes[0] as BlockNode;
+
+		expect(kinds(split.children)).toEqual(kinds(flat.children));
+		expect(kinds((split.children[1] as { children: Node[] }).children)).toEqual(["scope"]);
+		expect(kinds((flat.children[1] as { children: Node[] }).children)).toEqual(["scope"]);
+	});
+
+	it("keeps a blank line the author wrote inside a scope", () => {
+		const node = build("<align to=center>\na\n\nb\n</align>").nodes[0];
+
+		expect(kinds((node as { children: Node[] }).children)).toEqual(["text", "break", "break", "text"]);
+	});
+
+	it("drops the newline before a closing tag written on a later line", () => {
+		const document = build("<bold>a\n  </bold>");
+
+		expect(kinds(document.nodes)).toEqual(["scope"]);
+		expect(kinds((document.nodes[0] as { children: Node[] }).children)).toEqual(["text"]);
+	});
 });
 
 describe("block tags", () => {

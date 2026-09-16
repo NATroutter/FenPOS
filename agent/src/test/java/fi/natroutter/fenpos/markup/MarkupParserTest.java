@@ -737,6 +737,27 @@ class MarkupParserTest {
     }
 
     @Test
+    void laysAScopeOutOverSeveralLinesTheSameAsOnOneLine() throws MarkupException {
+        List<Line> split = MarkupParser.parseDocument("<align to=center>\n<bold>a</bold>\n</align>");
+        List<Line> flat = MarkupParser.parseDocument("<align to=center><bold>a</bold></align>");
+
+        assertEquals(flat.size(), split.size());
+        assertEquals(1, split.size());
+        assertEquals("a", split.get(0).spans().get(0).text());
+        assertEquals(Align.CENTER, split.get(0).align());
+    }
+
+    @Test
+    void keepsABlankLineWrittenInsideAScope() throws MarkupException {
+        List<Line> lines = MarkupParser.parseDocument("<align to=center>\na\n\nb\n</align>");
+
+        assertEquals(3, lines.size());
+        assertEquals("a", lines.get(0).spans().get(0).text());
+        assertTrue(lines.get(1).spans().isEmpty());
+        assertEquals("b", lines.get(2).spans().get(0).text());
+    }
+
+    @Test
     void reportsTheLineOfAnUnclosedTag() {
         MarkupException thrown = assertThrows(MarkupException.class,
                 () -> MarkupParser.parseDocument("x\n  <bold>y\nz"));
@@ -1038,10 +1059,10 @@ class MarkupParserTest {
     }
 
     @Test
-    void dropsIndentationBeforeAClosingTagOnALaterLine() throws Exception {
+    void dropsIndentationAndTheNewlineBeforeAClosingTagOnALaterLine() throws Exception {
         List<Line> lines = MarkupParser.parseDocument("<bold>a\n  </bold>");
 
-        assertEquals(2, lines.size());
-        assertTrue(lines.get(1).spans().isEmpty());
+        assertEquals(1, lines.size());
+        assertEquals("a", lines.getFirst().spans().getFirst().text());
     }
 }

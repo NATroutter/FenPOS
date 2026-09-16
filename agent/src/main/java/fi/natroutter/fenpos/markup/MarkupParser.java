@@ -233,7 +233,9 @@ public final class MarkupParser {
     }
 
     private List<Line> run() throws MarkupException {
-        for (MarkupToken token : MarkupTokenizer.tokenize(source)) {
+        List<MarkupToken> tokens = MarkupTokenizer.tokenize(source);
+        for (int at = 0; at < tokens.size(); at++) {
+            MarkupToken token = tokens.get(at);
             line = token.line();
             switch (token) {
                 case MarkupToken.Text text -> appendText(text);
@@ -242,7 +244,7 @@ public final class MarkupParser {
                 case MarkupToken.Break ignored -> {
                     // A block spanning several lines of the document is still one printed line: the
                     // server feeds the paper once for it, so only a break outside a block ends a line.
-                    if (block == null) {
+                    if (block == null && !laysOutAScope(tokens, at)) {
                         endLine();
                     }
                 }
@@ -259,6 +261,39 @@ public final class MarkupParser {
         endLine();
 
         return List.copyOf(lines);
+    }
+
+    /**
+     * The tags whose breaks may be laying them out: the styling scopes and the two line owners.
+     * <p>
+     * Not the tags that enclose data. A break inside {@code <qr>} or {@code <image>} is whitespace
+     * around a payload, which the block that holds it reads for itself.
+     */
+    private static final Set<Tag> LINE_SCOPES = Set.of(
+            Tag.BOLD, Tag.UNDERLINE, Tag.INVERT, Tag.SIZE, Tag.TEXT, Tag.ALIGN, Tag.WRAP, Tag.NOWRAP);
+
+    /**
+     * Whether a break only lays a scope out over several lines rather than ending a printed line.
+     * <p>
+     * A scope opened at the end of its line is followed by the newline ending that line, and one
+     * closed at the start of its line is preceded by another. Neither is content: the author wrote
+     * them to be read, and printing them puts blank lines on the paper nobody asked for, so the same
+     * markup laid out over several lines prints what the one-line form prints.
+     * <p>
+     * Mirrors the panel, which drops these two breaks as it closes the scope that holds them. One
+     * goes at each end, so a blank line written deliberately still prints.
+     */
+    private static boolean laysOutAScope(List<MarkupToken> tokens, int at) {
+        MarkupToken before = at > 0 ? tokens.get(at - 1) : null;
+        MarkupToken after = at + 1 < tokens.size() ? tokens.get(at + 1) : null;
+        if (before instanceof MarkupToken.Open opening && isLineScope(opening.name())) {
+            return true;
+        }
+        return after instanceof MarkupToken.Close closing && isLineScope(closing.name());
+    }
+
+    private static boolean isLineScope(String name) {
+        return Tag.byName(name).filter(LINE_SCOPES::contains).isPresent();
     }
 
     /**
