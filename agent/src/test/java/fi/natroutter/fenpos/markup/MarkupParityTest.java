@@ -10,8 +10,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -95,6 +97,12 @@ class MarkupParityTest {
         assertEquals(List.of(), missing, "tags and attributes no parity case writes");
     }
 
+    @Test
+    void theCoverageScanReadsNamesNotTheTextInsideValues() {
+        assertEquals(Set.of("title", "type"), attributeNames(" title=\"width=5\" type=bar"));
+        assertEquals(Set.of("data", "type"), attributeNames(" data=a=b type=code128"));
+    }
+
     /**
      * Whether some case writes {@code attribute=} inside an opening {@code <tagName ...>}, rather
      * than merely somewhere in the fixture under the same name.
@@ -106,7 +114,7 @@ class MarkupParityTest {
      */
     private static boolean writesAttributeOnItsOwnTag(List<String> markups, String tagName, String attribute) {
         Pattern openTag = Pattern.compile("(?i)<" + Pattern.quote(tagName) + "(?=[\\s>])");
-        Pattern attributeWritten = Pattern.compile("(?i)(^|[^a-zA-Z0-9_-])" + Pattern.quote(attribute) + "=");
+        String wanted = attribute.toLowerCase(Locale.ROOT);
 
         for (String markup : markups) {
             Matcher tagMatch = openTag.matcher(markup);
@@ -123,11 +131,56 @@ class MarkupParityTest {
                     i++;
                 }
                 String header = markup.substring(tagMatch.end(), i);
-                if (attributeWritten.matcher(header).find()) {
+                if (attributeNames(header).contains(wanted)) {
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    /**
+     * The attribute names one opening header writes, read the way the tokenizer reads them: a name,
+     * then {@code =}, then a value skipped whole — quoted to its closing quote, bare to the next space.
+     * <p>
+     * Reading past each value rather than searching through it is what keeps a value from claiming
+     * coverage it does not give: in {@code <chart title="width=5">} the only name is {@code title}.
+     */
+    private static Set<String> attributeNames(String header) {
+        Set<String> names = new HashSet<>();
+        int i = 0;
+        while (i < header.length()) {
+            while (i < header.length() && !isNameCharacter(header.charAt(i))) {
+                i++;
+            }
+            int start = i;
+            while (i < header.length() && isNameCharacter(header.charAt(i))) {
+                i++;
+            }
+            if (start == i) {
+                break;
+            }
+            if (i >= header.length() || header.charAt(i) != '=') {
+                continue;
+            }
+            names.add(header.substring(start, i).toLowerCase(Locale.ROOT));
+            i++;
+            if (i < header.length() && header.charAt(i) == '"') {
+                i++;
+                while (i < header.length() && header.charAt(i) != '"') {
+                    i++;
+                }
+                i++;
+            } else {
+                while (i < header.length() && !Character.isWhitespace(header.charAt(i))) {
+                    i++;
+                }
+            }
+        }
+        return names;
+    }
+
+    private static boolean isNameCharacter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
     }
 }
