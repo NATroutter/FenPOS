@@ -1,8 +1,9 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { type Extension, RangeSetBuilder } from "@codemirror/state";
-import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import {
 	attributeSuggestions,
+	closingFor,
 	contextAt,
 	type Suggestion,
 	tagSuggestions,
@@ -154,7 +155,32 @@ function entityAt(source: string, offset: number): number | null {
 	return /^&[a-z]*$/i.test(source.slice(start, offset)) ? start : null;
 }
 
+/**
+ * Closes a paired tag as its `>` is typed, leaving the caret between the two.
+ *
+ * `closingFor` decides: a void tag encloses nothing, a name no registry knows may not be a tag at
+ * all, a `>` inside a quoted value is a character, and a tag that already has its close must not get
+ * a second one.
+ */
+const autoClose = EditorView.inputHandler.of((view, from, to, text) => {
+	if (text !== ">") {
+		return false;
+	}
+	const source = view.state.doc.toString();
+	const typed = `${source.slice(0, from)}>${source.slice(to)}`;
+	const closing = closingFor(typed, from + 1);
+	if (closing === null) {
+		return false;
+	}
+	view.dispatch({
+		changes: { from, to, insert: `>${closing}` },
+		selection: { anchor: from + 1 },
+		userEvent: "input.type",
+	});
+	return true;
+});
+
 /** Everything the markup editor adds to CodeMirror, as one extension. */
 export function markupLanguage(): Extension[] {
-	return [highlighting, autocompletion({ override: [markupCompletions] })];
+	return [highlighting, autocompletion({ override: [markupCompletions] }), autoClose];
 }
