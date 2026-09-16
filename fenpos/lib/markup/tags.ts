@@ -190,7 +190,7 @@ export function tagByName(name: string): Tag | undefined {
 /**
  * The tags the printer prints for itself, which is why no block may hold one.
  *
- * A block is a region of dots the server draws and sends as a picture. A symbol is encoded by the
+ * A block is a region of dots this side draws and sends as a picture. A symbol is encoded by the
  * printer's own firmware and a cut or a feed acts on the paper rather than marking it, so neither
  * is something that can be drawn into a region: there is nothing to draw.
  */
