@@ -648,15 +648,17 @@ class MarkupParserTest {
     }
 
     /**
-     * An image is the one block that may be placed beside text: it is drawn into a row of glyphs
-     * sized to its own dots rather than taking the whole line, so a line may hold both.
+     * The server can place an image beside text because it draws that line as one raster; this
+     * renderer sends text as character codes and an image as its own raster command, with no way
+     * to interleave the two on one printed line, so the agent refuses the shape instead.
      */
     @Test
-    void letsAnImageShareItsLineWithText() throws Exception {
-        Line line = MarkupParser.parse("Logo: <image>logo</image>", holding("logo", 100));
+    void refusesAnImageSharingItsLineWithText() {
+        MarkupException thrown = assertThrows(MarkupException.class,
+                () -> MarkupParser.parse("Logo: <image>logo</image>", holding("logo", 100)));
 
-        assertEquals("Logo: ", line.plainText());
-        assertEquals(List.of(ONE_DOT), line.directives());
+        assertEquals(MarkupError.INVALID_BLOCK_SCOPE, thrown.error());
+        assertEquals(7, thrown.column());
     }
 
     @Test

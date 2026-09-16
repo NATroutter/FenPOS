@@ -705,12 +705,11 @@ public final class MarkupParser {
             default -> throw new IllegalStateException("Tag " + tag + " is not a block");
         };
 
-        // A symbol is a block of dots the printer places by itself, so it claims the printed line it is
-        // placed on. An image claims nothing: it is the one of these that can be placed beside text, in
-        // a row of glyphs sized to its own dots.
-        if (tag != Tag.IMAGE) {
-            claimLine(tag.tagName(), finished.line(), column, MarkupError.INVALID_BLOCK_SCOPE);
-        }
+        // A symbol or an image is a block of dots the printer places by itself, so it claims the
+        // printed line it is placed on. The server can place an image beside text because it draws
+        // that line as one raster; this renderer sends text as character codes and an image as its
+        // own raster command, and ESC/POS gives no way to interleave the two on one printed line.
+        claimLine(tag.tagName(), finished.line(), column, MarkupError.INVALID_BLOCK_SCOPE);
         directives.add(directive);
         block = null;
     }
