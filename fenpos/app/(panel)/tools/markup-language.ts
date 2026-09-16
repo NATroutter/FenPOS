@@ -1,15 +1,7 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { EditorState, type Extension, RangeSetBuilder, type Transaction } from "@codemirror/state";
+import { EditorState, type Extension, RangeSetBuilder, type Text, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import {
-	attributeSuggestions,
-	closingFor,
-	contextAt,
-	renamePairFor,
-	type Suggestion,
-	tagSuggestions,
-	valueSuggestions,
-} from "@/lib/markup/editor-language";
+import { closingFor, contextAt, renameEditsFor, type SourceEdit, suggestionsFor } from "@/lib/markup/editor-language";
 import { type SpanKind, scan } from "@/lib/markup/scan";
 import { ENTITIES } from "@/lib/markup/tokenizer";
 
@@ -113,14 +105,7 @@ function markupCompletions(context: CompletionContext): CompletionResult | null 
 	const source = context.state.doc.toString();
 	const caret = contextAt(source, context.pos);
 
-	let suggestions: Suggestion[];
-	if (caret.inHeader && caret.inValue) {
-		suggestions = valueSuggestions(caret);
-	} else if (caret.inHeader && caret.tag !== null) {
-		suggestions = attributeSuggestions(caret, source);
-	} else if (caret.inHeader) {
-		suggestions = tagSuggestions(caret);
-	} else {
+	if (!caret.inHeader) {
 		const entity = entityAt(source, context.pos);
 		if (entity === null) {
 			return null;
@@ -133,7 +118,7 @@ function markupCompletions(context: CompletionContext): CompletionResult | null 
 		};
 	}
 
-	const options = suggestions
+	const options = suggestionsFor(caret, source)
 		.filter((suggestion) => suggestion.label.length > 0)
 		.map((suggestion) => ({ label: suggestion.label, detail: suggestion.detail }));
 	if (options.length === 0) {
@@ -157,14 +142,33 @@ function entityAt(source: string, offset: number): number | null {
 }
 
 /**
+ * Whether a `>` typed over this range could end a tag header, read from the line it lands on.
+ *
+ * A header is line-local, so the line the `>` falls on holds everything this turns on, and a `>` typed
+ * in ordinary text is turned away without reading a document that may run to a million characters. A
+ * replacement reaching past the line's own end is not a question one line can answer, and is passed on
+ * rather than refused.
+ */
+function mayEndHeader(doc: Text, from: number, to: number): boolean {
+	const line = doc.lineAt(from);
+	if (to > line.to) {
+		return true;
+	}
+	const typed = `${line.text.slice(0, from - line.from)}>${line.text.slice(to - line.from)}`;
+	const at = from - line.from + 1;
+	return scan(typed).some((span) => span.kind === "tag-punctuation" && span.to === at && typed[span.from] === ">");
+}
+
+/**
  * Closes a paired tag as its `>` is typed, leaving the caret between the two.
  *
  * `closingFor` decides: a void tag encloses nothing, a name no registry knows may not be a tag at
  * all, a `>` inside a quoted value is a character, and a tag that already has its close must not get
- * a second one.
+ * a second one. Whether it is asked at all is decided from the caret's own line, because it reads the
+ * whole document to find out whether the tag is closed already.
  */
 const autoClose = EditorView.inputHandler.of((view, from, to, text) => {
-	if (text !== ">") {
+	if (text !== ">" || !mayEndHeader(view.state.doc, from, to)) {
 		return false;
 	}
 	const source = view.state.doc.toString();
@@ -182,33 +186,58 @@ const autoClose = EditorView.inputHandler.of((view, from, to, text) => {
 });
 
 /**
+ * Whether an edit at this offset falls on a tag's name, read from the line the edit lands on.
+ *
+ * A tag, its attributes and its punctuation all stop at the line's own end, so one line places a name
+ * exactly where a pass over the whole document would place it. An offset counts as on a name at either
+ * of its ends, which is what the search for a partner does, so that a character appended to a name
+ * belongs to it.
+ */
+function editsTagName(doc: Text, offset: number): boolean {
+	const line = doc.lineAt(offset);
+	const at = offset - line.from;
+	return scan(line.text).some((span) => span.kind === "tag-name" && span.from <= at && at <= span.to);
+}
+
+/**
  * Rewrites a tag's partner as its name is edited.
  *
  * Read from the document as it was before the change, so the pair is found while both names still
  * agree. Where the document is unbalanced around the caret there is no honest partner, and the edit
  * is left alone rather than a guess being rewritten.
+ *
+ * This is a filter over every transaction that changes the document, so it sits on the keystroke. An
+ * edit that is nowhere near a tag name is turned away by reading its own line, before the search for a
+ * partner reads a document that may run to a million characters — which the overwhelming majority of
+ * keystrokes have no use for.
+ *
+ * Undo and redo are left out. Both replay changes this filter has already seen, and reading them again
+ * would have an undo compose edits of its own rather than restore what it undid.
  */
 const linkedRename = EditorState.transactionFilter.of((transaction: Transaction) => {
-	if (!transaction.docChanged || transaction.isUserEvent("input.type.compose")) {
+	if (
+		!transaction.docChanged ||
+		transaction.isUserEvent("input.type.compose") ||
+		transaction.isUserEvent("undo") ||
+		transaction.isUserEvent("redo")
+	) {
 		return transaction;
 	}
 
-	const before = transaction.startState.doc.toString();
-	const edits: { from: number; to: number; insert: string }[] = [];
+	const { doc } = transaction.startState;
+	const changes: SourceEdit[] = [];
+	let onName = false;
 
 	transaction.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-		const pair = renamePairFor(before, fromA);
-		if (pair === null) {
-			return;
-		}
-		const subject = renamePairFor(before, pair.from);
-		if (subject === null || fromA < subject.from || toA > subject.to) {
-			return;
-		}
-		const renamed = `${before.slice(subject.from, fromA)}${inserted.toString()}${before.slice(toA, subject.to)}`;
-		edits.push({ from: pair.from, to: pair.to, insert: renamed });
+		changes.push({ from: fromA, to: toA, insert: inserted.toString() });
+		onName = onName || editsTagName(doc, fromA);
 	});
 
+	if (!onName) {
+		return transaction;
+	}
+
+	const edits = renameEditsFor(doc.toString(), changes);
 	if (edits.length === 0) {
 		return transaction;
 	}
