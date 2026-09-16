@@ -1,6 +1,15 @@
+import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { type Extension, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import {
+	attributeSuggestions,
+	contextAt,
+	type Suggestion,
+	tagSuggestions,
+	valueSuggestions,
+} from "@/lib/markup/editor-language";
 import { type SpanKind, scan } from "@/lib/markup/scan";
+import { ENTITIES } from "@/lib/markup/tokenizer";
 
 /** The class each kind of span is painted with. Styling lives in `editor-theme.ts`. */
 const CLASS: Record<SpanKind, string | null> = {
@@ -91,7 +100,61 @@ const highlighting = ViewPlugin.fromClass(
 	{ decorations: (plugin) => plugin.decorations },
 );
 
+/**
+ * What may be written at the caret.
+ *
+ * Every candidate comes from the tag registry, so the editor cannot offer something the parser would
+ * refuse. A suggestion carrying no label is a description of what an attribute accepts — an integer's
+ * range has nothing to list — and is shown without being offered as a completion.
+ */
+function markupCompletions(context: CompletionContext): CompletionResult | null {
+	const source = context.state.doc.toString();
+	const caret = contextAt(source, context.pos);
+
+	let suggestions: Suggestion[];
+	if (caret.inHeader && caret.inValue) {
+		suggestions = valueSuggestions(caret);
+	} else if (caret.inHeader && caret.tag !== null) {
+		suggestions = attributeSuggestions(caret, source);
+	} else if (caret.inHeader) {
+		suggestions = tagSuggestions(caret);
+	} else {
+		const entity = entityAt(source, context.pos);
+		if (entity === null) {
+			return null;
+		}
+		return {
+			from: entity,
+			to: context.pos,
+			options: ENTITIES.map(([written]) => ({ label: written })),
+			validFor: /^&[a-z]*;?$/i,
+		};
+	}
+
+	const options = suggestions
+		.filter((suggestion) => suggestion.label.length > 0)
+		.map((suggestion) => ({ label: suggestion.label, detail: suggestion.detail }));
+	if (options.length === 0) {
+		return null;
+	}
+	return { from: caret.word.from, to: caret.word.to, options, validFor: /^[a-z0-9_-]*$/i };
+}
+
+/**
+ * Where an entity being typed starts, when the caret is inside one.
+ *
+ * Only an unterminated run — `&`, `&l`, `&amp` — is one being typed. Once the `;` is there the entity
+ * is written, and offering to replace it with itself helps nobody.
+ */
+function entityAt(source: string, offset: number): number | null {
+	const start = source.lastIndexOf("&", Math.max(0, offset - 1));
+	if (start < 0) {
+		return null;
+	}
+	return /^&[a-z]*$/i.test(source.slice(start, offset)) ? start : null;
+}
+
 /** Everything the markup editor adds to CodeMirror, as one extension. */
 export function markupLanguage(): Extension[] {
-	return [highlighting];
+	return [highlighting, autocompletion({ override: [markupCompletions] })];
 }
