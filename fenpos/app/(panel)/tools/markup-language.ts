@@ -1,10 +1,11 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { type Extension, RangeSetBuilder } from "@codemirror/state";
+import { EditorState, type Extension, RangeSetBuilder, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import {
 	attributeSuggestions,
 	closingFor,
 	contextAt,
+	renamePairFor,
 	type Suggestion,
 	tagSuggestions,
 	valueSuggestions,
@@ -180,7 +181,46 @@ const autoClose = EditorView.inputHandler.of((view, from, to, text) => {
 	return true;
 });
 
+/**
+ * Rewrites a tag's partner as its name is edited.
+ *
+ * Read from the document as it was before the change, so the pair is found while both names still
+ * agree. Where the document is unbalanced around the caret there is no honest partner, and the edit
+ * is left alone rather than a guess being rewritten.
+ */
+const linkedRename = EditorState.transactionFilter.of((transaction: Transaction) => {
+	if (!transaction.docChanged || transaction.isUserEvent("input.type.compose")) {
+		return transaction;
+	}
+
+	const before = transaction.startState.doc.toString();
+	const edits: { from: number; to: number; insert: string }[] = [];
+
+	transaction.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+		const pair = renamePairFor(before, fromA);
+		if (pair === null) {
+			return;
+		}
+		const subject = renamePairFor(before, pair.from);
+		if (subject === null || fromA < subject.from || toA > subject.to) {
+			return;
+		}
+		const renamed = `${before.slice(subject.from, fromA)}${inserted.toString()}${before.slice(toA, subject.to)}`;
+		edits.push({ from: pair.from, to: pair.to, insert: renamed });
+	});
+
+	if (edits.length === 0) {
+		return transaction;
+	}
+	// Not `sequential`. The offsets above were read from `transaction.startState`, and specs combined
+	// without that flag are all taken to refer to that same starting document. Marking this one
+	// sequential would have CodeMirror read those offsets against the document the user's own edit
+	// produced instead — a different position whenever the edit changed the length of anything before
+	// the partner, which renaming a tag usually does.
+	return [transaction, { changes: edits }];
+});
+
 /** Everything the markup editor adds to CodeMirror, as one extension. */
 export function markupLanguage(): Extension[] {
-	return [highlighting, autocompletion({ override: [markupCompletions] }), autoClose];
+	return [highlighting, autocompletion({ override: [markupCompletions] }), autoClose, linkedRename];
 }
