@@ -59,10 +59,18 @@ public sealed interface Directive {
     }
 
     /**
-     * A horizontal rule spanning the full paper width. Rendered as repeated hyphens rather
-     * than a graphic, so it costs no image data and works on every ESC/POS device.
+     * A horizontal rule spanning the full paper width. Rendered as one character repeated rather
+     * than as a graphic, so it costs no image data and works on every ESC/POS device.
+     *
+     * @param character the character to repeat; a dash unless the tag named another
      */
-    record Rule() implements Directive {
+    record Rule(String character) implements Directive {
+
+        public Rule {
+            if (character == null || character.isEmpty()) {
+                throw new IllegalArgumentException("rule character must not be empty");
+            }
+        }
     }
 
     /**

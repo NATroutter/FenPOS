@@ -65,8 +65,12 @@ public enum Tag {
     /** Advance the paper by {@code lines}. */
     FEED("feed", Kind.VOID, AttributeSpec.table("lines", AttributeSpec.markRequired(AttributeSpec.integer(1, 255)))),
 
-    /** A full-width horizontal rule. Required to be alone on its line. */
-    HR("hr", Kind.VOID, Map.of()),
+    /**
+     * A full-width horizontal rule, drawn with {@code char} or a dash. Required to be alone on its
+     * line. The character is the same spec {@link #FILL} takes, and answers to the codepage the
+     * same way: it is repeated into text on this side rather than drawn.
+     */
+    HR("hr", Kind.VOID, AttributeSpec.table("char", AttributeSpec.character())),
 
     /** A QR code; {@code size} is dots per module. */
     QR("qr", Kind.PAIRED, AttributeSpec.table("size", AttributeSpec.integer(1, 16))),

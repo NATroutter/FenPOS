@@ -217,7 +217,7 @@ class MarkupParserTest {
 
     @Test
     void parsesRuleAloneOnItsLine() throws Exception {
-        assertEquals(List.of(new Directive.Rule()), MarkupParser.parse("<hr>").directives());
+        assertEquals(List.of(new Directive.Rule("-")), MarkupParser.parse("<hr>").directives());
     }
 
     @Test
@@ -433,7 +433,7 @@ class MarkupParserTest {
         Line line = MarkupParser.parse("<nowrap><hr></nowrap>");
 
         assertEquals(Boolean.FALSE, line.wrap());
-        assertEquals(List.of(new Directive.Rule()), line.directives());
+        assertEquals(List.of(new Directive.Rule("-")), line.directives());
     }
 
     @Test

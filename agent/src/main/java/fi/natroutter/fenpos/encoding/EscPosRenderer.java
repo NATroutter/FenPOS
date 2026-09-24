@@ -66,9 +66,6 @@ public final class EscPosRenderer {
         TABLES.put(Codepage.ISO8859_7, EscPos.CharacterCodeTable.ISO8859_7_Greek);
     }
 
-    /** Character repeated to draw {@code <hr>}; prints on every device, unlike a graphic. */
-    private static final char RULE_CHARACTER = '-';
-
     /** ESC, as a byte, for the one command this class assembles itself. */
     private static final byte ESC = 0x1B;
 
@@ -172,8 +169,8 @@ public final class EscPosRenderer {
                 // would skip a preamble it now needs.
                 state.activeStyle = null;
             }
-            case Directive.Rule ignored -> {
-                writeStyled(SpanStyle.PLAIN, align, String.valueOf(RULE_CHARACTER).repeat(columns),
+            case Directive.Rule rule -> {
+                writeStyled(SpanStyle.PLAIN, align, rule.character().repeat(columns),
                         out, state, codepage);
                 out.write(new byte[]{EscPosConst.LF});
             }

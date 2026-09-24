@@ -84,12 +84,6 @@ class PrintCompilerTest {
     // -------------------------------------------------------------------------
 
     @Test
-    void rejectsTooManyLines() {
-        assertEquals("too_many_lines",
-                error(data("x", "x", "x", "x", "x", "x")).apiCode());
-    }
-
-    @Test
     void rejectsALineLongerThanTheLimit() {
         PrintRequestException thrown = error(data("ok", "a".repeat(21)));
 
@@ -225,7 +219,7 @@ class PrintCompilerTest {
                 new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
                         true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
                 new PrintSettings(10, Codepage.CP858, UnsupportedPolicy.REJECT, true, Linefeed.LF),
-                new LimitSettings(5, 20, 50, 3, 100),
+                new LimitSettings(20, 50, 3, 100),
                 false);
     }
 
@@ -241,7 +235,7 @@ class PrintCompilerTest {
                 new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
                         true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
                 new PrintSettings(10, Codepage.CP858, UnsupportedPolicy.REJECT, defaultWrap, Linefeed.LF),
-                new LimitSettings(5, 60, 200, 6, 100),
+                new LimitSettings(60, 200, 6, 100),
                 false);
     }
 
@@ -252,7 +246,7 @@ class PrintCompilerTest {
                 new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
                         true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
                 new PrintSettings(6, Codepage.CP858, UnsupportedPolicy.REJECT, true, Linefeed.LF),
-                new LimitSettings(5, 20, 50, 3, 100),
+                new LimitSettings(20, 50, 3, 100),
                 false);
     }
 

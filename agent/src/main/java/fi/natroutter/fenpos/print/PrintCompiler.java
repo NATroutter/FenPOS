@@ -138,11 +138,11 @@ public final class PrintCompiler {
 
         String text = data.getAsString();
         String[] lines = text.replace("\r\n", "\n").split("\n", -1);
-        if (lines.length > limits.maxLines()) {
-            throw PrintRequestException.of("too_many_lines",
-                    "At most " + limits.maxLines() + " lines are allowed, got " + lines.length);
-        }
 
+        // Nothing is charged for how many lines the caller wrote. The same content written on half
+        // as many lines wraps back to the same printed lines, so a cap here refused one spelling of
+        // a receipt and accepted another that prints identically. What a request costs is bounded
+        // where the cost is: the characters below, and maxOutputLines after the layout.
         int total = 0;
         for (int index = 0; index < lines.length; index++) {
             int lineNumber = index + 1;

@@ -278,7 +278,7 @@ describe("parseLine", () => {
 	});
 
 	it("parses a rule alone on its line", () => {
-		expect(parseLine("<hr>").directives).toEqual([{ kind: "RULE" }]);
+		expect(parseLine("<hr>").directives).toEqual([{ kind: "RULE", character: "-", sourceColumn: 1 }]);
 	});
 
 	it("rejects a rule sharing a line with text", () => {
@@ -528,7 +528,7 @@ describe("parseLine", () => {
 			const line = parseLine("{blank}<hr>", context({ blank: "" }));
 
 			expect(line.spans).toHaveLength(0);
-			expect(line.directives).toEqual([{ kind: "RULE" }]);
+			expect(line.directives).toEqual([{ kind: "RULE", character: "-", sourceColumn: 8 }]);
 		});
 
 		/**
@@ -615,7 +615,7 @@ describe("wrap tags", () => {
 		const line = parseLine("<nowrap><hr></nowrap>");
 
 		expect(line.wrap).toBe(false);
-		expect(line.directives).toEqual([{ kind: "RULE" }]);
+		expect(line.directives).toEqual([{ kind: "RULE", character: "-", sourceColumn: 9 }]);
 	});
 });
 

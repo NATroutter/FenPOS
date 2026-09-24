@@ -49,7 +49,14 @@ export interface InlineImage {
 	raster: ImageRaster;
 }
 
-export type InlineItem = InlineRun | InlineFill | InlineImage;
+/** A checkbox, drawn at the size the style around it prints. */
+export interface InlineCheck {
+	kind: "check";
+	checked: boolean;
+	style: SpanStyle;
+}
+
+export type InlineItem = InlineRun | InlineFill | InlineImage | InlineCheck;
 
 /** What the flow needs from its surroundings: which font a style selects, and what to do with a gap in it. */
 export interface TextContext {
@@ -118,7 +125,18 @@ interface ImageAtom {
 	space: false;
 }
 
-type Atom = GlyphAtom | FillAtom | ImageAtom;
+interface CheckAtom {
+	kind: "check";
+	checked: boolean;
+	/** The square's own side, which is smaller than the cell it is centred in. */
+	side: number;
+	stroke: number;
+	width: number;
+	height: number;
+	space: false;
+}
+
+type Atom = GlyphAtom | FillAtom | ImageAtom | CheckAtom;
 
 /**
  * Lays out a line's inline items into rows of placed cells.
@@ -128,6 +146,8 @@ type Atom = GlyphAtom | FillAtom | ImageAtom;
  * @param wrap whether a row too long for the width is broken, or left to overflow
  * @param align how a row is placed in the width it did not use
  * @param context the fonts to draw with and what to do with a character none of them has
+ * @param indent dots every row but the first begins at, which is the hanging indent of a list entry;
+ *        clamped to leave a dot to draw in
  * @returns one row per printed line, always at least one
  * @throws UnsupportedCharacterError under the `REJECT` policy, when the face has no such glyph
  */
@@ -137,11 +157,16 @@ export function layoutText(
 	wrap: boolean,
 	align: Align,
 	context: TextContext,
+	indent = 0,
 ): TextRow[] {
 	const blank = blankHeight(items, context);
-	return breakRows(measure(items, context), availableWidth, wrap).map((atoms) =>
-		buildRow(trimTrailingSpaces(atoms), availableWidth, align, blank),
-	);
+	// The same clamp the printed-line wrapper applies, and for the same reason: how deep a list nests
+	// is the author's and how wide the paper is belongs to the device, so the two can disagree.
+	const hanging = Math.min(indent, Math.max(0, availableWidth - 1));
+	return breakRows(measure(items, context), availableWidth, wrap, hanging).map((atoms, index) => {
+		const offset = index === 0 ? 0 : hanging;
+		return buildRow(trimTrailingSpaces(atoms), availableWidth - offset, align, blank, offset);
+	});
 }
 
 /**
@@ -179,7 +204,7 @@ export function textHeight(rows: TextRow[]): number {
  */
 function blankHeight(items: InlineItem[], context: TextContext): number {
 	for (const item of items) {
-		if (item.kind !== "image") {
+		if (item.kind !== "image" && item.kind !== "check") {
 			return context.typeface(item.style).cellHeight;
 		}
 	}
@@ -191,6 +216,10 @@ function measure(items: InlineItem[], context: TextContext): Atom[] {
 	const atoms: Atom[] = [];
 
 	for (const item of items) {
+		if (item.kind === "check") {
+			atoms.push(checkAtom(item, context));
+			continue;
+		}
 		if (item.kind === "image") {
 			atoms.push({
 				kind: "image",
@@ -291,9 +320,13 @@ function codePointOf(character: string): number {
  * Fills are weightless here: a fill is what is left over after the row is settled, so letting it
  * claim width while the row is still being filled would break the row at the fill every time.
  *
+ * Every row but the first is broken to `availableWidth - indent`, because its caller places it that
+ * far in. Read from `rows.length` on each pass rather than fixed once, so the width narrows the moment
+ * the first row is pushed.
+ *
  * @returns one array of atoms per row, always at least one
  */
-function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[][] {
+function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean, indent: number): Atom[][] {
 	if (!wrap) {
 		return [atoms];
 	}
@@ -301,6 +334,7 @@ function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[]
 	const rows: Atom[][] = [];
 	let current: Atom[] = [];
 	let width = 0;
+	const available = (): number => (rows.length === 0 ? availableWidth : availableWidth - indent);
 	/** Index in `current` of the last space, or -1 while the row holds none. */
 	let lastSpace = -1;
 	/** Whether the empty row being filled was opened by a break rather than by the start of the line. */
@@ -325,7 +359,7 @@ function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[]
 			continue;
 		}
 
-		if (atom.space && current.length > 0 && width + cost > availableWidth) {
+		if (atom.space && current.length > 0 && width + cost > available()) {
 			// The space that does not fit is itself the break, and a break drops its space.
 			flush(current.length, current.length);
 			continue;
@@ -333,7 +367,7 @@ function breakRows(atoms: Atom[], availableWidth: number, wrap: boolean): Atom[]
 
 		// A loop rather than a branch: breaking at a space can leave a tail that still does not fit
 		// with this atom beside it, and that tail is then a word wider than the row and broken by glyph.
-		while (current.length > 0 && width + cost > availableWidth) {
+		while (current.length > 0 && width + cost > available()) {
 			if (lastSpace >= 0) {
 				flush(lastSpace, lastSpace + 1);
 			} else {
@@ -378,22 +412,29 @@ function trimTrailingSpaces(atoms: Atom[]): Atom[] {
 	return end === atoms.length ? atoms : atoms.slice(0, end);
 }
 
-/** Spends the row's fills, then places every atom as a cell. */
-function buildRow(atoms: Atom[], availableWidth: number, align: Align, blank: number): TextRow {
+/**
+ * Spends the row's fills, then places every atom as a cell.
+ *
+ * `availableWidth` is what this row has rather than what the line has, and `offset` is where it
+ * begins: a hanging indent takes dots off the front of a continuation row, so the row is justified
+ * within what is left and every cell then shifted past the indent. The row's own `width` counts the
+ * indent, because it measures how far across the flow the row reaches.
+ */
+function buildRow(atoms: Atom[], availableWidth: number, align: Align, blank: number, offset = 0): TextRow {
 	spendFills(atoms, availableWidth);
 
-	let width = 0;
+	let content = 0;
 	let height = atoms.length === 0 ? blank : 0;
 	for (const atom of atoms) {
-		width += atom.width;
+		content += atom.width;
 		height = Math.max(height, atom.height);
 	}
 
-	let x = 0;
+	let x = offset;
 	if (align === "CENTER") {
-		x = Math.floor((availableWidth - width) / 2);
+		x += Math.floor((availableWidth - content) / 2);
 	} else if (align === "RIGHT") {
-		x = availableWidth - width;
+		x += availableWidth - content;
 	}
 
 	const cells: Cell[] = [];
@@ -402,7 +443,7 @@ function buildRow(atoms: Atom[], availableWidth: number, align: Align, blank: nu
 		x += atom.width;
 	}
 
-	return { width, height, cells };
+	return { width: offset + content, height, cells };
 }
 
 /**
@@ -426,8 +467,81 @@ function spendFills(atoms: Atom[], availableWidth: number): void {
 	}
 }
 
+/**
+ * How much of a line a checkbox takes up, as a share of the cell it is drawn in.
+ *
+ * Less than the whole cell, because a cell is sized for an ascender over a descender and a square
+ * drawn to that height towers over the lower-case letters beside it. Three quarters is about the
+ * height of a capital, which is what the eye reads a checkbox as lining up with.
+ */
+const CHECK_SIDE = 0.72;
+
+/** The gap either side of the square, so it does not touch the word after it. */
+const CHECK_GAP = 0.14;
+
+/**
+ * Measures a checkbox against the style it was written in.
+ *
+ * The atom is as tall as a full cell even though the square is not, so that the row it sits in is no
+ * taller for having a checkbox on it. {@link paintRows} centres every cell in its row and
+ * {@link paintCheck} centres the square in the cell, which between them are what put the box on the
+ * same middle as the words: two centrings rather than a baseline, because a drawn square has no
+ * baseline to sit on.
+ */
+function checkAtom(item: InlineCheck, context: TextContext): CheckAtom {
+	const typeface = context.typeface(item.style);
+	const height = typeface.cellHeight * item.style.heightMult;
+	const side = Math.max(3, Math.round(height * CHECK_SIDE));
+	return {
+		kind: "check",
+		checked: item.checked,
+		side,
+		// Two dots from double height up, so an enlarged checkbox reads as heavier rather than as the
+		// same hairline stretched around a bigger square.
+		stroke: item.style.heightMult > 1 ? 2 : 1,
+		width: side + 2 * Math.max(1, Math.round(side * CHECK_GAP)),
+		height,
+		space: false,
+	};
+}
+
+/**
+ * Draws the square, and the cross inside it when it is ticked.
+ *
+ * The cross is inset from the frame by its own stroke so the two never touch — a cross drawn corner
+ * to corner reads as a filled box at this size, which is the opposite of what a tick means.
+ *
+ * @param x the left of the whole atom, gap included
+ * @param y the top of the atom, which is a full cell tall
+ */
+function paintCheck(canvas: Canvas, atom: CheckAtom, x: number, y: number): void {
+	const left = x + Math.floor((atom.width - atom.side) / 2);
+	const top = y + Math.floor((atom.height - atom.side) / 2);
+	canvas.rect(left, top, atom.side, atom.side, atom.stroke);
+
+	if (!atom.checked) {
+		return;
+	}
+	const inset = atom.stroke + Math.max(1, Math.round(atom.side * 0.18));
+	const first = left + inset;
+	const last = left + atom.side - 1 - inset;
+	const upper = top + inset;
+	const lower = top + atom.side - 1 - inset;
+	for (let step = 0; step < atom.stroke; step++) {
+		canvas.line(first + step, upper, last, lower - step);
+		canvas.line(first, upper + step, last - step, lower);
+		canvas.line(first + step, lower, last, upper + step);
+		canvas.line(first, lower - step, last - step, upper);
+	}
+}
 /** Builds the closure a cell paints itself with. Each one holds its own atom, already fully measured. */
 function painterFor(atom: Atom): (canvas: Canvas, x: number, y: number) => void {
+	if (atom.kind === "check") {
+		return (canvas, x, y) => {
+			paintCheck(canvas, atom, x, y);
+		};
+	}
+
 	if (atom.kind === "image") {
 		return (canvas, x, y) => {
 			canvas.blit(atom.raster, x, y);

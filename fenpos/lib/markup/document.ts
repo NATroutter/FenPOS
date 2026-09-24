@@ -136,9 +136,62 @@ export interface VoidNode extends Located {
 	directive: VoidDirective;
 }
 
-/** A full-width horizontal rule. */
+/**
+ * A checkbox, drawn beside the words on its line.
+ *
+ * Drawn rather than printed, because no codepage a thermal printer supports carries an empty
+ * square: CP437 and its descendants have a filled one and nothing hollow. A checklist is the one
+ * thing people reach for a square to write, so the tag draws one rather than leaving everybody to
+ * approximate it with brackets.
+ */
+export interface CheckNode extends Located {
+	kind: "check";
+	checked: boolean;
+}
+
+/** A full-width horizontal rule, drawn by repeating one character. */
 export interface RuleNode extends Located {
 	kind: "rule";
+	/** Exactly one code point; a dash unless the tag said otherwise. */
+	character: string;
+}
+
+/** How a list marks its entries. */
+export type ListStyle = "dash" | "number" | "letter" | "check";
+
+/**
+ * A list and the entries it holds.
+ *
+ * **Not a {@link BlockNode}, deliberately.** A block is a region of dots the server draws, and
+ * `needsRaster` treats every one of them as such; a dash, a number and a letter are characters the
+ * printer has, so a list modelled as a block would send a picture of every line for markers the
+ * device could have printed itself. `check` is the one style that really is drawn, and it earns that
+ * by holding a {@link CheckNode} like any other line with a checkbox on it.
+ *
+ * The list owns whole lines the way `<table>` does, and it holds nothing but {@link ItemNode}s. How
+ * many entries it has is a property of the whole list rather than of any one of them — the marker
+ * column has to be wide enough for the last number as well as the first — which is why the expansion
+ * in `lib/markup/lists.ts` reads the list rather than each item as it closes.
+ */
+export interface ListNode extends Located {
+	kind: "list";
+	style: ListStyle;
+	/** What a numbered or lettered list counts from. One under every other style, where it means nothing. */
+	start: number;
+	children: Node[];
+}
+
+/**
+ * One entry of a list: its own text, and any list nested beneath it.
+ *
+ * `done` is read only under `style=check`, which is the only style with a box to cross. Under every
+ * other style writing it at all is `invalid_attribute`, the same answer `<text>` gives `size` on one
+ * of the printer's own fonts.
+ */
+export interface ItemNode extends Located {
+	kind: "item";
+	done: boolean;
+	children: Node[];
 }
 
 /**
@@ -243,10 +296,13 @@ export type Node =
 	| WrapNode
 	| FillNode
 	| VoidNode
+	| CheckNode
 	| RuleNode
 	| SymbolNode
 	| ImageNode
-	| BlockNode;
+	| BlockNode
+	| ListNode
+	| ItemNode;
 
 /**
  * One source line, and what is known about it before anything is printed.

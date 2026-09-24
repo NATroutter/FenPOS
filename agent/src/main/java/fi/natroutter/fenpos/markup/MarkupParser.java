@@ -97,7 +97,20 @@ public final class MarkupParser {
      * refusal names what the tag actually is, rather than reporting it as merely unknown.
      */
     private static final Set<String> SERVER_TAGS =
-            Set.of("box", "table", "row", "cell", "chart", "series", "labels", "bar");
+            Set.of("box", "table", "row", "cell", "chart", "series", "labels", "bar", "check", "list", "item");
+
+    /**
+     * The server tags that are laid out rather than drawn.
+     * <p>
+     * A list is the one thing on that list the server does not turn into a picture: three of its four
+     * styles are characters the printer has, and what the server does is count the markers and set
+     * each entry in the column its own depth puts it in. The refusal says so, because telling a caller
+     * their list would be drawn into a raster would be telling them something untrue.
+     */
+    private static final Set<String> SERVER_LAID_OUT = Set.of("list", "item");
+
+    /** What {@code <hr>} is drawn with when the tag carries no {@code char}. */
+    private static final String RULE_CHARACTER = "-";
 
     private final String source;
 
@@ -383,10 +396,14 @@ public final class MarkupParser {
      * commands, before {@link Tag#byName} has a chance to report it as merely unknown.
      */
     private void requireNotServerTag(String name, int column) throws MarkupException {
-        if (name != null && SERVER_TAGS.contains(name.toLowerCase(Locale.ROOT))) {
-            throw new MarkupException(MarkupError.SERVER_RENDERED, line, column, name,
-                    "<" + name + "> is drawn by the server into a raster; the console prints text only");
+        if (name == null || !SERVER_TAGS.contains(name.toLowerCase(Locale.ROOT))) {
+            return;
         }
+        String reason = SERVER_LAID_OUT.contains(name.toLowerCase(Locale.ROOT))
+                ? "<" + name + "> is laid out by the server, which counts its markers and sets its entries; "
+                        + "the console prints text only"
+                : "<" + name + "> is drawn by the server into a raster; the console prints text only";
+        throw new MarkupException(MarkupError.SERVER_RENDERED, line, column, name, reason);
     }
 
     /**
@@ -827,7 +844,9 @@ public final class MarkupParser {
             case FEED -> directives.add(new Directive.Feed(attributes.integer("lines", 1)));
             case HR -> {
                 claimLine("hr", line, column, MarkupError.INVALID_RULE_SCOPE);
-                directives.add(new Directive.Rule());
+                // The reader has already refused anything but one character, the same as for `<fill>`.
+                directives.add(new Directive.Rule(
+                        attributes.has("char") ? attributes.string("char") : RULE_CHARACTER));
             }
             default -> throw new IllegalStateException("Tag " + tag + " is not a directive");
         }

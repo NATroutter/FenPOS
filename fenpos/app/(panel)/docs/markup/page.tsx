@@ -88,7 +88,26 @@ const TAGS: { syntax: string; meaning: string }[] = [
 		meaning:
 			"Pad to the paper's width, so what follows sits at the right margin. char=. repeats a dot instead of a space. Several on one line split the space evenly.",
 	},
-	{ syntax: "<hr>", meaning: "A rule across the paper. Must be alone in its line." },
+	{
+		syntax: "<check state=on>",
+		meaning:
+			"A checkbox, drawn at the height of the words beside it. state=on crosses it. Shares its line, and is drawn by this server rather than printed, since no codepage carries an empty square.",
+	},
+	{
+		syntax: "<list style=number start=1>…</list>",
+		meaning:
+			"A list of the items it holds, marked with dash, number, letter or check and counted from start. Opens at the start of a line and closes at the end of one, and holds items and nothing else. A list written inside an item nests under it.",
+	},
+	{
+		syntax: "<item done=on>…</item>",
+		meaning:
+			"One entry of a list, printed on a line of its own behind its marker; a wrapped entry continues under its own text. done crosses the box of a check list and applies to no other style.",
+	},
+	{
+		syntax: "<hr char=*>",
+		meaning:
+			"A rule across the paper, drawn with char or a dash. Must be alone in its line, and the codepage has to be able to print the character.",
+	},
 	{
 		syntax: "<qr>…</qr>",
 		meaning: "A QR code. size=8 sets the module size, 1–16, default 6. ASCII only. Must be alone in its line.",
@@ -208,7 +227,6 @@ export default async function MarkupDocsPage() {
 	const variablesEnabled = await booleanSetting("variables.enabled");
 	const maxVariableRefs = await integerSetting("variables.maxPerElement");
 	const maxLineChars = await integerSetting("limits.maxLineChars");
-	const maxLines = await integerSetting("limits.maxLines");
 	const maxTotalChars = await integerSetting("limits.maxTotalChars");
 	const maxBlockDepth = await integerSetting("limits.maxBlockDepth");
 	const maxTableCells = await integerSetting("limits.maxTableCells");
@@ -280,11 +298,12 @@ export default async function MarkupDocsPage() {
 
 								<P>
 									At most {maxLineChars} characters on one line of <Mono>data</Mono>, measured on the line as written
-									rather than on what it prints, past which is <ErrorRef code="line_too_long" />; at most {maxLines}{" "}
-									lines in one receipt, past which is <ErrorRef code="too_many_lines" />; and at most {maxTotalChars}{" "}
-									characters across every counted line together, past which is <ErrorRef code="text_too_large" />. All
-									three are counted before a tag is interpreted, so they bound the request rather than the receipt it
-									compiles to.
+									rather than on what it prints, past which is <ErrorRef code="line_too_long" />; and at most{" "}
+									{maxTotalChars} characters across every counted line together, past which is{" "}
+									<ErrorRef code="text_too_large" />. Both are counted before a tag is interpreted, so they bound the
+									request rather than the receipt it compiles to. There is no cap on how many lines a receipt is written
+									on: the same content written on half as many lines wraps back to the same paper, so what a receipt
+									costs to print is bounded where the cost is — see <Mono>maxOutputLines</Mono> below.
 								</P>
 
 								<P>
@@ -620,6 +639,10 @@ export default async function MarkupDocsPage() {
   <series>3,5,2,6</series>
   <labels>08,09,10,11</labels>
 </chart>
+<list style=number>
+  <item>Flat white</item>
+  <item>Croissant, warmed</item>
+</list>
 <align to=center><qr>https://natroutter.fi</qr></align>
 <bold>Total<fill>5.50</bold>
 <cut>`}</CodeBlock>
@@ -644,8 +667,19 @@ export default async function MarkupDocsPage() {
 									<Mono>&lt;box&gt;</Mono>, <Mono>&lt;table&gt;</Mono> and <Mono>&lt;chart&gt;</Mono>, below, must
 									enclose whole lines, exactly like <Mono>&lt;align&gt;</Mono>: nothing may precede one on the line it
 									opens and nothing may follow it on the line it closes. <Mono>&lt;row&gt;</Mono> and{" "}
-									<Mono>&lt;cell&gt;</Mono> may share a line, which is how a table stays readable in source at all, and
-									blocks nest inside one another, a table in a box in a table's cell, the same way styling tags do.
+									<Mono>&lt;cell&gt;</Mono> are free either way, and blocks nest inside one another — a table in a box
+									in a table's cell — the same way styling tags do.
+								</P>
+
+								<P>
+									<strong className="font-medium text-foreground">
+										Write one tag to a line, indented a step per level
+									</strong>
+									, the way every example here is. A row of cells run together reads well enough at two cells and stops
+									reading at five, and a line has {maxLineChars} characters to spend before{" "}
+									<ErrorRef code="line_too_long" /> — which a wide row reaches long before the grid it draws is
+									finished. Nothing in the markup requires it: the indentation prints nothing and the line breaks
+									between cells are whitespace inside a row, so a grid written either way draws the same paper.
 								</P>
 
 								<P>
@@ -689,15 +723,43 @@ export default async function MarkupDocsPage() {
 								</div>
 
 								<CodeBlock label="sudoku corner">{`<table group=2>
-  <row><cell align=center>5</cell><cell align=center>3</cell><cell align=center>4</cell><cell align=center>6</cell></row>
-  <row><cell align=center>6</cell><cell align=center>7</cell><cell align=center>2</cell><cell align=center>1</cell></row>
-  <row><cell align=center>9</cell><cell align=center>8</cell><cell align=center>1</cell><cell align=center>4</cell></row>
-  <row><cell align=center>2</cell><cell align=center>6</cell><cell align=center>3</cell><cell align=center>5</cell></row>
+  <row>
+    <cell align=center>5</cell>
+    <cell align=center>3</cell>
+    <cell align=center>4</cell>
+    <cell align=center>6</cell>
+  </row>
+  <row>
+    <cell align=center>6</cell>
+    <cell align=center>7</cell>
+    <cell align=center>2</cell>
+    <cell align=center>1</cell>
+  </row>
+  <row>
+    <cell align=center>9</cell>
+    <cell align=center>8</cell>
+    <cell align=center>1</cell>
+    <cell align=center>4</cell>
+  </row>
+  <row>
+    <cell align=center>2</cell>
+    <cell align=center>6</cell>
+    <cell align=center>3</cell>
+    <cell align=center>5</cell>
+  </row>
 </table>`}</CodeBlock>
 
 								<CodeBlock label="forecast">{`<table>
-  <row><cell align=center><bold>Mon</bold></cell><cell align=center><bold>Tue</bold></cell><cell align=center shade=light><bold>Wed</bold></cell></row>
-  <row><cell align=center>72°F</cell><cell align=center>68°F</cell><cell align=center shade=light>75°F</cell></row>
+  <row>
+    <cell align=center><bold>Mon</bold></cell>
+    <cell align=center><bold>Tue</bold></cell>
+    <cell align=center shade=light><bold>Wed</bold></cell>
+  </row>
+  <row>
+    <cell align=center>72°F</cell>
+    <cell align=center>68°F</cell>
+    <cell align=center shade=light>75°F</cell>
+  </row>
 </table>`}</CodeBlock>
 							</Col>
 						</Split>

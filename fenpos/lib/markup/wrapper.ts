@@ -1,4 +1,4 @@
-import { columnAt, type Line, type Span, type SpanStyle } from "@/lib/markup/model";
+import { columnAt, type Line, PLAIN, type Span, type SpanStyle } from "@/lib/markup/model";
 
 /**
  * Splits a line so it fits the paper width.
@@ -11,7 +11,10 @@ import { columnAt, type Line, type Span, type SpanStyle } from "@/lib/markup/mod
  * Breaks are chosen greedily at the last space that still fits. A word longer than the whole
  * width is broken hard, since the alternative is a line that overflows.
  *
- * Ported from `LineWrapper.java`, whose tests are the specification.
+ * Ported from `LineWrapper.java`, whose tests are the specification. The hanging indent is the one
+ * thing this side has and that side does not, and it is a parameter rather than a field on `Line` for
+ * exactly that reason: a list is expanded by the server, so no line the agent wraps ever carries one
+ * and the two models stay the same shape.
  */
 
 const SPACE = " ";
@@ -32,10 +35,12 @@ interface Cell {
  *
  * @param line the line to wrap
  * @param columns printable columns at normal character width; must be at least 1
+ * @param indent columns every row but the first begins at, so a wrapped list entry continues under
+ *        its own text rather than under its marker; clamped to leave one column to print in
  * @returns one or more lines in printing order; a line with no text is returned unchanged
  * @throws RangeError if `columns` is below 1
  */
-export function wrapLine(line: Line, columns: number): Line[] {
+export function wrapLine(line: Line, columns: number, indent = 0): Line[] {
 	if (columns < 1) {
 		throw new RangeError(`columns must be at least 1, got ${columns}`);
 	}
@@ -43,8 +48,12 @@ export function wrapLine(line: Line, columns: number): Line[] {
 		return [line];
 	}
 
-	const rows = layOut(flatten(line), columns);
-	return toLines(rows, line);
+	// Clamped rather than refused: how deep a list nests is written in the markup and how many columns
+	// the paper has belongs to the device, so a list one printer has room for is one another does not.
+	// A continuation squeezed to a single column still prints; a refusal would reject the receipt.
+	const hanging = Math.min(indent, columns - 1);
+	const rows = layOut(flatten(line), columns, hanging);
+	return toLines(rows, line, hanging);
 }
 
 /**
@@ -75,12 +84,17 @@ function flatten(line: Line): Cell[] {
  *
  * The loop deliberately re-examines the current character after a break rather than advancing,
  * so a character that triggered a break is placed on the new row instead of being lost.
+ *
+ * Every row but the first is laid out in `columns - indent`, because {@link toLines} puts that many
+ * spaces in front of it. Read from `rows.length` on each pass rather than fixed once, so the width
+ * narrows the moment the first row is pushed.
  */
-function layOut(cells: Cell[], columns: number): Cell[][] {
+function layOut(cells: Cell[], columns: number, indent: number): Cell[][] {
 	const rows: Cell[][] = [];
 	let row: Cell[] = [];
 	let width = 0;
 	let lastSpace = -1;
+	const available = (): number => (rows.length === 0 ? columns : columns - indent);
 
 	let index = 0;
 	while (index < cells.length) {
@@ -93,7 +107,7 @@ function layOut(cells: Cell[], columns: number): Cell[][] {
 		}
 
 		if (isSpace(cell)) {
-			if (width + cost(cell) > columns) {
+			if (width + cost(cell) > available()) {
 				// The space itself is the break point, so it is consumed rather than carried to
 				// the next row.
 				rows.push(row);
@@ -104,7 +118,7 @@ function layOut(cells: Cell[], columns: number): Cell[][] {
 				continue;
 			}
 			lastSpace = row.length;
-		} else if (row.length > 0 && width + cost(cell) > columns) {
+		} else if (row.length > 0 && width + cost(cell) > available()) {
 			if (lastSpace >= 0) {
 				// Everything after the last space is an unfinished word: move it down.
 				const carried = row.slice(lastSpace + 1);
@@ -149,16 +163,26 @@ function trim(rows: Cell[][]): Cell[][] {
 	return rows;
 }
 
-/** Rebuilds lines from rows, merging neighbouring characters that share a style. */
-function toLines(rows: Cell[][], source: Line): Line[] {
+/**
+ * Rebuilds lines from rows, merging neighbouring characters that share a style.
+ *
+ * A hanging indent becomes real spaces at the front of every row but the first, in the plain style:
+ * spaces put nothing on the paper, so the style they carry cannot show, and inheriting the row's
+ * would pull an underline or an inverted block out into the margin.
+ */
+function toLines(rows: Cell[][], source: Line, indent: number): Line[] {
 	return rows.map((row, index) => ({
 		align: source.align,
 		wrap: source.wrap,
-		spans: toSpans(row),
+		spans: index === 0 || indent === 0 ? toSpans(row) : [hangingSpan(indent), ...toSpans(row)],
 		// Always empty: the wrapper only ever runs on a line `resolveFills` has already emptied.
 		fills: [],
 		directives: index === rows.length - 1 ? source.directives : [],
 	}));
+}
+
+function hangingSpan(indent: number): Span {
+	return { text: SPACE.repeat(indent), style: PLAIN, sourceColumn: 1 };
 }
 
 function toSpans(row: Cell[]): Span[] {

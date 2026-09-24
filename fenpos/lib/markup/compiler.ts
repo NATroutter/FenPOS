@@ -47,9 +47,6 @@ import { readSuppliedVariables, type SuppliedValue } from "@/lib/variables/suppl
  * at the intermediate representation and lets the agent emit the bytes.
  */
 
-/** The rendering character for a horizontal rule. */
-const RULE_CHARACTER = "-";
-
 /**
  * The only keys a request body may carry.
  *
@@ -291,7 +288,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 				// rather than by the one line its text would have cost. The charset check is skipped
 				// deliberately: a codepage bounds what the *printer* can put on paper, and nothing on
 				// this line reaches the printer as a character.
-				const raster = renderRasterLine(top.nodes, layoutContext(settings, limits));
+				const raster = renderRasterLine(top.nodes, layoutContext(settings, limits), dotWidth(top.indent));
 				requireRasterFitsTheWire(raster, top.number);
 				lines.push({
 					align: "LEFT",
@@ -311,7 +308,7 @@ export function layOut(request: PrintRequest, settings: CompileSettings, limits:
 			const filled = resolveFills(checked, settings.columns);
 			const wrap = filled.wrap ?? settings.defaultWrap;
 			if (wrap) {
-				lines.push(...wrapLine(filled, settings.columns));
+				lines.push(...wrapLine(filled, settings.columns, top.indent));
 			} else {
 				lines.push(filled);
 			}
@@ -587,7 +584,9 @@ export function collectDocumentErrors(
 				// compiles, stopping short of painting it: measuring alone runs the same `layoutText`
 				// and raises the same `UnsupportedCharacterError` and misplaced-block `MarkupError`,
 				// which is all a preview needs to know a drawn line is wrong.
-				buildFlow(top.nodes, layoutContext(settings, limits)).measure(dotWidth(settings.columns));
+				buildFlow(top.nodes, layoutContext(settings, limits), "LEFT", dotWidth(top.indent)).measure(
+					dotWidth(settings.columns),
+				);
 				continue;
 			}
 			const parsed = flattenLine(top.nodes);
@@ -841,7 +840,7 @@ function toWireLine(line: Line, settings: CompileSettings): WireLine {
 	const spans: WireSpan[] = rule
 		? [
 				{
-					text: RULE_CHARACTER.repeat(columns),
+					text: rule.character.repeat(columns),
 					bold: false,
 					underline: 0,
 					invert: false,

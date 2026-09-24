@@ -104,7 +104,7 @@ class BundledImagesTest {
                 new SerialSettings("COM3", 9600, 8, 1, Parity.NONE, FlowControl.NONE,
                         true, true, Duration.ofSeconds(5), Duration.ofMillis(5000)),
                 new PrintSettings(columns, Codepage.CP858, UnsupportedPolicy.REJECT, true, Linefeed.LF),
-                new LimitSettings(100, 200, 4000, 200, 100),
+                new LimitSettings(200, 4000, 200, 100),
                 false);
     }
 }

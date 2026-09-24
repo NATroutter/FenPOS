@@ -1,6 +1,5 @@
-import { Align, BarcodeSystem } from "@/lib/domain/enums";
+import { Align, BarcodeSystem, Font } from "@/lib/domain/enums";
 import type { AttributeTable } from "@/lib/markup/attributes";
-import type { BlockTag } from "@/lib/markup/document";
 
 /**
  * The complete set of markup tags.
@@ -53,7 +52,22 @@ export const TAGS: Record<string, Tag> = {
 	text: {
 		name: "text",
 		kind: "PAIRED",
-		attributes: { font: { kind: "text", maxLength: 64, required: true }, size: { kind: "integer", min: 8, max: 4096 } },
+		attributes: {
+			font: { kind: "text", maxLength: 64, names: "font", required: true },
+			// The printer's own faces are a size as well as a shape, chosen by the hardware, so there is
+			// nothing for a size in dots to act on. Stated against the two built-in names because every
+			// other name is a stored font, of which this side knows nothing here.
+			size: {
+				kind: "integer",
+				min: 8,
+				max: 4096,
+				appliesWhen: {
+					attribute: "font",
+					isNot: Font.values,
+					because: "applies to a stored font, not to the printer's own",
+				},
+			},
+		},
 	},
 	/** Line justification. Paired, and required to own its whole line. */
 	align: { name: "align", kind: "PAIRED", attributes: { to: { kind: "enum", values: Align.values, required: true } } },
@@ -72,8 +86,37 @@ export const TAGS: Record<string, Tag> = {
 	cut: { name: "cut", kind: "VOID", attributes: { mode: { kind: "enum", values: ["full", "partial"] } } },
 	/** Advance the paper by `lines`, bounded by ESC/POS `ESC d`. */
 	feed: { name: "feed", kind: "VOID", attributes: { lines: { kind: "integer", min: 1, max: 255, required: true } } },
-	/** A full-width horizontal rule. Required to be alone on its line. */
-	hr: { name: "hr", kind: "VOID", attributes: {} },
+	/**
+	 * A checkbox, drawn at the height of the text it sits beside.
+	 *
+	 * Void, and one of the few drawn things that shares a line with words rather than owning one:
+	 * a checkbox with nothing beside it is a box nobody can read.
+	 */
+	check: { name: "check", kind: "VOID", attributes: { state: { kind: "enum", values: ["off", "on"] } } },
+	/**
+	 * A list of the items it encloses, marked by `style` and numbered from `start`.
+	 *
+	 * Owns whole lines, like `<table>`, and holds `<item>` and nothing else. `dash`, `number` and
+	 * `letter` are characters the printer draws for itself; `check` draws a box per line, the way
+	 * `<check>` does.
+	 */
+	list: {
+		name: "list",
+		kind: "PAIRED",
+		attributes: {
+			style: { kind: "enum", values: ["dash", "number", "letter", "check"] },
+			start: { kind: "integer", min: 1, max: 9999 },
+		},
+	},
+	/** One entry of a list; `done` crosses the box of a `check` list. */
+	item: { name: "item", kind: "PAIRED", attributes: { done: { kind: "enum", values: ["off", "on"] } } },
+	/**
+	 * A full-width horizontal rule, drawn with `char` or a dash. Required to be alone on its line.
+	 *
+	 * The character is the same spec `<fill>` takes, and is held to the same rule: it is expanded to
+	 * text on this side, so the codepage has to be able to print it.
+	 */
+	hr: { name: "hr", kind: "VOID", attributes: { char: { kind: "char" } } },
 	/** A QR code; `size` is dots per module, bounded by ESC/POS `GS ( k` function 167. */
 	qr: { name: "qr", kind: "PAIRED", attributes: { size: { kind: "integer", min: 1, max: 16 } } },
 	/** A linear barcode of the symbology `type` names. */
@@ -129,7 +172,15 @@ export const TAGS: Record<string, Tag> = {
 			height: { kind: "integer", min: 3, max: 60 },
 			title: { kind: "text", maxLength: 64 },
 			legend: { kind: "enum", values: ["auto", "on", "off"] },
-			area: { kind: "enum", values: ["on", "off"] },
+			area: {
+				kind: "enum",
+				values: ["on", "off"],
+				appliesWhen: {
+					attribute: "type",
+					is: ["line"],
+					because: "fills under a line, so it applies to a line chart only",
+				},
+			},
 		},
 	},
 	/** One series of a chart, its values enclosed as data; `name` is what the legend prints. */
@@ -139,7 +190,20 @@ export const TAGS: Record<string, Tag> = {
 		attributes: {
 			name: { kind: "text", maxLength: 64 },
 			pattern: { kind: "enum", values: ["solid", "hatch", "dot", "hollow"] },
-			marker: { kind: "enum", values: ["circle", "square", "triangle", "cross", "none"] },
+			// A marker is drawn on a plotted point, and a bar or a pie plots none. The condition names
+			// the chart's type rather than the series' own, which is why it is settled when the chart
+			// closes instead of when the series opens: a series is read before the chart it is part of
+			// is finished.
+			marker: {
+				kind: "enum",
+				values: ["circle", "square", "triangle", "cross", "none"],
+				appliesWhen: {
+					attribute: "type",
+					on: "parent",
+					is: ["line", "scatter"],
+					because: "draws on plotted points, so it applies to line and scatter charts only",
+				},
+			},
 		},
 	},
 	/** A chart's category labels, enclosed as data. */
@@ -196,17 +260,47 @@ export function tagByName(name: string): Tag | undefined {
  */
 export const PRINTER_DRAWN: ReadonlySet<string> = new Set(["qr", "barcode", "pdf417", "cut", "feed", "drawer"]);
 
-/** The blocks that mean nothing on their own, and the block each belongs directly inside. */
-export const REQUIRED_PARENT: ReadonlyMap<string, BlockTag> = new Map([
+/**
+ * The tags that mean nothing on their own, and the one each belongs directly inside.
+ *
+ * Keyed and valued by tag name rather than by a block's own type, because `<item>` belongs inside
+ * `<list>` and neither of those is a block: a list prints characters the device already has.
+ */
+export const REQUIRED_PARENT: ReadonlyMap<string, string> = new Map([
 	["row", "table"],
 	["cell", "row"],
 	["series", "chart"],
 	["labels", "chart"],
-] as [string, BlockTag][]);
+	["item", "list"],
+]);
 
-/** The blocks that hold named tags and nothing else, whitespace and line breaks apart. */
-export const HOLDS_ONLY: ReadonlyMap<BlockTag, readonly string[]> = new Map([
+/** The tags that hold named tags and nothing else, whitespace and line breaks apart. */
+export const HOLDS_ONLY: ReadonlyMap<string, readonly string[]> = new Map([
 	["table", ["row"]],
 	["row", ["cell"]],
 	["chart", ["series", "labels"]],
-] as [BlockTag, readonly string[]][]);
+	["list", ["item"]],
+]);
+
+/**
+ * The tags no `<item>` may hold.
+ *
+ * An item is one printed line with a marker in front of it. A region is a block of dots that the
+ * layout stacks *below* whatever line it interrupts, and a rule takes the paper's whole width, so
+ * either one written inside an item would print somewhere other than beside the marker that
+ * introduces it. Refused rather than drawn in the wrong place.
+ *
+ * `<image>` is deliberately absent: it is the one drawn thing that sits in a row of glyphs, so an
+ * image inside an item prints beside the item's own words like any other inline content.
+ */
+export const NOT_IN_AN_ITEM: ReadonlySet<string> = new Set([
+	"box",
+	"table",
+	"row",
+	"cell",
+	"chart",
+	"series",
+	"labels",
+	"bar",
+	"hr",
+]);

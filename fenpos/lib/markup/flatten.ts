@@ -7,6 +7,7 @@ import {
 } from "@/lib/markup/blocks";
 import type { Node } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
+import { expandList } from "@/lib/markup/lists";
 import { type Directive, type Line, PLAIN, type SpanStyle } from "@/lib/markup/model";
 
 /**
@@ -26,16 +27,30 @@ import { type Directive, type Line, PLAIN, type SpanStyle } from "@/lib/markup/m
 export interface TopLine {
 	number: number;
 	nodes: Node[];
+	/**
+	 * Columns a wrapped continuation of this line begins at, zero for every line but a list's.
+	 *
+	 * A hanging indent, and the only property of a printed line that the render model does not carry:
+	 * it is spent by the wrapper and by the inline flow and neither the wire nor the agent has any use
+	 * for it, so it travels beside the line rather than on it — which is also what keeps `Line` the
+	 * same shape as the `Line.java` it was ported from.
+	 */
+	indent: number;
 }
 
 /**
- * Splits a tree at its breaks.
+ * Splits a tree at its breaks, expanding every list into the lines it prints.
  *
  * A scope that spans lines is copied onto every line it covers with only that line's children, so
  * each line can be flattened on its own and still carry the style. Blocks are atomic: their breaks
  * belong to the layout engine. A tag enclosing data that spans lines leaves no break behind for the
  * lines it swallows — they print nothing — so the line number of what follows comes from the break
  * that ends its closing line, not from counting the parts produced so far.
+ *
+ * **A list is turned into ordinary lines here and nowhere else.** One entry is one line of a marker
+ * and the entry's text, and a nested list is more of the same further in, so once the expansion has
+ * run nothing downstream — the raster test, the flattener, the image pre-pass that walks these same
+ * lines — has to know that lists exist.
  *
  * @param nodes a document's nodes
  * @returns one entry per printed line, in order
@@ -45,26 +60,46 @@ export function splitLines(nodes: Node[]): TopLine[] {
 }
 
 function splitAtBreaks(nodes: Node[], firstNumber: number): TopLine[] {
-	const lines: TopLine[] = [{ number: firstNumber, nodes: [] }];
+	const lines: TopLine[] = [blankLine(firstNumber)];
 	const current = (): TopLine => lines[lines.length - 1];
 	for (const node of nodes) {
 		if (node.kind === "break") {
-			lines.push({ number: node.line + 1, nodes: [] });
+			lines.push(blankLine(node.line + 1));
 			continue;
 		}
 		if (node.kind === "scope" || node.kind === "align" || node.kind === "wrap") {
 			const inner = splitAtBreaks(node.children, current().number);
 			inner.forEach((part, index) => {
 				if (index > 0) {
-					lines.push({ number: part.number, nodes: [] });
+					lines.push(blankLine(part.number));
 				}
 				current().nodes.push({ ...node, children: part.nodes });
+				// Carried out of the recursion: a list inside an `<align>` still hangs its wrapped rows
+				// under its own text, and the wrapper is handed the line rather than the tree.
+				current().indent = part.indent;
+			});
+			continue;
+		}
+		if (node.kind === "list") {
+			// The list owns the line it opened on, so the first of its own lines takes that line over
+			// rather than leaving a blank one above it. The rest follow as lines in their own right.
+			expandList(node, 0).forEach((draft, index) => {
+				if (index > 0 || current().nodes.length > 0) {
+					lines.push(blankLine(draft.line));
+				}
+				current().number = draft.line;
+				current().nodes.push(...draft.nodes);
+				current().indent = draft.indent;
 			});
 			continue;
 		}
 		current().nodes.push(node);
 	}
 	return lines;
+}
+
+function blankLine(number: number): TopLine {
+	return { number, nodes: [], indent: 0 };
 }
 
 /**
@@ -85,6 +120,8 @@ export function needsRaster(nodes: Node[]): boolean {
 		for (const node of list) {
 			switch (node.kind) {
 				case "block":
+				// A checkbox is dots this side draws, so its line cannot be sent as characters.
+				case "check":
 					raster = true;
 					break;
 				case "image":
@@ -104,6 +141,9 @@ export function needsRaster(nodes: Node[]): boolean {
 				case "fill":
 					other += 1;
 					break;
+				case "list":
+				case "item":
+					throw new Error("splitLines expands every list into ordinary lines");
 				default:
 					break;
 			}
@@ -164,7 +204,7 @@ function walk(nodes: Node[], style: SpanStyle, line: Line): void {
 				line.directives.push(node.directive);
 				break;
 			case "rule":
-				line.directives.push({ kind: "RULE" });
+				line.directives.push({ kind: "RULE", character: node.character, sourceColumn: node.column });
 				break;
 			case "symbol":
 				line.directives.push(measured(node.spec, node.line, node.column));
@@ -177,6 +217,11 @@ function walk(nodes: Node[], style: SpanStyle, line: Line): void {
 				break;
 			case "block":
 				throw new Error("a block cannot be flattened to a native line");
+			case "check":
+				throw new Error("a checkbox cannot be flattened to a native line");
+			case "list":
+			case "item":
+				throw new Error("splitLines expands every list into ordinary lines");
 			case "break":
 				throw new Error("splitLines removes every break");
 		}

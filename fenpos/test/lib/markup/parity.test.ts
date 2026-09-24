@@ -32,7 +32,7 @@ const CASES: ParityCase[] = JSON.parse(readFileSync("../agent/src/test/resources
 
 describe("markup parity cases on the server", () => {
 	it("reads the shared cases", () => {
-		expect(CASES.length).toBe(107);
+		expect(CASES.length).toBe(112);
 	});
 
 	for (const parity of CASES) {

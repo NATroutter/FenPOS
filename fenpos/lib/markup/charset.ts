@@ -1,7 +1,7 @@
 import iconv from "iconv-lite";
 import type { Codepage, UnsupportedPolicy } from "@/lib/domain/enums";
 import { UnsupportedCharacterError } from "@/lib/markup/errors";
-import { columnAt, type Fill, type Line, type Span } from "@/lib/markup/model";
+import { columnAt, type Directive, type Fill, type Line, type Span } from "@/lib/markup/model";
 
 /**
  * Checks that every character of a line can be represented in the device's codepage.
@@ -118,7 +118,7 @@ export function validateCharset(line: Line, codepage: Codepage, policy: Unsuppor
 
 	const fills: Fill[] = [];
 	for (const fill of line.fills) {
-		const character = convertCharacter(fill, codepage, policy);
+		const character = convertCharacter(fill.character, fill.sourceColumn, codepage, policy);
 		// A fill whose character cannot be printed at all is dropped, for the same reason an emptied
 		// span is. The slack it would have taken falls to the fills that remain.
 		if (character.length > 0) {
@@ -126,24 +126,62 @@ export function validateCharset(line: Line, codepage: Codepage, policy: Unsuppor
 		}
 	}
 
-	return { align: line.align, wrap: line.wrap, spans: converted, fills, directives: line.directives };
+	return {
+		align: line.align,
+		wrap: line.wrap,
+		spans: converted,
+		fills,
+		directives: convertDirectives(line.directives, codepage, policy),
+	};
 }
 
 /**
- * Applies the policy to a fill's character.
+ * Applies the policy to the one directive that carries a character of its own.
  *
- * Runs before the fill is expanded, which is the point of the ordering: the caller is told about one
+ * A `RULE` is a `<fill>` in all but name — one character the author wrote, repeated to the paper's
+ * width by a later stage — so it answers to the codepage the same way, and a rule whose character
+ * cannot be printed is dropped the way an emptied fill is. Every other directive is a command or a
+ * payload the printer's own firmware reads, and none of them is text this table applies to.
+ */
+function convertDirectives(
+	directives: readonly Directive[],
+	codepage: Codepage,
+	policy: UnsupportedPolicy,
+): Directive[] {
+	const kept: Directive[] = [];
+	for (const directive of directives) {
+		if (directive.kind !== "RULE") {
+			kept.push(directive);
+			continue;
+		}
+		const character = convertCharacter(directive.character, directive.sourceColumn, codepage, policy);
+		if (character.length > 0) {
+			kept.push({ ...directive, character });
+		}
+	}
+	return kept;
+}
+
+/**
+ * Applies the policy to a single character that will be repeated.
+ *
+ * Runs before the repetition, which is the point of the ordering: the caller is told about one
  * character they wrote, at the column they wrote it, rather than about the thirtieth copy of it.
  *
  * @returns the character to repeat, or an empty string when the policy is to strip it
  * @throws UnsupportedCharacterError under the `REJECT` policy
  */
-function convertCharacter(fill: Fill, codepage: Codepage, policy: UnsupportedPolicy): string {
-	if (repertoireOf(codepage).has(fill.character)) {
-		return fill.character;
+function convertCharacter(
+	character: string,
+	sourceColumn: number,
+	codepage: Codepage,
+	policy: UnsupportedPolicy,
+): string {
+	if (repertoireOf(codepage).has(character)) {
+		return character;
 	}
 	if (policy === "REJECT") {
-		throw new UnsupportedCharacterError(fill.character, fill.sourceColumn, codepage);
+		throw new UnsupportedCharacterError(character, sourceColumn, codepage);
 	}
 	return policy === "REPLACE" ? REPLACEMENT : "";
 }

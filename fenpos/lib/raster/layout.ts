@@ -5,6 +5,7 @@ import type { BlockNode, BlockTag, ChartData, ImageNode, Node } from "@/lib/mark
 import { MARKUP_ERRORS, MarkupError } from "@/lib/markup/errors";
 import { share } from "@/lib/markup/fill";
 import { printedWidthDots, type ResolvedImages } from "@/lib/markup/images";
+import { expandList } from "@/lib/markup/lists";
 import { PLAIN, type SpanStyle } from "@/lib/markup/model";
 import { Canvas } from "@/lib/raster/canvas";
 import { chartHeight, paintChart } from "@/lib/raster/charts";
@@ -85,9 +86,11 @@ interface FlowChild {
  * @param nodes one line's nodes, or — inside a block — every line of its content run together
  * @param context the fonts, the paper and what the pre-pass resolved
  * @param align the justification the flow opens under, for a region that sets one for its content
+ * @param indent dots every row but the first of an inline sequence begins at, which a `<list>` entry
+ *        passed in from the line above this flow carries; a list written inside the flow sets its own
  * @returns the node that draws them
  */
-export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = "LEFT"): LayoutNode {
+export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = "LEFT", indent = 0): LayoutNode {
 	const children: FlowChild[] = [];
 	let items: InlineItem[] = [];
 	// Whether the node just visited was itself a break, tracked across the whole walk rather than per
@@ -97,9 +100,9 @@ export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = 
 	// first break any block's children carry ends that line, not a blank one before it.
 	let previousWasBreak = false;
 
-	const closeSequence = (align: Align, wrap: boolean): void => {
+	const closeSequence = (align: Align, wrap: boolean, hanging = indent): void => {
 		if (items.length > 0) {
-			children.push({ node: inlineSequence(items, align, wrap, context), align: "LEFT" });
+			children.push({ node: inlineSequence(items, align, wrap, context, hanging), align: "LEFT" });
 			items = [];
 		}
 	};
@@ -124,6 +127,12 @@ export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = 
 				case "image":
 					previousWasBreak = false;
 					items.push({ kind: "image", raster: rasterFor(node, context) });
+					break;
+				// Inline, unlike every other drawn thing: it takes its size from the style around it and
+				// sits in the row of glyphs, so the words it labels stay beside it rather than below.
+				case "check":
+					previousWasBreak = false;
+					items.push({ kind: "check", checked: node.checked, style });
 					break;
 				case "scope":
 					visit(node.children, { ...style, ...node.patch }, align, wrap);
@@ -150,6 +159,21 @@ export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = 
 					closeSequence(align, wrap);
 					children.push({ node: blockNode(node, context), align });
 					break;
+				// A list reaches here only inside a region — a box or a cell — because every list at the
+				// document's own level was expanded before the line was handed over. Expanded here too,
+				// and for the same reason: each entry is one row, and each row hangs its wrapped text under
+				// its own text rather than under the marker that introduced it.
+				case "list":
+					previousWasBreak = false;
+					closeSequence(align, wrap);
+					for (const draft of expandList(node, 0)) {
+						visit(draft.nodes, style, align, wrap);
+						closeSequence(align, wrap, indent + dotWidth(draft.indent));
+					}
+					break;
+				case "item":
+					// Only a list holds one, and every list is expanded before its entries are visited.
+					throw new Error("a list's <item> reached the layout unexpanded");
 				case "symbol":
 				case "void": {
 					// Inside a block the tree refuses these outright, which is where that rule belongs: it is
@@ -196,13 +220,14 @@ export function buildFlow(nodes: Node[], context: LayoutContext, align: Align = 
  *
  * @param nodes one line's nodes, as `splitLines` produced them
  * @param context the fonts, the paper and what the pre-pass resolved
+ * @param indent dots a wrapped continuation of this line begins at, for a line of a `check` list
  * @returns the dots, packed exactly as `GS v 0` takes them
  * @throws UnsupportedCharacterError under the `REJECT` policy, when a face has no such glyph
  * @throws MarkupError when the line carries something the printer draws for itself
  */
-export function renderRasterLine(nodes: Node[], context: LayoutContext): ImageRaster {
+export function renderRasterLine(nodes: Node[], context: LayoutContext, indent = 0): ImageRaster {
 	const width = dotWidth(context.columns);
-	const flow = buildFlow(nodes, context);
+	const flow = buildFlow(nodes, context, "LEFT", indent);
 	const canvas = new Canvas(width, Math.max(1, flow.measure(width).height));
 	flow.paint(canvas, 0, 0, width);
 	return canvas.pack();
@@ -245,13 +270,19 @@ function rasterFor(node: ImageNode, context: LayoutContext): ImageRaster {
  * two calls about one layout and breaking the text twice would be both wasteful and a chance for
  * the two to disagree.
  */
-function inlineSequence(items: InlineItem[], align: Align, wrap: boolean, context: LayoutContext): LayoutNode {
+function inlineSequence(
+	items: InlineItem[],
+	align: Align,
+	wrap: boolean,
+	context: LayoutContext,
+	indent: number,
+): LayoutNode {
 	let measuredAt = -1;
 	let rows: TextRow[] = [];
 
 	const rowsAt = (availableWidth: number): TextRow[] => {
 		if (measuredAt !== availableWidth) {
-			rows = layoutText(items, availableWidth, wrap, align, context);
+			rows = layoutText(items, availableWidth, wrap, align, context, indent);
 			measuredAt = availableWidth;
 		}
 		return rows;

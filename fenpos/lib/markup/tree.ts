@@ -1,6 +1,6 @@
 import { type Align, type BarcodeSystem, Font } from "@/lib/domain/enums";
 import { NAME_PATTERN } from "@/lib/domain/naming";
-import { type Attributes, readAttributes } from "@/lib/markup/attributes";
+import { type AppliesWhen, type Attributes, conditionMet, readAttributes } from "@/lib/markup/attributes";
 import { type SymbolSpec, validateSymbolContent } from "@/lib/markup/blocks";
 import type {
 	AlignNode,
@@ -11,7 +11,10 @@ import type {
 	Document,
 	ImageNode,
 	ImageSourceRef,
+	ItemNode,
 	LineInfo,
+	ListNode,
+	ListStyle,
 	Node,
 	ParseOptions,
 	ScopeNode,
@@ -23,7 +26,16 @@ import type {
 } from "@/lib/markup/document";
 import { MARKUP_ERRORS, MarkupError, type MarkupErrorCode } from "@/lib/markup/errors";
 import type { SpanStyle } from "@/lib/markup/model";
-import { HOLDS_ONLY, isContentTag, PRINTER_DRAWN, REQUIRED_PARENT, TAGS, type Tag, tagByName } from "@/lib/markup/tags";
+import {
+	HOLDS_ONLY,
+	isContentTag,
+	NOT_IN_AN_ITEM,
+	PRINTER_DRAWN,
+	REQUIRED_PARENT,
+	TAGS,
+	type Tag,
+	tagByName,
+} from "@/lib/markup/tags";
 import type { Token, Tokenized } from "@/lib/markup/tokenizer";
 
 /**
@@ -53,8 +65,15 @@ const DEFAULT_PDF417_ERROR_LEVEL = 1;
 /** A data URI `<image>` accepts: base64 PNG or JPEG. Line breaks are trimmed out before this runs. */
 const IMAGE_DATA_URI = /^data:(image\/png|image\/jpeg);base64,([A-Za-z0-9+/=]+)$/;
 
-/** The charts that plot points a marker can be drawn on. */
-const MARKER_KINDS: readonly string[] = ["line", "scatter"];
+/**
+ * What a `<series>` marker needs of the chart around it, as the registry states it.
+ *
+ * Read from the registry rather than repeated here, because the Insert dialog offers the same
+ * attribute and would otherwise be free to offer it on a chart this refuses it on. The condition
+ * names the *parent's* type, which is why it is checked as the chart closes rather than in
+ * {@link readAttributes} with the conditions a tag can settle for itself.
+ */
+const MARKER_APPLIES = declaredCondition("series", "marker");
 
 /** Printed lines a `<chart>` stands, when the tag does not say. */
 const DEFAULT_CHART_HEIGHT = 8;
@@ -71,8 +90,23 @@ const VALUE_SEPARATOR = /[\s,]+/;
 /** Splits a list of labels, which may hold spaces of their own and so are cut on commas alone. */
 const LABEL_SEPARATOR = /[,\n]/;
 
-/** The blocks that may sit beside something else on a line, rather than owning whole lines. */
-const SHARES_A_LINE: ReadonlySet<BlockTag> = new Set(["row", "cell", "series", "labels", "bar"]);
+/**
+ * The regions that may sit beside something else on a line, rather than owning whole lines.
+ *
+ * `<item>` is one of them so that a short list can be written along a single source line, the way a
+ * table's row of cells can. Where it prints is unaffected: the list is expanded into one printed line
+ * per entry however its source was laid out.
+ */
+const SHARES_A_LINE: ReadonlySet<string> = new Set(["row", "cell", "series", "labels", "bar", "item"]);
+
+/** A region: a laid-out block, or a list that owns lines without being drawn into one. */
+type Region = BlockNode | ListNode | ItemNode;
+
+/** What a list marks its entries with when the tag does not say. */
+const DEFAULT_LIST_STYLE: ListStyle = "dash";
+
+/** What `<hr>` is drawn with when the tag carries no `char`. */
+const RULE_CHARACTER = "-";
 
 type OpenToken = Extract<Token, { kind: "open" }>;
 
@@ -161,11 +195,11 @@ type ContentShape =
  */
 interface Frame {
 	tag: Tag | null;
-	node: ScopeNode | AlignNode | WrapNode | BlockNode | null;
+	node: ScopeNode | AlignNode | WrapNode | Region | null;
 	children: Node[];
 	line: number;
 	column: number;
-	/** The line state of the nearest scope that owns lines: a block, or the document. */
+	/** The line state of the nearest scope that owns lines: a region, or the document. */
 	owner: LineState;
 	/** What this block is accumulating, on a block's frame; null on every other. */
 	block: BlockState | null;
@@ -297,15 +331,15 @@ class DocumentBuilder {
 	 * indenting the markup is not writing text.
 	 */
 	private requireTextIsWelcome(line: number, column: number): void {
-		const block = this.enclosingBlock();
-		const holds = block ? HOLDS_ONLY.get(block.tag) : undefined;
-		if (block && holds) {
+		const region = regionName(this.enclosingRegion());
+		const holds = region === null ? undefined : HOLDS_ONLY.get(region);
+		if (region !== null && holds) {
 			throw new MarkupError(
 				MARKUP_ERRORS.misplacedBlock,
 				line,
 				column,
-				block.tag,
-				`<${block.tag}> holds ${listed(holds)} rather than text`,
+				region,
+				`<${region}> holds ${listed(holds)} rather than text`,
 			);
 		}
 	}
@@ -429,6 +463,12 @@ class DocumentBuilder {
 			case "labels":
 				this.openDataBlock(tag, token, attributes);
 				return;
+			case "list":
+				this.openList(token, attributes);
+				return;
+			case "item":
+				this.openItem(token, attributes);
+				return;
 			case "bar":
 				this.appendGauge(token, attributes);
 				return;
@@ -450,7 +490,10 @@ class DocumentBuilder {
 				this.appendFill(token, attributes);
 				return;
 			case "hr":
-				this.appendRule(token);
+				this.appendRule(token, attributes);
+				return;
+			case "check":
+				this.appendCheck(token, attributes);
 				return;
 			case "cut":
 			case "feed":
@@ -478,7 +521,7 @@ class DocumentBuilder {
 	 * The change one styling tag makes, rather than the style that results.
 	 *
 	 * @throws MarkupError if `size` names neither dimension, or `text` names a face that is neither a
-	 * built-in letter nor a stored font's name, or sizes a built-in one
+	 * built-in letter nor a stored font's name, or asks for a size the install does not allow
 	 */
 	private stylePatch(scope: ScopeTag, token: OpenToken, attributes: Attributes): Partial<SpanStyle> {
 		switch (scope) {
@@ -507,16 +550,9 @@ class DocumentBuilder {
 				const builtIn = raw.toUpperCase();
 				const size = attributes.size as number | undefined;
 
+				// A size beside a built-in face is refused before this, by the condition the registry
+				// states on `size` — so a face resolved here is one that can honour whatever came with it.
 				if (Font.is(builtIn)) {
-					if (size !== undefined) {
-						throw new MarkupError(
-							MARKUP_ERRORS.invalidAttribute,
-							token.line,
-							attributeColumn(token, "size"),
-							"size",
-							"<text> size applies to a stored font, not to the printer's own",
-						);
-					}
 					return { font: builtIn, face: null, faceDots: 24 };
 				}
 
@@ -647,12 +683,36 @@ class DocumentBuilder {
 		this.placed(frame.owner);
 	}
 
-	private appendRule(token: OpenToken): void {
+	private appendRule(token: OpenToken, attributes: Attributes): void {
+		this.requireInsideLineScope(token.line, token.column);
+
+		// The reader has already refused anything but one character, the same as it does for `<fill>`.
+		const character = (attributes.char as string | undefined) ?? RULE_CHARACTER;
+
+		const frame = this.frame();
+		frame.children.push({ kind: "rule", character, line: token.line, column: token.column });
+		this.claimLine("hr", token.line, token.column, MARKUP_ERRORS.invalidRuleScope);
+		frame.owner.printing += 1;
+		this.placed(frame.owner);
+	}
+
+	/**
+	 * Places a checkbox in the line, beside whatever is written around it.
+	 *
+	 * No line is claimed and nothing is refused around it, because a checkbox that owned its line
+	 * would be a box with its label on the line below. It counts as printing, so a line holding
+	 * nothing else is still a printed line.
+	 */
+	private appendCheck(token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 
 		const frame = this.frame();
-		frame.children.push({ kind: "rule", line: token.line, column: token.column });
-		this.claimLine("hr", token.line, token.column, MARKUP_ERRORS.invalidRuleScope);
+		frame.children.push({
+			kind: "check",
+			checked: attributes.state === "on",
+			line: token.line,
+			column: token.column,
+		});
 		frame.owner.printing += 1;
 		this.placed(frame.owner);
 	}
@@ -697,13 +757,17 @@ class DocumentBuilder {
 	 * @throws MarkupError if this tag cannot sit inside the block that encloses it
 	 */
 	private requirePlacement(tag: Tag, line: number, column: number): void {
-		const inside = this.enclosingBlock()?.tag ?? null;
+		const inside = regionName(this.enclosingRegion());
 		const refuse = (message: string): never => {
 			throw new MarkupError(MARKUP_ERRORS.misplacedBlock, line, column, tag.name, message);
 		};
 
 		if (inside !== null && PRINTER_DRAWN.has(tag.name)) {
 			refuse(`<${tag.name}> is printed by the printer itself, so it cannot sit inside <${inside}>`);
+		}
+
+		if (inside === "item" && NOT_IN_AN_ITEM.has(tag.name)) {
+			refuse(`<${tag.name}> takes a line of its own, so it cannot sit inside a list's <item>`);
 		}
 
 		const required = REQUIRED_PARENT.get(tag.name);
@@ -727,10 +791,6 @@ class DocumentBuilder {
 	 */
 	private openRegion(tag: Tag, token: OpenToken, attributes: Attributes): void {
 		const block = tag.name as BlockTag;
-		if (block === "chart") {
-			this.requireChartShape(token, attributes);
-		}
-
 		if (SHARES_A_LINE.has(block)) {
 			this.requireInsideLineScope(token.line, token.column);
 		} else {
@@ -739,7 +799,7 @@ class DocumentBuilder {
 		if (block === "cell") {
 			this.countCell(token.line, token.column);
 		}
-		this.enterBlock(token.line, token.column);
+		this.enterRegion(token.line, token.column);
 
 		this.enter(tag, token, {
 			kind: "block",
@@ -762,7 +822,7 @@ class DocumentBuilder {
 	private openDataBlock(tag: Tag, token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
 		this.rememberMarker(token, attributes);
-		this.enterBlock(token.line, token.column);
+		this.enterRegion(token.line, token.column);
 
 		this.enter(tag, token, {
 			kind: "block",
@@ -775,10 +835,102 @@ class DocumentBuilder {
 		}).content = { tag, parts: [], shape: null };
 	}
 
+	// -----------------------------------------------------------------------
+	// Lists
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Opens a list, which owns whole lines the way `<table>` does but is no block.
+	 *
+	 * A block is a region of dots the server draws; three of the four list styles are characters the
+	 * printer has, so a list must not become one or every entry would be sent as a picture. What it
+	 * shares with a block is only the line rule: an entry is a line of marker and text, so anything
+	 * beside the list on its opening line would have nowhere to print.
+	 *
+	 * @throws MarkupError if the list cannot own the line it opened on, if it nests past the depth
+	 * limit, or if `start` is written on a style that counts nothing
+	 */
+	private openList(token: OpenToken, attributes: Attributes): void {
+		const style = (attributes.style as ListStyle | undefined) ?? DEFAULT_LIST_STYLE;
+		const start = attributes.start as number | undefined;
+		// Refused rather than ignored, the same answer `<text>` gives `size` on one of the printer's own
+		// fonts: a dash list has nothing to count from, so an author who wrote one meant something the
+		// list cannot do and should hear so rather than watch it vanish.
+		if (start !== undefined && style !== "number" && style !== "letter") {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidAttribute,
+				token.line,
+				attributeColumn(token, "start"),
+				"start",
+				"<list> start counts from a number, so it applies to a number or letter list only",
+			);
+		}
+
+		this.requireBlockCanOpen("list", token.line, token.column);
+		this.enterRegion(token.line, token.column);
+
+		this.enter(TAGS.list, token, {
+			kind: "list",
+			style,
+			start: start ?? 1,
+			line: token.line,
+			column: token.column,
+			children: [],
+		});
+	}
+
+	/**
+	 * Opens one entry of a list.
+	 *
+	 * The list it belongs to is already settled — {@link requirePlacement} refuses an `<item>` written
+	 * anywhere else — so its style is what decides whether `done` means anything here.
+	 *
+	 * @throws MarkupError if `done` is written under a style with no box to cross, or the entry nests
+	 * past the depth limit
+	 */
+	private openItem(token: OpenToken, attributes: Attributes): void {
+		const list = this.enclosingRegion();
+		const style = list?.kind === "list" ? list.style : DEFAULT_LIST_STYLE;
+		if (attributes.done !== undefined && style !== "check") {
+			throw new MarkupError(
+				MARKUP_ERRORS.invalidAttribute,
+				token.line,
+				attributeColumn(token, "done"),
+				"done",
+				"<item> done crosses a checkbox, so it applies inside a <list style=check> only",
+			);
+		}
+
+		this.requireInsideLineScope(token.line, token.column);
+		this.enterRegion(token.line, token.column);
+
+		this.enter(TAGS.item, token, {
+			kind: "item",
+			done: attributes.done === "on",
+			line: token.line,
+			column: token.column,
+			children: [],
+		});
+	}
+
+	/**
+	 * Closes a list or one of its entries: its own last line is verified, and it is placed on the line
+	 * that holds it.
+	 *
+	 * A list closes its line and an entry does not, which is the same distinction `<table>` and
+	 * `<row>` already draw: the list is what owns the paper, and the entries are its parts.
+	 *
+	 * @throws MarkupError if its last line is malformed
+	 */
+	private closeList(frame: Frame, node: ListNode | ItemNode): void {
+		this.endLineOf(frame.owner);
+		this.placeBlock(this.frame().owner, node.kind);
+	}
+
 	/** Appends a gauge, which encloses nothing: how full it is drawn is its `value`. */
 	private appendGauge(token: OpenToken, attributes: Attributes): void {
 		this.requireInsideLineScope(token.line, token.column);
-		this.enterBlock(token.line, token.column);
+		this.enterRegion(token.line, token.column);
 
 		const frame = this.frame();
 		frame.children.push({
@@ -791,23 +943,6 @@ class DocumentBuilder {
 			column: token.column,
 		});
 		this.placeBlock(frame.owner, "bar");
-	}
-
-	/**
-	 * Rejects a chart attribute that only some chart types can honour.
-	 *
-	 * @throws MarkupError if `area` is asked of anything but a line chart
-	 */
-	private requireChartShape(token: OpenToken, attributes: Attributes): void {
-		if (attributes.area !== undefined && attributes.type !== "line") {
-			throw new MarkupError(
-				MARKUP_ERRORS.invalidAttribute,
-				token.line,
-				attributeColumn(token, "area"),
-				"area",
-				"<chart> area fills under a line, so it applies to a line chart only",
-			);
-		}
 	}
 
 	/** Records where a `<series>` asked for a marker, which the chart it sits in has the final say on. */
@@ -873,7 +1008,7 @@ class DocumentBuilder {
 	 * lines close them too: what follows one on its line would be text beside a drawn region, which
 	 * is the same contradiction as text after `</align>`.
 	 */
-	private placeBlock(state: LineState, tag: BlockTag): void {
+	private placeBlock(state: LineState, tag: string): void {
 		this.placed(state);
 		state.blockSeen = true;
 		state.printing += 1;
@@ -894,13 +1029,13 @@ class DocumentBuilder {
 		this.endLineOf(frame.owner);
 
 		const marker = node.tag === "chart" ? frame.block?.marker : null;
-		if (marker && !MARKER_KINDS.includes(node.attributes.type as string)) {
+		if (marker && !conditionMet(MARKER_APPLIES, node.attributes)) {
 			throw new MarkupError(
 				MARKUP_ERRORS.invalidAttribute,
 				marker.line,
 				marker.column,
 				"marker",
-				`<series> marker draws on plotted points, so it applies to ${MARKER_KINDS.join(" and ")} charts only`,
+				`<series> marker ${MARKER_APPLIES.because}`,
 			);
 		}
 
@@ -1142,6 +1277,9 @@ class DocumentBuilder {
 			if (node.kind === "block") {
 				this.closeRegion(frame, node);
 			}
+			if (node.kind === "list" || node.kind === "item") {
+				this.closeList(frame, node);
+			}
 			if (node.kind === "scope" || node.kind === "align" || node.kind === "wrap") {
 				this.trimLayoutBreaks(node.children);
 			}
@@ -1372,17 +1510,17 @@ class DocumentBuilder {
 	}
 
 	/**
-	 * The block this position is written directly inside, or null at the document's own level.
+	 * The region this position is written directly inside, or null at the document's own level.
 	 *
-	 * Nearest rather than outermost: a block lays out a region of the paper, so what a tag may be is
-	 * decided by the region immediately around it — a `<cell>` is welcome in a row and nowhere else,
-	 * whatever the row itself sits in. Nothing but a block interrupts the walk, because a styling tag
+	 * Nearest rather than outermost: a region owns a part of the paper, so what a tag may be is
+	 * decided by the one immediately around it — a `<cell>` is welcome in a row and nowhere else,
+	 * whatever the row itself sits in. Nothing but a region interrupts the walk, because a styling tag
 	 * or an alignment inside one is transparent to this: it places nothing of its own.
 	 */
-	private enclosingBlock(): BlockNode | null {
+	private enclosingRegion(): Region | null {
 		for (let at = this.frames.length - 1; at > 0; at--) {
 			const node = this.frames[at].node;
-			if (node?.kind === "block") {
+			if (node?.kind === "block" || node?.kind === "list" || node?.kind === "item") {
 				return node;
 			}
 		}
@@ -1432,12 +1570,18 @@ class DocumentBuilder {
 	/**
 	 * Pushes the frame for a tag that has just opened.
 	 *
-	 * A block gets a line state of its own, because its lines are its own: the text in a cell is laid
-	 * out against the cell's width and knows nothing of what shares the paper with the table. Every
-	 * other tag inherits the state of whatever owns the line it was written on, so that a rule written
-	 * inside two styling tags still sees what the line already holds.
+	 * A region gets a line state of its own, because its lines are its own: the text in a cell is laid
+	 * out against the cell's width and knows nothing of what shares the paper with the table, and a
+	 * list's entry is a printed line however its source was laid out. Every other tag inherits the
+	 * state of whatever owns the line it was written on, so that a rule written inside two styling tags
+	 * still sees what the line already holds.
+	 *
+	 * A block's own line starts as one a block has already been seen on, so the whitespace written
+	 * around its inner tags prints nothing. A list's does too, for the indentation an author puts
+	 * before each `<item>`. An entry's does not: what is written inside it is content, and a single
+	 * space between two styled runs there is a space the author meant to print.
 	 */
-	private enter(tag: Tag, token: OpenToken, node: ScopeNode | AlignNode | WrapNode | BlockNode | null): Frame {
+	private enter(tag: Tag, token: OpenToken, node: ScopeNode | AlignNode | WrapNode | Region | null): Frame {
 		const parent = this.frame();
 		const block = node?.kind === "block";
 		const frame: Frame = {
@@ -1446,7 +1590,7 @@ class DocumentBuilder {
 			children: node ? node.children : [],
 			line: token.line,
 			column: token.column,
-			owner: block ? blockLine() : parent.owner,
+			owner: block || node?.kind === "list" ? blockLine() : node?.kind === "item" ? freshLine() : parent.owner,
 			block: block ? { cells: 0, marker: null } : null,
 			content: null,
 		};
@@ -1457,17 +1601,18 @@ class DocumentBuilder {
 	/**
 	 * Charges one more level of nesting against the depth limit.
 	 *
-	 * Blocks are the only nesting that is bounded, because they are the only nesting whose cost is
+	 * Regions are the only nesting that is bounded, because they are the only nesting whose cost is
 	 * not linear in the document's length: a table holds rows, a row holds cells, and every level
-	 * measures everything below it.
+	 * measures everything below it. A list is counted with them — its entries hold lists of their own,
+	 * and each level widens the marker column the level below it is set in.
 	 *
-	 * Counted from the frames rather than kept in a field, so the count falls again when a block
+	 * Counted from the frames rather than kept in a field, so the count falls again when a region
 	 * closes without anything having to remember to say so.
 	 *
-	 * @throws MarkupError if the document nests blocks deeper than the limit allows
+	 * @throws MarkupError if the document nests regions deeper than the limit allows
 	 */
-	enterBlock(line: number, column: number): void {
-		const depth = this.frames.filter((frame) => frame.node?.kind === "block").length + 1;
+	enterRegion(line: number, column: number): void {
+		const depth = this.frames.filter((frame) => isRegion(frame.node)).length + 1;
 		if (depth > this.options.maxBlockDepth) {
 			throw new MarkupError(
 				MARKUP_ERRORS.nestingTooDeep,
@@ -1478,6 +1623,19 @@ class DocumentBuilder {
 			);
 		}
 	}
+}
+
+/** Whether a frame's node is a region: a laid-out block, or a list or one of its entries. */
+function isRegion(node: Frame["node"]): boolean {
+	return node?.kind === "block" || node?.kind === "list" || node?.kind === "item";
+}
+
+/** A region's name as a refusal writes it, which for a list is simply its kind. */
+function regionName(node: Region | null): string | null {
+	if (node === null) {
+		return null;
+	}
+	return node.kind === "block" ? node.tag : node.kind;
 }
 
 /** A line with nothing on it yet. */
@@ -1502,6 +1660,22 @@ function blockLine(): LineState {
 	const line = freshLine();
 	line.blockSeen = true;
 	return line;
+}
+
+/**
+ * The condition an attribute declares, or a failure at load time.
+ *
+ * A rule the registry stopped declaring would otherwise become a rule that quietly stopped being
+ * enforced, which is the one way a check driven by a declaration is worse than a check written out.
+ *
+ * @throws Error if the attribute declares no condition
+ */
+function declaredCondition(tag: string, attribute: string): AppliesWhen {
+	const condition = TAGS[tag]?.attributes[attribute]?.appliesWhen;
+	if (!condition) {
+		throw new Error(`<${tag}> ${attribute} declares no condition`);
+	}
+	return condition;
 }
 
 /** An attribute's column, for a refusal the tag's own position would point vaguely at. */

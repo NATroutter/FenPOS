@@ -133,8 +133,14 @@ export interface Fill {
 export type Directive =
 	| { kind: "CUT"; mode: "FULL" | "PARTIAL" }
 	| { kind: "FEED"; lines: number }
-	/** A full-width rule, expanded to characters at compile time once the width is known. */
-	| { kind: "RULE" }
+	/**
+	 * A full-width rule, expanded to characters at compile time once the width is known.
+	 *
+	 * Carries the character to repeat and the column it was written at, for the same reason a
+	 * {@link Fill} does: the expansion happens after the codepage check, so the check has to be able
+	 * to reach the one character the author wrote and to name where they wrote it.
+	 */
+	| { kind: "RULE"; character: string; sourceColumn: number }
 	/** A QR code. `size` is the module size in dots, 1-16. */
 	| { kind: "QR"; content: string; size: number; heightLines: number; widthDots: number; sourceColumn: number }
 	/** A linear barcode in one of the printer's supported symbologies. */

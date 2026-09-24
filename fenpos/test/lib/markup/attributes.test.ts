@@ -199,3 +199,98 @@ describe("readAttributes", () => {
 		expect(thrown.message).toBe("<box> width= is not accepted; expected a whole number from 1 to 100");
 	});
 });
+
+/**
+ * An attribute that means nothing beside the value it was written with.
+ *
+ * The combinations a tag allows used to be checked one at a time wherever the tree happened to build
+ * that tag, which is why the Insert dialog could offer one the parser refused: nothing that reads the
+ * registry could see a rule that was not in it. These cases are about the declared form of those
+ * rules; what each tag declares is checked where that tag is.
+ */
+describe("readAttributes on a conditional attribute", () => {
+	const CONDITIONAL: AttributeTable = {
+		type: { kind: "enum", values: ["bar", "line"], required: true },
+		font: { kind: "text", maxLength: 64 },
+		area: {
+			kind: "enum",
+			values: ["on", "off"],
+			appliesWhen: { attribute: "type", is: ["line"], because: "applies to a line chart only" },
+		},
+		size: {
+			kind: "integer",
+			min: 8,
+			max: 96,
+			appliesWhen: { attribute: "font", isNot: ["A", "B"], because: "applies to a stored font" },
+		},
+		marker: {
+			kind: "enum",
+			values: ["circle", "none"],
+			appliesWhen: { attribute: "type", on: "parent", is: ["line"], because: "applies to a line chart only" },
+		},
+	};
+
+	const read = (raw: { name: string; value: string; column: number }[]): unknown =>
+		readAttributes("chart", raw, CONDITIONAL, 1, 1);
+
+	it("keeps an attribute whose condition the value beside it meets", () => {
+		expect(
+			read([
+				{ name: "type", value: "line", column: 8 },
+				{ name: "area", value: "on", column: 18 },
+			]),
+		).toEqual({ type: "line", area: "on" });
+	});
+
+	it("refuses one whose condition it does not, at the attribute's own column", () => {
+		const thrown = refusal(() =>
+			read([
+				{ name: "type", value: "bar", column: 8 },
+				{ name: "area", value: "on", column: 17 },
+			]),
+		);
+
+		expect(thrown.code).toBe(MARKUP_ERRORS.invalidAttribute);
+		expect(thrown.column).toBe(17);
+		expect(thrown.detail).toBe("area");
+		expect(thrown.message).toBe("<chart> area applies to a line chart only");
+	});
+
+	/** The other half of the same rule: a dependency on text names what disqualifies it instead. */
+	it("refuses one written beside a value its condition excludes, ignoring case", () => {
+		const thrown = refusal(() =>
+			read([
+				{ name: "type", value: "bar", column: 8 },
+				{ name: "font", value: "a", column: 17 },
+				{ name: "size", value: "32", column: 25 },
+			]),
+		);
+
+		expect(thrown.column).toBe(25);
+		expect(thrown.message).toBe("<chart> size applies to a stored font");
+	});
+
+	it("keeps one whose excluded values the text beside it is none of", () => {
+		expect(
+			read([
+				{ name: "type", value: "bar", column: 8 },
+				{ name: "font", value: "roboto", column: 17 },
+				{ name: "size", value: "32", column: 30 },
+			]),
+		).toEqual({ type: "bar", font: "roboto", size: 32 });
+	});
+
+	it("says nothing about a condition the attribute it depends on was left off for", () => {
+		expect(read([{ name: "type", value: "bar", column: 8 }])).toEqual({ type: "bar" });
+	});
+
+	/** What encloses a tag is not known while its own opening tag is read, so the tree settles these. */
+	it("leaves a condition on the enclosing tag's attribute alone", () => {
+		expect(
+			read([
+				{ name: "type", value: "bar", column: 8 },
+				{ name: "marker", value: "circle", column: 17 },
+			]),
+		).toEqual({ type: "bar", marker: "circle" });
+	});
+});
