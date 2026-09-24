@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	listMarkupImages,
@@ -30,7 +31,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { BarcodeSystem } from "@/lib/domain/enums";
+import type { InsertData, SeriesDraft } from "@/lib/markup/editing";
+import { applies, fieldsFor, type InsertControl } from "@/lib/markup/insert-fields";
 
 /**
  * The tags whose usefulness depends on something the toolbar cannot guess.
@@ -50,11 +52,26 @@ import { BarcodeSystem } from "@/lib/domain/enums";
  * own. `text` is here because a stored font is a name off the Assets tab, exactly like an image, and
  * asking for it also means asking what it should say — unlike the two built-in fonts, which used to
  * write themselves straight onto the toolbar because there was nothing left to ask.
+ *
+ * `chart` and `table` ask for more than attributes: both enclose a structure, and a button that
+ * writes the structure empty leaves the operator to type `<series>` and `<cell>` by hand, which is
+ * the markup the dialog exists to spare them. `box` asks for attributes alone — the lines it frames
+ * are the ones already selected — and is here because a frame's width and border had no other way
+ * in at all.
  */
-export type InsertTag = "image" | "variable" | "barcode" | "qr" | "pdf417" | "feed" | "fill" | "chart" | "bar" | "text";
-
-/** The four kinds of chart the toolbar offers. */
-const CHART_TYPES = ["bar", "line", "pie", "scatter"] as const;
+export type InsertTag =
+	| "image"
+	| "variable"
+	| "barcode"
+	| "qr"
+	| "pdf417"
+	| "feed"
+	| "fill"
+	| "chart"
+	| "bar"
+	| "text"
+	| "table"
+	| "box";
 
 /** What the dialog asks for, and how it explains itself, per tag. */
 const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
@@ -90,7 +107,7 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
 	chart: {
 		title: "Insert a chart",
 		description:
-			"Bar, line, pie or scatter. A sample series and labels are inserted with it — replace the values and add more series by copying the tags.",
+			"Bar, line, pie or scatter, drawn from the series below. Values are separated by commas or spaces; a scatter takes x:y pairs instead, and marks its own axes rather than taking labels.",
 	},
 	bar: { title: "Insert a gauge", description: "How full the gauge is drawn, 0 (empty) to 100 (full)." },
 	text: {
@@ -98,20 +115,68 @@ const PROMPTS: Record<InsertTag, { title: string; description: string }> = {
 		description:
 			"A or B for one of the printer's built-in fonts, or the name of a font stored on the Assets tab, drawn at the given size.",
 	},
+	table: {
+		title: "Insert a table",
+		description:
+			"How many rows and columns, and what each cell holds. Cells may be left empty; a column's width is shared out evenly unless the markup says otherwise.",
+	},
+	box: {
+		title: "Insert a box",
+		description:
+			"A frame around whole lines. Whatever is selected in the editor is framed; with nothing selected the caret is left inside the box to type into.",
+	},
 };
 
-/** The attribute each prompted tag's answer is written as. */
-const ATTRIBUTE: Record<Exclude<InsertTag, "variable">, string> = {
-	image: "width",
-	barcode: "type",
-	qr: "size",
-	pdf417: "level",
-	feed: "lines",
-	fill: "char",
-	chart: "type",
-	bar: "value",
-	text: "font",
-};
+/**
+ * The tags whose content is the point of writing them.
+ *
+ * A symbol with nothing to encode is not a symbol, and an `<image>` or a `{name}` with no name
+ * refers to nothing. Everything else either carries its meaning in its attributes — a feed, a
+ * gauge — or is a paired tag whose text may just as well come from what was selected in the editor.
+ */
+const NEEDS_CONTENT: ReadonlySet<InsertTag> = new Set(["image", "variable", "barcode", "qr", "pdf417"]);
+
+/**
+ * What a required attribute's control opens showing.
+ *
+ * The registry's own answer rather than a table of preferences: the first value of a fixed set, the
+ * lowest of a range. Anything else has no sensible opening value and starts empty, which for a
+ * required text attribute is the box waiting to be filled in.
+ */
+function openingValue(field: InsertControl): [string, string] {
+	if (field.kind === "select") {
+		return [field.name, field.values[0] ?? ""];
+	}
+	return [field.name, field.kind === "number" ? String(field.min) : ""];
+}
+
+/** A series with nothing in it yet, which is what Add series adds and what a chart dialog opens on. */
+const EMPTY_SERIES: SeriesDraft = { values: "", attributes: {} };
+
+/**
+ * The grid a table dialog opens on, and the largest one it will collect.
+ *
+ * Two by two because a table of one cell is a line of text and nobody draws one; the ceiling is
+ * about the dialog rather than the parser, which allows a couple of thousand cells: past this, typing
+ * into a grid of boxes is slower than copying a `<row>` in the editor and editing it, so the dialog
+ * stops pretending to be the better tool.
+ */
+const GRID_OPENS_AT = 2;
+const MOST_ROWS = 20;
+const MOST_COLUMNS = 8;
+
+/**
+ * The same cells in a grid of a different shape.
+ *
+ * What was typed is kept wherever it still has a cell to sit in: a column added and taken away again
+ * should not cost the rows their text, and a row count nudged past its mark with the stepper's arrow
+ * would otherwise clear everything below it.
+ */
+function resized(cells: readonly (readonly string[])[], rows: number, columns: number): string[][] {
+	return Array.from({ length: rows }, (_, row) =>
+		Array.from({ length: columns }, (_, column) => cells[row]?.[column] ?? ""),
+	);
+}
 
 /**
  * Collects the data a tag needs, then hands it back for insertion.
@@ -126,24 +191,37 @@ const ATTRIBUTE: Record<Exclude<InsertTag, "variable">, string> = {
  */
 export function InsertDialog({
 	tag,
+	fonts,
 	onClose,
 	onInsert,
 }: {
 	tag: InsertTag | null;
+	/** What a `font` attribute may name beyond the printer's own two. */
+	fonts: readonly string[];
 	onClose: () => void;
-	onInsert: (tag: InsertTag, attributes: Record<string, string> | undefined, content: string) => void;
+	onInsert: (
+		tag: InsertTag,
+		attributes: Record<string, string> | undefined,
+		content: string,
+		data?: InsertData,
+	) => void;
 }) {
-	const [argument, setArgument] = useState("");
 	/**
-	 * The attribute value of the tags whose attribute is a number.
+	 * Every attribute's value, by the name markup writes it under, as text.
 	 *
-	 * Held apart from {@link argument} rather than as text, because these use the same stepper the
-	 * Settings tab does and that speaks in numbers. `null` is a real state and not zero: it is the
-	 * empty box, which is how the markup says "no attribute at all" — a different thing from any value
-	 * the field could hold.
+	 * One record rather than the scalar per control this used to hold. That pair — one string and one
+	 * number — is the whole reason a tag could carry exactly one attribute: `<chart>` collected its
+	 * type and had nowhere to put a height. Text even for the numbers, because an empty box and a
+	 * zero are different answers and a record of strings says so without a second null-able type.
 	 */
-	const [amount, setAmount] = useState<number | null>(null);
+	const [values, setValues] = useState<Record<string, string>>({});
 	const [content, setContent] = useState("");
+	/** A chart's series, in the order they are drawn and named in the legend. */
+	const [series, setSeries] = useState<SeriesDraft[]>([EMPTY_SERIES]);
+	/** A chart's category labels, as one row of commas — the way `<labels>` itself is written. */
+	const [labels, setLabels] = useState("");
+	/** A table's cells, row by row. The grid's shape is this array's shape; see {@link resized}. */
+	const [cells, setCells] = useState<string[][]>(() => resized([], GRID_OPENS_AT, GRID_OPENS_AT));
 	const [images, setImages] = useState<MarkupImage[] | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [variables, setVariables] = useState<MarkupVariable[] | null>(null);
@@ -155,11 +233,22 @@ export function InsertDialog({
 		if (!tag) {
 			return;
 		}
-		setArgument(tag === "barcode" ? "CODE128" : tag === "chart" ? "bar" : "");
-		// Only the feed starts with a value: it is the one whose attribute is required, and one line
-		// is what someone reaching for it usually wants.
-		setAmount(tag === "feed" ? 1 : null);
+		// A required attribute opens with a value, because the tag cannot be written without one and an
+		// empty control would only ever be filled in with the same answer. Which value comes from the
+		// registry rather than from a list here: the first of a fixed set, the lowest of a range. That
+		// reproduces what this used to hardcode — a barcode's first symbology, a chart's `bar`, one
+		// line of feed — and keeps doing so for a tag added later.
+		setValues(
+			Object.fromEntries(
+				fieldsFor(tag)
+					.filter((field) => field.required)
+					.map(openingValue),
+			),
+		);
 		setContent("");
+		setSeries([EMPTY_SERIES]);
+		setLabels("");
+		setCells(resized([], GRID_OPENS_AT, GRID_OPENS_AT));
 	}, [tag]);
 
 	// The library is fetched on the first opening of the image dialog and kept: images change on
@@ -191,25 +280,47 @@ export function InsertDialog({
 	}
 
 	const trimmedContent = content.trim();
-	const trimmedArgument = argument.trim();
-	/** Whether this tag's attribute is the numeric one. */
-	const numeric = tag === "image" || tag === "qr" || tag === "pdf417" || tag === "feed" || tag === "bar";
-	// The void tags carry everything in their attribute and enclose nothing; a chart's type always has
-	// a value once the dialog is open, since it defaults to "bar"; a text tag needs a font name but its
-	// text is optional, the same as any other paired tag with nothing selected; the rest need content.
+	// Only the attributes that mean something beside the answers already given: `<chart>` drops its
+	// area fill unless the type is a line, `<text>` drops its size for one of the printer's own faces.
+	// Which combinations are legal is the registry's to say and the parser's to enforce — see
+	// `applies` — so this dialog cannot offer one the preview would refuse, and an attribute filtered
+	// out here is also one `written` no longer carries.
+	const fields = fieldsFor(tag).filter((field) => applies(field, values));
+	/** Every attribute actually filled in, trimmed; an empty box means the tag simply omits it. */
+	const written = Object.fromEntries(
+		fields.map((field) => [field.name, (values[field.name] ?? "").trim()]).filter(([, value]) => value !== ""),
+	);
+
+	/** A scatter carries its own axes, so it plots pairs and refuses the labels the others take. */
+	const scatter = tag === "chart" && (values.type ?? "").toLowerCase() === "scatter";
+	/** A pie divides one whole up, so a second series is not something the parser would draw. */
+	const single = tag === "chart" && (values.type ?? "").toLowerCase() === "pie";
+	const drawn = single ? series.slice(0, 1) : series;
+
+	// Three halves, by now. Every attribute the tag cannot be written without has to be filled in —
+	// which the registry says, so no list here repeats it — and the tags whose whole meaning is their
+	// content need that content. A `<text>` is the exception among the paired tags for the same reason
+	// it always was: its font is the point and its text may be supplied by the selection instead. A
+	// chart is the third case: a chart draws what its series hold, so it needs a series holding
+	// something, which is the one thing about it nothing else can supply.
 	const ready =
-		tag === "feed" || tag === "bar"
-			? amount !== null
-			: tag === "fill" || tag === "chart"
-				? true
-				: tag === "text"
-					? trimmedArgument !== ""
-					: trimmedContent !== "";
+		fields.every((field) => !field.required || written[field.name] !== undefined) &&
+		(!NEEDS_CONTENT.has(tag) || trimmedContent !== "") &&
+		(tag !== "chart" || drawn.some((one) => one.values.trim() !== ""));
+
+	/** The structure this tag encloses, for the two that enclose one. */
+	const collected = (): InsertData | undefined => {
+		if (tag === "chart") {
+			return { kind: "chart", series: drawn, labels: scatter ? "" : labels };
+		}
+		if (tag === "table") {
+			return { kind: "table", rows: cells };
+		}
+		return undefined;
+	};
 
 	const insert = (): void => {
-		const written = numeric ? (amount === null ? "" : String(amount)) : trimmedArgument;
-		const attributes = tag === "variable" || written === "" ? undefined : { [ATTRIBUTE[tag]]: written };
-		onInsert(tag, attributes, trimmedContent);
+		onInsert(tag, Object.keys(written).length === 0 ? undefined : written, trimmedContent, collected());
 		onClose();
 	};
 
@@ -230,122 +341,25 @@ export function InsertDialog({
 				<DialogBody>
 					<div className="flex flex-col gap-4">
 						{tag === "image" ? (
-							<ImageFields
-								images={images}
-								loading={loading}
-								name={content}
-								onName={setContent}
-								width={amount}
-								onWidth={setAmount}
-							/>
+							<ImageFields images={images} loading={loading} name={content} onName={setContent} />
 						) : null}
 
 						{tag === "variable" ? (
 							<VariableFields variables={variables} loading={loadingVariables} name={content} onName={setContent} />
 						) : null}
 
-						{tag === "barcode" ? (
-							<Field>
-								<FieldLabel htmlFor="insert-barcode-system">Symbology</FieldLabel>
-								<Select
-									items={Object.fromEntries(BarcodeSystem.values.map((value) => [value, value]))}
-									value={trimmedArgument}
-									onValueChange={(next) => next && setArgument(String(next))}
-								>
-									<SelectTrigger id="insert-barcode-system">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										{BarcodeSystem.values.map((value) => (
-											<SelectItem key={value} value={value} className="font-mono text-[12px]">
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</Field>
-						) : null}
-
-						{tag === "qr" ? (
-							<NumberRow
-								label="Module size"
-								description="1 to 16. Left empty, the printer's default is used."
-								value={amount}
-								onChange={setAmount}
-								min={1}
-								max={16}
+						{/* Every attribute the tag declares, drawn from the registry's own spec for it — see
+						    `fieldsFor`. What used to stand here was one hand-written block per tag, which is
+						    why `<chart>` collected its type and none of its other five. */}
+						{fields.map((field) => (
+							<AttributeField
+								key={field.name}
+								field={field}
+								fonts={fonts}
+								value={values[field.name] ?? ""}
+								onValue={(next) => setValues((held) => ({ ...held, [field.name]: next }))}
 							/>
-						) : null}
-
-						{tag === "pdf417" ? (
-							<NumberRow
-								label="Error correction"
-								description="0 to 8. Left empty, the encoder chooses."
-								value={amount}
-								onChange={setAmount}
-								min={0}
-								max={8}
-							/>
-						) : null}
-
-						{tag === "feed" ? (
-							<NumberRow
-								label="Lines"
-								description="How many blank lines to advance."
-								value={amount}
-								onChange={setAmount}
-								min={1}
-								max={255}
-							/>
-						) : null}
-
-						{tag === "chart" ? (
-							<Field>
-								<FieldLabel htmlFor="insert-chart-type">Type</FieldLabel>
-								<Select
-									items={Object.fromEntries(CHART_TYPES.map((value) => [value, value]))}
-									value={trimmedArgument}
-									onValueChange={(next) => next && setArgument(String(next))}
-								>
-									<SelectTrigger id="insert-chart-type">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										{CHART_TYPES.map((value) => (
-											<SelectItem key={value} value={value} className="font-mono text-[12px]">
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</Field>
-						) : null}
-
-						{tag === "bar" ? (
-							<NumberRow
-								label="Fill"
-								description="How full the gauge is drawn."
-								value={amount}
-								onChange={setAmount}
-								min={0}
-								max={100}
-							/>
-						) : null}
-
-						{tag === "text" ? (
-							<Field>
-								<FieldLabel htmlFor="insert-text-name">Font</FieldLabel>
-								<Input
-									id="insert-text-name"
-									value={argument}
-									placeholder="a"
-									onChange={(event) => setArgument(event.target.value)}
-								/>
-								<FieldDescription>
-									A or B for one of the printer's built-in fonts, or the name of a font stored on the Assets tab.
-								</FieldDescription>
-							</Field>
-						) : null}
+						))}
 
 						{tag === "text" ? (
 							<Field>
@@ -363,21 +377,19 @@ export function InsertDialog({
 							</Field>
 						) : null}
 
-						{tag === "fill" ? (
-							<Field>
-								<FieldLabel htmlFor="insert-fill-character">Character</FieldLabel>
-								<Input
-									id="insert-fill-character"
-									value={argument}
-									maxLength={1}
-									placeholder="."
-									onChange={(event) => setArgument(event.target.value)}
-								/>
-								<FieldDescription>
-									One character, repeated. Left empty it is a space, which is what most receipts want.
-								</FieldDescription>
-							</Field>
+						{tag === "chart" ? (
+							<ChartData
+								series={drawn}
+								labels={labels}
+								scatter={scatter}
+								single={single}
+								chart={values}
+								onSeries={setSeries}
+								onLabels={setLabels}
+							/>
 						) : null}
+
+						{tag === "table" ? <TableData cells={cells} onCells={setCells} /> : null}
 
 						{tag === "barcode" || tag === "qr" || tag === "pdf417" ? (
 							<Field>
@@ -408,6 +420,296 @@ export function InsertDialog({
 }
 
 /**
+ * One attribute's control, chosen by what the registry says the attribute accepts.
+ *
+ * The whole dialog's per-tag knowledge used to live in nine hand-written blocks like this one; this
+ * is what replaced them. A control here knows about a *kind* of attribute, never about a tag, so
+ * `<chart>`'s height and `<qr>`'s module size are the same number box bounded differently, and
+ * neither of them is written down twice.
+ *
+ * The id is built from the attribute's name so that every control has a stable one, which is what
+ * the label points at and what carries focus across a republish.
+ */
+function AttributeField({
+	field,
+	fonts,
+	value,
+	onValue,
+	idPrefix = "insert-attribute",
+}: {
+	field: InsertControl;
+	fonts: readonly string[];
+	value: string;
+	onValue: (next: string) => void;
+	/** What the control's id begins with, so several series' controls do not share one id. */
+	idPrefix?: string;
+}) {
+	const id = `${idPrefix}-${field.name}`;
+	const optional = field.required ? null : <FieldDescription>Optional.</FieldDescription>;
+
+	if (field.kind === "number") {
+		return (
+			<NumberRow
+				label={field.label}
+				description={`${field.min} to ${field.max}.${field.required ? "" : " Left empty, the tag omits it."}`}
+				value={value === "" ? null : Number.parseInt(value, 10)}
+				onChange={(next) => onValue(next === null ? "" : String(next))}
+				min={field.min}
+				max={field.max}
+			/>
+		);
+	}
+
+	if (field.kind === "select" || field.kind === "font") {
+		// A font is a select too, over a list the registry cannot hold: the printer's own two faces,
+		// which every install has, followed by whatever this one stores. Typing the name was the thing
+		// that made this dialog worth changing.
+		const choices = field.kind === "font" ? [...BUILT_IN_FONTS, ...fonts] : field.values;
+		return (
+			<Field>
+				<FieldLabel htmlFor={id}>{field.label}</FieldLabel>
+				<Select
+					items={Object.fromEntries(choices.map((choice) => [choice, choice]))}
+					value={value}
+					onValueChange={(next) => next && onValue(String(next))}
+				>
+					<SelectTrigger id={id}>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						{choices.map((choice) => (
+							<SelectItem key={choice} value={choice} className="font-mono text-[12px]">
+								{choice}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				{field.kind === "font" && fonts.length === 0 ? (
+					<FieldDescription>The printer's own faces. Store a font on the Assets tab to add more.</FieldDescription>
+				) : (
+					optional
+				)}
+			</Field>
+		);
+	}
+
+	return (
+		<Field>
+			<FieldLabel htmlFor={id}>{field.label}</FieldLabel>
+			<Input
+				id={id}
+				value={value}
+				maxLength={field.kind === "char" ? 1 : field.maxLength}
+				onChange={(event) => onValue(event.target.value)}
+			/>
+			{field.kind === "char" ? (
+				<FieldDescription>One character, repeated. Left empty it is a space.</FieldDescription>
+			) : (
+				optional
+			)}
+		</Field>
+	);
+}
+
+/** The faces every printer has, which no install needs to store. Offered lower-case, as the docs write them. */
+const BUILT_IN_FONTS = ["a", "b"] as const;
+
+/**
+ * A chart's series and its labels row.
+ *
+ * What the button used to write was one sample series of `1,2,3` and labels of `a,b,c`, to be found
+ * and replaced by hand — which meant the operator still had to know that values go in the content of
+ * a `<series>` and its name in an attribute, the very thing a dialog exists to spare them.
+ *
+ * Each series' attributes are the registry's, filtered as the chart's own are: `marker` is declared
+ * to apply to the charts that plot points, so a bar chart's series are not offered one. A pie is the
+ * other shape rule — it divides a single whole, so there is no second series to collect — and a
+ * scatter carries its own axes, so its points are pairs and there are no categories to label.
+ */
+function ChartData({
+	series,
+	labels,
+	scatter,
+	single,
+	chart,
+	onSeries,
+	onLabels,
+}: {
+	series: readonly SeriesDraft[];
+	labels: string;
+	scatter: boolean;
+	single: boolean;
+	/** The chart's own attributes, which is what a series' conditions are judged against. */
+	chart: Readonly<Record<string, string>>;
+	onSeries: (next: (held: SeriesDraft[]) => SeriesDraft[]) => void;
+	onLabels: (next: string) => void;
+}) {
+	const controls = fieldsFor("series").filter((field) => applies(field, chart));
+
+	const change = (index: number, edit: (held: SeriesDraft) => SeriesDraft): void =>
+		onSeries((held) => held.map((one, at) => (at === index ? edit(one) : one)));
+
+	return (
+		<>
+			{series.map((one, index) => (
+				// Keyed by position, which is what a series is: its place in this list decides the order it
+				// is drawn in and the row it takes in the legend, so two series never swap identity.
+				// biome-ignore lint/suspicious/noArrayIndexKey: position is the identity here
+				<div key={index} className="flex flex-col gap-3 rounded-lg border border-border p-3">
+					<div className="flex items-center justify-between">
+						<span className="text-[12px] font-medium">{single ? "Series" : `Series ${index + 1}`}</span>
+						{series.length > 1 ? (
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="h-6 px-1.5 text-[11.5px]"
+								onClick={() => onSeries((held) => held.filter((_, at) => at !== index))}
+							>
+								<X className="size-3.5" />
+								Remove
+							</Button>
+						) : null}
+					</div>
+
+					<Field>
+						<FieldLabel htmlFor={`insert-series-${index}-values`}>Values</FieldLabel>
+						<Input
+							id={`insert-series-${index}-values`}
+							value={one.values}
+							className="font-mono text-[12px]"
+							placeholder={scatter ? "1:2, 2:3, 3:5" : "1, 2, 3"}
+							onChange={(event) => change(index, (held) => ({ ...held, values: event.target.value }))}
+						/>
+						<FieldDescription>
+							{scatter
+								? "One x:y pair per point, separated by commas or spaces."
+								: "One number per point, separated by commas or spaces."}
+						</FieldDescription>
+					</Field>
+
+					{controls.map((field) => (
+						<AttributeField
+							key={field.name}
+							field={field}
+							fonts={[]}
+							idPrefix={`insert-series-${index}`}
+							value={one.attributes[field.name] ?? ""}
+							onValue={(next) =>
+								change(index, (held) => ({ ...held, attributes: { ...held.attributes, [field.name]: next } }))
+							}
+						/>
+					))}
+				</div>
+			))}
+
+			{single ? (
+				<p className="text-[12px] text-muted-foreground">
+					A pie divides one whole into shares, so it is drawn from a single series.
+				</p>
+			) : (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className="h-7 self-start text-[11.5px]"
+					onClick={() => onSeries((held) => [...held, EMPTY_SERIES])}
+				>
+					<Plus className="size-3.5" />
+					Add series
+				</Button>
+			)}
+
+			{scatter ? null : (
+				<Field>
+					<FieldLabel htmlFor="insert-chart-labels">Labels</FieldLabel>
+					<Input
+						id="insert-chart-labels"
+						value={labels}
+						className="font-mono text-[12px]"
+						placeholder="Mon, Tue, Wed"
+						onChange={(event) => onLabels(event.target.value)}
+					/>
+					<FieldDescription>
+						One label per point, separated by commas. Left empty, the points are drawn unnamed.
+					</FieldDescription>
+				</Field>
+			)}
+		</>
+	);
+}
+
+/**
+ * A table's shape and what its cells hold.
+ *
+ * The shape is two numbers rather than Add row and Add column buttons: a table is a grid, and
+ * someone who wants four columns knows that before they start typing into them. Changing either
+ * number keeps whatever has already been typed wherever it still fits — see {@link resized} — so a
+ * miscounted column is not an afternoon's work to correct.
+ */
+function TableData({ cells, onCells }: { cells: readonly (readonly string[])[]; onCells: (next: string[][]) => void }) {
+	const rows = cells.length;
+	const columns = cells[0]?.length ?? 0;
+
+	return (
+		<>
+			<div className="grid grid-cols-2 gap-4">
+				<NumberRow
+					label="Rows"
+					description={`1 to ${MOST_ROWS}.`}
+					value={rows}
+					min={1}
+					max={MOST_ROWS}
+					onChange={(next) => onCells(resized(cells, next ?? 1, columns))}
+				/>
+				<NumberRow
+					label="Columns"
+					description={`1 to ${MOST_COLUMNS}.`}
+					value={columns}
+					min={1}
+					max={MOST_COLUMNS}
+					onChange={(next) => onCells(resized(cells, rows, next ?? 1))}
+				/>
+			</div>
+
+			<Field>
+				<FieldLabel>Cells</FieldLabel>
+				<div className="flex flex-col gap-1 overflow-x-auto rounded-lg border border-border p-2">
+					{cells.map((row, rowIndex) => (
+						// Keyed by position for the reason a series is: a cell's place in the grid is what it
+						// is, and nothing here reorders rows or columns.
+						// biome-ignore lint/suspicious/noArrayIndexKey: position is the identity here
+						<div key={rowIndex} className="flex gap-1">
+							{row.map((cell, columnIndex) => (
+								<Input
+									// biome-ignore lint/suspicious/noArrayIndexKey: position is the identity here
+									key={columnIndex}
+									aria-label={`Row ${rowIndex + 1}, column ${columnIndex + 1}`}
+									value={cell}
+									className="h-7 min-w-24 font-mono text-[12px]"
+									onChange={(event) =>
+										onCells(
+											cells.map((each, at) =>
+												at === rowIndex
+													? each.map((held, column) => (column === columnIndex ? event.target.value : held))
+													: [...each],
+											),
+										)
+									}
+								/>
+							))}
+						</div>
+					))}
+				</div>
+				<FieldDescription>
+					What each cell prints. An empty cell is written empty, which draws the column and prints nothing in it.
+				</FieldDescription>
+			</Field>
+		</>
+	);
+}
+
+/**
  * The stored image library, plus the two things that are not a stored image.
  *
  * A picker and a free-text field rather than one or the other: most of the time the image wanted is
@@ -421,15 +723,11 @@ function ImageFields({
 	loading,
 	name,
 	onName,
-	width,
-	onWidth,
 }: {
 	images: MarkupImage[] | null;
 	loading: boolean;
 	name: string;
 	onName: (next: string) => void;
-	width: number | null;
-	onWidth: (next: number | null) => void;
 }) {
 	return (
 		<>
@@ -481,15 +779,6 @@ function ImageFields({
 				/>
 				<FieldDescription>A stored image's name, or an http(s) URL the server can reach.</FieldDescription>
 			</Field>
-
-			<NumberRow
-				label="Width"
-				description="A percentage of the paper's width, 1 to 100. Left empty, the image prints at its own size."
-				value={width}
-				onChange={onWidth}
-				min={1}
-				max={100}
-			/>
 		</>
 	);
 }

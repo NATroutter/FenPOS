@@ -129,6 +129,22 @@
 	/* A step dimmer than muted-foreground, for timestamps and monospace annotations. */
 	--subtle-foreground: #737373;
 
+	/*
+   * The scrollbar thumb, at rest and under the pointer.
+   *
+   * The resting value is --input's: a scrollbar is the same kind of thing a field outline is — a
+   * piece of chrome that says something can be operated — and one step above the hairline is
+   * where that reads without becoming furniture. Under the pointer it lifts to --secondary's
+   * neighbour, the same distance again, so a thumb answers being pointed at the way a control
+   * does.
+   *
+   * No track token: the track is the surface behind it, whichever card or well that happens to
+   * be. A tinted groove down the side of every scrolling panel is exactly the ugliness this
+   * replaces.
+   */
+	--scrollbar-thumb: #2e2e2e;
+	--scrollbar-thumb-hover: #454545;
+
 	/*--chart-1: #e5e5e5;*/
 	/*--chart-2: #a1a1a1;*/
 	/*--chart-3: #737373;*/
@@ -178,5 +194,59 @@
    */
 	::selection {
 		background-color: color-mix(in oklab, var(--brand) 40%, transparent);
+	}
+
+	/*
+   * Scrollbars, everywhere something scrolls.
+   *
+   * The platform's own are built for a light window and land on this console as a bright groove
+   * with a grey slab in it — the loudest thing on a page whose whole scheme is three shades of
+   * near-black. These are a rounded thumb on the surface behind it and nothing else: no track, no
+   * arrows, no border.
+   *
+   * The two mechanisms are exclusive rather than both applied. Chrome has supported
+   * `scrollbar-width` and `scrollbar-color` since 121 and lets them *outrank* its own
+   * `::-webkit-scrollbar` rules, so a stylesheet that set both would get the standard pair's
+   * plain thumb there and the detailed one only in Safari. The query hands the standard pair to
+   * the engines that have nothing else — Firefox — and leaves the rest to the pseudo-elements,
+   * which can do the inset and the radius that make the thumb float rather than fill a channel.
+   */
+	@supports (scrollbar-width: thin) and (not selector(::-webkit-scrollbar)) {
+		* {
+			scrollbar-width: thin;
+			scrollbar-color: var(--scrollbar-thumb) transparent;
+		}
+	}
+
+	::-webkit-scrollbar {
+		width: 12px;
+		height: 12px;
+	}
+
+	/* Transparent rather than unset: WebKit's default is a filled channel. */
+	::-webkit-scrollbar-track,
+	::-webkit-scrollbar-corner {
+		background: transparent;
+	}
+
+	/*
+   * The border is the inset. A transparent border with the background clipped to the padding box
+   * leaves a 6px thumb centred in a 12px lane, so it reads as a mark on the surface rather than as
+   * a bar filling a gutter — and the lane is still the full width a pointer has to hit.
+   */
+	::-webkit-scrollbar-thumb {
+		background-color: var(--scrollbar-thumb);
+		background-clip: padding-box;
+		border: 3px solid transparent;
+		border-radius: 9999px;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background-color: var(--scrollbar-thumb-hover);
+	}
+
+	/* No arrows. Left alone they appear as two empty squares at the ends of every scrollbar. */
+	::-webkit-scrollbar-button {
+		display: none;
 	}
 }

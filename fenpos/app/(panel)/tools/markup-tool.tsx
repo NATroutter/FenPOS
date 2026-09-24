@@ -1,6 +1,6 @@
 "use client";
 
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, type Extension } from "@codemirror/state";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
 	ALargeSmall,
@@ -19,7 +19,18 @@ import {
 	ReceiptText,
 	Underline,
 } from "lucide-react";
-import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState, useTransition } from "react";
+import {
+	type CSSProperties,
+	Fragment,
+	type ReactNode,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useTransition,
+} from "react";
 import { toast } from "sonner";
 import {
 	type PreviewError,
@@ -32,7 +43,7 @@ import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
 import { InsertDialog, type InsertTag } from "@/app/(panel)/tools/insert-dialog";
-import { markupLanguage } from "@/app/(panel)/tools/markup-language";
+import { markupLanguage, showMarkupErrors } from "@/app/(panel)/tools/markup-language";
 import { ImagePreview } from "@/components/panel/image-preview";
 import { useSessionState } from "@/components/panel/session-state";
 import { SymbolPreview } from "@/components/panel/symbol-preview";
@@ -47,13 +58,40 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Linefeed } from "@/lib/domain/enums";
-import { markupEdit, variableEdit } from "@/lib/markup/editing";
+import { type InsertData, markupEdit, variableEdit } from "@/lib/markup/editing";
+import type { VariableName } from "@/lib/markup/editor-language";
 
 /** How long the editor sits still before a preview is compiled. */
 const DEBOUNCE_MS = 300;
 
-/** Built once: a new extension array on every render would reconfigure the editor each keystroke. */
-const MARKUP_EXTENSIONS = markupLanguage();
+/**
+ * The editor's extensions, rebuilt only when what this install holds changes.
+ *
+ * Building them once at module load was enough until `font=` needed to offer what this install
+ * holds: a new array on every render reconfigures the editor on every keystroke. Both lists arrive
+ * from the server with the page and do not change while it is open, so this memoises on the two
+ * things that could — keyed on their serialised form, because each arrives as a new array identity
+ * every render and would defeat the memo it was handed to.
+ */
+function useMarkupExtensions(
+	fonts: readonly string[],
+	variables: readonly VariableName[],
+	columns: number,
+): Extension[] {
+	const fontKey = fonts.join("\n");
+	const variableKey = JSON.stringify(variables);
+	return useMemo(
+		() =>
+			markupLanguage(
+				{
+					fonts: fontKey === "" ? [] : fontKey.split("\n"),
+					variables: JSON.parse(variableKey) as VariableName[],
+				},
+				columns,
+			),
+		[fontKey, variableKey, columns],
+	);
+}
 
 /**
  * How long a toolbar action keeps pulling focus back to the editor.
@@ -76,6 +114,30 @@ const FOCUS_GUARD_MS = 300;
 const PAPER_FONT_SIZE_PX = 12;
 const PAPER_LINE_HEIGHT = 1.45;
 const PAPER_LINE_HEIGHT_PX = PAPER_FONT_SIZE_PX * PAPER_LINE_HEIGHT;
+
+/**
+ * How much of the row the editor may be dragged to take, as a percentage.
+ *
+ * Bounded at both ends rather than left free: the paper is a fixed number of columns wide and the
+ * toolbar is a fixed number of buttons, so a handle dragged to either edge would hide one of them
+ * behind a scrollbar with no way to see what happened.
+ */
+const SPLIT_MIN = 25;
+const SPLIT_MAX = 75;
+
+/** What one arrow key moves the handle, as a percentage. */
+const SPLIT_STEP = 2;
+
+/** Where the handle rests until it is moved, as a percentage. */
+const SPLIT_DEFAULT = 50;
+
+/** The handle's position, held inside its bounds and safe against a stored value that is not a number. */
+function clampSplit(percent: number): number {
+	if (!Number.isFinite(percent)) {
+		return SPLIT_DEFAULT;
+	}
+	return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, percent));
+}
 
 /**
  * The picker's value for "whatever this printer is set to".
@@ -289,6 +351,650 @@ const EXAMPLES: Example[] = [
 				"<cut>",
 			].join("\n"),
 	},
+	{
+		label: "Weather forecast",
+		note: "A box, a plotted line and two grids",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>WEATHER</size></align>",
+				"<align to=center>Wed, Sep 09 2026 . 08:00 . NEW YORK</align>",
+				"<hr>",
+				"<box border=single pad=1>",
+				"  <align to=center><size width=2 height=2>68F</size></align>",
+				"  <align to=center><bold>Partly cloudy</bold></align>",
+				"  <align to=center>H 76F    L 62F</align>",
+				"</box>",
+				"<feed lines=1>",
+				"<wrap>Next 24 hours: fair overall, between 62F and 76F, staying fairly steady. Little to no precipitation expected.</wrap>",
+				"<feed lines=1>",
+				"<bold>12-HOUR FORECAST</bold>",
+				`<chart type=line height=9 title="Temperature (F)" legend=off>`,
+				"  <series marker=circle>68,69,71,73,74,75,76,75,74,72,70,68</series>",
+				"  <labels>08,09,10,11,12,13,14,15,16,17,18,19</labels>",
+				"</chart>",
+				"<feed lines=1>",
+				"<bold>5-DAY FORECAST</bold>",
+				"<table border=single>",
+				"  <row>",
+				"    <cell align=center><bold>Today</bold></cell>",
+				"    <cell align=center><bold>Thu</bold></cell>",
+				"    <cell align=center><bold>Fri</bold></cell>",
+				"    <cell align=center><bold>Sat</bold></cell>",
+				"    <cell align=center><bold>Sun</bold></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>09/09</cell>",
+				"    <cell align=center>09/10</cell>",
+				"    <cell align=center>09/11</cell>",
+				"    <cell align=center>09/12</cell>",
+				"    <cell align=center>09/13</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center><bold>76</bold></cell>",
+				"    <cell align=center><bold>74</bold></cell>",
+				"    <cell align=center><bold>72</bold></cell>",
+				"    <cell align=center><bold>75</bold></cell>",
+				"    <cell align=center><bold>77</bold></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>62</cell>",
+				"    <cell align=center>61</cell>",
+				"    <cell align=center>60</cell>",
+				"    <cell align=center>62</cell>",
+				"    <cell align=center>64</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>10%</cell>",
+				"    <cell align=center>5%</cell>",
+				"    <cell align=center>60%</cell>",
+				"    <cell align=center>15%</cell>",
+				"    <cell align=center>5%</cell>",
+				"  </row>",
+				"</table>",
+				"<align to=center>High / low / chance of rain</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Morning brief",
+		note: "Headlines, rules and a QR code each",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>MORNING BRIEF</size></align>",
+				"<align to=center>Wednesday, September 09, 2026 . 08:00</align>",
+				"<hr>",
+				"<bold>LOCAL</bold>",
+				"<wrap><size width=2 height=2>Neighbourhood library opens a new reading garden</size></wrap>",
+				"<wrap>A quiet outdoor space welcomes readers of all ages, open from sunrise until dusk.</wrap>",
+				"<feed lines=1>",
+				"<align to=center><qr size=4>https://news.example/a/1042</qr></align>",
+				"<align to=center>Scan to read</align>",
+				"<hr>",
+				"<bold>MARKETS</bold>",
+				"<wrap><size width=2 height=2>Weekend market returns to the town square</size></wrap>",
+				"<wrap>Local growers and makers gather every Saturday from eight until two.</wrap>",
+				"<feed lines=1>",
+				"<align to=center><qr size=4>https://news.example/a/1043</qr></align>",
+				"<align to=center>Scan to read</align>",
+				"<hr>",
+				"<bold>TRANSPORT</bold>",
+				"<wrap><size width=2 height=2>Night bus adds two stops on the harbour route</size></wrap>",
+				"<wrap>The 22 now calls at Pier Road and Old Customs House after ten in the evening.</wrap>",
+				"<feed lines=1>",
+				"<align to=center><qr size=4>https://news.example/a/1044</qr></align>",
+				"<align to=center>Scan to read</align>",
+				"<hr>",
+				"<align to=center>Sample data. No wire service was harmed.</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Sudoku",
+		note: "A 9x9 grid, ruled every third line",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>SUDOKU</size></align>",
+				"<align to=center>Wednesday, September 09, 2026</align>",
+				"<align to=center>Difficulty: medium</align>",
+				"<hr>",
+				"<table border=single group=3>",
+				"  <row>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>2</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>3</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>5</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>5</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center>4</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>2</cell>",
+				"    <cell align=center>1</cell>",
+				"    <cell align=center>7</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>2</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>9</cell>",
+				"    <cell align=center>7</cell>",
+				"    <cell align=center>3</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>2</cell>",
+				"    <cell align=center>9</cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>1</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>3</cell>",
+				"    <cell align=center>8</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>4</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center>9</cell>",
+				"    <cell align=center>7</cell>",
+				"    <cell align=center></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>4</cell>",
+				"    <cell align=center>1</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>5</cell>",
+				"    <cell align=center>2</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>8</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center>4</cell>",
+				"    <cell align=center>1</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>9</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center>4</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center></cell>",
+				"    <cell align=center>4</cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"    <cell align=center></cell>",
+				"  </row>",
+				"</table>",
+				"<feed lines=1>",
+				"<align to=center>One of each digit per row, column and box.</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Word search",
+		note: "A letter grid and a wrapped word list",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>WORD SEARCH</size></align>",
+				"<align to=center>Wednesday, September 09, 2026</align>",
+				"<align to=center>Level: easy</align>",
+				"<hr>",
+				"<feed lines=1>",
+				"<align to=center><bold>K B E N E V O L E N T O</bold></align>",
+				"<align to=center><bold>K E U P H E M I S M G V</bold></align>",
+				"<align to=center><bold>I J E S T U D I O A J X</bold></align>",
+				"<align to=center><bold>V Q B D I C E E L T O N</bold></align>",
+				"<align to=center><bold>Y R E S I L I E N C E H</bold></align>",
+				"<align to=center><bold>Q O B N D S P C J A V A</bold></align>",
+				"<align to=center><bold>L C N N C I P R H D W L</bold></align>",
+				"<align to=center><bold>O Z I D H O E A O I K F</bold></align>",
+				"<align to=center><bold>G K S C E M R U R X P T</bold></align>",
+				"<align to=center><bold>I U R T U R Z E N A Y I</bold></align>",
+				"<align to=center><bold>N A A L S E X T A N T M</bold></align>",
+				"<align to=center><bold>E H P J N W A R D E N E</bold></align>",
+				"<feed lines=1>",
+				"<hr>",
+				"<bold>FIND THESE WORDS</bold>",
+				"<wrap>ARCHIPELAGO, BENEVOLENT, ENCORE, EUPHEMISM, HALFTIME, JEST, KINDLE, LOGIN, PLUME, PROXY, RESILIENCE, SEXTANT, STUDIO, WARDEN, YONDER</wrap>",
+				"<feed lines=1>",
+				"<align to=center>Across, down and diagonally.</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Crossword",
+		note: "A grid of blocked squares, with clues",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>CROSSWORD</size></align>",
+				"<align to=center>Wednesday, September 09, 2026</align>",
+				"<align to=center>Level: easy</align>",
+				"<hr>",
+				"<table border=single>",
+				"  <row>",
+				"    <cell>1</cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell>2</cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell>3</cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell>4</cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell>5</cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell shade=black>.</cell>",
+				"    <cell></cell>",
+				"  </row>",
+				"</table>",
+				"<feed lines=1>",
+				"<bold>ACROSS</bold>",
+				"<wrap>1. A person new to a field or activity</wrap>",
+				"<wrap>3. Series of rulers from one family</wrap>",
+				"<wrap>4. Fire-breathing mythical winged reptile</wrap>",
+				"<wrap>5. A group working toward a shared goal</wrap>",
+				"<feed lines=1>",
+				"<bold>DOWN</bold>",
+				"<wrap>1. Sun-dried brick made of clay</wrap>",
+				"<wrap>2. A mass of ice covering a region</wrap>",
+				"<wrap>5. Facts and figures collected for analysis</wrap>",
+				"<hr>",
+				"<align to=center>Answers on the back of the roll.</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Maze",
+		note: "Shaded cells drawn as walls",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>MAZE</size></align>",
+				"<align to=center>Wednesday, September 09, 2026</align>",
+				"<hr>",
+				"<align to=center>Start top left, finish bottom right.</align>",
+				"<feed lines=1>",
+				"<table border=none>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell align=center>.</cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell shade=black></cell>",
+				"    <cell align=center>.</cell>",
+				"  </row>",
+				"</table>",
+				"<feed lines=1>",
+				"<align to=center>Find the path.</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "System monitor",
+		note: "Gauges, a bar chart and leader lines",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>SYSTEM MONITOR</size></align>",
+				"<align to=center>Wednesday, September 09, 2026 . 08:00</align>",
+				"<hr>",
+				"<bold>NETWORK</bold>",
+				"Host<fill char=.>pc-1",
+				"Address<fill char=.>192.0.2.10",
+				"Wireless<fill char=.>Sample Home",
+				"<hr>",
+				"<bold>STORAGE</bold>",
+				"<bar value=16>",
+				"5GB used<fill char=.>27GB free",
+				"<feed lines=1>",
+				"<bold>MEMORY</bold>",
+				"<bar value=38>",
+				"192MB used<fill char=.>320MB free",
+				"<hr>",
+				`<chart type=bar height=7 title="CPU load, last six hours" legend=off>`,
+				"  <series pattern=hatch>12,18,35,27,41,22</series>",
+				"  <labels>02,03,04,05,06,07</labels>",
+				"</chart>",
+				"<hr>",
+				"Uptime<fill char=.>2h 30m",
+				"Load<fill char=.>0.12",
+				"Temperature<fill char=.>42.5C",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Day planner",
+		note: "A week strip and the day's agenda",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>DAY PLANNER</size></align>",
+				"<align to=center>Wednesday, September 09, 2026 . 08:00</align>",
+				"<hr>",
+				"<table border=single>",
+				"  <row>",
+				"    <cell align=center><bold>S</bold></cell>",
+				"    <cell align=center><bold>M</bold></cell>",
+				"    <cell align=center><bold>T</bold></cell>",
+				"    <cell align=center><bold>W</bold></cell>",
+				"    <cell align=center><bold>T</bold></cell>",
+				"    <cell align=center><bold>F</bold></cell>",
+				"    <cell align=center><bold>S</bold></cell>",
+				"  </row>",
+				"  <row>",
+				"    <cell align=center>6</cell>",
+				"    <cell align=center>7</cell>",
+				"    <cell align=center>8</cell>",
+				"    <cell align=center shade=light><bold>9</bold></cell>",
+				"    <cell align=center>10</cell>",
+				"    <cell align=center>11</cell>",
+				"    <cell align=center>12</cell>",
+				"  </row>",
+				"</table>",
+				"<hr>",
+				"<bold>TODAY (09/09)</bold>",
+				"09:30<fill char=.>Farmer's market run",
+				"12:00<fill char=.>Lunch with Sam",
+				"15:15<fill char=.>Dentist, Harbour Road",
+				"<feed lines=1>",
+				"<bold>TOMORROW (09/10)</bold>",
+				"18:00<fill char=.>Grandma's birthday dinner",
+				"<feed lines=1>",
+				"<bold>SATURDAY (09/12)</bold>",
+				"All day<fill char=.>Library pickup day",
+				"<hr>",
+				"<align to=center><qr size=4>https://calendar.example/d/20260909</qr></align>",
+				"<align to=center>Scan for the full week</align>",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
+	{
+		label: "Astronomy",
+		note: "A plotted arc and a pie of the moon",
+		build: () =>
+			[
+				"<align to=center><size width=2 height=2>ASTRONOMY</size></align>",
+				"<align to=center>Wednesday, September 09, 2026 . 08:00</align>",
+				"<align to=center>NEW YORK</align>",
+				"<hr>",
+				"<bold>SUN</bold>",
+				`<chart type=line height=9 title="Altitude above the horizon" legend=off>`,
+				"  <series marker=none>0,14,31,45,54,57,54,45,31,14,0</series>",
+				"  <labels>06,08,09,11,12,13,15,16,18,19,20</labels>",
+				"</chart>",
+				"Sunrise<fill char=.>06:31",
+				"Day length<fill char=.>12h 43m",
+				"Sunset<fill char=.>19:14",
+				"<hr>",
+				"<bold>MOON</bold>",
+				`<chart type=pie height=8 title="Illuminated" legend=on>`,
+				"  <series>4,96</series>",
+				"  <labels>Lit,Dark</labels>",
+				"</chart>",
+				"Phase<fill char=.>New",
+				"Age<fill char=.>Day 27 of 28",
+				"Next full<fill char=.>September 23",
+				"<feed lines=3>",
+				"<cut>",
+			].join("\n"),
+	},
 ];
 
 /** One entry in a toolbar dropdown: what it writes, and how it is described. */
@@ -354,6 +1060,10 @@ const ALIGN_CHOICES: TagChoice[] = [
  * except, for Box alone, the lines it should frame. Font joined them too, once naming a stored font
  * meant asking for a size as well as a name — a single button could write `<text font=a>` or
  * `<text font=b>` without asking anything, but it cannot guess a name off the Assets tab.
+ *
+ * Box and Table were the last two written straight through, and what they wrote was an empty
+ * structure: a frame that could not be given a width or a border, and a grid of two blank cells to be
+ * copied by hand for a third. Both ask now.
  */
 const INSERT_CHOICES: TagChoice[] = [
 	{ label: "Horizontal rule", tag: "hr", note: "A full-width line" },
@@ -374,8 +1084,8 @@ const INSERT_CHOICES: TagChoice[] = [
 	},
 	{ label: "Wrap", tag: "wrap", note: "Break this line at the paper width" },
 	{ label: "No wrap", tag: "nowrap", note: "Print this line as written" },
-	{ label: "Box", tag: "box", note: "Frame the selected lines" },
-	{ label: "Table", tag: "table", note: "A grid of cells" },
+	{ label: "Box", tag: "box", prompt: "box", note: "Frame the selected lines" },
+	{ label: "Table", tag: "table", prompt: "table", note: "Rows, columns and their cells" },
 	{ label: "Chart", tag: "chart", prompt: "chart", note: "bar, line, pie or scatter" },
 	{ label: "Gauge", tag: "bar", prompt: "bar", note: "0 to 100" },
 	{ label: "Font", tag: "text", prompt: "text", note: "a, b or a stored font" },
@@ -394,10 +1104,18 @@ const INSERT_CHOICES: TagChoice[] = [
  */
 export function MarkupTool({
 	devices,
+	fonts,
+	variables,
 	canPreview,
 	canPrint,
 }: {
 	devices: ToolDevice[];
+	/** Names of the fonts stored on the Assets tab, which is what a `<text font=…>` may name beyond
+	    the printer's own two. Read on the server, because a client component cannot. */
+	fonts: string[];
+	/** The variables a `{name}` may refer to, for the editor to offer. Empty while the install has
+	    variables switched off, since a brace is ordinary text then. */
+	variables: VariableName[];
 	/** Whether the operator holds `tools:preview`. Without it the paper card is left out and nothing
 	    is compiled — the editor still composes markup, it just cannot be shown against the paper. */
 	canPreview: boolean;
@@ -414,8 +1132,18 @@ export function MarkupTool({
 	const editor = useRef<ReactCodeMirrorRef>(null);
 	/** Which tag the insert dialog is collecting data for, or null when it is closed. */
 	const [prompting, setPrompting] = useState<InsertTag | null>(null);
+	/** The row the two panes sit in, which is what a drag measures a position against. */
+	const splitRow = useRef<HTMLDivElement>(null);
+	// Kept as text because that is what survives leaving the page; read back through `clampSplit`, so
+	// a stored value from a build with different bounds — or none at all — still lands somewhere usable.
+	const [storedSplit, setStoredSplit] = useSessionState("tools.markup.split", String(SPLIT_DEFAULT));
+	const split = clampSplit(Number.parseFloat(storedSplit));
+	const setSplit = useCallback((percent: number) => setStoredSplit(String(clampSplit(percent))), [setStoredSplit]);
 
 	const device = devices.find((entry) => entry.id === deviceId);
+	// Zero while no device is chosen, which draws no guide: where the paper ends is the device's
+	// answer, and there is none to give yet.
+	const extensions = useMarkupExtensions(fonts, variables, device?.columns ?? 0);
 
 	/**
 	 * Writes a tag at the cursor, or around what is selected.
@@ -437,59 +1165,65 @@ export function MarkupTool({
 	 * @param attributes its attributes, for tags that take them
 	 * @param content what it should enclose, when that came from a dialog rather than from the
 	 *   selection — the two are alternatives, and a dialog's answer wins because the person just
-	 *   typed it. For `"variable"`, this is the variable's name rather than enclosed text.
+	 *   typed it. An empty answer is no answer: a dialog that collects attributes alone, as `<box>`'s
+	 *   does, hands back nothing to enclose, and the selection is what the tag goes around. For
+	 *   `"variable"`, this is the variable's name rather than enclosed text.
+	 * @param data the structure a dialog filled in, for `<chart>` and `<table>`
 	 */
-	const applyTag = useCallback((name: string, attributes?: Record<string, string>, content?: string) => {
-		const view = editor.current?.view;
-		if (!view) {
-			return;
-		}
-
-		const { state } = view;
-		view.dispatch(
-			state.update(
-				state.changeByRange((range) => {
-					const selected = state.sliceDoc(range.from, range.to);
-					const edit =
-						name === "variable" && content !== undefined
-							? variableEdit(content, selected)
-							: markupEdit(name, content ?? selected, attributes);
-					if (!edit) {
-						return { range };
-					}
-
-					return {
-						changes: { from: range.from, to: range.to, insert: edit.insert },
-						range: EditorSelection.range(range.from + edit.selectionFrom, range.from + edit.selectionTo),
-					};
-				}),
-				{ userEvent: "input", scrollIntoView: true },
-			),
-		);
-		// Back to the editor, and then held there. The click moved focus to a button, and the point of
-		// putting the caret between the tags is that the next thing typed lands there.
-		//
-		// The toolbar's four menus make this harder than it looks. An open menu keeps focus inside
-		// itself, so a `focus()` from an item's click handler is taken straight back; the item then
-		// unmounts as the menu closes, dropping focus to `<body>`; and the menu may hand focus to its
-		// own trigger button on the way out. Each of those happens at a moment this code cannot
-		// predict, and counting animation frames to outlast them encodes a duration that goes wrong
-		// the day the animation changes.
-		//
-		// So rather than guessing when, watch for it: while the menu is closing, any focus landing
-		// outside the editor is the menu tidying up after itself, and the caret this function just
-		// placed between two tags is what the person is about to type into. Pull it back, briefly, and
-		// stop watching once things have settled.
-		view.focus();
-
-		const keepFocus = (event: FocusEvent): void => {
-			if (!(event.target instanceof Node) || !view.dom.contains(event.target)) {
-				view.focus();
+	const applyTag = useCallback(
+		(name: string, attributes?: Record<string, string>, content?: string, data?: InsertData) => {
+			const view = editor.current?.view;
+			if (!view) {
+				return;
 			}
-		};
-		document.addEventListener("focusin", keepFocus, true);
-		window.setTimeout(() => document.removeEventListener("focusin", keepFocus, true), FOCUS_GUARD_MS);
-	}, []);
+
+			const { state } = view;
+			view.dispatch(
+				state.update(
+					state.changeByRange((range) => {
+						const selected = state.sliceDoc(range.from, range.to);
+						const edit =
+							name === "variable" && content !== undefined
+								? variableEdit(content, selected)
+								: markupEdit(name, content === undefined || content === "" ? selected : content, attributes, data);
+						if (!edit) {
+							return { range };
+						}
+
+						return {
+							changes: { from: range.from, to: range.to, insert: edit.insert },
+							range: EditorSelection.range(range.from + edit.selectionFrom, range.from + edit.selectionTo),
+						};
+					}),
+					{ userEvent: "input", scrollIntoView: true },
+				),
+			);
+			// Back to the editor, and then held there. The click moved focus to a button, and the point of
+			// putting the caret between the tags is that the next thing typed lands there.
+			//
+			// The toolbar's four menus make this harder than it looks. An open menu keeps focus inside
+			// itself, so a `focus()` from an item's click handler is taken straight back; the item then
+			// unmounts as the menu closes, dropping focus to `<body>`; and the menu may hand focus to its
+			// own trigger button on the way out. Each of those happens at a moment this code cannot
+			// predict, and counting animation frames to outlast them encodes a duration that goes wrong
+			// the day the animation changes.
+			//
+			// So rather than guessing when, watch for it: while the menu is closing, any focus landing
+			// outside the editor is the menu tidying up after itself, and the caret this function just
+			// placed between two tags is what the person is about to type into. Pull it back, briefly, and
+			// stop watching once things have settled.
+			view.focus();
+
+			const keepFocus = (event: FocusEvent): void => {
+				if (!(event.target instanceof Node) || !view.dom.contains(event.target)) {
+					view.focus();
+				}
+			};
+			document.addEventListener("focusin", keepFocus, true);
+			window.setTimeout(() => document.removeEventListener("focusin", keepFocus, true), FOCUS_GUARD_MS);
+		},
+		[],
+	);
 
 	useEffect(() => {
 		// `canPreview` here as well as at the card: without it every keystroke would spend a round
@@ -506,6 +1240,17 @@ export function MarkupTool({
 		// the markup last changed, which is worse than not stating it at all.
 	}, [deviceId, source, linefeed, canPreview]);
 
+	// Underlines what the compile refused, where it happened. Keyed on the errors alone rather than on
+	// the whole result: a preview that comes back clean after one that did not still has to clear the
+	// markers, and one that comes back with the same faults should not redraw them.
+	const errors = result?.errors;
+	useEffect(() => {
+		const view = editor.current?.view;
+		if (view) {
+			showMarkupErrors(view, errors ?? []);
+		}
+	}, [errors]);
+
 	if (devices.length === 0) {
 		return (
 			<Card>
@@ -517,205 +1262,328 @@ export function MarkupTool({
 	}
 
 	return (
-		// No `items-start`: the two cards stretch to the taller of them, so the preview's paper is
-		// as tall as the editor beside it rather than stopping halfway up the row. With no preview
-		// card there is nothing to sit beside, so the editor takes the full width instead of leaving
-		// half the row empty.
-		<div className={`grid gap-4 ${canPreview ? "lg:grid-cols-2" : ""}`}>
-			<Card className="flex flex-col">
-				<CardHeader className="flex flex-row flex-wrap items-center gap-3 border-b border-border pb-3">
-					<Code className="size-4.5 shrink-0 text-subtle-foreground" />
-					<div className="min-w-0 flex-1">
-						<h3 className="text-[13px] font-medium">Markup</h3>
-						<p className="mt-0.5 text-[11.5px] text-muted-foreground">
-							One line per element of <span className="font-mono">data</span>. Tags are listed on the Docs tab.
-						</p>
-					</div>
-					<DevicePicker devices={devices} value={deviceId} onChange={setDeviceId} />
-				</CardHeader>
-				<CardContent className="flex flex-1 flex-col gap-3 pt-4">
-					{/* A menu of actions rather than a select: loading an example is something you do,
+		// One card holding both panes, rather than two cards side by side, with a handle between them:
+		// the markup and the paper it produces are one task, and where the line between them falls
+		// depends on what is being written — a fixed half and half is right for nobody in particular.
+		//
+		// The card is as tall as the window from `lg` up, and each pane scrolls inside itself. Left to
+		// its content it grew as tall as the markup was long, so editing the end of a long receipt
+		// scrolled the paper off the top of the window and every change meant scrolling back up to see
+		// what it did. Below `lg` the panes stack and the card takes its content's height again: a
+		// split row on a narrow screen leaves two columns too thin to read either of them.
+		<Card className="flex flex-col lg:h-[calc(100svh-10.5rem)] lg:min-h-[34rem]">
+			{/* `relative`, because the handle is laid over the seam rather than set into the row. A
+			    handle that took width of its own opened a gap the whole height of the card, and across
+			    the header band that gap showed as a notch of card colour cut out of the band. The panes
+			    meet instead, the seam is the left pane's own right border, and the handle floats on it. */}
+			<div ref={splitRow} className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
+				{/* The basis is set from the handle rather than from a class, and only from `lg`, where
+				    the row is a row. In the stacked layout a basis is a height, and giving the editor
+				    half the card's height there would cut the toolbar in two. With no preview there is
+				    nothing to divide, so the editor takes the row rather than half of it. */}
+				<section
+					className={`flex min-h-0 min-w-0 flex-col ${canPreview ? "lg:basis-(--split) lg:border-border lg:border-r" : "flex-1"}`}
+					style={canPreview ? ({ "--split": `${split}%` } as CSSProperties) : undefined}
+				>
+					<CardHeader className="flex flex-row flex-wrap items-center gap-3 rounded-none border-b border-border pb-3">
+						<Code className="size-4.5 shrink-0 text-subtle-foreground" />
+						<div className="min-w-0 flex-1">
+							<h3 className="text-[13px] font-medium">Markup</h3>
+							<p className="mt-0.5 text-[11.5px] text-muted-foreground">
+								One line per element of <span className="font-mono">data</span>. Tags are listed on the Docs tab.
+							</p>
+						</div>
+						<DevicePicker devices={devices} value={deviceId} onChange={setDeviceId} />
+					</CardHeader>
+					<CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-4">
+						{/* A menu of actions rather than a select: loading an example is something you do,
 					    not a value the editor holds — a select would go on claiming an example was
 					    "selected" after the first keystroke changed it into something else. */}
-					<div className="flex flex-wrap items-center gap-2">
-						{/* The three that need no attributes get a button each; everything else is a menu,
+						<div className="flex flex-wrap items-center gap-2">
+							{/* The three that need no attributes get a button each; everything else is a menu,
 						    because a tag with a value has no single obvious one to put on a button. */}
-						<div className="flex items-center gap-1">
-							<TagButton label="Bold" icon={<Bold className="size-3.5" />} onClick={() => applyTag("bold")} />
-							<TagButton
-								label="Underline"
-								icon={<Underline className="size-3.5" />}
-								onClick={() => applyTag("underline")}
+							<div className="flex items-center gap-1">
+								<TagButton label="Bold" icon={<Bold className="size-3.5" />} onClick={() => applyTag("bold")} />
+								<TagButton
+									label="Underline"
+									icon={<Underline className="size-3.5" />}
+									onClick={() => applyTag("underline")}
+								/>
+								<TagButton label="Invert" icon={<Contrast className="size-3.5" />} onClick={() => applyTag("invert")} />
+							</div>
+
+							<TagMenu
+								label="Size"
+								icon={<ALargeSmall className="size-3.5" />}
+								choices={SIZE_CHOICES}
+								onPick={applyTag}
 							/>
-							<TagButton label="Invert" icon={<Contrast className="size-3.5" />} onClick={() => applyTag("invert")} />
-						</div>
+							<TagMenu
+								label="Align"
+								icon={<AlignCenter className="size-3.5" />}
+								choices={ALIGN_CHOICES}
+								onPick={applyTag}
+							/>
+							<TagMenu
+								label="Insert"
+								icon={<Plus className="size-3.5" />}
+								choices={INSERT_CHOICES}
+								onPick={applyTag}
+								onPrompt={setPrompting}
+							/>
 
-						<TagMenu
-							label="Size"
-							icon={<ALargeSmall className="size-3.5" />}
-							choices={SIZE_CHOICES}
-							onPick={applyTag}
-						/>
-						<TagMenu
-							label="Align"
-							icon={<AlignCenter className="size-3.5" />}
-							choices={ALIGN_CHOICES}
-							onPick={applyTag}
-						/>
-						<TagMenu
-							label="Insert"
-							icon={<Plus className="size-3.5" />}
-							choices={INSERT_CHOICES}
-							onPick={applyTag}
-							onPrompt={setPrompting}
-						/>
-
-						<span aria-hidden className="h-5 w-px bg-border" />
-
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							className="h-7 text-[11.5px]"
-							disabled={source.trim() === ""}
-							onClick={() => setSource("")}
-						>
-							<Eraser className="size-3.5" />
-							Clear
-						</Button>
-
-						<DropdownMenu>
-							<DropdownMenuTrigger
-								render={<Button type="button" variant="outline" size="sm" className="h-7 text-[11.5px]" />}
-								disabled={!device}
-							>
-								<BookOpen className="size-3.5" />
-								Examples
-								<ChevronDown className="size-3.5 opacity-60" />
-							</DropdownMenuTrigger>
-							<DropdownMenuContent className="w-auto min-w-72">
-								{EXAMPLES.map((example) => (
-									<DropdownMenuItem
-										key={example.label}
-										className="flex-col items-start gap-0.5 text-[12.5px]"
-										onClick={() => device && setSource(example.build(device))}
-									>
-										<span>{example.label}</span>
-										<span className="text-[11px] text-subtle-foreground">{example.note}</span>
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuContent>
-						</DropdownMenu>
-
-						<span className="text-[11px] text-subtle-foreground">Examples replace the editor; undo with Ctrl+Z.</span>
-					</div>
-
-					{/* No border of its own: the editor's background is transparent, so it sits directly
-					    in the card's well. A frame here would draw a second box inside the card.
-
-					    `flex-1` with `height="100%"`: this card's height is set by the preview beside it,
-					    which is as tall as the receipt is long. A fixed 320px editor left the rest of
-					    the card empty and scrolled the markup inside a box with space underneath it.
-					    `min-h-80` keeps 320px as the floor for when the preview is shorter than that. */}
-					<div className="min-h-80 flex-1 overflow-hidden">
-						<CodeMirror
-							ref={editor}
-							value={source}
-							// `className` lands on the component's own `.cm-theme` wrapper, which has no
-							// height of its own — so the editor's `height="100%"` resolved against `auto`
-							// and came back to its content. Both are needed.
-							className="h-full"
-							height="100%"
-							theme={editorTheme}
-							extensions={MARKUP_EXTENSIONS}
-							basicSetup={{
-								lineNumbers: true,
-								foldGutter: false,
-								highlightActiveLine: false,
-								// Off: it marks every other occurrence of whatever is selected, which in a
-								// buffer of repeated sequences and repeated tags reads as the selection having
-								// jumped to lines nobody selected.
-								highlightSelectionMatches: false,
-							}}
-							onChange={setSource}
-						/>
-					</div>
-
-					{/* Mounted here rather than behind each menu item: a menu item cannot also be a dialog
-					    trigger, because choosing it closes the menu that owns it. The toolbar records which
-					    tag was asked for and this reads that. */}
-					<InsertDialog tag={prompting} onClose={() => setPrompting(null)} onInsert={applyTag} />
-
-					{/* A rule inside the content rather than a filled footer band, matching how the
-					    other tabs' cards separate their controls from what they act on. The whole row
-					    goes with the Print button: the line ending is a choice about sending, so on its
-					    own it would be a control over nothing. */}
-					{!canPrint ? null : (
-						<CardActions className="min-h-17">
-							<LinefeedPicker value={linefeed} onChange={setLinefeed} />
-
-							<div className="flex-1" />
+							<span aria-hidden className="h-5 w-px bg-border" />
 
 							<Button
 								type="button"
-								disabled={printing || !device}
-								onClick={() =>
-									startPrint(async () => {
-										const outcome = await printMarkup(deviceId, source, chosenLinefeed(linefeed));
-										if (outcome.error) {
-											toast.error(outcome.error);
-										} else {
-											toast.success(outcome.message ?? "Queued.");
-										}
-									})
-								}
+								variant="outline"
+								size="sm"
+								className="h-7 text-[11.5px]"
+								disabled={source.trim() === ""}
+								onClick={() => setSource("")}
 							>
-								{printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
-								Print
+								<Eraser className="size-3.5" />
+								Clear
 							</Button>
-						</CardActions>
-					)}
-				</CardContent>
-			</Card>
 
-			{!canPreview ? null : (
-				<Card className="flex flex-col">
-					<CardHeader className="flex flex-row items-center gap-3 border-b border-border pb-3">
-						<ReceiptText className="size-4.5 shrink-0 text-subtle-foreground" />
-						<div className="min-w-0 flex-1">
-							<h3 className="text-[13px] font-medium">Paper preview</h3>
-							<p className="mt-0.5 text-[11.5px] text-muted-foreground">
-								Compiled by the server, at this printer's own width and codepage.
-							</p>
+							<DropdownMenu>
+								<DropdownMenuTrigger
+									render={<Button type="button" variant="outline" size="sm" className="h-7 text-[11.5px]" />}
+									disabled={!device}
+								>
+									<BookOpen className="size-3.5" />
+									Examples
+									<ChevronDown className="size-3.5 opacity-60" />
+								</DropdownMenuTrigger>
+								<DropdownMenuContent className="w-auto min-w-72">
+									{EXAMPLES.map((example) => (
+										<DropdownMenuItem
+											key={example.label}
+											className="flex-col items-start gap-0.5 text-[12.5px]"
+											onClick={() => device && setSource(example.build(device))}
+										>
+											<span>{example.label}</span>
+											<span className="text-[11px] text-subtle-foreground">{example.note}</span>
+										</DropdownMenuItem>
+									))}
+								</DropdownMenuContent>
+							</DropdownMenu>
+
+							<span className="text-[11px] text-subtle-foreground">Examples replace the editor; undo with Ctrl+Z.</span>
 						</div>
-						{/* The measurements sit with the verdict below, beside what they describe.
-					    Repeating them here would state the same numbers twice. */}
-						{compiling ? <Spinner className="size-3.5" /> : null}
-					</CardHeader>
-					<CardContent className="flex flex-1 flex-col pt-4">
-						{result && result.errors.length > 0 ? <Problems errors={result.errors} /> : <Paper result={result} />}
 
-						{/* Only when it compiles. A failing preview already says everything there is to say
+						{/* No border of its own: the editor's background is transparent, so it sits directly
+					    in the card's well. A frame here would draw a second box inside the card.
+
+					    `flex-1` with `height="100%"`: the editor takes what is left of the pane once the
+					    toolbar and the controls under it have had theirs, and scrolls its own markup
+					    inside that. `min-h-80` is the floor in the stacked layout, where the card has no
+					    height of its own; from `lg` the card's height is the window's and the editor
+					    must be free to shrink to whatever share of it the handle has left. */}
+						<div className="min-h-80 flex-1 overflow-hidden lg:min-h-0">
+							<CodeMirror
+								ref={editor}
+								value={source}
+								// `className` lands on the component's own `.cm-theme` wrapper, which has no
+								// height of its own — so the editor's `height="100%"` resolved against `auto`
+								// and came back to its content. Both are needed.
+								className="h-full"
+								height="100%"
+								theme={editorTheme}
+								extensions={extensions}
+								basicSetup={{
+									lineNumbers: true,
+									foldGutter: false,
+									highlightActiveLine: false,
+									// Off: it marks every other occurrence of whatever is selected, which in a
+									// buffer of repeated sequences and repeated tags reads as the selection having
+									// jumped to lines nobody selected.
+									highlightSelectionMatches: false,
+								}}
+								onChange={setSource}
+							/>
+						</div>
+
+						{/* Mounted here rather than behind each menu item: a menu item cannot also be a dialog
+					    trigger, because choosing it closes the menu that owns it. The toolbar records which
+					    tag was asked for and this reads that. */}
+						<InsertDialog tag={prompting} fonts={fonts} onClose={() => setPrompting(null)} onInsert={applyTag} />
+
+						{/* A rule inside the content rather than a filled footer band, matching how the
+					    other tabs' cards separate their controls from what they act on. The whole row
+					    goes with the Print button: the line ending is a choice about sending, so on its
+					    own it would be a control over nothing. */}
+						{!canPrint ? null : (
+							<CardActions className="min-h-17">
+								<LinefeedPicker value={linefeed} onChange={setLinefeed} />
+
+								<div className="flex-1" />
+
+								<Button
+									type="button"
+									disabled={printing || !device}
+									onClick={() =>
+										startPrint(async () => {
+											const outcome = await printMarkup(deviceId, source, chosenLinefeed(linefeed));
+											if (outcome.error) {
+												toast.error(outcome.error);
+											} else {
+												toast.success(outcome.message ?? "Queued.");
+											}
+										})
+									}
+								>
+									{printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
+									Print
+								</Button>
+							</CardActions>
+						)}
+					</CardContent>
+				</section>
+
+				{!canPreview ? null : <Splitter value={split} onChange={setSplit} rowRef={splitRow} />}
+
+				{!canPreview ? null : (
+					<section className="flex min-h-0 min-w-0 flex-1 flex-col">
+						<CardHeader className="flex flex-row items-center gap-3 rounded-none border-b border-border pb-3">
+							<ReceiptText className="size-4.5 shrink-0 text-subtle-foreground" />
+							<div className="min-w-0 flex-1">
+								<h3 className="text-[13px] font-medium">Paper preview</h3>
+								<p className="mt-0.5 text-[11.5px] text-muted-foreground">
+									Compiled by the server, at this printer's own width and codepage.
+								</p>
+							</div>
+							{/* The measurements sit with the verdict below, beside what they describe.
+					    Repeating them here would state the same numbers twice. */}
+							{compiling ? <Spinner className="size-3.5" /> : null}
+						</CardHeader>
+						<CardContent className="flex min-h-0 flex-1 flex-col pt-4">
+							{result && result.errors.length > 0 ? <Problems errors={result.errors} /> : <Paper result={result} />}
+
+							{/* Only when it compiles. A failing preview already says everything there is to say
 					    where the paper would have been, and a second verdict under it would be one
 					    judgement too many on the same markup. */}
-						{result && result.errors.length === 0 && result.lines ? (
-							// A column, so `justify-center` is what centres it the way `items-center` centres
-							// the single-row cases. Without it the two lines sat at the top of the row.
-							<CardActions className="min-h-17 flex-col items-start justify-center gap-1">
-								<div className="flex items-center gap-2">
-									<CircleCheck className="size-4 shrink-0 text-emerald-400" />
-									<span className="text-[12.5px] font-medium">Compiles clean</span>
-								</div>
-								<p className="text-[11.5px] text-muted-foreground">
-									{result.outputLines} output {result.outputLines === 1 ? "line" : "lines"} of {result.maxOutputLines} ·{" "}
-									{result.columns} columns · linefeed {result.linefeed}
-								</p>
-							</CardActions>
-						) : null}
-					</CardContent>
-				</Card>
-			)}
-		</div>
+							{result && result.errors.length === 0 && result.lines ? (
+								// A column, so `justify-center` is what centres it the way `items-center` centres
+								// the single-row cases. Without it the two lines sat at the top of the row.
+								<CardActions className="min-h-17 flex-col items-start justify-center gap-1">
+									<div className="flex items-center gap-2">
+										<CircleCheck className="size-4 shrink-0 text-emerald-400" />
+										<span className="text-[12.5px] font-medium">Compiles clean</span>
+									</div>
+									<p className="text-[11.5px] text-muted-foreground">
+										{result.outputLines} output {result.outputLines === 1 ? "line" : "lines"} of {result.maxOutputLines}{" "}
+										· {result.columns} columns · linefeed {result.linefeed}
+									</p>
+								</CardActions>
+							) : null}
+						</CardContent>
+					</section>
+				)}
+			</div>
+		</Card>
+	);
+}
+
+/**
+ * The handle between the markup and the paper.
+ *
+ * A separator carrying a value rather than a plain rule, because it is a control: it can be tabbed
+ * to and moved with the arrow keys, which is the only way to reach it without a pointer. Home and a
+ * double-click both return it to the middle, which is faster than dragging back to a half nobody can
+ * hit exactly.
+ *
+ * The pointer is captured on the way down, so a drag that runs over the editor keeps being reported
+ * here rather than being swallowed by whatever it passes over. Positions are measured against the
+ * row rather than accumulated from movements, so a drag that outruns the pointer's own events lands
+ * where the pointer is rather than a little behind it.
+ *
+ * Hidden below `lg`, where the panes stack: there is nothing to divide horizontally, and a handle
+ * that resized nothing would still take a tab stop.
+ *
+ * @param rowRef the row the panes sit in, which a drag measures a position against and which the
+ *   handle is positioned inside — it has to be the positioned ancestor for that to line up
+ */
+function Splitter({
+	value,
+	onChange,
+	rowRef,
+}: {
+	value: number;
+	onChange: (percent: number) => void;
+	rowRef: RefObject<HTMLDivElement | null>;
+}) {
+	const dragging = useRef(false);
+
+	const moveTo = (clientX: number): void => {
+		const row = rowRef.current;
+		if (!row) {
+			return;
+		}
+		const bounds = row.getBoundingClientRect();
+		if (bounds.width === 0) {
+			return;
+		}
+		onChange(((clientX - bounds.left) / bounds.width) * 100);
+	};
+
+	return (
+		// An `<hr>`, which is a separator already, rather than a div told to be one.
+		//
+		// Laid over the seam rather than set into the row: it is positioned at the handle's own
+		// percentage and pulled back by half its width, so its middle sits on the border the panes
+		// already draw between them. Taking width of its own would part the panes by nine pixels and
+		// cut a notch of card colour out of the header band where it crossed.
+		//
+		// It is transparent until it is pointed at. The one pixel of colour that appears then is the
+		// padding box; the four transparent pixels of border either side are what makes it something a
+		// pointer can hit at all. `bg-clip-padding` keeps that colour off the border, and `box-content`
+		// keeps the border outside the pixel rather than eating it.
+		//
+		// `touch-none`: without it a drag on a touch screen scrolls the panel instead of moving the
+		// handle, and the browser takes the pointer away mid-gesture.
+		<hr
+			aria-orientation="vertical"
+			aria-label="Resize the markup pane"
+			aria-valuenow={Math.round(value)}
+			aria-valuemin={SPLIT_MIN}
+			aria-valuemax={SPLIT_MAX}
+			tabIndex={0}
+			style={{ left: `${value}%` }}
+			className="absolute inset-y-0 z-10 my-0 box-content hidden h-auto w-px -translate-x-1/2 cursor-col-resize touch-none border-transparent border-x-4 border-y-0 bg-transparent bg-clip-padding outline-none transition-colors hover:bg-brand focus-visible:bg-brand lg:block"
+			onPointerDown={(event) => {
+				dragging.current = true;
+				event.currentTarget.setPointerCapture(event.pointerId);
+				// Stops the drag from selecting the text either side of the handle as it passes over it.
+				event.preventDefault();
+				event.currentTarget.focus();
+			}}
+			onPointerMove={(event) => {
+				if (dragging.current) {
+					moveTo(event.clientX);
+				}
+			}}
+			onPointerUp={(event) => {
+				dragging.current = false;
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			}}
+			onPointerCancel={() => {
+				dragging.current = false;
+			}}
+			onDoubleClick={() => onChange(SPLIT_DEFAULT)}
+			onKeyDown={(event) => {
+				if (event.key === "ArrowLeft") {
+					event.preventDefault();
+					onChange(value - SPLIT_STEP);
+				} else if (event.key === "ArrowRight") {
+					event.preventDefault();
+					onChange(value + SPLIT_STEP);
+				} else if (event.key === "Home") {
+					event.preventDefault();
+					onChange(SPLIT_DEFAULT);
+				}
+			}}
+		/>
 	);
 }
 
@@ -815,7 +1683,9 @@ function Problems({ errors }: { errors: PreviewError[] }) {
 	const status = errors[0]?.status ?? 400;
 
 	return (
-		<div className="flex-1 rounded-md border border-destructive/30 bg-destructive/5 p-4">
+		// `min-h-0` with `overflow-y-auto`: the pane's height is the window's, so a list long enough to
+		// outgrow it scrolls inside the panel rather than pushing the verdict row off the card.
+		<div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-destructive/30 bg-destructive/5 p-4">
 			<div className="flex items-center gap-2">
 				<CircleAlert className="size-4 shrink-0 text-destructive" />
 				<span className="text-[12.5px] font-medium text-destructive">
@@ -903,7 +1773,10 @@ function Paper({ result }: { result: PreviewResult | null }) {
 		// card, while the sheet is the paper and stays exactly `columns` wide whatever happens
 		// around it. Stretching the sheet would make the preview disagree with the printer, which
 		// is the one thing a preview may not do.
-		<div className="flex-1 overflow-x-auto rounded-md p-4">
+		// `overflow-auto` rather than `overflow-x-auto`, with `min-h-0`: the desk is as tall as the
+		// pane, and a receipt longer than that scrolls on the desk. Letting it grow instead would push
+		// the verdict row below the card and take the paper's own top off the window.
+		<div className="min-h-0 flex-1 overflow-auto rounded-md p-4">
 			<div
 				className="mx-auto w-fit rounded-sm bg-white px-3 py-3 shadow-sm ring-1 ring-black/10"
 				style={{ minWidth: "fit-content" }}
