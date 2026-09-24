@@ -7,7 +7,16 @@ import {
 	startCompletion,
 } from "@codemirror/autocomplete";
 import { linter, lintGutter, setDiagnostics } from "@codemirror/lint";
-import { EditorState, type Extension, Prec, RangeSetBuilder, type Text, type Transaction } from "@codemirror/state";
+import {
+	EditorState,
+	type Extension,
+	Prec,
+	RangeSetBuilder,
+	StateEffect,
+	StateField,
+	type Text,
+	type Transaction,
+} from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { diagnosticsFor, type PositionedError } from "@/lib/markup/diagnostics";
 import {
@@ -432,62 +441,123 @@ const suggestAfterDeleting = EditorView.updateListener.of((update: ViewUpdate) =
 	queueMicrotask(() => startCompletion(update.view));
 });
 
+/** Asks for the guide to stand at this many columns; zero, or less, puts it away. */
+const setPrintWidth = StateEffect.define<number>();
+
 /**
- * A hairline where the paper runs out.
+ * How many columns the guide is currently drawn at, zero for not drawn.
  *
- * **What it is honest about, and what it is not.** The rule stands at the device's column count
- * measured in the editor's own character width, so a line reaching it is a line that will wrap. It
- * describes single-width text only: under `<size width=2>` every character costs two columns and the
- * real limit is half as far across. Modelling that would mean laying the document out twice — once
- * here and once on the server — to draw a rule that moved as the author typed a tag, which is a
- * second layout engine's worth of work for a guide.
+ * Held in the document's state rather than baked into the extension the editor was built with, so
+ * that switching the guide on, or changing to a printer of another width, is a transaction instead
+ * of a reconfiguration. The difference matters: reconfiguring drops what `setDiagnostics` put in the
+ * lint state, so a rule toggled on would have taken the underlines with it until the next compile.
+ */
+const printWidthColumns = StateField.define<number>({
+	create: () => 0,
+	update: (columns, transaction) => {
+		for (const effect of transaction.effects) {
+			if (effect.is(setPrintWidth)) {
+				return effect.value;
+			}
+		}
+		return columns;
+	},
+});
+
+/**
+ * A rule where the paper runs out, drawn only when it is asked for.
+ *
+ * **What it is honest about, and what it is not.** The rule stands at the chosen device's column
+ * count measured in the editor's own character width, so it answers for a line of plain text and
+ * nothing else. Tags are the bigger half of that: `<align to=center>` is seventeen source characters
+ * that print none at all, so a line carrying tags reaches the rule long before it fills the paper.
+ * `<size width=2>` is the same problem from the other side, every character costing two columns.
+ * Either would need the document laid out here as well as on the server to answer properly, which is
+ * a second layout engine's worth of work for a guide — so the guide stays off unless someone turns
+ * it on, and what it measures is written beside the switch.
  *
  * Drawn as a background on the content rather than an element placed over it: a gradient scrolls
  * with the text it measures and cannot land on top of a glyph or swallow a click.
  *
  * The position is read through `requestMeasure`, which is where CodeMirror does its own layout
  * reads — taking a rectangle during an update would force a reflow on a keystroke.
- *
- * @param columns the device's width in printer columns; below one, no guide is drawn at all
  */
-function printWidthGuide(columns: number): Extension {
-	if (columns < 1) {
-		return [];
-	}
-
-	return ViewPlugin.fromClass(
-		class {
-			constructor(view: EditorView) {
-				this.place(view);
-			}
-
-			update(update: ViewUpdate): void {
-				// Geometry alone: the rule moves when the font, the zoom or the editor's width changes,
-				// and none of those follow from the document's content.
-				if (update.geometryChanged) {
-					this.place(update.view);
+function printWidthGuide(): Extension {
+	return [
+		printWidthColumns,
+		ViewPlugin.fromClass(
+			class {
+				constructor(view: EditorView) {
+					this.place(view);
 				}
-			}
 
-			private place(view: EditorView): void {
-				view.requestMeasure({
-					read: (measured) => {
-						// A line's own left padding, rather than the coordinates of the first character. Both
-						// give the same number in a laid-out editor, but `coordsAtPos` measures through a DOM
-						// range and throws where one cannot be measured — an editor rendered to zero width by
-						// the split handle, or never shown at all. A guide is furniture; it must not be able
-						// to take the editor down with it.
-						const line = measured.contentDOM.firstElementChild;
-						const indent = line ? Number.parseFloat(getComputedStyle(line).paddingLeft) || 0 : 0;
-						return indent + columns * measured.defaultCharacterWidth;
-					},
-					write: (left, measured) => {
-						measured.contentDOM.style.setProperty("--cm-print-width", `${Math.round(left)}px`);
-					},
-				});
-			}
-		},
-	);
+				update(update: ViewUpdate): void {
+					// Geometry, or the width it is meant to stand at. The rule moves when the font, the zoom
+					// or the editor's width changes, and none of those follow from the document's content.
+					const columns = update.state.field(printWidthColumns);
+					if (update.geometryChanged || update.startState.field(printWidthColumns) !== columns) {
+						this.place(update.view);
+					}
+				}
+
+				/**
+				 * Taking the rule away is done here and now; putting it somewhere needs a measurement.
+				 *
+				 * The asymmetry is deliberate. A measurement runs in `requestMeasure`, which CodeMirror
+				 * schedules on an animation frame — and a frame is exactly what a browser stops handing
+				 * out while the tab is in the background. Switching the guide off through a measure left
+				 * the rule standing in a tab nobody was looking at, to be found still there on the way
+				 * back. Removing a custom property reads no layout, so it need not wait for anything.
+				 */
+				private place(view: EditorView): void {
+					if (view.state.field(printWidthColumns) < 1) {
+						// Removed rather than set to a hiding value, so the theme's own fallback decides where
+						// an unmeasured rule parks and there is one answer to that instead of two.
+						view.contentDOM.style.removeProperty("--cm-print-width");
+						return;
+					}
+
+					view.requestMeasure({
+						read: (measured) => {
+							const columns = measured.state.field(printWidthColumns);
+							if (columns < 1) {
+								return null;
+							}
+							// A line's own left padding, rather than the coordinates of the first character. Both
+							// give the same number in a laid-out editor, but `coordsAtPos` measures through a DOM
+							// range and throws where one cannot be measured — an editor rendered to zero width by
+							// the split handle, or never shown at all. A guide is furniture; it must not be able
+							// to take the editor down with it.
+							const line = measured.contentDOM.firstElementChild;
+							const indent = line ? Number.parseFloat(getComputedStyle(line).paddingLeft) || 0 : 0;
+							return indent + columns * measured.defaultCharacterWidth;
+						},
+						write: (left, measured) => {
+							if (left === null) {
+								measured.contentDOM.style.removeProperty("--cm-print-width");
+								return;
+							}
+							measured.contentDOM.style.setProperty("--cm-print-width", `${Math.round(left)}px`);
+						},
+					});
+				}
+			},
+		),
+	];
+}
+
+/**
+ * Stands the print-width guide at a device's column count, or puts it away.
+ *
+ * @param view the editor to draw it in
+ * @param columns the device's width in printer columns; zero, or less, draws no guide at all —
+ *   which is what an editor with no device chosen, or with the guide switched off, asks for
+ */
+export function showPrintWidth(view: EditorView, columns: number): void {
+	if (view.state.field(printWidthColumns, false) === columns) {
+		return;
+	}
+	view.dispatch({ effects: setPrintWidth.of(columns) });
 }
 
 /**
@@ -527,10 +597,8 @@ const acceptOnTab = Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion 
  *   which costs the stored half of a `font=` suggestion — the printer's own faces are offered either
  *   way — and the `{name}` suggestions entirely, so an editor mounted without it still works rather
  *   than failing to build.
- * @param columns the chosen device's width in printer columns, for the guide that marks where a line
- *   will wrap. Defaults to none, which is the honest answer for an editor with no device chosen.
  */
-export function markupLanguage(stored: StoredNames = {}, columns = 0): Extension[] {
+export function markupLanguage(stored: StoredNames = {}): Extension[] {
 	return [
 		highlighting,
 		autocompletion({
@@ -554,6 +622,8 @@ export function markupLanguage(stored: StoredNames = {}, columns = 0): Extension
 		// this editor ever holds are the ones the server compile put there.
 		linter(null),
 		lintGutter(),
-		printWidthGuide(columns),
+		// Mounted always and drawn on request, for the same reason as the two above: what the rule
+		// stands at is state, so the editor is never rebuilt to move it. See {@link showPrintWidth}.
+		printWidthGuide(),
 	];
 }

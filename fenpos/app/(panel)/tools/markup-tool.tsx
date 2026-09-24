@@ -17,6 +17,7 @@ import {
 	Plus,
 	Printer,
 	ReceiptText,
+	Ruler,
 	Underline,
 } from "lucide-react";
 import {
@@ -43,7 +44,7 @@ import type { ToolDevice } from "@/app/(panel)/tools/device-picker";
 import { DevicePicker } from "@/app/(panel)/tools/device-picker";
 import { editorTheme } from "@/app/(panel)/tools/editor-theme";
 import { InsertDialog, type InsertTag } from "@/app/(panel)/tools/insert-dialog";
-import { markupLanguage, showMarkupErrors } from "@/app/(panel)/tools/markup-language";
+import { markupLanguage, showMarkupErrors, showPrintWidth } from "@/app/(panel)/tools/markup-language";
 import { ImagePreview } from "@/components/panel/image-preview";
 import { useSessionState } from "@/components/panel/session-state";
 import { SymbolPreview } from "@/components/panel/symbol-preview";
@@ -73,25 +74,27 @@ const DEBOUNCE_MS = 300;
  * things that could — keyed on their serialised form, because each arrives as a new array identity
  * every render and would defeat the memo it was handed to.
  */
-function useMarkupExtensions(
-	fonts: readonly string[],
-	variables: readonly VariableName[],
-	columns: number,
-): Extension[] {
+function useMarkupExtensions(fonts: readonly string[], variables: readonly VariableName[]): Extension[] {
 	const fontKey = fonts.join("\n");
 	const variableKey = JSON.stringify(variables);
 	return useMemo(
 		() =>
-			markupLanguage(
-				{
-					fonts: fontKey === "" ? [] : fontKey.split("\n"),
-					variables: JSON.parse(variableKey) as VariableName[],
-				},
-				columns,
-			),
-		[fontKey, variableKey, columns],
+			markupLanguage({
+				fonts: fontKey === "" ? [] : fontKey.split("\n"),
+				variables: JSON.parse(variableKey) as VariableName[],
+			}),
+		[fontKey, variableKey],
 	);
 }
+
+/**
+ * What the width guide's switch stores.
+ *
+ * Words rather than `"true"` and `"false"`, because session storage holds strings and a stored
+ * `"false"` reads as truthy to anything that forgets to compare it.
+ */
+const GUIDE_ON = "on";
+const GUIDE_OFF = "off";
 
 /**
  * How long a toolbar action keeps pulling focus back to the editor.
@@ -1137,13 +1140,16 @@ export function MarkupTool({
 	// Kept as text because that is what survives leaving the page; read back through `clampSplit`, so
 	// a stored value from a build with different bounds — or none at all — still lands somewhere usable.
 	const [storedSplit, setStoredSplit] = useSessionState("tools.markup.split", String(SPLIT_DEFAULT));
+	// Off unless asked for, and remembered per session like the rest of this toolbar's state. The rule
+	// measures source characters, so it only answers for plain text — see `printWidthGuide` — which is
+	// a thing to reach for while laying out a table of prices, not to have standing there by default.
+	const [guide, setGuide] = useSessionState("tools.markup.guide", GUIDE_OFF);
+	const guideOn = guide === GUIDE_ON;
 	const split = clampSplit(Number.parseFloat(storedSplit));
 	const setSplit = useCallback((percent: number) => setStoredSplit(String(clampSplit(percent))), [setStoredSplit]);
 
 	const device = devices.find((entry) => entry.id === deviceId);
-	// Zero while no device is chosen, which draws no guide: where the paper ends is the device's
-	// answer, and there is none to give yet.
-	const extensions = useMarkupExtensions(fonts, variables, device?.columns ?? 0);
+	const extensions = useMarkupExtensions(fonts, variables);
 
 	/**
 	 * Writes a tag at the cursor, or around what is selected.
@@ -1251,6 +1257,17 @@ export function MarkupTool({
 		}
 	}, [errors]);
 
+	// Where the paper ends, when the guide is switched on and a printer has said how wide it is.
+	// Zero covers both halves of "not now": the switch is off, or no device is chosen and there is no
+	// width to draw — the same answer, and the guide draws nothing for it.
+	const guideColumns = guideOn ? (device?.columns ?? 0) : 0;
+	useEffect(() => {
+		const view = editor.current?.view;
+		if (view) {
+			showPrintWidth(view, guideColumns);
+		}
+	}, [guideColumns]);
+
 	if (devices.length === 0) {
 		return (
 			<Card>
@@ -1344,6 +1361,29 @@ export function MarkupTool({
 							>
 								<Eraser className="size-3.5" />
 								Clear
+							</Button>
+
+							{/* A switch rather than a menu item: it is a thing the editor is either doing or
+						    not, and the button says which by looking pressed. Disabled with no printer
+						    chosen, since the width it would stand at is the printer's answer. `title` carries
+						    what the rule actually measures — the toolbar has no room to say it, and a guide
+						    that quietly means something narrower than it looks is worth one sentence. */}
+							<Button
+								type="button"
+								variant={guideOn ? "secondary" : "outline"}
+								size="sm"
+								className="h-7 text-[11.5px]"
+								aria-pressed={guideOn}
+								disabled={!device}
+								title={
+									device
+										? `Marks ${device.columns} characters of plain text. Tags are counted as the characters they are written with, so a line carrying them reaches the rule sooner than it fills the paper.`
+										: "Choose a printer to mark where its paper ends."
+								}
+								onClick={() => setGuide(guideOn ? GUIDE_OFF : GUIDE_ON)}
+							>
+								<Ruler className="size-3.5" />
+								Width guide
 							</Button>
 
 							<DropdownMenu>

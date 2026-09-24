@@ -17,12 +17,16 @@ export const editorTheme = EditorView.theme(
 		".cm-content": {
 			fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 			caretColor: "#e5e5e5",
-			// The paper's right edge, at the hairline weight a card's border uses: a guide is furniture,
-			// not content, and anything brighter would compete with the text it measures. `printWidthGuide`
-			// keeps the offset; until it has measured one, the fallback parks the rule off the left edge
-			// rather than drawing it at zero.
+			// The paper's right edge, in the grey-blue the punctuation is drawn in and thinned until it
+			// reads as furniture rather than as a mark on the text. It was the card's hairline `#262626`,
+			// which is the colour of an edge nobody chose to see — wrong for a rule somebody switched on
+			// deliberately, and easy to mistake for a rendering fault. Matched tags already wash in this
+			// hue, so the guide belongs to the same quiet family instead of taking a colour of its own.
+			//
+			// `printWidthGuide` keeps the offset, and removes it when the rule is off; the fallback here
+			// is what "off" looks like, parking it off the left edge rather than drawing it at zero.
 			backgroundImage:
-				"linear-gradient(to right, transparent var(--cm-print-width, -10px), #262626 var(--cm-print-width, -10px), #262626 calc(var(--cm-print-width, -10px) + 1px), transparent calc(var(--cm-print-width, -10px) + 1px))",
+				"linear-gradient(to right, transparent var(--cm-print-width, -10px), color-mix(in oklab, #9daab2 45%, transparent) var(--cm-print-width, -10px), color-mix(in oklab, #9daab2 45%, transparent) calc(var(--cm-print-width, -10px) + 1px), transparent calc(var(--cm-print-width, -10px) + 1px))",
 			backgroundRepeat: "no-repeat",
 		},
 		".cm-gutters": {
