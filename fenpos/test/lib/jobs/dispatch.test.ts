@@ -129,7 +129,6 @@ describe("submitJob", () => {
 	 * which is exactly why the frame guard has to exist: none of them bound the compiled frame.
 	 */
 	const LONG_RECEIPTS_ALLOWED = {
-		maxLines: 10_000,
 		maxLineChars: 10_000,
 		maxTotalChars: 1_000_000,
 		maxOutputLines: 10_000,

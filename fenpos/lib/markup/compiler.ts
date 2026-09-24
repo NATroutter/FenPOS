@@ -65,7 +65,6 @@ const ALLOWED_FIELDS = new Set(["data", "linefeed", "variables"]);
 
 /** Limits applied to one request. */
 export interface CompileLimits {
-	maxLines: number;
 	maxLineChars: number;
 	maxTotalChars: number;
 	maxOutputLines: number;
@@ -137,11 +136,11 @@ export interface PrintRequest {
 /**
  * Reads a request body and checks what can be checked without parsing it.
  *
- * The line count is one of those, and is the cheapest thing that can refuse an oversized body: it is
- * a count of newlines in the raw string, so a caller computing it gets the same number this does.
- * The character limits are not, and moved to {@link layOut}: a line lying inside a content tag
- * prints nothing of its own, and which lines those are is only known once the document has been
- * parsed.
+ * Shape, that is: the fields present, their types, and the supplied variables. No size limit is
+ * applied here. The character limits live in {@link layOut}, because a line lying inside a content
+ * tag prints nothing of its own and which lines those are is only known once the document has been
+ * parsed; and nothing counts the lines the body was written on, because how a receipt is broken into
+ * lines says nothing about what it costs.
  *
  * Takes the device's settings rather than the whole {@link CompileSettings}, because it runs before
  * the images are resolved: what a request refers to cannot be known until its markup has been read,
@@ -155,18 +154,12 @@ export interface PrintRequest {
  * Prisma; see that module's own header for why.
  *
  * @param body the parsed JSON body
- * @param limits the limits to apply
  * @param settings the device's print settings, supplying defaults
  * @param maxVariableValueChars the install's cap on one supplied variable value's length
  * @returns the request, validated
- * @throws ApiError when the body is malformed or exceeds a limit
+ * @throws ApiError when the body is malformed
  */
-export function readRequest(
-	body: unknown,
-	limits: CompileLimits,
-	settings: DeviceSettings,
-	maxVariableValueChars: number,
-): PrintRequest {
+export function readRequest(body: unknown, settings: DeviceSettings, maxVariableValueChars: number): PrintRequest {
 	if (typeof body !== "object" || body === null || Array.isArray(body)) {
 		throw new ApiError("invalid_json", "Body must be a JSON object");
 	}
@@ -201,16 +194,17 @@ export function readRequest(
 		);
 	}
 
-	// Normalised before anything is counted, so a caller sending Windows line endings is charged the
-	// same number of lines as one sending Unix endings for the same receipt.
-	const normalised = normaliseSource(data);
-	const lineCount = normalised.length === 0 ? 1 : normalised.split("\n").length;
-	if (lineCount > limits.maxLines) {
-		throw new ApiError("too_many_lines", `At most ${limits.maxLines} lines are allowed, got ${lineCount}`);
-	}
-
+	// Line endings are normalised so that everything measured downstream — characters, printed lines
+	// — is charged the same whether the caller sent Windows endings or Unix ones.
+	//
+	// Nothing is charged for the number of lines the caller wrote. How a receipt is broken into
+	// source lines says nothing about how much paper it takes: the same content written on half as
+	// many lines wraps back to the same printed lines, so a cap here refused one spelling of a
+	// receipt and accepted another that prints identically. What a request actually costs is bounded
+	// where the cost is — `maxLineChars` and `maxTotalChars` on what was sent, `maxOutputLines` on
+	// what comes out of the layout.
 	return {
-		data: normalised,
+		data: normaliseSource(data),
 		linefeed: readLinefeed(record.linefeed, settings),
 		variables: readSuppliedVariables(record.variables, maxVariableValueChars),
 	};

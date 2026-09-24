@@ -77,21 +77,21 @@ describe("settings", () => {
 	});
 
 	it("stores and reports an override", async () => {
-		await setSetting("limits.maxLines", 42);
+		await setSetting("limits.maxLineChars", 42);
 
 		const settings = await listSettings();
-		const maxLines = settings.find((setting) => setting.definition.key === "limits.maxLines");
+		const maxLineChars = settings.find((setting) => setting.definition.key === "limits.maxLineChars");
 
-		expect(maxLines?.value).toBe(42);
-		expect(maxLines?.overridden).toBe(true);
+		expect(maxLineChars?.value).toBe(42);
+		expect(maxLineChars?.overridden).toBe(true);
 	});
 
 	it("returns a setting to its default when cleared", async () => {
-		await setSetting("limits.maxLines", 42);
+		await setSetting("limits.maxLineChars", 42);
 
-		await clearSetting("limits.maxLines");
+		await clearSetting("limits.maxLineChars");
 
-		expect(await valueOf("limits.maxLines")).toBe(DEFAULT_LIMITS.maxLines);
+		expect(await valueOf("limits.maxLineChars")).toBe(DEFAULT_LIMITS.maxLineChars);
 	});
 
 	it("refuses an unknown key", async () => {
@@ -104,19 +104,19 @@ describe("settings", () => {
 	});
 
 	it("refuses a value that is not a whole number", async () => {
-		await expect(setSetting("limits.maxLines", 1.5)).rejects.toBeInstanceOf(ApiError);
+		await expect(setSetting("limits.maxLineChars", 1.5)).rejects.toBeInstanceOf(ApiError);
 	});
 
 	it("ignores a stored value outside its range rather than clamping it", async () => {
 		// It can only have got there by a hand edit or an older version with wider bounds, and
 		// quietly applying half of someone's intention is worse than applying none of it.
-		await prisma.setting.create({ data: { key: "limits.maxLines", value: "999999999" } });
+		await prisma.setting.create({ data: { key: "limits.maxLineChars", value: "999999999" } });
 
 		const settings = await listSettings();
-		const maxLines = settings.find((setting) => setting.definition.key === "limits.maxLines");
+		const maxLineChars = settings.find((setting) => setting.definition.key === "limits.maxLineChars");
 
-		expect(maxLines?.value).toBe(DEFAULT_LIMITS.maxLines);
-		expect(maxLines?.overridden).toBe(false);
+		expect(maxLineChars?.value).toBe(DEFAULT_LIMITS.maxLineChars);
+		expect(maxLineChars?.overridden).toBe(false);
 	});
 
 	it("ignores a stored value that is not a number", async () => {
@@ -431,7 +431,6 @@ describe("setting definitions", () => {
 			"server.trustedProxies": "list",
 			"server.trustedProxyHeaders": "list",
 			"server.proxyIpPriority": "enum",
-			"limits.maxLines": "integer",
 			"limits.maxLineChars": "integer",
 			"limits.maxTotalChars": "integer",
 			"limits.maxOutputLines": "integer",
@@ -537,10 +536,10 @@ describe("setting definitions", () => {
 	});
 
 	it("still reads a row stored before values became JSON", async () => {
-		await prisma.setting.create({ data: { key: "limits.maxLines", value: "250" } });
+		await prisma.setting.create({ data: { key: "limits.maxLineChars", value: "250" } });
 
 		const settings = await listSettings();
-		const stored = settings.find((setting) => setting.definition.key === "limits.maxLines");
+		const stored = settings.find((setting) => setting.definition.key === "limits.maxLineChars");
 
 		expect(stored?.value).toBe(250);
 		expect(stored?.overridden).toBe(true);
@@ -632,7 +631,7 @@ describe("limits.maxRasterMb bounds", () => {
 
 /**
  * Exercises `setSetting`'s per-variant validation and the typed accessors, through
- * `limits.maxLines` — an existing `type: "integer"` setting. Only the integer path can be
+ * `limits.maxLineChars` — an existing `type: "integer"` setting. Only the integer path can be
  * exercised this way today; no boolean setting exists yet, and a test key added to
  * `SETTING_KEYS` for the occasion would be a stored contract nobody else asked for.
  * `logs.minimumLevel` gives the enum variant its real coverage below; `server.publicUrl` does the
@@ -644,20 +643,20 @@ describe("value variants", () => {
 	});
 
 	it("stores and reads back an integer", async () => {
-		await setSetting("limits.maxLines", 250);
-		expect(await integerSetting("limits.maxLines")).toBe(250);
+		await setSetting("limits.maxLineChars", 250);
+		expect(await integerSetting("limits.maxLineChars")).toBe(250);
 	});
 
 	it("refuses a string for an integer setting", async () => {
-		await expect(setSetting("limits.maxLines", "250")).rejects.toThrow(ApiError);
+		await expect(setSetting("limits.maxLineChars", "250")).rejects.toThrow(ApiError);
 	});
 
 	it("refuses a fractional integer", async () => {
-		await expect(setSetting("limits.maxLines", 2.5)).rejects.toThrow(ApiError);
+		await expect(setSetting("limits.maxLineChars", 2.5)).rejects.toThrow(ApiError);
 	});
 
 	it("refuses an out-of-range integer", async () => {
-		await expect(setSetting("limits.maxLines", 0)).rejects.toThrow(ApiError);
+		await expect(setSetting("limits.maxLineChars", 0)).rejects.toThrow(ApiError);
 	});
 
 	it("refuses an unknown key", async () => {
@@ -665,12 +664,12 @@ describe("value variants", () => {
 	});
 
 	it("throws when an accessor is pointed at another variant", async () => {
-		await expect(booleanSetting("limits.maxLines")).rejects.toThrow();
+		await expect(booleanSetting("limits.maxLineChars")).rejects.toThrow();
 	});
 
 	it("stores an integer as JSON, not as bare text", async () => {
-		await setSetting("limits.maxLines", 250);
-		const row = await prisma.setting.findUnique({ where: { key: "limits.maxLines" } });
+		await setSetting("limits.maxLineChars", 250);
+		const row = await prisma.setting.findUnique({ where: { key: "limits.maxLineChars" } });
 		expect(row?.value).toBe("250");
 	});
 });
@@ -1030,7 +1029,7 @@ describe("panel.locale, panel.timeFormat, panel.timezone", () => {
  * `images.allowPlainHttp` — the first `type: "boolean"` setting the store has ever held.
  *
  * `fits()`'s boolean branch and `setSetting`'s JSON write path have been exercised only by
- * `logs.minimumLevel`'s enum coverage and `limits.maxLines`'s integer coverage until now; the
+ * `logs.minimumLevel`'s enum coverage and `limits.maxLineChars`'s integer coverage until now; the
  * behaviour this setting actually controls belongs to `fetch-remote.test.ts`, and what belongs
  * here is the same boundary the other variants get: validation at the store, and the raw text
  * written, which for a boolean is the one place a regression could slip past every other test —

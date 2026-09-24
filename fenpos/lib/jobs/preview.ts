@@ -180,7 +180,7 @@ export async function compilePreviewWithContext(
 		// to report beyond the device's default.
 		let request: PrintRequest;
 		try {
-			request = readRequest(body, limits, deviceSettings, maxVariableValueChars);
+			request = readRequest(body, deviceSettings, maxVariableValueChars);
 		} catch (error) {
 			return {
 				preview: { ...measured(deviceSettings.defaultLinefeed), errors: [faultOf(error)] },

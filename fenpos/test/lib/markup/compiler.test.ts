@@ -79,7 +79,6 @@ describe("compile pipeline", () => {
 
 	const limits: CompileLimits = {
 		...DEFAULT_LIMITS,
-		maxLines: 5,
 		maxLineChars: 20,
 		maxTotalChars: 50,
 		maxOutputLines: 3,
@@ -87,7 +86,7 @@ describe("compile pipeline", () => {
 
 	/** Runs a body through both stages, as a request handler does. */
 	const run = (body: unknown) => {
-		const request = readRequest(body, limits, settings, MAX_VARIABLE_VALUE_CHARS);
+		const request = readRequest(body, settings, MAX_VARIABLE_VALUE_CHARS);
 		return compile("job-1", "kitchen", request, limits, settings);
 	};
 
@@ -137,17 +136,19 @@ describe("compile pipeline", () => {
 	// Limits
 	// -----------------------------------------------------------------------
 
-	it("rejects too many lines", () => {
-		expect(error({ data: Array.from({ length: 6 }, () => "x").join("\n") }).code).toBe("too_many_lines");
+	it("refuses nothing for the number of lines a receipt is written on", () => {
+		// The same content on half as many lines wraps back to the same paper, so a cap on lines of
+		// `data` refused one spelling of a receipt and accepted another that prints identically. What
+		// a receipt costs is bounded by the characters it carries and the lines it prints.
+		const roomy: CompileLimits = { ...limits, maxTotalChars: 1000, maxOutputLines: 60 };
+		const data = Array.from({ length: 50 }, () => "x").join("\n");
+
+		expect(layOut(readRequest({ data }, settings, MAX_VARIABLE_VALUE_CHARS), settings, roomy)).toHaveLength(50);
 	});
 
 	it("rejects a line longer than the limit, naming it", () => {
 		const thrown = refusal(() =>
-			layOut(
-				readRequest({ data: `ok\n${"a".repeat(21)}` }, limits, settings, MAX_VARIABLE_VALUE_CHARS),
-				settings,
-				limits,
-			),
+			layOut(readRequest({ data: `ok\n${"a".repeat(21)}` }, settings, MAX_VARIABLE_VALUE_CHARS), settings, limits),
 		);
 
 		expect(thrown.code).toBe("line_too_long");
@@ -156,9 +157,7 @@ describe("compile pipeline", () => {
 
 	it("rejects total text larger than the limit", () => {
 		const data = Array.from({ length: 3 }, () => "a".repeat(20)).join("\n");
-		const thrown = refusal(() =>
-			layOut(readRequest({ data }, limits, settings, MAX_VARIABLE_VALUE_CHARS), settings, limits),
-		);
+		const thrown = refusal(() => layOut(readRequest({ data }, settings, MAX_VARIABLE_VALUE_CHARS), settings, limits));
 
 		expect(thrown.code).toBe("text_too_large");
 	});
@@ -168,12 +167,6 @@ describe("compile pipeline", () => {
 		// the post-wrap count can catch this. Checking the submitted count alone would let a
 		// short request produce an unbounded receipt.
 		expect(error({ data: "ab ab ab ab\ncd cd cd cd" }).code).toBe("too_many_output_lines");
-	});
-
-	it("counts the lines before parsing content", () => {
-		// A request that is both oversized and malformed is refused for the cheaper reason,
-		// without parsing megabytes of markup first.
-		expect(error({ data: Array.from({ length: 6 }, () => "<blink>").join("\n") }).code).toBe("too_many_lines");
 	});
 
 	// -----------------------------------------------------------------------
@@ -250,7 +243,6 @@ describe("compile pipeline", () => {
 		const roomy: CompileLimits = { ...limits, maxLineChars: 60 };
 		const request = readRequest(
 			{ data: "<size width=2 height=2>x</size>\n<bold>y</bold>" },
-			roomy,
 			settings,
 			MAX_VARIABLE_VALUE_CHARS,
 		);
@@ -288,7 +280,6 @@ describe("compile pipeline", () => {
 		// before it ever reaches the wrapper. Roomier here so the tag is what is being tested.
 		const roomy: CompileLimits = {
 			...DEFAULT_LIMITS,
-			maxLines: 5,
 			maxLineChars: 60,
 			maxTotalChars: 200,
 			maxOutputLines: 6,
@@ -297,7 +288,7 @@ describe("compile pipeline", () => {
 		/** Compiles against the ten-column fixture, with the device default under test. */
 		const wrapping = (body: unknown, defaultWrap = true) => {
 			const merged = { ...settings, defaultWrap };
-			return compile("job", "kitchen", readRequest(body, roomy, merged, MAX_VARIABLE_VALUE_CHARS), roomy, merged);
+			return compile("job", "kitchen", readRequest(body, merged, MAX_VARIABLE_VALUE_CHARS), roomy, merged);
 		};
 
 		it("leaves a <nowrap> line intact while its neighbours wrap", () => {
@@ -326,7 +317,7 @@ describe("compile pipeline", () => {
 				compile(
 					"job",
 					"kitchen",
-					readRequest({ data: "<wrap>ab ab ab ab</wrap>" }, tight, merged, MAX_VARIABLE_VALUE_CHARS),
+					readRequest({ data: "<wrap>ab ab ab ab</wrap>" }, merged, MAX_VARIABLE_VALUE_CHARS),
 					tight,
 					merged,
 				),
@@ -351,7 +342,7 @@ describe("compile pipeline", () => {
 		});
 
 		it("refuses an array in data with a message naming the change", () => {
-			const thrown = refusal(() => readRequest({ data: ["a", "b"] }, limits, settings, MAX_VARIABLE_VALUE_CHARS));
+			const thrown = refusal(() => readRequest({ data: ["a", "b"] }, settings, MAX_VARIABLE_VALUE_CHARS));
 
 			expect(thrown.code).toBe("invalid_type");
 			expect(thrown.message).toBe(
@@ -360,25 +351,13 @@ describe("compile pipeline", () => {
 		});
 
 		it("refuses a non-string data", () => {
-			expect(refusal(() => readRequest({ data: 7 }, limits, settings, MAX_VARIABLE_VALUE_CHARS)).message).toMatch(
+			expect(refusal(() => readRequest({ data: 7 }, settings, MAX_VARIABLE_VALUE_CHARS)).message).toMatch(
 				/must be a string/,
 			);
 		});
 
-		it("counts lines of the string against maxLines after normalising line endings", () => {
-			expect(() =>
-				readRequest({ data: "a\r\nb\r\nc" }, { ...limits, maxLines: 3 }, settings, MAX_VARIABLE_VALUE_CHARS),
-			).not.toThrow();
-			const thrown = refusal(() =>
-				readRequest({ data: "a\nb\nc\nd" }, { ...limits, maxLines: 3 }, settings, MAX_VARIABLE_VALUE_CHARS),
-			);
-
-			expect(thrown.code).toBe("too_many_lines");
-			expect(thrown.message).toBe("At most 3 lines are allowed, got 4");
-		});
-
 		it("keeps the request's data normalised", () => {
-			expect(readRequest({ data: "a\r\nb" }, limits, settings, MAX_VARIABLE_VALUE_CHARS).data).toBe("a\nb");
+			expect(readRequest({ data: "a\r\nb" }, settings, MAX_VARIABLE_VALUE_CHARS).data).toBe("a\nb");
 		});
 	});
 
@@ -407,7 +386,7 @@ describe("compile pipeline", () => {
 	});
 
 	it("fills the same markup differently for a narrower device", () => {
-		const request = readRequest({ data: "a<fill>b" }, limits, settings, MAX_VARIABLE_VALUE_CHARS);
+		const request = readRequest({ data: "a<fill>b" }, settings, MAX_VARIABLE_VALUE_CHARS);
 		const narrow = compile("job-1", "kitchen", request, limits, { ...settings, columns: 6 });
 
 		expect(printed(narrow.lines[0])).toBe(`a${" ".repeat(4)}b`);
@@ -488,7 +467,6 @@ describe("block line budget", () => {
 	/** Roomy enough that no character limit fires: these cases are about the line budget. */
 	const BUDGET_LIMITS: CompileLimits = {
 		...DEFAULT_LIMITS,
-		maxLines: 20,
 		maxLineChars: 80,
 		maxTotalChars: 400,
 		maxOutputLines: 400,
@@ -617,17 +595,11 @@ describe("block line budget", () => {
 	it("refuses a job whose images do not fit, the same as one whose text does not", () => {
 		const limits: CompileLimits = {
 			...DEFAULT_LIMITS,
-			maxLines: 5,
 			maxLineChars: 40,
 			maxTotalChars: 100,
 			maxOutputLines: 9,
 		};
-		const request = readRequest(
-			{ data: "<image>logo</image>", linefeed: "LF" },
-			limits,
-			SETTINGS,
-			MAX_VARIABLE_VALUE_CHARS,
-		);
+		const request = readRequest({ data: "<image>logo</image>", linefeed: "LF" }, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
 
 		expect(() => compile("job-1", "kitchen", request, limits, SETTINGS)).toThrow(ApiError);
 	});
@@ -656,7 +628,6 @@ describe("block line budget", () => {
 	it("carries block directives to the wire unchanged, unlike a rule", () => {
 		const limits: CompileLimits = {
 			...DEFAULT_LIMITS,
-			maxLines: 10,
 			maxLineChars: 60,
 			maxTotalChars: 400,
 			maxOutputLines: 30,
@@ -671,7 +642,6 @@ describe("block line budget", () => {
 				].join("\n"),
 				linefeed: "LF",
 			},
-			limits,
 			WIDE_SETTINGS,
 			MAX_VARIABLE_VALUE_CHARS,
 		);
@@ -730,14 +700,13 @@ describe("images on the wire", () => {
 
 	const limits: CompileLimits = {
 		...DEFAULT_LIMITS,
-		maxLines: 5,
 		maxLineChars: 60,
 		maxTotalChars: 200,
 		maxOutputLines: 40,
 	};
 
 	const directivesFor = (markup: string) => {
-		const request = readRequest({ data: markup, linefeed: "LF" }, limits, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
+		const request = readRequest({ data: markup, linefeed: "LF" }, SETTINGS, MAX_VARIABLE_VALUE_CHARS);
 		const job = compile("job-1", "kitchen", request, limits, SETTINGS);
 		expect(compiledJobSchema.safeParse(job).success).toBe(true);
 		return job.lines[0].directives;
@@ -789,7 +758,6 @@ describe("images on the wire", () => {
 describe("compiling with variables", () => {
 	const limits = (): CompileLimits => ({
 		...DEFAULT_LIMITS,
-		maxLines: 5,
 		maxLineChars: 200,
 		maxTotalChars: 500,
 		maxOutputLines: 10,

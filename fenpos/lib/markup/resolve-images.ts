@@ -47,11 +47,12 @@ import { integerSetting } from "@/lib/settings/settings-service";
  * How many images may be resolved at once.
  *
  * **This is a bound on what a single request can make this server do, and it is the reason the
- * parallelism above is safe.** A request may carry up to `maxLines` lines — 200 by default — so
- * resolving every reference together let one authenticated caller open 200 sockets, hold 200 buffers
- * of up to `MAX_REMOTE_IMAGE_BYTES` each before anything was decoded, and pay 200 TLS handshakes,
- * since `pinnedTransport` deliberately pools no connections. Six holds the same shape at a constant
- * cost: at most six sockets and about twelve megabytes in flight, whatever the receipt says.
+ * parallelism above is safe.** Nothing bounds how many lines a request is written on, and even when
+ * something did — 200 by default — resolving every reference together let one authenticated caller
+ * open a socket per line, hold a buffer of up to `MAX_REMOTE_IMAGE_BYTES` for each before anything
+ * was decoded, and pay a TLS handshake for each, since `pinnedTransport` deliberately pools no
+ * connections. Six holds the same shape at a constant cost: at most six sockets and about twelve
+ * megabytes in flight, whatever the receipt says.
  *
  * Six rather than one, because resolving in turn is what the parallelism was for: a receipt naming
  * three hosts should wait once, not three times. Six rather than sixty, because a receipt with more
@@ -351,8 +352,8 @@ function isRemote(reference: string): boolean {
  * Raised as a request-level {@link ApiError} rather than a positioned `MarkupError`, because that is
  * what it is. The count is of *distinct* references across the whole receipt, so no single tag is at
  * fault — the one that crosses the line is merely the last one written, and pointing a column at it
- * would name an innocent tag. Same reasoning the compiler already applies to `too_many_lines` and
- * `text_too_large`, which are also whole-request refusals with no line to report.
+ * would name an innocent tag. Same reasoning the compiler already applies to `text_too_large`, which
+ * is also a whole-request refusal with no line to report.
  *
  * **Zero is a switch, not merely a small limit.** An operator may set `images.maxRemoteReferences` to
  * 0 to turn outbound image fetching off entirely — a security posture, not an edge case — so a

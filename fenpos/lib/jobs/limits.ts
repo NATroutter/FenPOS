@@ -7,7 +7,6 @@ import type { CompileLimits } from "@/lib/markup/compiler";
  * failing that, the built-in default) says, and only a non-null value narrows it.
  */
 export interface DeviceLimitOverrides {
-	maxLines: number | null;
 	maxLineChars: number | null;
 	maxTotalChars: number | null;
 	maxOutputLines: number | null;
@@ -32,7 +31,6 @@ export interface DeviceLimitOverrides {
  */
 export function effectiveLimits(device: DeviceLimitOverrides, installed: CompileLimits): CompileLimits {
 	return {
-		maxLines: device.maxLines ?? installed.maxLines,
 		maxLineChars: device.maxLineChars ?? installed.maxLineChars,
 		maxTotalChars: device.maxTotalChars ?? installed.maxTotalChars,
 		maxOutputLines: device.maxOutputLines ?? installed.maxOutputLines,

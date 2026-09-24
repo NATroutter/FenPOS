@@ -3,7 +3,6 @@ import { effectiveLimits } from "@/lib/jobs/limits";
 import { DEFAULT_LIMITS } from "@/lib/settings/settings-service";
 
 const NONE = {
-	maxLines: null,
 	maxLineChars: null,
 	maxTotalChars: null,
 	maxOutputLines: null,

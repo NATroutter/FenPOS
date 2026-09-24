@@ -105,7 +105,7 @@ export async function submitJob(
 	// The body's shape and its limits, before anything is written. A request malformed at this level
 	// never becomes a job. Its markup is a separate question, settled later and on a job row — see
 	// this file's header.
-	const request = readRequest(body, limits, deviceSettings, maxVariableValueChars);
+	const request = readRequest(body, deviceSettings, maxVariableValueChars);
 
 	const link = getLink(device.agentId);
 	if (!link) {

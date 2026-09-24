@@ -435,7 +435,6 @@ model Device {
 
   // --- Per-device limit overrides. Null means inherit the global setting. ---
   maxBodyBytes    Int? @map("max_body_bytes")
-  maxLines        Int? @map("max_lines")
   maxLineChars    Int? @map("max_line_chars")
   maxTotalChars   Int? @map("max_total_chars")
   maxOutputLines  Int? @map("max_output_lines")

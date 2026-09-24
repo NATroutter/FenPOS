@@ -38,7 +38,6 @@ import { DEFAULT_PARSE_OPTIONS } from "@/lib/markup/document";
  * a cycle, and was one until it was moved.
  */
 export const DEFAULT_LIMITS: CompileLimits = {
-	maxLines: 200,
 	maxLineChars: 256,
 	maxTotalChars: 16_384,
 	maxOutputLines: 300,
@@ -160,13 +159,7 @@ export const CATEGORIES: readonly {
 		groups: [
 			{
 				label: "Print requests",
-				keys: [
-					"limits.maxLines",
-					"limits.maxLineChars",
-					"limits.maxTotalChars",
-					"limits.maxOutputLines",
-					"limits.maxBodyKb",
-				],
+				keys: ["limits.maxLineChars", "limits.maxTotalChars", "limits.maxOutputLines", "limits.maxBodyKb"],
 			},
 			{
 				label: "Blocks and rasters",
@@ -554,7 +547,6 @@ export const SETTING_KEYS = [
 	"server.trustedProxies",
 	"server.trustedProxyHeaders",
 	"server.proxyIpPriority",
-	"limits.maxLines",
 	"limits.maxLineChars",
 	"limits.maxTotalChars",
 	"limits.maxOutputLines",
@@ -727,17 +719,6 @@ export const SETTINGS: readonly SettingDefinition[] = [
 		type: "enum",
 		values: ["rightmost", "leftmost"],
 		fallback: "rightmost",
-	},
-	{
-		key: "limits.maxLines",
-		label: "Lines per request",
-		description: "Most lines the receipt may have, counted before markup is interpreted.",
-		category: "limits",
-		type: "integer",
-		min: 1,
-		max: 10_000,
-		fallback: DEFAULT_LIMITS.maxLines,
-		unit: "lines",
 	},
 	{
 		key: "limits.maxLineChars",
@@ -1984,7 +1965,6 @@ export async function globalLimits(): Promise<CompileLimits> {
 	const value = (key: SettingKey): number => narrow(settings, key, "integer") as number;
 
 	return {
-		maxLines: value("limits.maxLines"),
 		maxLineChars: value("limits.maxLineChars"),
 		maxTotalChars: value("limits.maxTotalChars"),
 		maxOutputLines: value("limits.maxOutputLines"),

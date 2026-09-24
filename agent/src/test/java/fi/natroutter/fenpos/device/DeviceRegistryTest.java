@@ -48,7 +48,6 @@ class DeviceRegistryTest {
         Device device = Device.from(wire("kitchen", "COM3", 5, 5000));
 
         assertEquals(7, device.limits().maxQueueDepth());
-        assertEquals(LimitSettings.DEFAULTS.maxLines(), device.limits().maxLines());
         assertEquals(LimitSettings.DEFAULTS.maxLineChars(), device.limits().maxLineChars());
         assertEquals(LimitSettings.DEFAULTS.maxTotalChars(), device.limits().maxTotalChars());
         assertEquals(LimitSettings.DEFAULTS.maxOutputLines(), device.limits().maxOutputLines());

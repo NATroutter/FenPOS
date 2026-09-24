@@ -125,7 +125,6 @@ export const API_ERROR_STATUS = {
 	 * cannot act on.
 	 */
 	body_too_large: 413,
-	too_many_lines: 413,
 	line_too_long: 413,
 	text_too_large: 413,
 	too_many_output_lines: 413,

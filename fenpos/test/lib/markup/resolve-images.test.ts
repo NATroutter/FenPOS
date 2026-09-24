@@ -749,9 +749,9 @@ describe("dots that have to travel with the job", () => {
 				fonts: new Map(),
 				variables: null,
 			};
-			const limits = { ...DEFAULT_LIMITS, maxLines: 5, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
+			const limits = { ...DEFAULT_LIMITS, maxLineChars: 60, maxTotalChars: 200, maxOutputLines: 400 };
 
-			const request = readRequest({ data: "<image>fenpos</image>", linefeed: "LF" }, limits, settings, 200);
+			const request = readRequest({ data: "<image>fenpos</image>", linefeed: "LF" }, settings, 200);
 			const job = compile("job-1", "kitchen", request, limits, settings);
 
 			expect(compiledJobSchema.safeParse(job).success).toBe(true);
