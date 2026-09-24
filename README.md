@@ -256,8 +256,8 @@ The status is `202`: the job is queued, and the paper has not moved yet.
 32-column printer alike, which hand-counted spaces cannot do.
 
 **Markup:** `bold` · `underline` · `invert` · `size` · `text` · `align` · `wrap` · `nowrap` ·
-`fill` · `hr` · `qr` · `barcode` · `pdf417` · `image` · `drawer` · `feed` · `cut` · `box` ·
-`table` · `row` · `cell` · `chart` · `series` · `labels` · `bar`
+`fill` · `hr` · `check` · `list` · `item` · `qr` · `barcode` · `pdf417` · `image` · `drawer` ·
+`feed` · `cut` · `box` · `table` · `row` · `cell` · `chart` · `series` · `labels` · `bar`
 
 Boxes, tables, charts, gauges, inline images and uploaded fonts are drawn by the server into
 rasters, so they look the same on every printer of the same width.
@@ -322,11 +322,17 @@ docker compose pull && docker compose up -d
 Images are tagged `latest`, the exact version, and `major.minor`, so you can pin as loosely
 or as tightly as you want.
 
-If **Settings → Print limits → Printed lines per job** was ever set above 1000, an upgrade past
-this release silently reverts it to its default: the setting's cap now derives from the same bound
-the dispatch frame enforces, and a stored value above the new cap is treated the same as any other
-out-of-range value, ignored rather than clamped. Check that setting after upgrading if you had
-raised it.
+Two print limits changed before 1.0.0. Both matter only to an install that was running from
+`master` before the first release, and neither needs anything done to it by hand:
+
+- **There is no lines-per-request limit any more.** How a receipt is broken into source lines never
+  said anything about what it costs to print — the same content written on one line slipped the cap
+  unchanged — so it is gone from the install settings, from the per-device overrides and from the
+  agent, and a migration drops the stored value at container start. The character, output-line and
+  body-size limits are unchanged, and are what actually bound a job.
+- **Printed lines per job is capped at 1000.** A stored value above that is ignored rather than
+  clamped, the same as any other out-of-range value, so the setting reverts to its default. The cap
+  derives from the bound the dispatch frame enforces. Check that setting if you had raised it.
 
 ---
 
